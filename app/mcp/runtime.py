@@ -39,6 +39,11 @@ MCP_HEADERS = {
     "Accept": "application/json, text/event-stream",
 }
 
+# Cache por endpoint dos tools expostos via `tools/list` (MCP spec).
+# Evita uma chamada extra por invocação sem exigir invalidation manual
+# (servidores estáveis em prazo curto). TTL não é crítico para Fase 1.
+_MCP_TOOLS_LIST_CACHE: dict[str, list[dict]] = {}
+
 
 def _extract_json_from_sse(sse_text: str) -> dict | None:
     """Extrai o primeiro objeto JSON-RPC válido de uma resposta SSE.
@@ -503,6 +508,165 @@ def build_openai_tools(mcp_tools: list[dict]) -> list[dict]:
 # Execute — HTTP + Stdio unified
 # ═══════════════════════════════════════════════════
 
+async def _discover_server_tools(client: "httpx.AsyncClient", endpoint: str, headers: dict) -> list[dict]:
+    """Chama MCP tools/list no servidor e cacheia por endpoint.
+
+    Retorna lista de dicts {name, description, inputSchema}. Vazio em caso
+    de falha — caller deve ser resiliente a lista vazia.
+    """
+    cached = _MCP_TOOLS_LIST_CACHE.get(endpoint)
+    if cached is not None:
+        return cached
+    try:
+        resp = await client.post(endpoint, json={
+            "jsonrpc": "2.0", "method": "tools/list", "params": {}, "id": 99,
+        }, headers=headers)
+        ct = resp.headers.get("content-type", "")
+        if "text/event-stream" in ct:
+            data = _extract_json_from_sse(resp.text)
+        else:
+            try:
+                data = resp.json()
+            except Exception:
+                data = None
+        tools = []
+        if isinstance(data, dict):
+            result = data.get("result") or {}
+            if isinstance(result, dict):
+                tools = result.get("tools") or []
+        if not isinstance(tools, list):
+            tools = []
+        _MCP_TOOLS_LIST_CACHE[endpoint] = tools
+        return tools
+    except Exception as e:
+        logger.warning(f"tools/list falhou para {endpoint}: {e}")
+        _MCP_TOOLS_LIST_CACHE[endpoint] = []
+        return []
+
+
+def _resolve_tool_name(declared: str, server_tools: list[dict]) -> str:
+    """Mapeia nome declarado (ex: 'search') para nome real exposto
+    pelo servidor (ex: 'tavily_search').
+
+    Estratégia:
+      1. Match exato.
+      2. Servidor expõe '<prefix>_<declared>' (ex: 'tavily_search' ⊃ 'search').
+      3. 'declared' é um dos tokens do nome (split por '_' ou '-').
+      4. Substring case-insensitive.
+    Fallback: retorna `declared` — servidor decide se aceita ou rejeita.
+    """
+    if not declared or not server_tools:
+        return declared
+    names = [t.get("name", "") for t in server_tools if isinstance(t, dict)]
+    # 1. exato
+    if declared in names:
+        return declared
+    low = declared.lower()
+    # 2. suffix após underscore/hífen
+    for n in names:
+        nl = n.lower()
+        if nl.endswith(f"_{low}") or nl.endswith(f"-{low}") or nl.startswith(f"{low}_") or nl.startswith(f"{low}-"):
+            return n
+    # 3. token match
+    for n in names:
+        tokens = set(re.split(r'[_\-\s]+', n.lower()))
+        if low in tokens:
+            return n
+    # 4. substring
+    for n in names:
+        if low in n.lower():
+            return n
+    return declared
+
+
+def _build_call_arguments(
+    actual_name: str,
+    query: str,
+    raw_arguments: dict,
+    server_tools: list[dict],
+) -> dict:
+    """Monta o dict de arguments respeitando o inputSchema quando conhecido.
+
+    Se o servidor MCP expôs inputSchema para este tool:
+      - preserva apenas propriedades declaradas
+      - mapeia 'query' para o primeiro campo `required` string (se houver)
+    Caso contrário, usa {'query': ...} como fallback histórico.
+    """
+    extras = {k: v for k, v in (raw_arguments or {}).items() if k not in ("operation", "query")}
+    # Acha o tool spec
+    tool_spec = None
+    for t in server_tools or []:
+        if isinstance(t, dict) and t.get("name") == actual_name:
+            tool_spec = t
+            break
+
+    if not tool_spec:
+        return {"query": query, **extras}
+
+    schema = tool_spec.get("inputSchema") or {}
+    properties = schema.get("properties") or {}
+    required = schema.get("required") or []
+
+    if not isinstance(properties, dict):
+        return {"query": query, **extras}
+
+    args: dict = {}
+    placed = False
+    req_set = set(r for r in required if isinstance(r, str))
+
+    # Prioridade 1: campo 'query' explicitamente REQUIRED (ex: tavily_search)
+    if "query" in req_set and "query" in properties:
+        args["query"] = query
+        placed = True
+
+    # Prioridade 2: primeiro required string (ex: context7 'libraryName')
+    if not placed:
+        for rname in required:
+            if not isinstance(rname, str) or rname in args:
+                continue
+            spec = properties.get(rname, {}) or {}
+            if spec.get("type") == "string":
+                args[rname] = query
+                placed = True
+                break
+
+    # Prioridade 3: primeiro required array-of-strings — empacota query como lista
+    # (ex: tavily_extract espera `urls: [...]`)
+    if not placed:
+        for rname in required:
+            if not isinstance(rname, str) or rname in args:
+                continue
+            spec = properties.get(rname, {}) or {}
+            if spec.get("type") == "array":
+                items_type = (spec.get("items") or {}).get("type")
+                if items_type == "string":
+                    raw_extra = extras.pop(rname, None)
+                    if raw_extra is None:
+                        args[rname] = [query]
+                    elif isinstance(raw_extra, list):
+                        args[rname] = raw_extra
+                    else:
+                        args[rname] = [raw_extra]
+                    placed = True
+                    break
+
+    # Prioridade 4: 'query' existe como propriedade opcional e não consumimos
+    # nenhum required — ainda assim colocar em query (caso tool sem required)
+    if not placed and "query" in properties:
+        args["query"] = query
+        placed = True
+
+    # Prioridade 5 (fallback): força 'query' mesmo fora do schema
+    if not placed:
+        args["query"] = query
+
+    # Propaga extras que existem no schema (preserva overrides do LLM)
+    for k, v in extras.items():
+        if k in properties and k not in args:
+            args[k] = v
+    return args
+
+
 async def execute_tool_call(tool_name: str, arguments: dict, mcp_tools: list[dict], timeout: int = 60) -> str:
     """Executa chamada ao MCP Server — HTTP ou stdio automaticamente.
 
@@ -583,11 +747,6 @@ async def execute_tool_call(tool_name: str, arguments: dict, mcp_tools: list[dic
 
     # ── HTTP endpoints ──
     try:
-        payload = {
-            "jsonrpc": "2.0", "method": "tools/call",
-            "params": {"name": operation or tool_name, "arguments": {"query": query, **{k: v for k, v in arguments.items() if k not in ('operation', 'query')}}},
-            "id": 1,
-        }
         async with httpx.AsyncClient(timeout=timeout, **client_kwargs) as client:
             try:
                 await client.post(endpoint, json={
@@ -598,6 +757,27 @@ async def execute_tool_call(tool_name: str, arguments: dict, mcp_tools: list[dic
                 await client.post(endpoint, json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, headers=headers)
             except: pass
 
+            # Descobre nomes reais dos tools do servidor (MCP tools/list) e
+            # mapeia a operação declarada no SKILL (ex: "search") para o
+            # nome real exposto (ex: "tavily_search"). Essencial porque o
+            # SKILL.md frequentemente usa nomes curtos/genéricos e o servidor
+            # MCP prefixa com o próprio nome (tavily_*, context7_*).
+            declared_name = operation or tool_name
+            server_tools = await _discover_server_tools(client, endpoint, headers)
+            actual_name = _resolve_tool_name(declared_name, server_tools)
+            if actual_name != declared_name:
+                logger.info(f"MCP name map: '{declared_name}' → '{actual_name}' @ {endpoint}")
+
+            # Constrói arguments respeitando o inputSchema do tool (quando
+            # conhecido). Fallback para {"query": ...} se o schema não
+            # estiver disponível.
+            call_args = _build_call_arguments(actual_name, query, arguments, server_tools)
+
+            payload = {
+                "jsonrpc": "2.0", "method": "tools/call",
+                "params": {"name": actual_name, "arguments": call_args},
+                "id": 1,
+            }
             resp = await client.post(endpoint, json=payload, headers=headers)
 
             # ── Tratar resposta SSE ──
