@@ -132,25 +132,87 @@ def _validate_inputs(inputs: dict, schema: dict) -> list[str]:
 @router.post("/{agent_id}/invoke", response_model=AgentInvokeResponse)
 async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeResponse:
     from app.agents.engine import execute_interaction
+    from app.agents.declarative_engine import execute_declarative
     from app.skill_parser.parser import parse_skill_md
 
     agent = await agents_repo.find_by_id(agent_id)
     if not agent:
         raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
 
-    if not data.message and not data.inputs:
-        raise HTTPException(400, "Informe ao menos 'message' ou 'inputs'")
-
+    parsed_skill = None
     if agent.get("skill_id"):
         skill_row = await skills_repo.find_by_id(agent["skill_id"])
         if skill_row and skill_row.get("raw_content"):
-            parsed = parse_skill_md(skill_row["raw_content"])
-            schema = _extract_inputs_schema(parsed.inputs)
+            parsed_skill = parse_skill_md(skill_row["raw_content"])
+            schema = _extract_inputs_schema(parsed_skill.inputs)
             if schema and data.inputs:
                 errs = _validate_inputs(data.inputs, schema)
                 if errs:
                     raise HTTPException(422, {"message": "Falha de validação de inputs", "errors": errs})
 
+    is_declarative = bool(parsed_skill and parsed_skill.execution_mode == "declarative")
+
+    if not is_declarative and not data.message and not data.inputs:
+        raise HTTPException(400, "Informe ao menos 'message' ou 'inputs'")
+    if is_declarative and not data.inputs and not data.context:
+        raise HTTPException(400, "Modo declarativo exige 'inputs' ou 'context'")
+
+    start = time.time()
+
+    if is_declarative:
+        try:
+            result = await execute_declarative(
+                agent=agent,
+                skill_parsed=parsed_skill,
+                inputs=data.inputs,
+                context=data.context,
+                session_id=data.session_id,
+            )
+        except Exception as e:
+            raise HTTPException(500, f"Erro no engine declarativo: {e}")
+
+        errs = result.get("errors", []) or []
+        executed = result.get("bindings_executed", []) or []
+        any_success = any(200 <= b.get("status", 0) < 300 for b in executed)
+        if errs and not any_success:
+            status = "failed"
+        elif errs:
+            status = "partial"
+        else:
+            status = "ok"
+
+        duration = result.get("duration_ms") or round((time.time() - start) * 1000, 2)
+
+        await audit_repo.create({
+            "entity_type": "agent",
+            "entity_id": agent_id,
+            "action": "invoked",
+            "details": json.dumps({
+                "mode": "declarative",
+                "session_id": result.get("interaction_id"),
+                "inputs_keys": list(data.inputs.keys()) if data.inputs else [],
+                "bindings_executed": len(executed),
+                "errors": len(errs),
+                "duration_ms": duration,
+            }, ensure_ascii=False),
+        })
+
+        return AgentInvokeResponse(
+            session_id=result.get("interaction_id"),
+            agent_id=agent_id,
+            status=status,
+            outputs={
+                "bindings_executed": executed,
+                "final_state": result.get("final_state", ""),
+            },
+            context=result.get("context", {}),
+            trace_id=result.get("interaction_id"),
+            duration_ms=duration,
+            evidence_score=None,
+            errors=errs,
+        )
+
+    # Caminho LLM (Fase 1) — permanece como fallback
     parts = []
     if data.message:
         parts.append(data.message)
@@ -164,7 +226,6 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
 
     pipeline_context = json.dumps(data.context, ensure_ascii=False) if data.context else None
 
-    start = time.time()
     try:
         result = await execute_interaction(
             agent_id=agent_id,
@@ -194,6 +255,7 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
         "entity_id": agent_id,
         "action": "invoked",
         "details": json.dumps({
+            "mode": "llm",
             "session_id": result.get("interaction_id"),
             "inputs_keys": list(data.inputs.keys()) if data.inputs else [],
             "has_message": bool(data.message),

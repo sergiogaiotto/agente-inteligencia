@@ -17,10 +17,10 @@ from typing import Optional
 
 
 REQUIRED_SECTIONS = ["Purpose", "Activation Criteria", "Inputs", "Workflow", "Tool Bindings", "Output Contract", "Failure Modes"]
-OPTIONAL_SECTIONS = ["Delegations", "Compensation", "Guardrails", "Budget", "Examples", "Telemetry", "Data Dependencies", "Model Constraints", "Evidence Policy", "Gold Refs", "Execution Profile"]
+OPTIONAL_SECTIONS = ["Delegations", "Compensation", "Guardrails", "Budget", "Examples", "Telemetry", "Data Dependencies", "Model Constraints", "Evidence Policy", "Gold Refs", "Execution Profile", "API Bindings"]
 VALID_KINDS = {"orchestrator", "router", "subagent"}
 VALID_STABILITY = {"alpha", "beta", "stable", "deprecated"}
-VALID_EXEC_MODES = {"fast", "standard", "rigorous"}
+VALID_EXEC_MODES = {"fast", "standard", "rigorous", "declarative"}
 
 
 @dataclass
@@ -30,6 +30,7 @@ class SkillFrontmatter:
     kind: str = "subagent"
     owner: str = ""
     stability: str = "alpha"
+    execution_mode: str = ""
 
 
 @dataclass
@@ -54,7 +55,9 @@ class ParsedSkill:
     evidence_policy: str = ""
     gold_refs: str = ""
     execution_profile: str = ""
-    execution_mode: str = ""       # fast | standard | rigorous (parsed or inferred)
+    execution_mode: str = ""       # fast | standard | rigorous | declarative
+    api_bindings: str = ""         # raw text (markdown or YAML)
+    api_bindings_parsed: list = field(default_factory=list)  # list of dicts
     raw_content: str = ""
     content_hash: str = ""
     validation_errors: list = field(default_factory=list)
@@ -85,7 +88,13 @@ def parse_skill_md(content: str) -> ParsedSkill:
                 kind=fm_data.get("kind", "subagent"),
                 owner=fm_data.get("owner", ""),
                 stability=fm_data.get("stability", "alpha"),
+                execution_mode=str(fm_data.get("execution_mode", "")).strip().lower(),
             )
+            if result.frontmatter.execution_mode and result.frontmatter.execution_mode not in VALID_EXEC_MODES:
+                result.validation_errors.append(
+                    f"execution_mode inválido: {result.frontmatter.execution_mode}. Válidos: {VALID_EXEC_MODES}"
+                )
+                result.frontmatter.execution_mode = ""
             if result.frontmatter.kind not in VALID_KINDS:
                 result.validation_errors.append(f"kind inválido: {result.frontmatter.kind}. Válidos: {VALID_KINDS}")
             if result.frontmatter.stability not in VALID_STABILITY:
@@ -125,14 +134,76 @@ def parse_skill_md(content: str) -> ParsedSkill:
         value = sections.get(section_name, "")
         setattr(result, key, value)
 
-    # ── Execution Profile — parse ou auto-inferência ──
-    if result.execution_profile.strip():
+    # ── Execution Mode — precedência: frontmatter > Execution Profile > inferência ──
+    if result.frontmatter.execution_mode:
+        result.execution_mode = result.frontmatter.execution_mode
+    elif result.execution_profile.strip():
         result.execution_mode = _parse_execution_mode(result.execution_profile)
     else:
         result.execution_mode = _infer_execution_mode(result)
 
+    # ── API Bindings — parse YAML para lista de dicts ──
+    if result.api_bindings.strip():
+        result.api_bindings_parsed = _parse_api_bindings(result.api_bindings)
+    if result.execution_mode == "declarative" and not result.api_bindings_parsed:
+        result.validation_errors.append(
+            "execution_mode=declarative exige ## API Bindings com pelo menos 1 binding válido"
+        )
+
     result.is_valid = len(result.validation_errors) == 0
     return result
+
+
+def _parse_api_bindings(section_text: str) -> list[dict]:
+    """Parse a seção ## API Bindings como lista YAML.
+
+    Aceita:
+      1. Bloco fencado ```yaml ... ``` (fechamento opcional — o
+         pré-processador da SKILL remove trailing ``` global).
+      2. Conteúdo inline (sem fence) começando com '- id:'.
+
+    Retorna lista de dicts; em erro retorna lista vazia silenciosamente
+    (validação estrutural fica na camada do engine).
+    """
+    if not section_text:
+        return []
+
+    fence_open = re.search(r"```(?:yaml|yml)?\s*\n", section_text)
+    if fence_open:
+        body = section_text[fence_open.end():]
+        body = re.sub(r"\n```\s*$", "", body)
+    else:
+        body = section_text
+
+    try:
+        data = yaml.safe_load(body)
+    except yaml.YAMLError:
+        return []
+
+    if isinstance(data, list):
+        return [_normalize_yaml11_bool_keys(b) for b in data if isinstance(b, dict) and b.get("id")]
+    return []
+
+
+def _normalize_yaml11_bool_keys(obj):
+    """YAML 1.1 (pyyaml) converte 'on'/'off'/'yes'/'no' para bool nas chaves.
+    No domínio de API bindings essas keys são sempre strings — reverto aqui
+    para evitar surpresa em retry.on, request.headers['off'] etc.
+    """
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if k is True:
+                new_k = "on"
+            elif k is False:
+                new_k = "off"
+            else:
+                new_k = k
+            out[new_k] = _normalize_yaml11_bool_keys(v)
+        return out
+    if isinstance(obj, list):
+        return [_normalize_yaml11_bool_keys(x) for x in obj]
+    return obj
 
 
 def _parse_execution_mode(profile_text: str) -> str:
