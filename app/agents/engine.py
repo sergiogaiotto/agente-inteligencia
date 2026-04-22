@@ -78,7 +78,14 @@ class DeepAgentHarness:
             self.openai_tools = build_openai_tools(self.mcp_tools)
 
     def _build_system_prompt(self) -> str:
-        """Constrói system prompt a partir do SKILL.md carregado."""
+        """Constrói system prompt a partir do SKILL.md carregado.
+
+        A seção de Ferramentas Disponíveis é colocada DEPOIS do Output Contract
+        e inclui catálogo explícito com o nome exato (sanitizado) que o LLM
+        deve usar no function call — isso evita que o modelo priorize fabricar
+        o shape do Output Contract em vez de invocar a ferramenta.
+        """
+        import re as _re
         skill = self.config.get("_parsed_skill", {})
         parts = [
             self.config.get("system_prompt", "Você é um agente inteligente."),
@@ -92,7 +99,39 @@ class DeepAgentHarness:
         if skill.get("guardrails"):
             parts.append(f"\n## Guardrails\n{skill['guardrails']}")
         if self.mcp_tools:
-            parts.append(f"\n## Ferramentas Disponíveis\nVocê TEM acesso a ferramentas MCP registradas. USE-AS ativamente quando a consulta do usuário puder ser atendida por elas. Não responda com conhecimento próprio se uma ferramenta relevante estiver disponível — chame a ferramenta primeiro.")
+            tool_catalog_lines: list[str] = []
+            for t in self.mcp_tools:
+                raw_name = t.get("name", "tool") or "tool"
+                fn_name = _re.sub(r'[^a-zA-Z0-9_-]', '_', raw_name).strip('_')[:64]
+                ops = t.get("operations", []) or []
+                ops_str = ", ".join(ops) if ops else "(sem operações declaradas)"
+                desc = (t.get("description") or "").strip()
+                server = t.get("mcp_server", "")
+                line = f"- **{raw_name}** (function `{fn_name}`, operações: {ops_str})"
+                if desc:
+                    line += f"\n  {desc[:300]}"
+                if server:
+                    line += f"\n  servidor MCP: {server}"
+                tool_catalog_lines.append(line)
+            tool_catalog = "\n".join(tool_catalog_lines)
+
+            parts.append(
+                "\n## Ferramentas Disponíveis (MCP)\n"
+                "Você TEM function calls registrados para as ferramentas abaixo. "
+                "**REGRA CRÍTICA**: se a solicitação do usuário puder ser atendida "
+                "por uma destas ferramentas (ex: busca na web, consulta de documentação, "
+                "extração de dados externos, pesquisa factual), **você DEVE chamar "
+                "a ferramenta apropriada ANTES de gerar qualquer resposta**.\n\n"
+                f"{tool_catalog}\n\n"
+                "**Nunca fabrique o conteúdo do Output Contract.** "
+                "Se o Output Contract pede um array `results`, esse array deve vir "
+                "do retorno real da ferramenta — jamais de um `results: []` vazio "
+                "inventado. Se nenhuma ferramenta se aplica, explique isso em texto "
+                "e NÃO monte o JSON do Output Contract.\n\n"
+                "**Como chamar**: use o function call com `operation` (uma das operações "
+                "listadas acima) e `query` (a consulta ou parâmetros em string). "
+                "Aguarde o retorno antes de gerar sua resposta final."
+            )
         return "\n".join(parts)
 
     async def reason(self, state: AgentState) -> AgentState:

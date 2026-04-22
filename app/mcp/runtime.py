@@ -440,25 +440,61 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
 
 
 def build_openai_tools(mcp_tools: list[dict]) -> list[dict]:
-    """Converte ferramentas MCP em definições OpenAI function calling."""
+    """Converte ferramentas MCP em definições OpenAI function calling.
+
+    O campo `description` é o sinal mais forte que o LLM usa para decidir
+    invocar a função — precisa ser específico, não genérico.
+    """
     if not mcp_tools:
         return []
     openai_tools = []
     for tool in mcp_tools:
-        name = re.sub(r'[^a-zA-Z0-9_-]', '_', tool.get('name', 'tool')).strip('_')[:64]
-        ops = tool.get('operations', [])
-        desc = tool.get('description', '')
-        if not desc:
-            desc = f"Ferramenta MCP: {tool.get('name', '')}. Operações: {', '.join(ops)}."
+        raw_name = tool.get('name', 'tool') or 'tool'
+        name = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_name).strip('_')[:64]
+        ops = tool.get('operations', []) or []
+        user_desc = (tool.get('description') or '').strip()
+        ops_list = ', '.join(ops) if ops else 'não listadas'
+        # Descrição rica: nome humano + operações + instrução de uso
+        desc_parts = [
+            f"Ferramenta MCP '{raw_name}'. Operações disponíveis: {ops_list}.",
+            "Chame esta função sempre que o usuário solicitar dados que exijam "
+            "busca externa, pesquisa na web, consulta de documentação, extração "
+            "de conteúdo ou qualquer informação que não esteja no contexto atual.",
+        ]
+        if user_desc:
+            desc_parts.insert(1, user_desc[:300])
+        desc = ' '.join(desc_parts)
+
         properties = {
-            "operation": {"type": "string", "description": f"Operação a executar. Disponíveis: {', '.join(ops)}" if ops else "Operação a executar"},
-            "query": {"type": "string", "description": "Consulta, parâmetro ou dados para a operação"},
+            "operation": {
+                "type": "string",
+                "description": (
+                    f"Operação a executar. Disponíveis: {ops_list}."
+                    if ops else "Operação a executar."
+                ),
+            },
+            "query": {
+                "type": "string",
+                "description": (
+                    "Consulta/parâmetros para a operação. Para 'search' use a "
+                    "pergunta do usuário em linguagem natural. Para 'extract' use "
+                    "a URL ou identificador. Para 'crawl'/'map' use a URL-raiz."
+                ),
+            },
         }
         if ops:
             properties["operation"]["enum"] = ops
         openai_tools.append({
             "type": "function",
-            "function": {"name": name, "description": desc[:500], "parameters": {"type": "object", "properties": properties, "required": ["operation", "query"]}},
+            "function": {
+                "name": name,
+                "description": desc[:900],
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": ["operation", "query"],
+                },
+            },
         })
     return openai_tools
 
