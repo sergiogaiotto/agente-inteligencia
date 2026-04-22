@@ -1,0 +1,526 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="settingsPage()" x-init="load()">
+
+    <!-- Tabs -->
+    <div class="flex items-center gap-1 mb-6">
+        {% if user_role == 'root' %}
+        <button @click="tab='platform'" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
+                :class="tab==='platform' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Plataforma</button>
+        <button @click="tab='prompts'; loadPrompts()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
+                :class="tab==='prompts' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">System Prompts</button>
+        {% endif %}
+        {% if user_role in ['root', 'admin'] %}
+        <button @click="tab='users'; loadUsers()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
+                :class="tab==='users' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Usuários</button>
+        {% endif %}
+    </div>
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB: PLATAFORMA                       -->
+    <!-- ══════════════════════════════════════ -->
+    <div x-show="tab==='platform'" class="max-w-2xl">
+
+        <div class="flex items-center justify-between mb-4">
+            <span class="text-[11px] text-surface-400" x-text="dirty ? 'Alterações não salvas' : (lastSaved ? 'Salvo em ' + lastSaved : '')"></span>
+            <button @click="savePlatform()" :disabled="saving"
+                    class="inline-flex items-center gap-2 rounded-lg px-5 py-2 text-[13px] font-semibold text-white transition-all"
+                    :class="dirty ? 'bg-brand-500 hover:bg-brand-600 shadow-md' : 'bg-surface-300'">
+                <svg x-show="!saving" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V7l-4-4z"/><path d="M17 3v4H7"/><path d="M7 14h10v7H7z"/></svg>
+                <svg x-show="saving" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                <span x-text="saving ? 'Salvando...' : 'Salvar'"></span>
+            </button>
+        </div>
+
+        <!-- OpenAI -->
+        <div class="rounded-xl border border-surface-200 bg-white p-5 mb-5">
+            <div class="flex items-center gap-3 mb-4"><span class="text-lg">🟢</span><div><div class="text-[13px] font-semibold text-brand-900">OpenAI</div><div class="text-[11px] text-surface-400">GPT-4o, GPT-4.1, o3, o4</div></div></div>
+            <div class="space-y-3">
+                <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">API Key</label>
+                <div class="flex gap-2"><input :type="showKeys.openai?'text':'password'" x-model="config.openai_key" placeholder="sk-..." class="flex-1 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-brand-400">
+                <button @click="showKeys.openai=!showKeys.openai" class="rounded-lg border border-surface-200 px-3 py-2 text-[11px] text-surface-400 hover:text-brand-600" x-text="showKeys.openai?'Ocultar':'Mostrar'"></button></div></div>
+                <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Modelo Padrão</label>
+                <select x-model="config.openai_model" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] text-brand-900 outline-none">
+                    <template x-for="m in models.openai" :key="m.id"><option :value="m.id" x-text="m.name+' — '+m.context+' ('+m.tier+')'"></option></template>
+                </select></div>
+            </div>
+        </div>
+
+        <!-- Maritaca -->
+        <div class="rounded-xl border border-surface-200 bg-white p-5 mb-5">
+            <div class="flex items-center gap-3 mb-4"><span class="text-lg">🔵</span><div><div class="text-[13px] font-semibold text-brand-900">Maritaca AI</div><div class="text-[11px] text-surface-400">Sabiá-3, Sabiá-2</div></div></div>
+            <div class="space-y-3">
+                <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">API Key</label>
+                <div class="flex gap-2"><input :type="showKeys.maritaca?'text':'password'" x-model="config.maritaca_key" placeholder="mrt-..." class="flex-1 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-brand-400">
+                <button @click="showKeys.maritaca=!showKeys.maritaca" class="rounded-lg border border-surface-200 px-3 py-2 text-[11px] text-surface-400 hover:text-brand-600" x-text="showKeys.maritaca?'Ocultar':'Mostrar'"></button></div></div>
+                <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Modelo Padrão</label>
+                <select x-model="config.maritaca_model" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] text-brand-900 outline-none">
+                    <template x-for="m in models.maritaca" :key="m.id"><option :value="m.id" x-text="m.name+' — '+m.context+' ('+m.tier+')'"></option></template>
+                </select></div>
+                <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">API URL</label>
+                <input x-model="config.maritaca_url" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono text-brand-900 outline-none"></div>
+            </div>
+        </div>
+
+        <!-- LangFuse -->
+        <div class="rounded-xl border border-surface-200 bg-white p-5 mb-5">
+            <h2 class="text-[13px] font-semibold text-brand-900 mb-4">LangFuse — Observabilidade §17</h2>
+            <div class="space-y-3">
+                <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Public Key</label><input x-model="config.langfuse_public" placeholder="pk-..." class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono outline-none"></div>
+                <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Secret Key</label><input :type="showKeys.langfuse?'text':'password'" x-model="config.langfuse_secret" placeholder="sk-..." class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono outline-none"></div>
+                <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Host</label><input x-model="config.langfuse_host" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono outline-none"></div>
+            </div>
+        </div>
+
+        <!-- DeepAgent -->
+        <div class="rounded-xl border border-surface-200 bg-white p-5 mb-5">
+            <h2 class="text-[13px] font-semibold text-brand-900 mb-4">DeepAgent Harness</h2>
+            <div class="grid grid-cols-2 gap-4">
+                <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Max Iterações</label><input x-model.number="config.max_iterations" type="number" min="1" max="50" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono outline-none"></div>
+                <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Timeout (s)</label><input x-model.number="config.timeout" type="number" min="10" max="600" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono outline-none"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB: SYSTEM PROMPTS                   -->
+    <!-- ══════════════════════════════════════ -->
+    <div x-show="tab==='prompts'">
+
+        <div class="flex items-center justify-between mb-6">
+            <div class="flex items-center gap-3">
+                <p class="text-[12px] text-surface-400">Biblioteca de System Prompts — reutilizáveis nos agentes</p>
+                <!-- Filtros -->
+                <select x-model="promptFilter.category" @change="loadPrompts()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] text-brand-900 outline-none">
+                    <option value="">Todas categorias</option>
+                    <option value="geral">Geral</option>
+                    <option value="orquestração">Orquestração</option>
+                    <option value="análise">Análise</option>
+                    <option value="geração">Geração</option>
+                    <option value="validação">Validação</option>
+                    <option value="extração">Extração</option>
+                </select>
+                <select x-model="promptFilter.kind" @change="loadPrompts()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] text-brand-900 outline-none">
+                    <option value="">Todos tipos</option>
+                    <option value="aobd">AOBD</option>
+                    <option value="router">Router</option>
+                    <option value="subagent">Subagent</option>
+                </select>
+            </div>
+            <button @click="openPromptEditor(null)" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                Novo Prompt
+            </button>
+        </div>
+
+        <!-- Prompt list + preview -->
+        <div class="flex gap-4" style="min-height: 500px">
+            <!-- List -->
+            <div class="flex-1 space-y-1.5 overflow-y-auto" style="max-height: 70vh">
+                <template x-for="p in prompts" :key="p.id">
+                    <div class="group flex items-center gap-3 rounded-lg border bg-white px-4 py-2.5 cursor-pointer transition-all"
+                         :class="previewPromptId === p.id ? 'border-brand-400 bg-brand-50/30 shadow-sm' : 'border-surface-200 hover:border-brand-200 hover:shadow-sm'"
+                         @click="previewPromptId = p.id; previewPrompt = p">
+                        <div class="flex h-8 w-8 items-center justify-center rounded-lg shrink-0 text-[9px] font-bold"
+                             :class="p.kind==='router'?'bg-brand-100 text-brand-600':p.kind==='aobd'?'bg-violet-100 text-violet-600':'bg-teal-100 text-teal-600'"
+                             x-text="(p.name||'SP').substring(0,2).toUpperCase()"></div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[12px] font-semibold text-brand-900 truncate" x-text="p.name"></span>
+                                <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[8px] font-mono text-surface-400 shrink-0" x-text="'v'+p.version"></span>
+                                <span x-show="p.is_default" class="rounded-full bg-amber-50 px-1.5 py-0.5 text-[8px] font-bold text-amber-600 shrink-0">DEFAULT</span>
+                            </div>
+                            <div class="flex items-center gap-1.5 mt-0.5">
+                                <span class="text-[9px] font-bold uppercase" :class="p.kind==='router'?'text-brand-500':p.kind==='aobd'?'text-violet-500':'text-teal-500'" x-text="p.kind"></span>
+                                <span class="text-[9px] text-surface-400" x-text="p.category"></span>
+                            </div>
+                        </div>
+                        <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                            <button @click.stop="previewPromptId = p.id; previewPrompt = p" class="p-1 rounded-md hover:bg-brand-50 text-surface-400 hover:text-brand-600" title="Visualizar">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                            </button>
+                            <button @click.stop="openPromptEditor(p)" class="p-1 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                            </button>
+                            <button @click.stop="copyPrompt(p)" class="p-1 rounded-md hover:bg-emerald-50 text-surface-400 hover:text-emerald-600" title="Copiar">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+                            </button>
+                            <button @click.stop="deletePrompt(p.id, p.name)" class="p-1 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600" title="Excluir">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                </template>
+                <template x-if="prompts.length===0">
+                    <div class="text-center py-10">
+                        <p class="text-[12px] text-surface-400 mb-3">Nenhum System Prompt salvo</p>
+                        <button @click="openPromptEditor(null)" class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white">Criar Prompt</button>
+                    </div>
+                </template>
+            </div>
+            <!-- Preview panel -->
+            <div x-show="previewPromptId" x-transition.duration.200ms class="w-[380px] shrink-0 rounded-lg border border-surface-200 bg-white overflow-hidden flex flex-col" style="max-height: 70vh">
+                <div class="flex items-center justify-between border-b border-surface-100 px-4 py-2.5">
+                    <span class="text-[12px] font-semibold text-brand-900 truncate" x-text="previewPrompt?.name"></span>
+                    <div class="flex gap-1">
+                        <button @click="openPromptEditor(previewPrompt)" class="p-1 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                        </button>
+                        <button @click="previewPromptId=null; previewPrompt=null" class="p-1 rounded-md hover:bg-surface-100 text-surface-400">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3">
+                    <div class="flex flex-wrap gap-1.5">
+                        <span class="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-bold text-brand-600" x-text="previewPrompt?.kind"></span>
+                        <span class="rounded-full bg-surface-100 px-2 py-0.5 text-[10px] text-surface-500" x-text="previewPrompt?.category"></span>
+                        <span class="rounded-full bg-surface-100 px-2 py-0.5 text-[10px] font-mono text-surface-400" x-text="'v' + previewPrompt?.version"></span>
+                        <span x-show="previewPrompt?.is_default" class="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-600">DEFAULT</span>
+                    </div>
+                    <div x-show="previewPrompt?.description">
+                        <h4 class="text-[9px] font-bold text-surface-400 uppercase tracking-wider mb-0.5">Descrição</h4>
+                        <p class="text-[11px] text-brand-900 leading-relaxed" x-text="previewPrompt?.description"></p>
+                    </div>
+                    <div>
+                        <h4 class="text-[9px] font-bold text-surface-400 uppercase tracking-wider mb-1">Prompt</h4>
+                        <pre class="rounded-lg bg-brand-950 text-brand-200 p-3 text-[10px] font-mono overflow-x-auto whitespace-pre-wrap" x-text="previewPrompt?.prompt_text || '—'"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- MODAL: Editor de System Prompt        -->
+    <!-- ══════════════════════════════════════ -->
+    <template x-if="promptEditorOpen">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
+            <div class="fixed inset-0 bg-black/40" @click="promptEditorOpen = false"></div>
+            <div class="relative z-10 w-full max-w-2xl rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden">
+                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4">
+                    <h3 class="text-[15px] font-bold text-brand-900" x-text="editingPromptId ? 'Editar System Prompt' : 'Novo System Prompt'"></h3>
+                    <button @click="promptEditorOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <div class="px-6 py-5 max-h-[70vh] overflow-y-auto scrollbar-thin space-y-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Nome *</label>
+                        <input x-model="promptForm.name" placeholder="Ex: Analista Financeiro" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[13px] text-brand-900 outline-none focus:border-brand-400"></div>
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Categoria</label>
+                        <select x-model="promptForm.category" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[13px] outline-none">
+                            <option value="geral">Geral</option><option value="orquestração">Orquestração</option>
+                            <option value="análise">Análise</option><option value="geração">Geração</option>
+                            <option value="validação">Validação</option><option value="extração">Extração</option>
+                        </select></div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Tipo de Agente</label>
+                        <select x-model="promptForm.kind" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[13px] outline-none">
+                            <option value="subagent">Subagente (SA)</option><option value="router">Roteador (AR)</option><option value="aobd">Orquestrador (AOBD)</option>
+                        </select></div>
+                        <div class="flex items-end">
+                            <label class="flex items-center gap-2 rounded-lg border border-surface-200 px-3 py-2 cursor-pointer hover:bg-surface-50">
+                                <input type="checkbox" x-model="promptForm.is_default" class="rounded border-surface-300">
+                                <span class="text-[12px] text-brand-900 font-medium">Prompt padrão</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Descrição</label>
+                    <input x-model="promptForm.description" placeholder="Breve descrição do propósito deste prompt" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-brand-400"></div>
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="text-[11px] font-semibold text-surface-500">Texto do Prompt *</label>
+                            <span class="text-[10px] text-surface-400" x-text="(promptForm.prompt_text?.length || 0) + ' caracteres'"></span>
+                        </div>
+                        <textarea x-model="promptForm.prompt_text" rows="14" placeholder="Você é um agente especializado em..."
+                                  class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[12px] font-mono text-brand-900 placeholder:text-surface-300 focus:border-brand-400 outline-none transition resize-none leading-relaxed"></textarea>
+                    </div>
+                </div>
+                <div class="border-t border-surface-100 px-6 py-4 flex items-center justify-end gap-3">
+                    <button @click="promptEditorOpen = false" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] font-medium text-surface-500 hover:bg-surface-50">Cancelar</button>
+                    <button @click="savePrompt()" :disabled="savingPrompt" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 transition-colors">
+                        <span x-text="savingPrompt ? 'Salvando...' : (editingPromptId ? 'Atualizar' : 'Criar Prompt')"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB: USUÁRIOS                         -->
+    <!-- ══════════════════════════════════════ -->
+    <div x-show="tab==='users'" class="max-w-3xl">
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-3">
+                <select x-model="userFilter" @change="loadUsers()" class="rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[12px] outline-none">
+                    <option value="">Todos os tipos</option>
+                    <option value="root">Root</option>
+                    <option value="admin">Admin</option>
+                    <option value="comum">Comum</option>
+                </select>
+                <span class="text-[11px] text-surface-400" x-text="userList.length + ' usuário(s)'"></span>
+            </div>
+            <button @click="openUserEditor(null)" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600 transition-colors">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                Novo Usuário
+            </button>
+        </div>
+        <div class="space-y-2">
+            <template x-for="u in userList" :key="u.id">
+                <div class="group flex items-center justify-between rounded-xl border border-surface-200 bg-white px-4 py-3 hover:shadow-sm transition-all">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-full text-[11px] font-bold text-white"
+                             :class="u.role==='root'?'bg-rose-500':u.role==='admin'?'bg-violet-500':'bg-brand-500'"
+                             x-text="(u.display_name||u.username).substring(0,2).toUpperCase()"></div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-[13px] font-semibold text-brand-900" x-text="u.display_name || u.username"></span>
+                                <span class="rounded-full px-2 py-0.5 text-[9px] font-bold uppercase"
+                                      :class="u.role==='root'?'bg-rose-50 text-rose-600':u.role==='admin'?'bg-violet-50 text-violet-600':'bg-brand-50 text-brand-600'"
+                                      x-text="u.role"></span>
+                                <span x-show="u.status==='inactive'" class="rounded-full bg-surface-100 px-2 py-0.5 text-[9px] text-surface-500">INATIVO</span>
+                            </div>
+                            <div class="text-[11px] text-surface-400">
+                                <span x-text="u.username"></span>
+                                <span x-show="u.email" x-text="' · ' + u.email"></span>
+                                <span x-show="u.domains && u.domains !== '[]'" class="ml-1">
+                                    · <span x-text="parseDomains(u.domains)"></span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button @click="openUserEditor(u)" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                        </button>
+                        <button @click="deleteUser(u)" class="p-1.5 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600" title="Excluir">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ══ USER EDITOR MODAL ══ -->
+    <template x-if="userEditorOpen">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
+            <div class="fixed inset-0 bg-black/40" @click="userEditorOpen = false"></div>
+            <div class="relative z-10 w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden">
+                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4">
+                    <h3 class="text-[15px] font-bold text-brand-900" x-text="editingUserId ? 'Editar Usuário' : 'Novo Usuário'"></h3>
+                    <button @click="userEditorOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <div class="px-6 py-5 space-y-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Username *</label>
+                        <input x-model="userForm.username" :disabled="!!editingUserId" :class="editingUserId ? 'bg-surface-50' : ''" placeholder="usuario.nome" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Nome de Exibição</label>
+                        <input x-model="userForm.display_name" placeholder="Nome Completo" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
+                    </div>
+                    <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Email</label>
+                    <input x-model="userForm.email" type="email" placeholder="usuario@empresa.com" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Tipo</label>
+                        <select x-model="userForm.role" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none">
+                            {% if user_role == 'root' %}<option value="root">Root</option>{% endif %}
+                            <option value="admin">Admin</option>
+                            <option value="comum">Comum</option>
+                        </select></div>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-surface-500 mb-1" x-text="editingUserId ? 'Nova Senha (deixe vazio para manter)' : 'Senha *'"></label>
+                            <input x-model="userForm.password" type="password" placeholder="••••••••" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Domínios</label>
+                        <div class="flex flex-wrap gap-2 mb-2">
+                            <template x-for="d in allDomains" :key="d.id">
+                                <label class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 px-2.5 py-1.5 cursor-pointer hover:bg-brand-50 transition-colors" :class="userDomainSelected(d.name) ? 'bg-brand-50 border-brand-300' : ''">
+                                    <input type="checkbox" :checked="userDomainSelected(d.name)" @change="toggleUserDomain(d.name)" class="rounded border-surface-300 text-brand-500">
+                                    <span class="text-[11px] font-medium text-brand-900" x-text="d.name"></span>
+                                </label>
+                            </template>
+                        </div>
+                        <div class="flex gap-2">
+                            <input x-model="newDomainName" placeholder="Novo domínio..." class="flex-1 rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] outline-none focus:border-brand-400">
+                            <button @click="createDomain()" class="rounded-lg bg-surface-100 px-3 py-1.5 text-[10px] font-medium text-surface-600 hover:bg-surface-200">Criar</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="border-t border-surface-100 px-6 py-4 flex items-center justify-end gap-3">
+                    <button @click="userEditorOpen = false" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] font-medium text-surface-500 hover:bg-surface-50">Cancelar</button>
+                    <button @click="saveUser()" :disabled="savingUser" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+                        <span x-text="savingUser ? 'Salvando...' : (editingUserId ? 'Atualizar' : 'Criar')"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function settingsPage() {
+    return {
+        tab: '{{ "users" if user_role == "admin" else "platform" }}',
+        /* ── Platform ── */
+        showKeys: {openai:false,maritaca:false,langfuse:false},
+        models: {openai:[],maritaca:[]},
+        saving: false, lastSaved: '', dirty: false, _snapshot: '',
+        config: {
+            openai_key:'',openai_model:'gpt-4o',
+            maritaca_key:'',maritaca_model:'sabia-3',maritaca_url:'https://chat.maritaca.ai/api',
+            langfuse_public:'',langfuse_secret:'',langfuse_host:'https://cloud.langfuse.com',
+            max_iterations:25,timeout:120,
+        },
+        /* ── Prompts ── */
+        prompts: [],
+        promptFilter: {category:'',kind:''},
+        promptEditorOpen: false,
+        editingPromptId: null,
+        savingPrompt: false,
+        previewPromptId: null, previewPrompt: null,
+        promptForm: {name:'',description:'',category:'geral',kind:'subagent',prompt_text:'',variables:'[]',is_default:false},
+        /* ── Users ── */
+        userList: [], userFilter: '',
+        userEditorOpen: false, editingUserId: null, savingUser: false,
+        userForm: {username:'',display_name:'',email:'',role:'comum',password:'',domains:'[]'},
+        allDomains: [], newDomainName: '',
+        currentUserRole: '{{ user_role }}',
+
+        async load() {
+            const urlTab = new URLSearchParams(window.location.search).get('tab');
+            if (urlTab && ['platform','prompts','users'].includes(urlTab)) this.tab = urlTab;
+            try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4o',name:'GPT-4o',context:'128K',tier:'flagship'}],maritaca:[{id:'sabia-3',name:'Sabiá-3',context:'32K',tier:'flagship'}]};}
+            try{const d=await api.get('/api/v1/settings');const s=d.settings||{};for(const[k,v]of Object.entries(s)){if(k in this.config)this.config[k]=(k==='max_iterations'||k==='timeout')?parseInt(v)||this.config[k]:v;}}catch{}
+            this._snapshot=JSON.stringify(this.config);
+            this.$watch('config',()=>{this.dirty=JSON.stringify(this.config)!==this._snapshot},{deep:true});
+            if (this.tab === 'users') await this.loadUsers();
+            if (this.tab === 'prompts') await this.loadPrompts();
+        },
+
+        async savePlatform() {
+            this.saving=true;
+            try{await api.put('/api/v1/settings',this.config);this.lastSaved=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});this._snapshot=JSON.stringify(this.config);this.dirty=false;showToast('Configurações salvas')}
+            catch(e){showToast('Erro: '+e.message,'error')}
+            this.saving=false;
+        },
+
+        /* ── Prompts methods ── */
+        async loadPrompts() {
+            const params = new URLSearchParams();
+            if(this.promptFilter.category) params.set('category',this.promptFilter.category);
+            if(this.promptFilter.kind) params.set('kind',this.promptFilter.kind);
+            try{const d=await api.get('/api/v1/system-prompts?'+params);this.prompts=d.prompts||[]}catch{}
+        },
+
+        openPromptEditor(p) {
+            if(p) {
+                this.editingPromptId = p.id;
+                this.promptForm = {name:p.name,description:p.description||'',category:p.category||'geral',kind:p.kind||'subagent',prompt_text:p.prompt_text,variables:p.variables||'[]',is_default:!!p.is_default};
+            } else {
+                this.editingPromptId = null;
+                this.promptForm = {name:'',description:'',category:'geral',kind:'subagent',prompt_text:'',variables:'[]',is_default:false};
+            }
+            this.promptEditorOpen = true;
+        },
+
+        async savePrompt() {
+            if(!this.promptForm.name.trim()||!this.promptForm.prompt_text.trim()){showToast('Nome e texto obrigatórios','error');return}
+            this.savingPrompt=true;
+            try{
+                if(this.editingPromptId){
+                    await api.put('/api/v1/system-prompts/'+this.editingPromptId, this.promptForm);
+                    showToast('Prompt atualizado');
+                } else {
+                    await api.post('/api/v1/system-prompts', this.promptForm);
+                    showToast('Prompt criado');
+                }
+                this.promptEditorOpen=false;
+                await this.loadPrompts();
+            }catch(e){showToast('Erro: '+e.message,'error')}
+            this.savingPrompt=false;
+        },
+
+        async deletePrompt(id,name) {
+            if(!confirm(`Remover prompt "${name}"?`)) return;
+            try{await api.del('/api/v1/system-prompts/'+id);showToast('Prompt removido');await this.loadPrompts()}catch{showToast('Erro','error')}
+        },
+
+        async copyPrompt(p) {
+            try{await navigator.clipboard.writeText(p.prompt_text);showToast('Prompt copiado')}catch{showToast('Erro ao copiar','error')}
+        },
+
+        /* ── Users ── */
+        async loadUsers() {
+            const params = this.userFilter ? `?role=${this.userFilter}` : '';
+            try { this.userList = (await api.get('/api/v1/users' + params)).users || []; } catch {}
+            try { this.allDomains = (await api.get('/api/v1/domains')).domains || []; } catch {}
+        },
+
+        parseDomains(raw) {
+            try { const arr = JSON.parse(raw || '[]'); return arr.join(', '); } catch { return raw; }
+        },
+
+        userDomainSelected(name) {
+            try { return JSON.parse(this.userForm.domains || '[]').includes(name); } catch { return false; }
+        },
+
+        toggleUserDomain(name) {
+            let arr = [];
+            try { arr = JSON.parse(this.userForm.domains || '[]'); } catch {}
+            if (arr.includes(name)) arr = arr.filter(d => d !== name);
+            else arr.push(name);
+            this.userForm.domains = JSON.stringify(arr);
+        },
+
+        async createDomain() {
+            if (!this.newDomainName.trim()) return;
+            try { await api.post('/api/v1/domains', { name: this.newDomainName.trim() }); this.newDomainName = ''; await this.loadUsers(); showToast('Domínio criado'); } catch(e) { showToast(e.message, 'error'); }
+        },
+
+        openUserEditor(u) {
+            if (u) {
+                this.editingUserId = u.id;
+                this.userForm = { username: u.username, display_name: u.display_name||'', email: u.email||'', role: u.role, password: '', domains: u.domains||'[]' };
+            } else {
+                this.editingUserId = null;
+                this.userForm = { username:'', display_name:'', email:'', role:'comum', password:'', domains:'[]' };
+            }
+            this.userEditorOpen = true;
+        },
+
+        async saveUser() {
+            if (!this.editingUserId && (!this.userForm.username.trim() || !this.userForm.password)) { showToast('Username e senha obrigatórios', 'error'); return; }
+            this.savingUser = true;
+            try {
+                const payload = {...this.userForm};
+                if (this.editingUserId && !payload.password) delete payload.password;
+                if (this.editingUserId) {
+                    await api.put('/api/v1/users/' + this.editingUserId, payload);
+                    showToast('Usuário atualizado');
+                } else {
+                    await api.post('/api/v1/users', payload);
+                    showToast('Usuário criado');
+                }
+                this.userEditorOpen = false; await this.loadUsers();
+            } catch(e) { showToast(e.message, 'error'); }
+            this.savingUser = false;
+        },
+
+        async deleteUser(u) {
+            if (!confirm(`Remover usuário "${u.display_name || u.username}"?`)) return;
+            try { await api.del('/api/v1/users/' + u.id); showToast('Usuário removido'); await this.loadUsers(); } catch(e) { showToast(e.message, 'error'); }
+        },
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,108 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<div x-data="harnessPage()" x-init="load()">
+    <p class="text-[12px] text-surface-400 mb-6">Harness de Avaliação §9.5 — dataset gold adversarial e avaliação baseline/regressão</p>
+
+    <div class="grid lg:grid-cols-2 gap-6">
+        <!-- Gold Cases -->
+        <div class="rounded-xl border border-surface-200 bg-white">
+            <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3.5">
+                <h2 class="text-[13px] font-semibold text-brand-900">Dataset Gold Adversarial</h2>
+                <button @click="showGoldForm=!showGoldForm" class="text-[12px] text-brand-500 font-medium hover:text-brand-700">+ Novo Caso</button>
+            </div>
+            <div x-show="showGoldForm" x-transition class="p-4 border-b border-surface-100 bg-surface-50 space-y-2">
+                <input x-model="goldForm.input_text" placeholder="Input do caso" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                <input x-model="goldForm.expected_output" placeholder="Output esperado" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                <div class="flex gap-2">
+                    <select x-model="goldForm.case_type" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                        <option value="normal">Normal</option><option value="adversarial">Adversarial</option>
+                    </select>
+                    <select x-model="goldForm.expected_state" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                        <option value="Recommend">Recommend</option><option value="Refuse">Refuse</option><option value="Escalate">Escalate</option>
+                    </select>
+                    <input x-model="goldForm.dataset_version" placeholder="v1" class="w-20 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                </div>
+                <button @click="createGoldCase()" class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600">Criar</button>
+            </div>
+            <div class="divide-y divide-surface-50 max-h-80 overflow-y-auto scrollbar-thin">
+                <template x-for="c in goldCases" :key="c.id">
+                    <div class="px-5 py-3">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                                  :class="c.case_type==='adversarial'?'bg-rose-50 text-rose-700':'bg-surface-100 text-surface-500'"
+                                  x-text="c.case_type"></span>
+                            <span class="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-600" x-text="c.expected_state"></span>
+                            <span class="text-[10px] text-surface-400 font-mono" x-text="c.dataset_version"></span>
+                        </div>
+                        <p class="text-[12px] text-brand-900 truncate" x-text="c.input_text"></p>
+                    </div>
+                </template>
+            </div>
+            <template x-if="goldCases.length===0"><div class="px-5 py-8 text-center text-[12px] text-surface-400">Nenhum caso gold</div></template>
+        </div>
+
+        <!-- Eval Runs -->
+        <div class="rounded-xl border border-surface-200 bg-white">
+            <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3.5">
+                <h2 class="text-[13px] font-semibold text-brand-900">Execuções de Avaliação</h2>
+                <button @click="showRunForm=!showRunForm" class="text-[12px] text-brand-500 font-medium hover:text-brand-700">+ Executar</button>
+            </div>
+            <div x-show="showRunForm" x-transition class="p-4 border-b border-surface-100 bg-surface-50 space-y-2">
+                <select x-model="runForm.agent_id" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                    <option value="">Selecione agente</option>
+                    <template x-for="a in agents" :key="a.id"><option :value="a.id" x-text="a.name"></option></template>
+                </select>
+                <select x-model="runForm.release_id" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                    <option value="">Selecione release</option>
+                    <template x-for="r in releases" :key="r.id"><option :value="r.id" x-text="r.name || r.id.substring(0,8)"></option></template>
+                </select>
+                <div class="flex gap-2">
+                    <select x-model="runForm.run_type" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                        <option value="baseline">Baseline</option><option value="regression">Regressão</option>
+                    </select>
+                    <button @click="executeHarness()" :disabled="running" class="rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50">
+                        <span x-text="running?'Executando...':'Executar Harness'"></span>
+                    </button>
+                </div>
+            </div>
+            <div class="divide-y divide-surface-50 max-h-80 overflow-y-auto scrollbar-thin">
+                <template x-for="r in evalRuns" :key="r.id">
+                    <div class="px-5 py-3">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-[12px] font-medium text-brand-900" x-text="r.run_type + ' — ' + (r.gate_result||r.status)"></span>
+                            <span class="rounded-full px-2 py-0.5 text-[10px] font-bold"
+                                  :class="r.gate_result==='approved'?'bg-emerald-50 text-emerald-700':r.gate_result==='rejected'?'bg-rose-50 text-rose-700':'bg-amber-50 text-amber-700'"
+                                  x-text="r.gate_result||r.status"></span>
+                        </div>
+                        <div class="flex gap-4 text-[11px] text-surface-400">
+                            <span x-text="'Acurácia: '+(r.accuracy*100).toFixed(1)+'%'"></span>
+                            <span x-text="r.passed+'/'+r.total_cases+' passed'"></span>
+                            <span x-text="r.avg_latency_ms?.toFixed(0)+'ms avg'"></span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+            <template x-if="evalRuns.length===0"><div class="px-5 py-8 text-center text-[12px] text-surface-400">Nenhuma avaliação executada</div></template>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function harnessPage(){return{
+    goldCases:[],evalRuns:[],agents:[],releases:[],showGoldForm:false,showRunForm:false,running:false,
+    goldForm:{input_text:'',expected_output:'',case_type:'normal',expected_state:'Recommend',dataset_version:'v1'},
+    runForm:{agent_id:'',release_id:'',run_type:'baseline',gold_version:'latest'},
+    async load(){
+        try{this.goldCases=(await api.get('/api/v1/gold-cases')).cases||[]}catch{}
+        try{this.evalRuns=(await api.get('/api/v1/eval-runs')).runs||[]}catch{}
+        try{this.agents=(await api.get('/api/v1/agents')).agents||[]}catch{}
+        try{this.releases=(await api.get('/api/v1/releases')).releases||[]}catch{}
+    },
+    async createGoldCase(){if(!this.goldForm.input_text.trim()){showToast('Input obrigatório','error');return}
+    try{await api.post('/api/v1/gold-cases',this.goldForm);showToast('Caso gold criado');this.showGoldForm=false;await this.load()}catch(e){showToast(e.message,'error')}},
+    async executeHarness(){if(!this.runForm.agent_id||!this.runForm.release_id){showToast('Selecione agente e release','error');return}
+    this.running=true;try{const r=await api.post('/api/v1/eval-runs/execute',this.runForm);showToast(`Harness: ${r.gate_result} (${(r.accuracy*100).toFixed(1)}%)`);this.showRunForm=false;await this.load()}catch(e){showToast(e.message,'error')}this.running=false},
+}}
+</script>
+{% endblock %}

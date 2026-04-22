@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} — {{ app_name }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+    tailwind.config = {
+        theme: { extend: {
+            fontFamily: { sans: ['DM Sans','system-ui','sans-serif'], mono: ['JetBrains Mono','monospace'] },
+            colors: {
+                brand: {50:'#f0f7ff',100:'#dfeeff',200:'#b8dcff',300:'#7ac0ff',400:'#3aa0ff',500:'#0b7dda',600:'#0062b8',700:'#004d95',800:'#00417a',900:'#003766',950:'#002244'},
+                surface: {0:'#ffffff',50:'#f8fafb',100:'#f1f4f6',200:'#e4e9ed',300:'#cdd5dc',400:'#9ba8b5',500:'#6b7a8a'},
+            },
+        }},
+    }
+    </script>
+    <style>
+        [x-cloak]{display:none!important}
+        .scrollbar-thin::-webkit-scrollbar{width:5px}
+        .scrollbar-thin::-webkit-scrollbar-track{background:transparent}
+        .scrollbar-thin::-webkit-scrollbar-thumb{background:#cdd5dc;border-radius:9999px}
+        .fade-in{animation:fadeIn .3s ease-out}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes pulseDot{0%,100%{opacity:1}50%{opacity:.4}}
+        .pulse-dot{animation:pulseDot 1.4s ease-in-out infinite}
+        .nav-item{transition:all .15s ease}
+        .nav-item:hover{background:rgba(11,125,218,.06)}
+        .nav-item.active{background:rgba(11,125,218,.1);color:#0b7dda;border-right:2px solid #0b7dda}
+        /* Tour spotlight */
+        .tour-overlay{position:fixed;inset:0;z-index:9998;pointer-events:auto}
+        .tour-spotlight{position:absolute;border-radius:12px;box-shadow:0 0 0 9999px rgba(0,20,50,0.65);z-index:9999;transition:all .4s cubic-bezier(.4,0,.2,1);pointer-events:none}
+        .tour-card{position:fixed;z-index:10000;max-width:380px;pointer-events:auto}
+        /* Help button */
+        .help-btn{opacity:0;transition:opacity .15s}
+        *:hover>.help-btn{opacity:1}
+    </style>
+    {% block head_extra %}{% endblock %}
+</head>
+<body class="h-full bg-surface-50 font-sans text-surface-500 antialiased" x-data="appShell()" x-init="initSearch()" x-cloak>
+
+    <!-- Mobile overlay -->
+    <div x-show="sidebarOpen" x-transition.opacity class="fixed inset-0 z-40 bg-black/30 lg:hidden" @click="sidebarOpen = false"></div>
+
+    <div class="flex h-full">
+
+        <!-- ════════════ LEFT NAV ════════════ -->
+        <aside :class="[sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0', sidebarCollapsed ? 'lg:w-[60px]' : 'w-[260px]']"
+               class="fixed lg:static inset-y-0 left-0 z-50 flex flex-col border-r border-surface-200 bg-white transition-all duration-200">
+            <!-- Logo -->
+            <div id="tour-logo" class="flex h-16 items-center border-b border-surface-100 px-3">
+                <template x-if="!sidebarCollapsed">
+                    <div class="flex items-center gap-3 flex-1 min-w-0 px-2">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500 text-white font-bold text-sm shrink-0">AI</div>
+                        <div class="flex-1 leading-tight min-w-0">
+                            <div class="text-[13px] font-semibold text-brand-900 tracking-tight">agente-inteligência</div>
+                            <div class="text-[10px] text-surface-400 font-medium uppercase tracking-widest">AI Mesh Platform</div>
+                        </div>
+                        <button @click="sidebarCollapsed = true" class="flex h-7 w-7 items-center justify-center rounded-lg text-surface-300 hover:bg-surface-100 hover:text-brand-600 transition-colors shrink-0" title="Recolher menu">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
+                        </button>
+                    </div>
+                </template>
+                <template x-if="sidebarCollapsed">
+                    <button @click="sidebarCollapsed = false" class="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500 text-white font-bold text-sm mx-auto hover:bg-brand-600 transition-colors" title="Expandir menu">AI</button>
+                </template>
+            </div>
+
+            <nav class="flex-1 overflow-y-auto scrollbar-thin py-4 px-3 space-y-1">
+                <div class="px-2 pb-2 text-[10px] font-semibold uppercase tracking-wider text-surface-400" x-show="!sidebarCollapsed">Principal</div>
+
+                <div class="relative" id="tour-nav-dashboard">
+                    <a href="/" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'dashboard' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zm0 7a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1h-4a1 1 0 01-1-1v-5zm-10-2a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1v-5z"/></svg>
+                        <span x-show="!sidebarCollapsed">Dashboard</span>
+                    </a>
+                    <button @click="openHelp('dashboard')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+                <div class="relative" id="tour-nav-agents">
+                    <a href="/agents" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'agents' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 00.659 1.591L19 14.5m-4.25-11.396c.251.023.501.05.75.082M5 14.5l-1.456 1.456a1.125 1.125 0 00-.098 1.476l.24.32a4.5 4.5 0 005.6 1.272L12 17.25l2.714 1.774a4.5 4.5 0 005.6-1.272l.24-.32a1.125 1.125 0 00-.098-1.476L19 14.5"/></svg>
+                        <span x-show="!sidebarCollapsed">Agentes</span>
+                    </a>
+                    <button @click="openHelp('agents')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+                <div class="relative" id="tour-nav-skills">
+                    <a href="/skills" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'skills' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63"/></svg>
+                        <span x-show="!sidebarCollapsed">Skills</span>
+                    </a>
+                    <button @click="openHelp('skills')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+
+                <div class="px-2 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-surface-400" x-show="!sidebarCollapsed">Operação</div>
+
+                <div class="relative" id="tour-nav-workspace">
+                    <a href="/workspace" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'workspace' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242"/></svg>
+                        <span x-show="!sidebarCollapsed">Workspace</span>
+                    </a>
+                    <button @click="openHelp('workspace')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+                <div class="relative" id="tour-nav-mesh">
+                    <a href="/mesh" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'mesh' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l3 8m5-8l-3 8M7.5 5h9"/></svg>
+                        <span x-show="!sidebarCollapsed">AI Mesh</span>
+                    </a>
+                    <button @click="openHelp('mesh')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+                <div class="relative" id="tour-nav-tools">
+                    <a href="/mcp" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'tools' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/><path d="M4.867 19.125h.008v.008h-.008v-.008z"/></svg>
+                        <span x-show="!sidebarCollapsed">MCP</span>
+                    </a>
+                    <button @click="openHelp('tools')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+                <div class="relative" id="tour-nav-evidence">
+                    <a href="/rag" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'evidence' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z"/></svg>
+                        <span x-show="!sidebarCollapsed">RAG</span>
+                    </a>
+                    <button @click="openHelp('evidence')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+
+
+                <div class="relative" id="tour-nav-api-connectors">
+                    <a href="/api-connectors" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'api_connectors' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.07-9.07l4.5-4.5a4.5 4.5 0 016.364 6.364l-1.757 1.757"/></svg>
+                        <span x-show="!sidebarCollapsed">API Connectors</span>
+                    </a>
+                    <button @click="openHelp('api_connectors')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+
+                <div class="px-2 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-surface-400" x-show="!sidebarCollapsed">Ciclo de Vida</div>
+
+                <div class="relative" id="tour-nav-harness">
+                    <a href="/harness" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'harness' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 00.659 1.591L19 14.5"/></svg>
+                        <span x-show="!sidebarCollapsed">Harness</span>
+                    </a>
+                    <button @click="openHelp('harness')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+                <div class="relative" id="tour-nav-releases">
+                    <a href="/releases" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'releases' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M7.5 7.5h-.75A2.25 2.25 0 004.5 9.75v7.5a2.25 2.25 0 002.25 2.25h7.5a2.25 2.25 0 002.25-2.25v-7.5a2.25 2.25 0 00-2.25-2.25h-.75m0-3l-3-3m0 0l-3 3m3-3v11.25m6-2.25h.75a2.25 2.25 0 012.25 2.25v7.5a2.25 2.25 0 01-2.25 2.25h-7.5a2.25 2.25 0 01-2.25-2.25v-.75"/></svg>
+                        <span x-show="!sidebarCollapsed">Releases</span>
+                    </a>
+                    <button @click="openHelp('releases')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+
+                <div class="px-2 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-surface-400" x-show="!sidebarCollapsed">Análise</div>
+
+                <div class="relative" id="tour-nav-observability">
+                    <a href="/observability" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'observability' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zm6.75-4.5c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625z"/></svg>
+                        <span x-show="!sidebarCollapsed">Observabilidade</span>
+                    </a>
+                    <button @click="openHelp('observability')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+                <div class="relative">
+                    <a href="/history" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'history' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <span x-show="!sidebarCollapsed">Histórico</span>
+                    </a>
+                    <button @click="openHelp('history')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+                <div class="relative">
+                    <a href="/settings" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'settings' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/><circle cx="12" cy="12" r="3"/></svg>
+                        <span x-show="!sidebarCollapsed">Configurações</span>
+                    </a>
+                    <button @click="openHelp('settings')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                </div>
+            </nav>
+
+            <div class="border-t border-surface-100 px-5 py-3">
+                <div class="flex items-center gap-2 text-[11px] text-surface-400">
+                    <div class="h-2 w-2 rounded-full bg-emerald-400 pulse-dot"></div>
+                    <span x-show="!sidebarCollapsed">LangGraph · LangFuse · FSM §15</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ════════════ MAIN ════════════ -->
+        <main class="flex flex-1 flex-col overflow-hidden">
+            <header class="flex h-14 items-center justify-between border-b border-surface-200 bg-white px-4 lg:px-6">
+                <div class="flex items-center gap-3">
+                    <button @click="sidebarOpen = !sidebarOpen" class="lg:hidden p-1.5 rounded-md hover:bg-surface-100">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
+                    </button>
+                    <h1 class="text-[15px] font-semibold text-brand-900">{{ title }}</h1>
+                </div>
+                <div class="flex items-center gap-2">
+                    <!-- Tour button -->
+                    <button @click="startTour()" id="tour-start-btn"
+                            class="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-violet-500 to-brand-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:shadow-md hover:scale-[1.02] transition-all">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4.26 10.147a60.438 60.438 0 00-.491 6.347A48.62 48.62 0 0112 20.904a48.62 48.62 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.636 50.636 0 00-2.658-.813A59.906 59.906 0 0112 3.493a59.903 59.903 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg>
+                        Guia Interativo
+                    </button>
+                    <button @click="searchOpen = true; $nextTick(() => $refs.searchInput?.focus())" class="hidden sm:flex items-center gap-1.5 rounded-full bg-surface-100 px-3 py-1.5 text-[12px] text-surface-400 hover:bg-surface-200 transition-colors cursor-pointer">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
+                        Buscar... <kbd class="ml-3 rounded border border-surface-200 bg-white px-1.5 py-0.5 text-[10px] font-mono">⌘K</kbd>
+                    </button>
+                    {% if current_user %}
+                    <!-- User menu -->
+                    <div class="relative" x-data="{userMenuOpen:false}">
+                        <button @click="userMenuOpen = !userMenuOpen" class="flex items-center gap-1.5 rounded-full bg-surface-100 pl-1.5 pr-3 py-1 hover:bg-surface-200 transition-colors">
+                            <div class="flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-white
+                                {% if current_user.role == 'root' %}bg-rose-500{% elif current_user.role == 'admin' %}bg-violet-500{% else %}bg-brand-500{% endif %}">
+                                {{ (current_user.display_name or current_user.username)[:2]|upper }}
+                            </div>
+                            <span class="text-[11px] font-medium text-surface-600 hidden md:inline">{{ current_user.display_name or current_user.username }}</span>
+                        </button>
+                        <div x-show="userMenuOpen" @click.away="userMenuOpen=false" x-transition
+                             class="absolute right-0 top-full mt-1 w-48 rounded-xl bg-white border border-surface-200 shadow-lg z-50 py-1">
+                            <div class="px-3 py-2 border-b border-surface-100">
+                                <div class="text-[12px] font-semibold text-brand-900">{{ current_user.display_name or current_user.username }}</div>
+                                <div class="text-[10px] text-surface-400">{{ current_user.role|upper }} · {{ current_user.username }}</div>
+                            </div>
+                            <a href="/settings" class="block px-3 py-2 text-[12px] text-surface-600 hover:bg-surface-50">Configurações</a>
+                            <button @click="fetch('/api/v1/users/logout',{method:'POST'}).then(()=>window.location.href='/login')" class="block w-full text-left px-3 py-2 text-[12px] text-rose-600 hover:bg-rose-50">Sair</button>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </header>
+
+            <div class="flex flex-1 overflow-hidden">
+                <div class="flex-1 overflow-y-auto scrollbar-thin p-4 lg:p-6">
+                    <div class="fade-in">{% block content %}{% endblock %}</div>
+                </div>
+                {% block right_panel %}{% endblock %}
+            </div>
+        </main>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <!-- TOUR SPOTLIGHT OVERLAY                            -->
+    <!-- ══════════════════════════════════════════════════ -->
+    <template x-if="tourActive">
+        <div>
+            <div class="tour-overlay" @click="nextTourStep()"></div>
+            <div class="tour-spotlight" :style="spotlightStyle"></div>
+            <div class="tour-card" :style="cardPosition">
+                <div class="rounded-2xl border border-brand-200 bg-white shadow-2xl p-5 w-[360px]">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="flex items-center gap-2">
+                            <span class="flex h-7 w-7 items-center justify-center rounded-full bg-brand-500 text-white text-[11px] font-bold" x-text="tourStep + 1"></span>
+                            <span class="text-[10px] font-semibold text-surface-400 uppercase tracking-wider" x-text="'Passo ' + (tourStep+1) + ' de ' + tourSteps.length"></span>
+                        </div>
+                        <button @click="endTour()" class="p-1 rounded-md hover:bg-surface-100 text-surface-400">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <h3 class="text-[15px] font-bold text-brand-900 mb-2" x-text="currentTourStep?.title"></h3>
+                    <p class="text-[12px] text-surface-500 leading-relaxed mb-4" x-text="currentTourStep?.description"></p>
+                    <div class="flex items-center justify-between">
+                        <button @click="prevTourStep()" x-show="tourStep > 0" class="rounded-lg border border-surface-200 px-3 py-1.5 text-[12px] font-medium text-surface-500 hover:bg-surface-50">Anterior</button>
+                        <div x-show="tourStep === 0"></div>
+                        <button @click="nextTourStep()" class="rounded-lg bg-brand-500 px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 transition-colors"
+                                x-text="tourStep < tourSteps.length - 1 ? 'Próximo' : 'Concluir'"></button>
+                    </div>
+                    <!-- Progress dots -->
+                    <div class="flex justify-center gap-1.5 mt-4">
+                        <template x-for="(_, i) in tourSteps" :key="i">
+                            <div class="h-1.5 rounded-full transition-all" :class="i === tourStep ? 'w-4 bg-brand-500' : i < tourStep ? 'w-1.5 bg-brand-300' : 'w-1.5 bg-surface-200'"></div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <!-- HELP MODAL                                        -->
+    <!-- ══════════════════════════════════════════════════ -->
+    <template x-if="helpOpen">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4" @click.self="helpOpen = false">
+            <div class="fixed inset-0 bg-black/40" @click="helpOpen = false"></div>
+            <div class="relative z-10 w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden">
+                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
+                        </div>
+                        <div>
+                            <h3 class="text-[15px] font-bold text-brand-900" x-text="helpData?.title"></h3>
+                            <span class="text-[10px] font-semibold text-brand-400 uppercase tracking-wider" x-text="helpData?.section"></span>
+                        </div>
+                    </div>
+                    <button @click="helpOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+                </div>
+                <div class="px-6 py-5 max-h-[60vh] overflow-y-auto scrollbar-thin space-y-4">
+                    <div>
+                        <h4 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-1.5">O que é</h4>
+                        <p class="text-[13px] text-surface-500 leading-relaxed" x-text="helpData?.what"></p>
+                    </div>
+                    <div>
+                        <h4 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-1.5">Fundamento (Especificação)</h4>
+                        <p class="text-[13px] text-surface-500 leading-relaxed" x-text="helpData?.foundation"></p>
+                    </div>
+                    <div>
+                        <h4 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-1.5">Como usar</h4>
+                        <p class="text-[13px] text-surface-500 leading-relaxed" x-text="helpData?.usage"></p>
+                    </div>
+                </div>
+                <div class="border-t border-surface-100 px-6 py-3 bg-surface-50">
+                    <button @click="helpOpen = false" class="w-full rounded-lg bg-brand-500 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 transition-colors">Entendi</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <!-- SEARCH COMMAND PALETTE                            -->
+    <!-- ══════════════════════════════════════════════════ -->
+    <template x-if="searchOpen">
+        <div class="fixed inset-0 z-[9995] flex items-start justify-center pt-[15vh] p-4" @click.self="searchOpen = false" @keydown.escape.window="searchOpen = false">
+            <div class="fixed inset-0 bg-black/40" @click="searchOpen = false"></div>
+            <div class="relative z-10 w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden">
+                <!-- Input -->
+                <div class="flex items-center gap-3 border-b border-surface-100 px-4 py-3">
+                    <svg class="w-5 h-5 text-surface-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
+                    <input x-ref="searchInput" x-model="searchQuery" @input.debounce.300ms="runSearch()" type="text" placeholder="Buscar agentes, skills, sessões, prompts..."
+                           class="flex-1 text-[14px] text-brand-900 placeholder:text-surface-300 outline-none bg-transparent" autofocus>
+                    <kbd class="rounded border border-surface-200 bg-surface-50 px-1.5 py-0.5 text-[10px] font-mono text-surface-400">ESC</kbd>
+                </div>
+                <!-- Results -->
+                <div class="max-h-[50vh] overflow-y-auto scrollbar-thin">
+                    <template x-if="searchResults.length > 0">
+                        <div class="py-2">
+                            <template x-for="r in searchResults" :key="r.id">
+                                <a :href="r.url" @click="searchOpen = false" class="flex items-center gap-3 px-4 py-2.5 hover:bg-brand-50 transition-colors cursor-pointer">
+                                    <div class="flex h-8 w-8 items-center justify-center rounded-lg shrink-0 text-[11px] font-bold"
+                                         :class="{'bg-brand-100 text-brand-700': r.icon==='agent', 'bg-teal-100 text-teal-700': r.icon==='skill', 'bg-violet-100 text-violet-700': r.icon==='session', 'bg-amber-100 text-amber-700': r.icon==='prompt', 'bg-emerald-100 text-emerald-700': r.icon==='knowledge'}"
+                                         x-text="r.type?.substring(0,2).toUpperCase()"></div>
+                                    <div class="flex-1 min-w-0">
+                                        <div class="text-[13px] font-medium text-brand-900 truncate" x-text="r.title"></div>
+                                        <div class="text-[11px] text-surface-400 truncate" x-text="r.subtitle"></div>
+                                    </div>
+                                    <span class="rounded-full bg-surface-100 px-2 py-0.5 text-[9px] font-semibold text-surface-400 uppercase shrink-0" x-text="r.type"></span>
+                                </a>
+                            </template>
+                        </div>
+                    </template>
+                    <template x-if="searchQuery.length >= 2 && searchResults.length === 0 && !searchLoading">
+                        <div class="px-4 py-8 text-center text-[13px] text-surface-400">Nenhum resultado para "<span x-text="searchQuery" class="font-medium text-brand-900"></span>"</div>
+                    </template>
+                    <template x-if="searchQuery.length < 2 && searchResults.length === 0">
+                        <div class="px-4 py-6 text-center">
+                            <p class="text-[12px] text-surface-400 mb-3">Digite ao menos 2 caracteres para buscar</p>
+                            <div class="flex flex-wrap justify-center gap-2">
+                                <button @click="searchQuery='agente';runSearch()" class="rounded-full bg-surface-100 px-3 py-1 text-[11px] text-surface-500 hover:bg-surface-200">agente</button>
+                                <button @click="searchQuery='skill';runSearch()" class="rounded-full bg-surface-100 px-3 py-1 text-[11px] text-surface-500 hover:bg-surface-200">skill</button>
+                                <button @click="searchQuery='fatura';runSearch()" class="rounded-full bg-surface-100 px-3 py-1 text-[11px] text-surface-500 hover:bg-surface-200">fatura</button>
+                            </div>
+                        </div>
+                    </template>
+                    <template x-if="searchLoading">
+                        <div class="px-4 py-6 text-center text-[12px] text-surface-400">Buscando...</div>
+                    </template>
+                </div>
+                <!-- Footer -->
+                <div class="border-t border-surface-100 px-4 py-2 flex items-center justify-between text-[10px] text-surface-400">
+                    <span x-show="searchResults.length > 0" x-text="searchResults.length + ' resultado(s)'"></span>
+                    <span x-show="searchResults.length === 0"></span>
+                    <span>Enter para navegar · ESC para fechar</span>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <script>
+    function appShell() {
+        return {
+            sidebarOpen: false,
+            sidebarCollapsed: false,
+            /* ══ Search ══ */
+            searchOpen: false,
+            searchQuery: '',
+            searchResults: [],
+            searchLoading: false,
+            async runSearch() {
+                if (this.searchQuery.length < 2) { this.searchResults = []; return; }
+                this.searchLoading = true;
+                try {
+                    const d = await api.get('/api/v1/search?q=' + encodeURIComponent(this.searchQuery));
+                    this.searchResults = d.results || [];
+                } catch { this.searchResults = []; }
+                this.searchLoading = false;
+            },
+            initSearch() {
+                document.addEventListener('keydown', (e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+                        e.preventDefault();
+                        this.searchOpen = !this.searchOpen;
+                        if (this.searchOpen) this.$nextTick(() => this.$refs.searchInput?.focus());
+                    }
+                });
+            },
+            /* ══ Tour ══ */
+            tourActive: false, tourStep: 0,
+            tourSteps: [
+                {el:'tour-logo', title:'agente-inteligência', description:'Plataforma multi-agente orientada a SKILL.md sobre AI Mesh. Arquitetura de três camadas: Orquestrador (AOBD), Roteador (AR) e Subagente (SA), conectados via protocolo A2A com Evidence Runtime e FSM de 9 estados.'},
+                {el:'tour-nav-dashboard', title:'Dashboard', description:'Visão geral da plataforma: contagem de agentes por camada (AOBD/AR/SA), skills registradas, interações processadas pela FSM de 9 estados, releases ativas, conectores de API e métricas agregadas.'},
+                {el:'tour-nav-agents', title:'Agentes', description:'CRUD de agentes nas três camadas §4. Cada agente pode ser AOBD, Roteador ou Subagente. Vincule um SKILL.md para definir o comportamento. Agentes sem skill e com prompt genérico são detectados como pass-through e ignorados (0ms) em pipelines do AI Mesh.'},
+                {el:'tour-nav-skills', title:'Skills — SKILL.md §5', description:'Contrato executável do agente. Defina Purpose, Workflow, Tool Bindings, Output Contract, Guardrails e Execution Profile (fast/standard/rigorous). O parser valida a anatomia canônica. O Execution Profile controla quantas chamadas LLM e se há reflexão e verificação de evidência.'},
+                {el:'tour-nav-workspace', title:'Workspace', description:'Execução e interação com agentes. FSM §15: Intake → PolicyCheck → RetrieveEvidence → DraftAnswer → VerifyEvidence → Recommend/Refuse/Escalate → LogAndClose. Respostas JSON são renderizadas automaticamente em formato rico (cards, key-value, markdown). Execution Log ao vivo com exportação XLSX.'},
+                {el:'tour-nav-mesh', title:'AI Mesh — Pipelines', description:'Topologia visual §11 com conexões entre agentes. Crie pipelines sequenciais, paralelas ou condicionais. Agentes pass-through são ignorados automaticamente (0ms). Painel de detalhes mostra timeline, skills, system prompts e conexões de cada pipeline.'},
+                {el:'tour-nav-tools', title:'Ferramentas MCP', description:'Catálogo de ferramentas MCP §10 que conectam agentes a sistemas externos. Registre endpoints, operações e classificação de sensibilidade. O snippet de Tool Binding gerado é colado no SKILL.md. O Permitted Toolset é a interseção entre inventário MCP e tools declaradas no SKILL.md.'},
+                {el:'tour-nav-evidence', title:'RAG — Base de Conhecimento', description:'Bases autorizadas §14. O Retriever busca evidências (lexical + vetorial), o Reranker ordena por relevância, e o Evidence Checker verifica consistência antes da entrega. O Execution Profile "rigorous" força verificação de evidência via LLM separada.'},
+                {el:'tour-nav-api-connectors', title:'API Connectors', description:'Registre e teste APIs externas. Cada conector tem base URL, autenticação (API Key, Bearer, Basic), health check e timeout. Crie endpoints organizados por categoria. O Request Builder permite testar chamadas diretamente, com histórico de execuções e métricas de latência.'},
+                {el:'tour-nav-harness', title:'Harness de Avaliação', description:'Avaliação contínua §9.5. Crie dataset gold adversarial, execute avaliações baseline/regressão, e use o gate automático para aprovar ou rejeitar releases baseado em acurácia, taxa de recusa e falsos positivos.'},
+                {el:'tour-nav-releases', title:'Version Registry', description:'Gerenciamento de releases §18. Cada release é uma tupla imutável (modelo + prompt + índice + policy). Promoção gated: staging → canary → production. Detecção de drift e rollback automático.'},
+                {el:'tour-nav-observability', title:'Observabilidade', description:'Métricas e traces via LangFuse §17. Spans obrigatórios por camada (aobd.interpret_intent, router.plan, subagent.execute, mcp.call), latência, custo por interação e tokens consumidos.'},
+                {el:'tour-start-btn', title:'Pronto para começar!', description:'A plataforma implementa §1-§24 da especificação funcional. Comece criando um agente, vincule skills com Execution Profile adequado, registre bases de conhecimento, conecte APIs externas via API Connectors, e execute interações pelo Workspace.'},
+            ],
+            get currentTourStep() { return this.tourSteps[this.tourStep] || {} },
+            get spotlightStyle() {
+                const el = document.getElementById(this.currentTourStep?.el);
+                if (!el) return 'display:none';
+                const r = el.getBoundingClientRect();
+                const pad = 6;
+                return `left:${r.left-pad}px;top:${r.top-pad}px;width:${r.width+pad*2}px;height:${r.height+pad*2}px`;
+            },
+            get cardPosition() {
+                const el = document.getElementById(this.currentTourStep?.el);
+                if (!el) return 'left:50%;top:50%;transform:translate(-50%,-50%)';
+                const r = el.getBoundingClientRect();
+                const spaceRight = window.innerWidth - r.right;
+                if (spaceRight > 400) return `left:${r.right + 16}px;top:${Math.max(16, r.top - 20)}px`;
+                if (r.left > 400) return `left:${r.left - 392}px;top:${Math.max(16, r.top - 20)}px`;
+                return `left:${Math.max(16, r.left)}px;top:${r.bottom + 12}px`;
+            },
+            startTour() { this.tourStep = 0; this.tourActive = true; },
+            endTour() { this.tourActive = false; },
+            nextTourStep() { if (this.tourStep < this.tourSteps.length - 1) this.tourStep++; else this.endTour(); },
+            prevTourStep() { if (this.tourStep > 0) this.tourStep--; },
+
+            /* ══ Help ══ */
+            helpOpen: false, helpKey: '',
+            helpContent: {
+                dashboard: {title:'Dashboard',section:'Visão Geral',what:'Painel central com métricas agregadas de toda a plataforma: agentes por camada (AOBD, AR, SA), skills registradas com Execution Profile, interações processadas, releases ativas, conectores de API e execuções recentes.',foundation:'O Dashboard reflete a topologia §4 e o modelo de dados §16. Cada métrica é consultada diretamente das tabelas SQLite que implementam o ER completo da especificação.',usage:'Acesse a página inicial para monitorar a saúde da plataforma. Use os cards de ações rápidas para navegar diretamente para criação de agentes, skills ou workspace.'},
+                agents: {title:'Agentes',section:'§4 Topologia',what:'Entidades computacionais organizadas em três camadas: AOBD (Orquestrador de Business Domain), AR (Agente Roteador) e SA (Subagente). Cada agente tem um SKILL.md vinculado que define seu comportamento. Agentes sem skill e com prompt genérico são detectados como pass-through — ignorados automaticamente (0ms) em pipelines.',foundation:'Seção §4 da especificação. O AOBD interpreta intenção e consulta o CAR (§6). O AR decompõe processos em DAGs de workflow. O SA executa tarefas atômicas com tools MCP. O DeepAgent Harness implementa auto-reflexão iterativa via LangGraph StateGraph. O short-circuit avalia _is_passthrough() e pula o LLM quando desnecessário.',usage:'Crie agentes com o botão "Novo Agente". O painel lateral direito mostra preview completo com badge PASS-THROUGH, skill vinculada com Execution Profile, e contador de caracteres do prompt. Vincule um SKILL.md ou escreva um prompt detalhado (200+ chars) para ativar execução via LLM.'},
+                skills: {title:'Skills — SKILL.md',section:'§5 Anatomia Canônica',what:'Contrato executável e alma semântica do agente. Não é documentação — é um artefato declarativo carregado em tempo de ativação. Define Purpose, Workflow, Tool Bindings, Output Contract, Failure Modes e Execution Profile (fast/standard/rigorous).',foundation:'Seção §5. Frontmatter YAML (id, version, kind, owner, stability) + seções obrigatórias + opcionais. Versionado com semver. O Execution Profile controla: fast (1 chamada LLM, sem reflexão), standard (2 chamadas, reflexão on-error), rigorous (3+ chamadas, reflexão sempre, evidence via LLM). Auto-inferido quando não declarado.',usage:'Crie skills via editor SKILL.md ou use o Wizard IA. Selecione o Execution Profile no seletor visual (Fast/Standard/Rigorous). O tab "Preview / Validação" verifica a anatomia canônica e mostra o profile detectado. Skills são vinculadas a agentes via AgentBinding.'},
+                workspace: {title:'Workspace',section:'§15 FSM Interação',what:'Área de execução de interações. Cada mensagem transita pela máquina de estados de 9 estados: Intake, PolicyCheck, RetrieveEvidence, DraftAnswer, VerifyEvidence, Recommend/Refuse/Escalate, LogAndClose. Respostas JSON são detectadas e renderizadas em formato rico.',foundation:'Seção §15. Invariantes: todo caminho termina em LogAndClose, VerifyEvidence é obrigatório, transições são atômicas e auditadas. O Evidence Checker (§14) verifica consistência antes da entrega. O Execution Profile da skill vinculada ao agente determina se há reflexão e verificação de evidência.',usage:'Selecione um agente ou pipeline, digite sua mensagem. Respostas estruturadas (JSON, arrays, objetos) são renderizadas automaticamente como cards, key-value ou markdown rico — use o botão de toggle para alternar. O Execution Log ao vivo mostra cada etapa da FSM. Exporte o log como XLSX.'},
+                mesh: {title:'AI Mesh',section:'§11 Infraestrutura',what:'Topologia visual de conexões entre agentes. Permite criar conexões sequenciais (pipeline), paralelas (fan-out) ou condicionais entre os três tipos de agente. Agentes pass-through são detectados e ignorados automaticamente em pipelines.',foundation:'Seção §11 (AI Mesh Kubernetes-native) e §6 (CAR). O matching no AOBD é híbrido: filtro simbólico sobre sinais estruturados seguido de ranking vetorial. O CAR indexa roteadores por intenção, não por endpoint. O short-circuit via _is_passthrough() evita chamadas LLM desnecessárias.',usage:'Visualize a rede de agentes. Crie conexões para definir fluxos de processamento. Use o botão "Detalhes" no header de cada pipeline para ver timeline, skills, system prompts e conexões. Registre entradas no CAR para habilitar o matching semântico do AOBD.'},
+                tools: {title:'Ferramentas MCP',section:'§10 Tool Registry',what:'Catálogo governado de ferramentas MCP (Model Context Protocol) que conectam agentes a sistemas externos. Cada tool é um adapter padronizado: consultar ERP, validar CPF/CNPJ, acessar APIs, ler bancos de dados — tudo via protocolo unificado.',foundation:'Seção §10 da especificação. MCP servers expõem operações com schemas tipados. O Tool Registry valida conformidade. O Permitted Toolset é a interseção entre inventário MCP disponível e tools declaradas no SKILL.md do agente. Tools fora do Permitted Toolset são invisíveis para o LLM.',usage:'1) Registre a ferramenta com nome, endpoint do MCP server, operações e classificação de sensibilidade. 2) Declare a tool no ## Tool Bindings do SKILL.md — use o botão "Inserir MCP" no editor. 3) O agente poderá invocá-la durante execução no Workspace.'},
+                evidence: {title:'RAG — Base de Conhecimento',section:'§14 Retriever + Checker',what:'Sistema que garante que toda recomendação é ancorada em evidência de bases autorizadas. Três componentes: Retriever (busca híbrida), Reranker (cross-encoder) e Evidence Checker (verificador independente).',foundation:'Seção §14. O Retriever combina busca lexical (BM25) e vetorial. O Reranker reordena por relevância contextual. O Evidence Checker valida consistência, regras de negócio, conflitos entre fontes e cobertura. Evidência insuficiente resulta em recusa controlada §15. O Execution Profile "rigorous" força verificação de evidência via chamada LLM separada.',usage:'Registre bases de conhecimento (manuais, regulatórios, contratuais, FAQs) com classificação de confidencialidade. O Retriever as consultará automaticamente durante interações no Workspace.'},
+                api_connectors: {title:'API Connectors',section:'Integrações Externas',what:'Módulo para registrar, organizar e testar APIs externas. Cada conector representa uma aplicação (base URL + autenticação). Endpoints são organizados por categoria em uma árvore hierárquica. O Request Builder permite testar chamadas via proxy com histórico completo.',foundation:'Complementa o §10 (Tool Registry) com integrações HTTP diretas. Suporta 4 tipos de autenticação (none, api_key, bearer, basic). Health check automático monitora disponibilidade. Histórico de chamadas registra método, URL, status, latência e corpo da resposta para auditoria.',usage:'1) Crie um conector com base URL e tipo de autenticação. 2) Adicione endpoints organizados por categoria (ex: agentes, skills, workspace). 3) Selecione um endpoint na árvore para abrir o Request Builder. 4) Teste a chamada e veja a resposta. O health check periódico mostra o status de cada conector.'},
+                harness: {title:'Harness de Avaliação',section:'§9.5 Baseline / Regressão',what:'Motor de avaliação que executa skills contra dataset gold adversarial. Produz métricas quantitativas e opera como gate de release: aprovado (deploy) ou reprovado (correções).',foundation:'Seção §9.5. Dataset gold (§9.4) é versionado, estratificado por jornada/complexidade, com proporção mínima de casos adversariais. O harness mede acurácia, taxa de recusa correta, falso positivo, latência e custo. Gate automático com thresholds configuráveis.',usage:'1) Crie casos gold (normais + adversariais). 2) Crie uma release. 3) Execute o harness selecionando agente, release e tipo (baseline/regressão). 4) O gate aprova ou rejeita automaticamente.'},
+                releases: {title:'Version Registry',section:'§18 Releases + Drift',what:'Registro de composições de artefatos — cada release empacota versões de modelo, prompt, índice e policy. Promoção gated (staging → canary → production) com detecção de drift e rollback.',foundation:'Seção §18. A unidade de deploy é a RELEASE, não o artefato isolado. Drift de dados (KS, PSI) e drift de comportamento (CUSUM) são monitorados contra baseline. Rollback automático quando SLOs são violados.',usage:'Crie releases em staging. Execute o harness para estabelecer baseline. Promova para canary (1% tráfego) e depois production. Monitore drift na aba de eventos de drift.'},
+                observability: {title:'Observabilidade',section:'§17 OpenTelemetry + LangFuse',what:'Stack de tracing-first. Cada envelope A2A propaga contexto W3C Trace Context. Spans obrigatórios por camada, métricas de custo e performance, registro de experimentos.',foundation:'Seção §17. LangFuse registra: prompt efetivo, modelo, saída, métricas de avaliação, lineage (roteador → AOBD → envelope), e resultado do Evidence Checker. Dashboards canônicos: Domain Health, Skill Drift, Evidence Quality.',usage:'Configure as credenciais LangFuse em Configurações. As traces são geradas automaticamente a cada interação. Acesse o dashboard LangFuse externo para análise detalhada de traces e custos.'},
+                history: {title:'Histórico',section:'§16 Modelo de Dados',what:'Consulta unificada de todas as interações, turnos, envelopes e auditoria armazenados em SQLite. Busca textual em conteúdo de mensagens e logs de auditoria.',foundation:'Seção §16. O modelo persiste INTERACTION, TURN, EVIDENCE, TOOL_CALL, TRACE em tabelas relacionais. Todo envelope, toda chamada MCP, toda decisão de roteamento é registrada em log imutável (append-only).',usage:'Use as abas para filtrar por tipo (Interações, Turnos, Envelopes, Auditoria). O campo de busca pesquisa em conteúdo textual. Cada registro preserva trace_id para correlação.'},
+                settings: {title:'Configurações',section:'Setup da Plataforma',what:'Gerenciamento de API keys dos provedores LLM (OpenAI, Maritaca AI), seleção de modelos padrão, credenciais LangFuse e parâmetros do DeepAgent Harness.',foundation:'A plataforma é agnóstica de modelo (§2.1). Qualquer LLM compatível com prompt estruturado pode ser usado. O AI Gateway (§11.1) abstrai providers — o agente nunca sabe se o modelo é local ou remoto.',usage:'Configure suas API keys. Selecione o modelo padrão por provedor (GPT-4o, Sabiá-3, etc). Ajuste max iterações do DeepAgent e timeout de execução.'},
+            },
+            get helpData() { return this.helpContent[this.helpKey] || {} },
+            openHelp(key) { this.helpKey = key; this.helpOpen = true; },
+        }
+    }
+
+    const api = {
+        async get(url) { const r = await fetch(url); if (!r.ok) throw new Error(`GET ${url} → ${r.status}`); return r.json(); },
+        async post(url, body) { const r = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if (!r.ok) { const e = await r.json().catch(()=>({})); const d = typeof e.detail==='string' ? e.detail : e.detail?.message || e.message || JSON.stringify(e.detail) || `POST ${url} → ${r.status}`; throw new Error(d); } return r.json(); },
+        async put(url, body) { const r = await fetch(url, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if (!r.ok) { const e = await r.json().catch(()=>({})); const d = typeof e.detail==='string' ? e.detail : e.detail?.message || e.message || `PUT ${url} → ${r.status}`; throw new Error(d); } return r.json(); },
+        async del(url) { const r = await fetch(url, {method:'DELETE'}); if (!r.ok) throw new Error(`DELETE ${url} → ${r.status}`); return r.json(); },
+    };
+    function showToast(msg, type='success') {
+        const t = document.createElement('div');
+        const c = {success:'bg-emerald-500',error:'bg-rose-500',info:'bg-brand-500'};
+        t.className = `fixed bottom-4 right-4 z-[999] ${c[type]||c.info} text-white text-[13px] font-medium px-4 py-2.5 rounded-lg shadow-lg fade-in`;
+        t.textContent = msg; document.body.appendChild(t); setTimeout(()=>t.remove(),3500);
+    }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

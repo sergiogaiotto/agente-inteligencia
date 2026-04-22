@@ -1,0 +1,231 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="historyPage()" x-init="load()">
+
+    <p class="text-[12px] text-surface-400 mb-4">Consulta unificada de interações, turnos e auditoria</p>
+
+    <!-- Tabs + Search + Pagination controls -->
+    <div class="flex flex-wrap items-center gap-3 mb-4">
+        <div class="flex rounded-lg border border-surface-200 bg-white overflow-hidden">
+            <template x-for="t in tabs" :key="t.key">
+                <button @click="activeTab = t.key; currentPage = 0; load()" class="px-3 py-1.5 text-[11px] font-medium transition-colors"
+                        :class="activeTab === t.key ? 'bg-brand-500 text-white' : 'text-surface-500 hover:bg-surface-50'"
+                        x-text="t.label"></button>
+            </template>
+        </div>
+        <input x-model="searchQuery" @keydown.enter="currentPage = 0; load()" type="text" placeholder="Buscar..."
+               class="rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[11px] outline-none w-48 focus:border-brand-400">
+        <div class="flex items-center gap-1 text-[10px] text-surface-400 ml-auto">
+            <span>Exibir</span>
+            <select x-model.number="pageSize" @change="currentPage = 0; load()" class="rounded border border-surface-200 bg-white px-1.5 py-0.5 text-[10px] outline-none">
+                <option value="10">10</option>
+                <option value="30">30</option>
+                <option value="50">50</option>
+            </select>
+            <span x-text="items.length + ' registro(s)'"></span>
+        </div>
+    </div>
+
+    <!-- ══ TAB: Interações ══ -->
+    <div x-show="activeTab === 'interactions'" class="rounded-lg border border-surface-200 bg-white">
+        <div class="divide-y divide-surface-50">
+            <template x-for="e in items" :key="e.id">
+                <div>
+                    <div class="group flex items-center gap-3 px-4 py-2 hover:bg-surface-50/50 cursor-pointer" @click="toggle(e)">
+                        <span class="flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-white shrink-0"
+                              :class="e.state==='LogAndClose'?'bg-emerald-500':e.state==='Refuse'?'bg-amber-500':e.state==='Escalate'?'bg-rose-500':'bg-surface-400'"
+                              x-text="e.state==='LogAndClose'?'✓':e.state==='Refuse'?'⚠':e.state==='Escalate'?'↑':'…'"></span>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[12px] font-medium text-brand-900 truncate" x-text="e.title || e.id?.substring(0,8)"></div>
+                            <div class="flex items-center gap-2 text-[9px] text-surface-400">
+                                <span x-text="e.channel || 'api'"></span>
+                                <span class="rounded-full px-1.5 py-0.5 text-[8px] font-semibold"
+                                      :class="e.state==='LogAndClose'?'bg-emerald-50 text-emerald-600':e.state==='Refuse'?'bg-amber-50 text-amber-600':'bg-surface-100 text-surface-500'"
+                                      x-text="e.state"></span>
+                            </div>
+                        </div>
+                        <span class="text-[10px] text-surface-400 shrink-0" x-text="e.created_at?.replace('T',' ').substring(0,16)"></span>
+                        <svg class="w-3.5 h-3.5 text-surface-300 transition-transform shrink-0" :class="expandedId === e.id ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                    </div>
+                    <div x-show="expandedId === e.id" x-transition.duration.150ms class="border-t border-surface-100 bg-surface-50/50 px-4 py-3">
+                        <div class="ml-9 space-y-3">
+                            <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 text-[10px]">
+                                <div><span class="text-surface-400 block">ID</span><span class="font-mono text-brand-900" x-text="e.id?.substring(0,16)+'…'"></span></div>
+                                <div><span class="text-surface-400 block">Agente</span><span class="text-brand-900" x-text="e.agent_id?.substring(0,12)+'…'"></span></div>
+                                <div><span class="text-surface-400 block">Canal</span><span class="text-brand-900" x-text="e.channel || '—'"></span></div>
+                                <div><span class="text-surface-400 block">Jornada</span><span class="text-brand-900" x-text="e.journey_id || '—'"></span></div>
+                            </div>
+                            <div x-show="e._turns?.length > 0" class="space-y-1.5">
+                                <template x-for="turn in (e._turns || [])" :key="turn.id">
+                                    <div class="rounded-lg border border-surface-200 bg-white p-2.5">
+                                        <span class="rounded-full bg-brand-100 px-2 py-0.5 text-[8px] font-bold text-brand-600" x-text="'Turno ' + turn.turn_number"></span>
+                                        <div x-show="turn.user_text_redacted" class="mt-1.5">
+                                            <div class="text-[9px] text-surface-400 mb-0.5">Entrada</div>
+                                            <div class="text-[11px] text-brand-900 bg-brand-50 rounded px-2 py-1 max-h-16 overflow-y-auto" x-text="turn.user_text_redacted"></div>
+                                        </div>
+                                        <div x-show="turn.output_text_redacted" class="mt-1.5">
+                                            <div class="text-[9px] text-surface-400 mb-0.5">Saída</div>
+                                            <div class="text-[11px] text-brand-900 bg-surface-50 rounded px-2 py-1 max-h-24 overflow-y-auto whitespace-pre-wrap" x-text="turn.output_text_redacted"></div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                            <div x-show="e._turns?.length === 0" class="text-[10px] text-surface-400">Nenhum turno</div>
+                            <div x-show="e.trace_data && e.trace_data !== '{}'">
+                                <button @click="e._showTrace = !e._showTrace" class="text-[10px] text-brand-500 font-medium">
+                                    <span x-text="e._showTrace ? '▾ Esconder trace' : '▸ Ver trace'"></span>
+                                </button>
+                                <pre x-show="e._showTrace" class="mt-1 rounded bg-brand-950 text-brand-300 p-2 text-[9px] font-mono overflow-x-auto whitespace-pre-wrap max-h-32" x-text="fmtJson(e.trace_data)"></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ══ TAB: Turnos ══ -->
+    <div x-show="activeTab === 'turns'" class="rounded-lg border border-surface-200 bg-white">
+        <div class="divide-y divide-surface-50">
+            <template x-for="t in items" :key="t.id">
+                <div>
+                    <div class="group flex items-center gap-3 px-4 py-2 hover:bg-surface-50/50 cursor-pointer" @click="expandedId = expandedId === t.id ? null : t.id">
+                        <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-100 text-[9px] font-bold text-brand-600 shrink-0" x-text="'T' + (t.turn_number||'?')"></span>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[12px] text-brand-900 truncate" x-text="t.user_text_redacted?.substring(0,80) || '—'"></div>
+                            <div class="text-[9px] text-surface-400" x-text="'Interação: ' + (t.interaction_id?.substring(0,8)||'—')"></div>
+                        </div>
+                        <span x-show="t.output_text_redacted" class="text-[9px] text-emerald-500 font-medium shrink-0">Com saída</span>
+                        <svg class="w-3.5 h-3.5 text-surface-300 transition-transform shrink-0" :class="expandedId === t.id ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                    </div>
+                    <div x-show="expandedId === t.id" x-transition.duration.150ms class="border-t border-surface-100 bg-surface-50/50 px-4 py-3">
+                        <div class="ml-9 space-y-2">
+                            <div class="grid grid-cols-3 gap-2 text-[10px]">
+                                <div><span class="text-surface-400 block">Turno</span><span class="text-brand-900" x-text="t.turn_number"></span></div>
+                                <div><span class="text-surface-400 block">Interação</span><span class="font-mono text-brand-900" x-text="t.interaction_id?.substring(0,16)"></span></div>
+                                <div><span class="text-surface-400 block">Envelope</span><span class="font-mono text-brand-900" x-text="t.envelope_id?.substring(0,12) || '—'"></span></div>
+                            </div>
+                            <div x-show="t.user_text_redacted">
+                                <div class="text-[9px] text-surface-400 mb-0.5">Entrada completa</div>
+                                <div class="text-[11px] text-brand-900 bg-brand-50 rounded px-2.5 py-1.5 max-h-24 overflow-y-auto whitespace-pre-wrap" x-text="t.user_text_redacted"></div>
+                            </div>
+                            <div x-show="t.output_text_redacted">
+                                <div class="text-[9px] text-surface-400 mb-0.5">Saída completa</div>
+                                <div class="text-[11px] text-brand-900 bg-surface-50 rounded px-2.5 py-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap" x-text="t.output_text_redacted"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ══ TAB: Auditoria ══ -->
+    <div x-show="activeTab === 'audit'" class="rounded-lg border border-surface-200 bg-white">
+        <div class="divide-y divide-surface-50">
+            <template x-for="a in items" :key="a.id">
+                <div>
+                    <div class="group flex items-center gap-3 px-4 py-2 hover:bg-surface-50/50 cursor-pointer" @click="expandedId = expandedId === a.id ? null : a.id">
+                        <span class="flex h-6 w-6 items-center justify-center rounded-full shrink-0 text-[9px] font-bold text-white"
+                              :class="a.action==='created'?'bg-emerald-500':a.action==='deleted'?'bg-rose-500':'bg-brand-500'"
+                              x-text="a.action==='created'?'+':a.action==='deleted'?'−':'↺'"></span>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[12px] font-medium text-brand-900">
+                                <span class="font-mono text-[11px]" x-text="a.action"></span>
+                                <span class="text-surface-400 mx-1">·</span>
+                                <span x-text="a.entity_type + ' / ' + (a.entity_id?.substring(0,8) || '')"></span>
+                            </div>
+                        </div>
+                        <span class="text-[10px] text-surface-400 shrink-0" x-text="a.created_at?.replace('T',' ').substring(0,16)"></span>
+                        <svg class="w-3.5 h-3.5 text-surface-300 transition-transform shrink-0" :class="expandedId === a.id ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                    </div>
+                    <div x-show="expandedId === a.id" x-transition.duration.150ms class="border-t border-surface-100 bg-surface-50/50 px-4 py-3">
+                        <div class="ml-9 space-y-2">
+                            <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 text-[10px]">
+                                <div><span class="text-surface-400 block">Ação</span><span class="font-semibold text-brand-900" x-text="a.action"></span></div>
+                                <div><span class="text-surface-400 block">Entidade</span><span class="text-brand-900" x-text="a.entity_type"></span></div>
+                                <div><span class="text-surface-400 block">ID</span><span class="font-mono text-brand-900" x-text="a.entity_id"></span></div>
+                                <div><span class="text-surface-400 block">Ator</span><span class="text-brand-900" x-text="a.actor || '—'"></span></div>
+                            </div>
+                            <div>
+                                <div class="text-[9px] text-surface-400 mb-0.5">Detalhes</div>
+                                <pre class="rounded bg-brand-950 text-brand-300 p-2 text-[9px] font-mono overflow-x-auto whitespace-pre-wrap max-h-32" x-text="fmtJson(a.details)"></pre>
+                            </div>
+                            <div x-show="a.trace_id">
+                                <span class="text-[9px] text-surface-400">Trace ID:</span>
+                                <span class="text-[10px] font-mono text-brand-900 ml-1" x-text="a.trace_id"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Empty -->
+    <template x-if="!loading && items.length === 0">
+        <div class="text-center py-10 text-[12px] text-surface-400">Nenhum registro encontrado</div>
+    </template>
+
+    <!-- Pagination -->
+    <div x-show="items.length > 0" class="flex items-center justify-between mt-3">
+        <button @click="prevPage()" :disabled="currentPage === 0" class="rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[11px] text-surface-500 hover:bg-surface-50 disabled:opacity-30">Anterior</button>
+        <span class="text-[10px] text-surface-400" x-text="'Página ' + (currentPage + 1)"></span>
+        <button @click="nextPage()" :disabled="items.length < pageSize" class="rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[11px] text-surface-500 hover:bg-surface-50 disabled:opacity-30">Próxima</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function historyPage() {
+    return {
+        activeTab: 'interactions',
+        tabs: [
+            { key: 'interactions', label: 'Interações' },
+            { key: 'turns', label: 'Turnos' },
+            { key: 'audit', label: 'Auditoria' },
+        ],
+        searchQuery: '',
+        items: [], loading: true,
+        expandedId: null,
+        pageSize: 10, currentPage: 0,
+
+        async load() {
+            this.loading = true;
+            this.expandedId = null;
+            const offset = this.currentPage * this.pageSize;
+            const params = new URLSearchParams({ entity_type: this.activeTab, limit: String(this.pageSize), offset: String(offset) });
+            if (this.searchQuery.trim()) params.set('search', this.searchQuery);
+            try {
+                const data = await api.get(`/api/v1/history?${params}`);
+                const key = this.activeTab === 'audit' ? 'audit_log' : this.activeTab;
+                this.items = (data[key] || []).map(i => ({...i, _turns: undefined, _showTrace: false}));
+            } catch { this.items = []; }
+            this.loading = false;
+        },
+
+        async toggle(e) {
+            if (this.expandedId === e.id) { this.expandedId = null; return; }
+            this.expandedId = e.id;
+            // Load turns for interactions
+            if (this.activeTab === 'interactions' && e._turns === undefined) {
+                try {
+                    const h = await api.get(`/api/v1/history?entity_type=turns&limit=100`);
+                    e._turns = (h.turns || []).filter(t => t.interaction_id === e.id).sort((a,b) => (a.turn_number||0) - (b.turn_number||0));
+                } catch { e._turns = []; }
+            }
+        },
+
+        prevPage() { if (this.currentPage > 0) { this.currentPage--; this.load(); } },
+        nextPage() { if (this.items.length >= this.pageSize) { this.currentPage++; this.load(); } },
+
+        fmtJson(raw) {
+            try { return JSON.stringify(JSON.parse(raw), null, 2); }
+            catch { return raw || '{}'; }
+        },
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,918 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="toolsPage()" x-init="load()" class="flex gap-0 -m-4 lg:-m-6 h-[calc(100vh-3.5rem)]">
+
+    <!-- ══ LEFT: Tools list ══ -->
+    <div class="flex-1 flex flex-col overflow-hidden p-4 lg:p-6">
+        <div class="flex items-center justify-between mb-4">
+            <p class="text-[12px] text-surface-400">Tool Registry — ferramentas MCP</p>
+            <button @click="openEditor(null)" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[13px] font-semibold text-white shadow-sm hover:bg-brand-600 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                Registrar
+            </button>
+        </div>
+
+        <!-- Filters -->
+        <div class="flex items-center gap-2 mb-4">
+            <select x-model="filter" @change="load()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none">
+                <option value="">Todas classificações</option>
+                <option value="public">Público</option>
+                <option value="internal">Interno</option>
+                <option value="confidential">Confidencial</option>
+                <option value="restricted">Restrito</option>
+            </select>
+            <input x-model="searchText" @input="applySearch()" placeholder="Buscar..." class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none w-40">
+            <span class="text-[10px] text-surface-400" x-text="filtered.length + '/' + allTools.length + ' ferramenta(s)'"></span>
+        </div>
+
+        <!-- Tool rows -->
+        <div class="flex-1 overflow-y-auto scrollbar-thin space-y-1.5 pr-1">
+            <template x-for="tool in filtered" :key="tool.id">
+                <div class="group flex items-center gap-3 rounded-lg border bg-white px-4 py-2.5 cursor-pointer transition-all"
+                     :class="previewId === tool.id ? 'border-brand-400 bg-brand-50/30 shadow-sm' : 'border-surface-200 hover:border-brand-200 hover:shadow-sm'"
+                     @click="openPreview(tool)">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg shrink-0"
+                         :class="tool.sensitivity==='restricted'?'bg-rose-100 text-rose-600':tool.sensitivity==='confidential'?'bg-amber-100 text-amber-600':tool.sensitivity==='internal'?'bg-brand-100 text-brand-600':'bg-emerald-100 text-emerald-600'">
+                        <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[13px] font-semibold text-brand-900 truncate font-mono" x-text="tool.name"></span>
+                            <span class="rounded-full px-1.5 py-0.5 text-[9px] font-medium shrink-0"
+                                  :class="tool.sensitivity==='restricted'?'bg-rose-50 text-rose-600':tool.sensitivity==='confidential'?'bg-amber-50 text-amber-600':tool.sensitivity==='internal'?'bg-brand-50 text-brand-600':'bg-emerald-50 text-emerald-600'"
+                                  x-text="tool.sensitivity"></span>
+                        </div>
+                        <div class="flex items-center gap-1.5 mt-0.5">
+                            <span class="text-[9px] text-surface-400 truncate max-w-[200px]" x-text="tool.mcp_server || '—'"></span>
+                            <span class="text-[9px] text-surface-300" x-text="parseOps(tool.operations)"></span>
+                        </div>
+                    </div>
+                    <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <button @click.stop="openPreview(tool)" class="p-1.5 rounded-md hover:bg-brand-50 text-surface-400 hover:text-brand-600" title="Visualizar">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                        </button>
+                        <button @click.stop="openEditor(tool)" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                        </button>
+                        <button @click.stop="deleteTool(tool.id, tool.name)" class="p-1.5 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600" title="Excluir">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="!loading && filtered.length === 0">
+                <div class="text-center py-12">
+                    <p class="text-[13px] text-surface-400 mb-3" x-text="allTools.length ? 'Nenhuma ferramenta encontrada' : 'Nenhuma ferramenta registrada'"></p>
+                    <button x-show="!allTools.length" @click="openEditor(null)" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white">Registrar Primeira</button>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ══ RIGHT: Preview panel ══ -->
+    <aside x-show="previewId" x-transition.duration.200ms class="hidden lg:flex w-[400px] flex-col border-l border-surface-200 bg-white shrink-0 overflow-hidden">
+        <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3">
+            <span class="text-[12px] font-semibold text-brand-900 font-mono truncate" x-text="previewTool?.name"></span>
+            <div class="flex items-center gap-1">
+                <button @click="openEditor(previewTool)" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                </button>
+                <button @click="copyBinding(previewTool)" class="p-1.5 rounded-md hover:bg-teal-50 text-surface-400 hover:text-teal-600" title="Copiar Binding">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+                </button>
+                <button @click="previewId=null; previewTool=null" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="flex-1 overflow-y-auto scrollbar-thin p-5 space-y-4">
+            <div class="flex flex-wrap gap-1.5">
+                <span class="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
+                      :class="previewTool?.sensitivity==='restricted'?'bg-rose-50 text-rose-700':previewTool?.sensitivity==='confidential'?'bg-amber-50 text-amber-700':previewTool?.sensitivity==='internal'?'bg-brand-50 text-brand-700':'bg-emerald-50 text-emerald-700'"
+                      x-text="previewTool?.sensitivity"></span>
+                <span x-show="previewTool?.requires_trusted_context" class="rounded-full bg-rose-50 px-2.5 py-0.5 text-[10px] font-medium text-rose-600">Trusted Context</span>
+                <span x-show="previewTool?.auth_requirements" class="rounded-full bg-surface-100 px-2.5 py-0.5 text-[10px] text-surface-500" x-text="'Auth: ' + previewTool?.auth_requirements"></span>
+            </div>
+            <div x-show="previewTool?.description">
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Descrição</h4>
+                <p class="text-[12px] text-brand-900 leading-relaxed" x-text="previewTool?.description"></p>
+            </div>
+            <div>
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Configuração</h4>
+                <div class="rounded-lg bg-surface-50 border border-surface-100 p-3 space-y-2 text-[11px]">
+                    <div class="flex justify-between"><span class="text-surface-400">MCP Server</span><span class="font-mono font-medium text-brand-900 truncate max-w-[200px]" x-text="previewTool?.mcp_server || '—'"></span></div>
+                    <div class="flex justify-between"><span class="text-surface-400">Custo</span><span class="font-medium text-brand-900" x-text="(previewTool?.cost_per_call||0) > 0 ? '$' + previewTool?.cost_per_call?.toFixed(4) : 'Gratuito'"></span></div>
+                    <div class="flex justify-between"><span class="text-surface-400">Trusted Context</span><span class="font-medium" :class="previewTool?.requires_trusted_context?'text-rose-600':'text-surface-400'" x-text="previewTool?.requires_trusted_context ? 'Obrigatório' : 'Não'"></span></div>
+                </div>
+            </div>
+            <div>
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Operações</h4>
+                <div class="flex flex-wrap gap-1.5">
+                    <template x-for="op in (function(){ try{return JSON.parse(previewTool?.operations||'[]')}catch{return[]} })()" :key="op">
+                        <span class="rounded-lg bg-brand-50 border border-brand-100 px-2.5 py-1 text-[11px] font-mono text-brand-700" x-text="op"></span>
+                    </template>
+                    <span x-show="!(function(){ try{return JSON.parse(previewTool?.operations||'[]').length}catch{return 0} })()" class="text-[11px] text-surface-400">Nenhuma operação definida</span>
+                </div>
+            </div>
+            <div>
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Tool Binding (SKILL.md)</h4>
+                <pre class="rounded-lg bg-brand-950 text-brand-200 p-4 text-[11px] font-mono overflow-x-auto whitespace-pre-wrap"
+                     x-text="previewTool ? generateBinding(previewTool) : ''"></pre>
+            </div>
+            <a :href="'/skills/new?mcp=' + previewId" class="flex items-center justify-center gap-2 w-full rounded-lg border-2 border-dashed border-violet-200 bg-violet-50/50 px-4 py-3 text-[12px] font-semibold text-violet-600 hover:bg-violet-100 hover:border-violet-300 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                Criar Skill com esta ferramenta
+            </a>
+        </div>
+    </aside>
+
+    <!-- ══ MODAL: Editor ══ -->
+    <template x-if="editorOpen">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
+            <div class="fixed inset-0 bg-black/40" @click="editorOpen = false"></div>
+            <div class="relative z-10 w-full max-w-2xl rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden">
+                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
+                        </div>
+                        <div><h3 class="text-[15px] font-bold text-brand-900" x-text="editingId ? 'Editar Ferramenta' : 'Registrar Ferramenta'"></h3>
+                        <p class="text-[11px] text-surface-400">Preencha os dados ou use o Wizard</p></div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button x-show="!editingId" @click="wizardOpen = !wizardOpen" class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-all"
+                                :class="wizardOpen ? 'bg-violet-100 text-violet-700 ring-1 ring-violet-200' : 'bg-violet-500 text-white hover:bg-violet-600'">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582"/></svg>
+                            <span x-text="wizardOpen ? 'Fechar' : 'Descobrir MCP'"></span>
+                        </button>
+                        <button @click="editorOpen = false; errorMsg = ''" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+                    </div>
+                </div>
+
+                <!-- ══ ERROR BANNER (PERSISTENTE — não some) ══ -->
+                <div x-show="errorMsg" x-transition class="mx-6 mt-3 rounded-lg bg-rose-50 border border-rose-200 px-4 py-3">
+                    <div class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-rose-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[12px] font-semibold text-rose-700 mb-0.5">Erro ao salvar</div>
+                            <div class="text-[11px] text-rose-600 break-words" x-text="errorMsg"></div>
+                        </div>
+                        <button @click="errorMsg = ''" class="p-0.5 rounded text-rose-400 hover:text-rose-700">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ══ SUCCESS BANNER ══ -->
+                <div x-show="successMsg" x-transition class="mx-6 mt-3 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-2 flex items-center gap-2">
+                    <svg class="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <span class="text-[12px] font-medium text-emerald-700" x-text="successMsg"></span>
+                </div>
+
+                <!-- Wizard -->
+                <div x-show="wizardOpen" x-transition class="border-b border-violet-100 bg-gradient-to-r from-violet-50 to-brand-50 px-6 py-4">
+                    <div class="flex gap-3 mb-3">
+                        <input x-model="wizardQuery" @keydown.enter="searchMCP()" placeholder="Cole URL ou descreva (Slack, GitHub, PostgreSQL...)"
+                               class="flex-1 rounded-lg border border-violet-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-violet-400 placeholder:text-violet-300">
+                        <button @click="searchMCP()" :disabled="wizardSearching || !wizardQuery.trim()" class="rounded-lg bg-violet-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-violet-600 disabled:opacity-40 whitespace-nowrap">
+                            <span x-text="wizardSearching ? 'Buscando...' : (wizardQuery.startsWith('http') ? 'Importar' : 'Buscar')"></span>
+                        </button>
+                    </div>
+                    <a href="https://mcpservers.org" target="_blank" class="text-[10px] text-violet-500 hover:text-violet-700 underline">mcpservers.org</a>
+                    <div x-show="wizardResults.length > 0" class="space-y-2 mt-3">
+                        <template x-for="(r, i) in wizardResults" :key="i">
+                            <div class="rounded-lg border border-violet-200 bg-white p-3 flex items-start justify-between gap-3">
+                                <div class="min-w-0"><span class="text-[12px] font-bold font-mono text-brand-900" x-text="r.name"></span>
+                                <p class="text-[10px] text-surface-500 mt-0.5" x-text="r.description"></p>
+                                <span class="text-[9px] font-mono text-surface-400" x-text="r.endpoint"></span></div>
+                                <button @click="applyWizardResult(r)" class="shrink-0 rounded-lg bg-violet-500 px-3 py-1 text-[10px] font-semibold text-white hover:bg-violet-600">Aplicar</button>
+                            </div>
+                        </template>
+                    </div>
+                    <div x-show="wizardError" class="rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-700 mt-2" x-text="wizardError"></div>
+                    <div x-show="wizardNoResults" class="text-[11px] text-surface-400 text-center py-2 mt-2">Nenhum encontrado</div>
+                </div>
+
+                <!-- Form -->
+                <div class="px-6 py-5 max-h-[55vh] overflow-y-auto scrollbar-thin space-y-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Nome *</label>
+                        <input x-model="form.name" placeholder="erp.fiscal.query" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[13px] font-mono outline-none focus:border-brand-400"></div>
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Endpoint MCP *</label>
+                        <input x-model="form.mcp_server" placeholder="http://localhost:3001" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[13px] font-mono outline-none focus:border-brand-400"></div>
+                    </div>
+                    <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Descrição</label>
+                    <textarea x-model="form.description" rows="2" placeholder="O que esta ferramenta faz..." class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[13px] outline-none resize-none"></textarea></div>
+                    <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Operações</label>
+                    <div class="space-y-1.5">
+                        <template x-for="(op, i) in parsedOps" :key="i"><div class="flex gap-2">
+                            <input :value="op" @input="updateOp(i, $event.target.value)" placeholder="operacao" class="flex-1 rounded-lg border border-surface-200 px-3 py-1.5 text-[12px] font-mono outline-none">
+                            <button @click="removeOp(i)" class="p-1.5 rounded hover:bg-rose-50 text-surface-400 hover:text-rose-600"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+                        </div></template>
+                        <button @click="addOp()" class="text-[11px] text-brand-500 font-medium hover:text-brand-700">+ Adicionar operação</button>
+                    </div></div>
+                    <div class="grid grid-cols-3 gap-4">
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Classificação</label>
+                        <select x-model="form.sensitivity" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[13px] outline-none">
+                            <option value="public">Público</option><option value="internal">Interno</option><option value="confidential">Confidencial</option><option value="restricted">Restrito</option>
+                        </select></div>
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Custo ($)</label>
+                        <input x-model.number="form.cost_per_call" type="number" step="0.0001" min="0" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[13px] font-mono outline-none"></div>
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Auth</label>
+                        <select x-model="form.auth_requirements" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[13px] outline-none">
+                            <option value="">Nenhuma</option><option value="api_key">API Key</option><option value="oauth2">OAuth2</option><option value="mTLS">mTLS</option>
+                        </select></div>
+                    </div>
+                    <!-- ══ AUTH CONFIG — campos condicionais por tipo ══ -->
+
+                    <!-- API Key -->
+                    <div x-show="form.auth_requirements === 'api_key'" x-transition class="rounded-lg border border-amber-200 bg-amber-50/30 px-4 py-3">
+                        <label class="block text-[11px] font-semibold text-amber-800 mb-1.5">API Key / Bearer Token</label>
+                        <div class="flex gap-2">
+                            <input :type="showAuthToken ? 'text' : 'password'" x-model="form.auth_token"
+                                   placeholder="sk-... ou token"
+                                   class="flex-1 rounded-lg border border-amber-200 bg-white px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-amber-400 placeholder:text-amber-300">
+                            <button @click="showAuthToken = !showAuthToken" type="button"
+                                    class="rounded-lg border border-amber-200 px-3 py-2 text-[11px] text-amber-700 hover:bg-amber-100 transition-colors"
+                                    x-text="showAuthToken ? 'Ocultar' : 'Mostrar'"></button>
+                        </div>
+                        <p class="mt-1.5 text-[9px] text-amber-600">Enviado como <code class="bg-amber-100 px-1 rounded">Authorization: Bearer &lt;token&gt;</code> em cada chamada HTTP.</p>
+                    </div>
+
+                    <!-- OAuth2 Client Credentials -->
+                    <div x-show="form.auth_requirements === 'oauth2'" x-transition class="rounded-lg border border-violet-200 bg-violet-50/30 px-4 py-3 space-y-3">
+                        <div class="flex items-center gap-2 mb-1">
+                            <svg class="w-4 h-4 text-violet-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+                            <span class="text-[12px] font-semibold text-violet-800">OAuth2 — Client Credentials</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-[10px] font-semibold text-violet-700 mb-1">Client ID *</label>
+                                <input x-model="authConfig.client_id" placeholder="client_abc123"
+                                       class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400 placeholder:text-violet-300">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-semibold text-violet-700 mb-1">Client Secret *</label>
+                                <div class="flex gap-1.5">
+                                    <input :type="showAuthToken ? 'text' : 'password'" x-model="authConfig.client_secret" placeholder="secret_..."
+                                           class="flex-1 rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400 placeholder:text-violet-300">
+                                    <button @click="showAuthToken = !showAuthToken" type="button"
+                                            class="rounded-lg border border-violet-200 px-2 py-2 text-[10px] text-violet-600 hover:bg-violet-100"
+                                            x-text="showAuthToken ? '🙈' : '👁'"></button>
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-semibold text-violet-700 mb-1">Token URL *</label>
+                            <input x-model="authConfig.token_url" placeholder="https://auth.example.com/oauth2/token"
+                                   class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400 placeholder:text-violet-300">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-semibold text-violet-700 mb-1">Scope (opcional)</label>
+                            <input x-model="authConfig.scope" placeholder="read write admin"
+                                   class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400 placeholder:text-violet-300">
+                        </div>
+                        <p class="text-[9px] text-violet-500">A plataforma busca um <code class="bg-violet-100 px-1 rounded">access_token</code> via grant <code class="bg-violet-100 px-1 rounded">client_credentials</code> antes de cada chamada. Tokens são cacheados até expiração.</p>
+                    </div>
+
+                    <!-- mTLS -->
+                    <div x-show="form.auth_requirements === 'mTLS'" x-transition class="rounded-lg border border-rose-200 bg-rose-50/30 px-4 py-3 space-y-3">
+                        <div class="flex items-center gap-2 mb-1">
+                            <svg class="w-4 h-4 text-rose-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
+                            <span class="text-[12px] font-semibold text-rose-800">mTLS — Certificado Cliente</span>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-semibold text-rose-700 mb-1">Certificado Cliente (PEM) *</label>
+                            <textarea x-model="authConfig.client_cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
+                                      class="w-full rounded-lg border border-rose-200 bg-white px-3 py-2 text-[10px] font-mono outline-none focus:border-rose-400 placeholder:text-rose-300 resize-none"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-semibold text-rose-700 mb-1">Chave Privada (PEM) *</label>
+                            <textarea x-model="authConfig.client_key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
+                                      class="w-full rounded-lg border border-rose-200 bg-white px-3 py-2 text-[10px] font-mono outline-none focus:border-rose-400 placeholder:text-rose-300 resize-none"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-semibold text-rose-700 mb-1">CA Certificate (PEM, opcional)</label>
+                            <textarea x-model="authConfig.ca_cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
+                                      class="w-full rounded-lg border border-rose-200 bg-white px-3 py-2 text-[10px] font-mono outline-none focus:border-rose-400 placeholder:text-rose-300 resize-none"></textarea>
+                        </div>
+                        <p class="text-[9px] text-rose-500">Conexão TLS mútua: o certificado e a chave são enviados no handshake TLS. Os dados PEM são armazenados no banco e carregados como arquivos temporários a cada conexão.</p>
+                    </div>
+                    <label class="flex items-center gap-2 text-[12px]"><input type="checkbox" x-model="form.requires_trusted_context" class="rounded border-surface-300"><span class="font-medium text-brand-900">Requer Trusted Context</span></label>
+
+                    <!-- MCP Playground -->
+                    <div class="rounded-lg border border-surface-200 overflow-hidden">
+                        <div class="flex items-center justify-between bg-surface-50 px-3 py-2">
+                            <span class="text-[11px] font-semibold text-brand-900">Playground MCP</span>
+                            <button @click="testMcp()" :disabled="testing || !form.mcp_server.trim()"
+                                    class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[10px] font-medium transition-all disabled:opacity-30"
+                                    :class="testing ? 'bg-amber-100 text-amber-700' : 'bg-emerald-500 text-white hover:bg-emerald-600'">
+                                <svg x-show="testing" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                                <svg x-show="!testing" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+                                <span x-text="testing ? 'Conectando...' : (testResult?.success ? 'Reconectar' : 'Conectar e Descobrir')"></span>
+                            </button>
+                        </div>
+                        <div class="px-3 py-2 space-y-2">
+                            <div x-show="testResult" class="flex items-center gap-2 text-[10px]">
+                                <span class="flex h-2 w-2 rounded-full" :class="testResult?.success ? 'bg-emerald-400' : 'bg-rose-400'"></span>
+                                <span :class="testResult?.success ? 'text-emerald-600' : 'text-rose-600'" x-text="testResult?.success ? 'Conectado' : 'Desconectado'"></span>
+                                <span x-show="testResult?.latency" class="font-mono text-surface-400" x-text="testResult?.latency + 'ms'"></span>
+                                <span x-show="testResult?.server_name" class="text-surface-400" x-text="'· ' + testResult?.server_name"></span>
+                            </div>
+                            <div x-show="testResult && !testResult?.success" class="rounded bg-rose-50 p-2 text-[10px] text-rose-600 space-y-1">
+                                <div class="font-semibold" x-text="testResult?.details"></div>
+                                <template x-for="(rec, ri) in (testResult?.recommendations || [])" :key="ri">
+                                    <div class="flex gap-1.5"><span class="shrink-0">→</span><span x-text="rec"></span></div>
+                                </template>
+                            </div>
+                            <div x-show="testResult?.success && discoveredTools.length > 0">
+                                <div class="text-[9px] font-bold text-surface-400 uppercase tracking-wider mb-1">Ferramentas Disponíveis (<span x-text="discoveredTools.length"></span>)</div>
+                                <div class="flex flex-wrap gap-1 mb-2">
+                                    <template x-for="dt in discoveredTools" :key="dt.name">
+                                        <button @click="selectDiscoveredTool(dt)" class="rounded-md px-2 py-1 text-[10px] font-mono border transition-colors"
+                                                :class="selectedTool?.name === dt.name ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-brand-700 border-surface-200 hover:border-brand-300'">
+                                            <span x-text="dt.name"></span>
+                                        </button>
+                                    </template>
+                                </div>
+                                <div x-show="selectedTool" class="rounded-lg border border-brand-200 bg-brand-50/30 p-3 space-y-2">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-[11px] font-bold font-mono text-brand-900" x-text="selectedTool?.name"></span>
+                                    </div>
+                                    <p x-show="selectedTool?.description" class="text-[10px] text-surface-500" x-text="selectedTool?.description"></p>
+
+                                    <!-- ══ CAMPOS POR PARÂMETRO DO SCHEMA ══ -->
+                                    <template x-if="schemaProps.length > 0">
+                                        <div class="space-y-2">
+                                            <template x-for="prop in schemaProps" :key="prop.name">
+                                                <div>
+                                                    <label class="flex items-center gap-1.5 text-[10px] font-semibold text-surface-500 mb-0.5">
+                                                        <span x-text="prop.name"></span>
+                                                        <span x-show="prop.required" class="text-rose-400">*</span>
+                                                        <span class="font-normal text-surface-300" x-text="prop.type ? '(' + prop.type + ')' : ''"></span>
+                                                    </label>
+                                                    <input x-model="execParams[prop.name]"
+                                                           :placeholder="prop.description || prop.name"
+                                                           class="w-full rounded border border-surface-200 px-2 py-1.5 text-[11px] font-mono outline-none focus:border-brand-400">
+                                                    <p x-show="prop.description" class="text-[9px] text-surface-300 mt-0.5 truncate" x-text="prop.description"></p>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+
+                                    <!-- ══ CAMPO LIVRE (fallback quando sem schema) ══ -->
+                                    <template x-if="schemaProps.length === 0">
+                                        <div>
+                                            <label class="text-[10px] font-semibold text-surface-400 block mb-0.5">Argumento (JSON ou texto)</label>
+                                            <input x-model="execFreeParam" placeholder='{"query": "..."}' class="w-full rounded border border-surface-200 px-2 py-1 text-[11px] font-mono outline-none focus:border-brand-400">
+                                        </div>
+                                    </template>
+
+                                    <button @click="executeTool()" :disabled="executing"
+                                            class="inline-flex items-center gap-1.5 rounded-lg bg-violet-500 px-3 py-1.5 text-[10px] font-semibold text-white hover:bg-violet-600 disabled:opacity-40 transition-colors">
+                                        <span x-text="executing ? 'Executando...' : 'Executar'"></span>
+                                    </button>
+                                    <div x-show="execResult !== null" x-transition class="rounded-lg overflow-hidden border" :class="execResult?.success ? 'border-emerald-200' : 'border-rose-200'">
+                                        <div class="flex items-center justify-between px-2 py-1" :class="execResult?.success ? 'bg-emerald-50' : 'bg-rose-50'">
+                                            <div class="flex items-center gap-2">
+                                                <span class="text-[9px] font-semibold" :class="execResult?.success ? 'text-emerald-600' : 'text-rose-600'" x-text="execResult?.success ? 'Sucesso' : 'Erro'"></span>
+                                                <span x-show="execResult?.latency" class="text-[9px] font-mono text-surface-400" x-text="execResult?.latency + 'ms'"></span>
+                                                <span x-show="execResultSize" class="text-[9px] font-mono text-surface-300" x-text="execResultSize"></span>
+                                            </div>
+                                            <div class="flex items-center gap-0.5">
+                                                <button @click="toggleExecFormat()" x-show="canFormatResult"
+                                                        class="p-1 rounded hover:bg-white/20 transition-colors" :title="execFormatted ? 'Ver bruto' : 'Formatar'">
+                                                    <svg class="w-3.5 h-3.5" :class="execFormatted ? 'text-violet-500' : 'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5"/></svg>
+                                                </button>
+                                                <button @click="toggleExecExpand()"
+                                                        class="p-1 rounded hover:bg-white/20 text-surface-400 transition-colors" :title="execExpanded ? 'Recolher' : 'Expandir'">
+                                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                                        <path x-show="!execExpanded" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/>
+                                                        <path x-show="execExpanded" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25"/>
+                                                    </svg>
+                                                </button>
+                                                <button @click="copyExecResult()"
+                                                        class="p-1 rounded hover:bg-white/20 text-surface-400 hover:text-emerald-500 transition-colors" title="Copiar resultado">
+                                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <!-- Raw view -->
+                                        <pre x-show="!execFormatted" class="px-3 py-2 text-[9px] font-mono overflow-auto whitespace-pre-wrap bg-brand-950 text-brand-200 scrollbar-thin transition-all"
+                                             :class="execExpanded ? 'max-h-[60vh]' : 'max-h-40'"
+                                             x-text="execResult?.data || execResult?.error || '—'"></pre>
+                                        <!-- Formatted view -->
+                                        <div x-show="execFormatted" class="overflow-auto scrollbar-thin transition-all bg-white border-t border-surface-100"
+                                             :class="execExpanded ? 'max-h-[60vh]' : 'max-h-40'">
+                                            <div class="px-4 py-3 text-[11px] text-brand-900 leading-relaxed exec-fmt" x-html="execFormattedHtml"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div x-show="testResult?.success && discoveredTools.length === 0" class="text-[10px] text-surface-400 py-1">
+                                Nenhuma ferramenta descoberta. Use os campos acima para configurar manualmente.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="border-t border-surface-100 px-6 py-3 flex items-center justify-between">
+                    <button @click="editorOpen = false; errorMsg = ''" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] text-surface-500 hover:bg-surface-50">Cancelar</button>
+                    <div class="flex gap-2">
+                        <button @click="copyBinding(form)" class="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-[12px] text-teal-700 hover:bg-teal-100">Copiar Binding</button>
+                        <button @click="saveTool()" :disabled="saving" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 inline-flex items-center gap-1.5">
+                            <svg x-show="saving" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                            <span x-text="saving ? 'Salvando...' : (editingId ? 'Atualizar' : 'Registrar')"></span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toolsPage() {
+    return {
+        allTools: [], filtered: [], loading: true,
+        filter: '', searchText: '',
+        editorOpen: false, editingId: null, saving: false,
+        errorMsg: '', successMsg: '',
+        wizardOpen: false, wizardQuery: '', wizardSearching: false,
+        wizardResults: [], wizardError: '', wizardNoResults: false,
+        previewId: null, previewTool: null,
+        testing: false, testResult: null,
+        discoveredTools: [], selectedTool: null,
+        execParams: {}, execFreeParam: '', executing: false, execResult: null,
+        execFormatted: false, execExpanded: false,
+        showAuthToken: false,
+        authConfig: { client_id: '', client_secret: '', token_url: '', scope: '', client_cert: '', client_key: '', ca_cert: '' },
+        form: { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'' },
+
+        get parsedOps() { try{const o=JSON.parse(this.form.operations||'[]');return Array.isArray(o)?o:[]}catch{return[]} },
+        parseOps(ops) { try{const a=JSON.parse(ops||'[]');return Array.isArray(a)?a.join(', ')||'—':'—'}catch{return ops||'—'} },
+        addOp() { const o=this.parsedOps; o.push(''); this.form.operations=JSON.stringify(o); },
+        removeOp(i) { const o=this.parsedOps; o.splice(i,1); this.form.operations=JSON.stringify(o); },
+        updateOp(i,v) { const o=this.parsedOps; o[i]=v; this.form.operations=JSON.stringify(o); },
+        generateBinding(t) { const ops=this.parseOps(t.operations); const c=t.requires_trusted_context?'\n  - Condição: requires_trusted_context = true':'\n  - Condição: sempre disponível'; return `- **${t.name||'nome.da.tool'}**\n  - Servidor MCP: ${t.mcp_server||'http://localhost:PORT'}\n  - Operações: ${ops}${c}\n  - Classificação: ${t.sensitivity||'internal'}\n  - Custo: $${(t.cost_per_call||0).toFixed(4)}/chamada\n  - Timeout: 30s\n  - Retry: 2x com backoff exponencial`; },
+        async copyBinding(t) { try{await navigator.clipboard.writeText(this.generateBinding(t));showToast('Snippet copiado')}catch{showToast('Erro','error')} },
+
+        // ══════════════════════════════════════════════════════════
+        // Exec result — copiar, formatar JSON/Markdown, expandir
+        // ══════════════════════════════════════════════════════════
+        get isExecResultJson() {
+            const raw = this.execResult?.data || this.execResult?.error || '';
+            if (!raw) return false;
+            const trimmed = raw.trim();
+            return (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
+        },
+
+        // Mostrar botão de formatação quando o resultado é JSON ou contém \n
+        get canFormatResult() {
+            const raw = this.execResult?.data || this.execResult?.error || '';
+            if (!raw || raw.length < 20) return false;
+            if (this.isExecResultJson) return true;
+            if (raw.includes('\\n') || raw.includes('\n')) return true;
+            return false;
+        },
+
+        // Texto limpo extraído do JSON (para copiar)
+        get execFormattedText() {
+            const raw = this.execResult?.data || this.execResult?.error || '';
+            return this._extractContent(raw);
+        },
+
+        // HTML renderizado para a view formatada
+        get execFormattedHtml() {
+            const raw = this.execResult?.data || this.execResult?.error || '';
+            const text = this._extractContent(raw);
+            return this._renderMarkdown(text);
+        },
+
+        // Extrai conteúdo textual de JSON MCP ou retorna o texto bruto
+        _extractContent(raw) {
+            if (!raw) return '';
+            const trimmed = raw.trim();
+
+            // Tentar extrair de JSON
+            if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+                try {
+                    const parsed = JSON.parse(trimmed);
+
+                    // MCP content format: {"content": "...text..."}
+                    // Também: {"result": {"content": [{"type":"text","text":"..."}]}}
+                    const contentFields = ['content', 'text', 'output', 'result', 'response', 'answer', 'message', 'generated_content', 'summary'];
+
+                    // Busca direta em campos de texto
+                    for (const field of contentFields) {
+                        if (parsed[field] && typeof parsed[field] === 'string') {
+                            return parsed[field].replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+                        }
+                    }
+
+                    // MCP array content: [{"type":"text","text":"..."}]
+                    if (Array.isArray(parsed)) {
+                        const texts = parsed.filter(b => b?.type === 'text' && b?.text).map(b => b.text);
+                        if (texts.length) return texts.join('\n\n').replace(/\\n/g, '\n');
+                    }
+
+                    // Nested content array: {"content": [{"type":"text","text":"..."}]}
+                    if (parsed.content && Array.isArray(parsed.content)) {
+                        const texts = parsed.content.filter(b => b?.type === 'text' && b?.text).map(b => b.text);
+                        if (texts.length) return texts.join('\n\n').replace(/\\n/g, '\n');
+                    }
+
+                    // result.content array
+                    if (parsed.result?.content && Array.isArray(parsed.result.content)) {
+                        const texts = parsed.result.content.filter(b => b?.type === 'text' && b?.text).map(b => b.text);
+                        if (texts.length) return texts.join('\n\n').replace(/\\n/g, '\n');
+                    }
+
+                    // Single-key object
+                    const keys = Object.keys(parsed);
+                    if (keys.length === 1 && typeof parsed[keys[0]] === 'string') {
+                        return parsed[keys[0]].replace(/\\n/g, '\n');
+                    }
+
+                    // Fallback: pretty-print JSON
+                    return JSON.stringify(parsed, null, 2);
+                } catch {
+                    return raw;
+                }
+            }
+
+            // Não é JSON — tratar \n literais
+            return raw.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+        },
+
+        // Renderiza Markdown básico como HTML seguro
+        _renderMarkdown(text) {
+            if (!text) return '';
+
+            // Escapar HTML
+            let html = text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            // Code blocks (``` ... ```)
+            html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+                return `<pre class="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2 my-2 text-[10px] font-mono overflow-x-auto text-brand-800"><code>${code.trim()}</code></pre>`;
+            });
+
+            // Processar por linhas
+            const lines = html.split('\n');
+            const processed = [];
+            let inList = false;
+
+            for (let i = 0; i < lines.length; i++) {
+                let line = lines[i];
+
+                // Headers
+                if (line.match(/^#{1,6}\s/)) {
+                    if (inList) { processed.push('</ul>'); inList = false; }
+                    const level = line.match(/^(#{1,6})\s/)[1].length;
+                    const content = line.replace(/^#{1,6}\s+/, '');
+                    const sizes = { 1: 'text-[15px] font-bold', 2: 'text-[13px] font-bold', 3: 'text-[12px] font-semibold', 4: 'text-[11px] font-semibold', 5: 'text-[11px] font-medium', 6: 'text-[10px] font-medium' };
+                    const cls = sizes[level] || sizes[3];
+                    const mt = level <= 2 ? 'mt-4 mb-1.5 pb-1 border-b border-surface-100' : 'mt-3 mb-1';
+                    processed.push(`<div class="${cls} text-brand-900 ${mt}">${this._inlineMarkdown(content)}</div>`);
+                    continue;
+                }
+
+                // Horizontal rule
+                if (line.match(/^[-*_]{3,}\s*$/)) {
+                    if (inList) { processed.push('</ul>'); inList = false; }
+                    processed.push('<hr class="my-3 border-surface-200">');
+                    continue;
+                }
+
+                // Unordered list
+                if (line.match(/^\s*[-*+]\s+/)) {
+                    if (!inList) { processed.push('<ul class="my-1.5 space-y-0.5">'); inList = true; }
+                    const content = line.replace(/^\s*[-*+]\s+/, '');
+                    processed.push(`<li class="flex gap-1.5 text-surface-600"><span class="text-brand-400 shrink-0 mt-0.5">•</span><span>${this._inlineMarkdown(content)}</span></li>`);
+                    continue;
+                }
+
+                // Ordered list
+                if (line.match(/^\s*\d+[.)]\s+/)) {
+                    if (!inList) { processed.push('<ol class="my-1.5 space-y-0.5 list-decimal list-inside">'); inList = true; }
+                    const content = line.replace(/^\s*\d+[.)]\s+/, '');
+                    processed.push(`<li class="text-surface-600">${this._inlineMarkdown(content)}</li>`);
+                    continue;
+                }
+
+                // Close list if we're not in a list item
+                if (inList && line.trim() === '') {
+                    processed.push('</ul>');
+                    inList = false;
+                }
+
+                // Empty line → paragraph break
+                if (line.trim() === '') {
+                    processed.push('<div class="h-2"></div>');
+                    continue;
+                }
+
+                // Regular paragraph
+                if (inList) { processed.push('</ul>'); inList = false; }
+                processed.push(`<p class="text-surface-600 mb-0.5">${this._inlineMarkdown(line)}</p>`);
+            }
+
+            if (inList) processed.push('</ul>');
+            return processed.join('\n');
+        },
+
+        // Formatação inline: bold, italic, code, links
+        _inlineMarkdown(text) {
+            return text
+                .replace(/`([^`]+)`/g, '<code class="rounded bg-surface-100 px-1 py-0.5 text-[10px] font-mono text-violet-700">$1</code>')
+                .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-brand-900">$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="text-brand-500 underline hover:text-brand-700">$1</a>');
+        },
+
+        get execResultSize() {
+            const raw = this.execResult?.data || this.execResult?.error || '';
+            if (!raw) return '';
+            const bytes = new Blob([raw]).size;
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        },
+        toggleExecFormat() { this.execFormatted = !this.execFormatted; },
+        toggleExecExpand() { this.execExpanded = !this.execExpanded; },
+        async copyExecResult() {
+            const text = this.execFormatted ? this.execFormattedText : (this.execResult?.data || this.execResult?.error || '');
+            try { await navigator.clipboard.writeText(text); showToast('Resultado copiado'); }
+            catch { showToast('Erro ao copiar', 'error'); }
+        },
+
+        openPreview(tool) { this.previewId=tool.id; this.previewTool=tool; },
+
+        // ══════════════════════════════════════════════════════════
+        // schemaProps — propriedades do inputSchema da tool selecionada
+        // Renderiza campos individuais no Playground em vez de campo livre
+        // ══════════════════════════════════════════════════════════
+        get schemaProps() {
+            if (!this.selectedTool?.inputSchema?.properties) return [];
+            const props = this.selectedTool.inputSchema.properties;
+            const required = this.selectedTool.inputSchema.required || [];
+            return Object.entries(props).map(([name, schema]) => ({
+                name,
+                type: schema.type || '',
+                description: schema.description || '',
+                required: required.includes(name),
+            }));
+        },
+
+        openEditor(tool) {
+            this.errorMsg = '';
+            this.successMsg = '';
+            this.saving = false;
+            if(tool){
+                this.editingId = tool.id;
+                this.form = {
+                    name: tool.name||'',
+                    mcp_server: tool.mcp_server||'',
+                    description: tool.description||'',
+                    operations: tool.operations||'[]',
+                    cost_per_call: Number(tool.cost_per_call) || 0,
+                    sensitivity: tool.sensitivity||'internal',
+                    requires_trusted_context: !!tool.requires_trusted_context,
+                    auth_requirements: tool.auth_requirements||'',
+                    auth_token: tool.auth_token||''
+                };
+                // Carregar auth_config JSON em objeto reativo
+                try { this.authConfig = JSON.parse(tool.auth_config || '{}'); }
+                catch { this.authConfig = {}; }
+                // Garantir que todas as chaves existam
+                this.authConfig = { client_id:'', client_secret:'', token_url:'', scope:'', client_cert:'', client_key:'', ca_cert:'', ...this.authConfig };
+            } else {
+                this.editingId = null;
+                this.form = { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'' };
+                this.authConfig = { client_id:'', client_secret:'', token_url:'', scope:'', client_cert:'', client_key:'', ca_cert:'' };
+            }
+            this.showAuthToken = false;
+            this.wizardOpen=false;this.wizardResults=[];this.wizardError='';this.wizardNoResults=false;
+            this.testResult=null;this.discoveredTools=[];this.selectedTool=null;this.execParams={};this.execFreeParam='';this.execResult=null;this.execFormatted=false;this.execExpanded=false;
+            this.editorOpen=true;
+        },
+
+        // ════════════════════════════════════════════
+        // saveTool — versão robusta com diagnóstico
+        // ════════════════════════════════════════════
+        async saveTool() {
+            this.errorMsg = '';
+            this.successMsg = '';
+
+            // Validação client-side
+            if (!this.form.name || !this.form.name.trim()) {
+                this.errorMsg = 'O campo "Nome" é obrigatório.';
+                return;
+            }
+            if (!this.form.mcp_server || !this.form.mcp_server.trim()) {
+                this.errorMsg = 'O campo "Endpoint MCP" é obrigatório.';
+                return;
+            }
+
+            this.saving = true;
+
+            // Construir payload limpo (sem propriedades reativas Alpine)
+            const payload = {
+                name: String(this.form.name).trim(),
+                mcp_server: String(this.form.mcp_server).trim(),
+                description: String(this.form.description || ''),
+                operations: String(this.form.operations || '[]'),
+                cost_per_call: Number(this.form.cost_per_call) || 0,
+                sensitivity: String(this.form.sensitivity || 'internal'),
+                requires_trusted_context: Boolean(this.form.requires_trusted_context),
+                auth_requirements: String(this.form.auth_requirements || ''),
+                auth_token: String(this.form.auth_token || ''),
+                auth_config: JSON.stringify(this.authConfig || {}),
+            };
+
+            console.log('[saveTool] editingId:', this.editingId, '| payload:', JSON.parse(JSON.stringify(payload)));
+
+            try {
+                let result;
+                if (this.editingId) {
+                    const url = '/api/v1/tools/' + this.editingId;
+                    console.log('[saveTool] PUT', url);
+                    const resp = await fetch(url, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload),
+                    });
+                    console.log('[saveTool] response status:', resp.status);
+                    const text = await resp.text();
+                    console.log('[saveTool] response body:', text.substring(0, 500));
+
+                    if (!resp.ok) {
+                        let msg = `HTTP ${resp.status}`;
+                        try {
+                            const err = JSON.parse(text);
+                            if (typeof err.detail === 'string') {
+                                msg = err.detail;
+                            } else if (Array.isArray(err.detail)) {
+                                msg = err.detail.map(e => {
+                                    const loc = Array.isArray(e.loc) ? e.loc.slice(1).join('.') : '';
+                                    return `${loc}: ${e.msg || e.type || JSON.stringify(e)}`;
+                                }).join('; ');
+                            } else if (err.detail) {
+                                msg = JSON.stringify(err.detail);
+                            } else if (err.message) {
+                                msg = err.message;
+                            }
+                        } catch {
+                            msg = text.substring(0, 300) || msg;
+                        }
+                        throw new Error(msg);
+                    }
+
+                    try { result = JSON.parse(text); } catch { result = {}; }
+                    this.successMsg = `Tool "${payload.name}" atualizada`;
+                    showToast('Tool atualizada com sucesso');
+                } else {
+                    const resp = await fetch('/api/v1/tools', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload),
+                    });
+                    console.log('[saveTool] POST response status:', resp.status);
+                    const text = await resp.text();
+                    if (!resp.ok) {
+                        let msg = `HTTP ${resp.status}`;
+                        try {
+                            const err = JSON.parse(text);
+                            if (typeof err.detail === 'string') msg = err.detail;
+                            else if (Array.isArray(err.detail)) msg = err.detail.map(e => `${(e.loc||[]).slice(1).join('.')}: ${e.msg||e.type}`).join('; ');
+                            else if (err.detail) msg = JSON.stringify(err.detail);
+                        } catch { msg = text.substring(0, 300) || msg; }
+                        throw new Error(msg);
+                    }
+                    try { result = JSON.parse(text); } catch { result = {}; }
+                    this.successMsg = `Tool "${payload.name}" registrada`;
+                    showToast('Tool registrada');
+                }
+
+                // Recarregar lista
+                await this.load();
+
+                // Fechar modal após pequeno delay para o usuário ver a mensagem de sucesso
+                setTimeout(() => {
+                    this.editorOpen = false;
+                    this.editingId = null;
+                    this.successMsg = '';
+                }, 800);
+
+            } catch(e) {
+                console.error('[saveTool] erro:', e);
+                this.errorMsg = e.message || String(e);
+                showToast('Erro ao salvar: ' + (e.message || e), 'error');
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async testMcp() {
+            if (!this.form.mcp_server.trim()) return;
+            this.testing = true; this.testResult = null; this.discoveredTools = []; this.selectedTool = null; this.execResult = null; this.execFormatted = false; this.execExpanded = false;
+            try {
+                const r = await api.post('/api/v1/tools/test', { endpoint: this.form.mcp_server, name: this.form.name, operations: this.form.operations, auth_type: this.form.auth_requirements, auth_token: this.form.auth_token, auth_config: JSON.stringify(this.authConfig || {}) });
+                this.testResult = r || { success: false, details: 'Resposta vazia' };
+                this.discoveredTools = r?.discovered_tools || [];
+            } catch(e) {
+                this.testResult = { success: false, details: e.message || 'Erro desconhecido', recommendations: ['Verifique se o endpoint está correto e acessível', 'Verifique os logs do servidor para mais detalhes'], discovered_tools: [] };
+                this.discoveredTools = [];
+            }
+            this.testing = false;
+        },
+
+        // ══════════════════════════════════════════════════════════
+        // selectDiscoveredTool — inicializa execParams com campos do schema
+        // CORREÇÃO 2026-04-21: popula execParams com defaults do schema
+        // para que os campos individuais renderizados tenham valor inicial
+        // ══════════════════════════════════════════════════════════
+        selectDiscoveredTool(dt) {
+            this.selectedTool = dt;
+            this.execParams = {};
+            this.execFreeParam = '';
+            this.execResult = null;
+            this.execFormatted = false;
+            this.execExpanded = false;
+            if (dt.inputSchema?.properties) {
+                for (const [k, v] of Object.entries(dt.inputSchema.properties)) {
+                    this.execParams[k] = v.default || '';
+                }
+            }
+        },
+
+        // ══════════════════════════════════════════════════════════
+        // executeTool — CORRIGIDO
+        // Problema original: quando a tool tinha inputSchema.properties,
+        // usava execParams (inicializado com strings vazias) e ignorava
+        // completamente execFreeParam (onde o usuário realmente digitava).
+        //
+        // Correção: usa execParams diretamente (agora preenchido via campos
+        // individuais renderizados pelo template). Quando sem schema,
+        // usa execFreeParam como fallback.
+        // ══════════════════════════════════════════════════════════
+        async executeTool() {
+            if (!this.selectedTool) return;
+            this.executing = true; this.execResult = null; this.execFormatted = false; this.execExpanded = false;
+
+            let args = {};
+
+            if (this.schemaProps.length > 0) {
+                // Tool tem schema com propriedades → usar campos individuais
+                args = {...this.execParams};
+            } else if (this.execFreeParam.trim()) {
+                // Sem schema → usar campo livre (JSON ou texto)
+                try { args = JSON.parse(this.execFreeParam); }
+                catch { args = { query: this.execFreeParam }; }
+            }
+
+            try {
+                const r = await api.post('/api/v1/tools/execute', {
+                    endpoint: this.form.mcp_server,
+                    tool_name: this.selectedTool.name,
+                    arguments: args,
+                    auth_type: this.form.auth_requirements,
+                    auth_token: this.form.auth_token,
+                    auth_config: JSON.stringify(this.authConfig || {}),
+                });
+                this.execResult = r;
+            } catch(e) {
+                this.execResult = { success: false, error: e.message };
+            }
+            this.executing = false;
+        },
+
+        async searchMCP() {
+            if(!this.wizardQuery.trim())return; this.wizardSearching=true;this.wizardResults=[];this.wizardError='';this.wizardNoResults=false;
+            try{const d=await api.post('/api/v1/tools/wizard',{query:this.wizardQuery});this.wizardResults=d.results||[];if(d.error)this.wizardError=d.error;if(!this.wizardResults.length&&!d.error)this.wizardNoResults=true;}catch(e){this.wizardError=e.message;}
+            this.wizardSearching=false;
+        },
+        applyWizardResult(r) { this.form.name=r.name||'';this.form.mcp_server=r.endpoint||'';this.form.description=r.description||'';this.form.operations=JSON.stringify(r.operations||[]);this.form.sensitivity=r.sensitivity||'internal';this.form.auth_requirements=r.auth||'';this.wizardOpen=false;showToast('Configuração aplicada'); },
+
+        applySearch() { const q=this.searchText.toLowerCase(); this.filtered=q?this.allTools.filter(t=>(t.name||'').toLowerCase().includes(q)||(t.description||'').toLowerCase().includes(q)):this.allTools; },
+
+        async load() {
+            const p=this.filter?`?sensitivity=${this.filter}`:'';
+            try{const d=await api.get('/api/v1/tools'+p);this.allTools=d.tools||[];this.filtered=this.allTools;this.applySearch();}catch{}
+            this.loading=false;
+        },
+
+        async deleteTool(id,name) {
+            if(!confirm(`Remover "${name}"?`))return;
+            try{await api.del('/api/v1/tools/'+id);this.allTools=this.allTools.filter(t=>t.id!==id);this.applySearch();if(this.previewId===id){this.previewId=null;this.previewTool=null;}showToast('Removida');}catch{showToast('Erro','error');}
+        },
+    }
+}
+</script>
+{% endblock %}

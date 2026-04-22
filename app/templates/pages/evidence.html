@@ -1,0 +1,160 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<div x-data="evidencePage()" x-init="load()">
+    <div class="flex items-center justify-between mb-6">
+        <p class="text-[12px] text-surface-400">RAG — bases autorizadas de conhecimento para Retrieval-Augmented Generation</p>
+        <button @click="openEditor(null)" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[13px] font-semibold text-white shadow-sm hover:bg-brand-600 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+            Nova Base
+        </button>
+    </div>
+
+    <!-- Cards -->
+    <div class="space-y-3">
+        <template x-for="s in sources" :key="s.id">
+            <div class="group rounded-xl border border-surface-200 bg-white p-5 hover:shadow-sm hover:border-brand-200 transition-all">
+                <div class="flex items-start justify-between">
+                    <div class="flex items-start gap-3 flex-1 min-w-0">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-xl shrink-0"
+                             :class="{'bg-emerald-100 text-emerald-600':s.confidentiality_label==='public','bg-brand-100 text-brand-600':s.confidentiality_label==='internal','bg-amber-100 text-amber-600':s.confidentiality_label==='confidential','bg-rose-100 text-rose-600':s.confidentiality_label==='restricted'}">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap mb-1">
+                                <h3 class="text-[14px] font-semibold text-brand-900" x-text="s.name"></h3>
+                                <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                                      :class="{'bg-emerald-50 text-emerald-700':s.confidentiality_label==='public','bg-brand-50 text-brand-700':s.confidentiality_label==='internal','bg-amber-50 text-amber-700':s.confidentiality_label==='confidential','bg-rose-50 text-rose-700':s.confidentiality_label==='restricted'}"
+                                      x-text="s.confidentiality_label"></span>
+                                <span class="rounded-full bg-surface-100 px-2 py-0.5 text-[10px] font-medium text-surface-500" x-text="s.source_type"></span>
+                            </div>
+                            <p class="text-[12px] text-surface-400" x-text="s.description || 'Sem descrição'"></p>
+                        </div>
+                    </div>
+                    <div class="flex gap-1 ml-4 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <button @click="openEditor(s)" title="Editar" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                        </button>
+                        <button @click="deleteSource(s.id, s.name)" title="Excluir" class="p-1.5 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Empty state -->
+    <template x-if="sources.length === 0">
+        <div class="text-center py-16">
+            <div class="h-16 w-16 rounded-2xl bg-brand-50 flex items-center justify-center mx-auto mb-4">
+                <svg class="w-8 h-8 text-brand-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
+            </div>
+            <p class="text-[14px] font-medium text-surface-500 mb-1">Nenhuma base registrada</p>
+            <p class="text-[12px] text-surface-400 mb-4 max-w-md mx-auto">Registre bases de conhecimento (manuais, regulatórios, FAQs) para habilitar o runtime de evidência nos agentes.</p>
+            <button @click="openEditor(null)" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[13px] font-semibold text-white">Registrar Primeira Base</button>
+        </div>
+    </template>
+
+    <!-- ══ MODAL: Editor ══ -->
+    <template x-if="editorOpen">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
+            <div class="fixed inset-0 bg-black/40" @click="editorOpen = false"></div>
+            <div class="relative z-10 w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden">
+                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4">
+                    <h3 class="text-[15px] font-bold text-brand-900" x-text="editingId ? 'Editar Base de Conhecimento' : 'Nova Base de Conhecimento'"></h3>
+                    <button @click="editorOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <div class="px-6 py-5 space-y-4">
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Nome *</label>
+                        <input x-model="form.name" placeholder="Ex: Manual de Cobranças 2024" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[13px] text-brand-900 outline-none focus:border-brand-400">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Descrição</label>
+                        <textarea x-model="form.description" rows="3" placeholder="Descreva o conteúdo e escopo desta base..."
+                                  class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[13px] text-brand-900 outline-none focus:border-brand-400 resize-none"></textarea>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-[11px] font-semibold text-surface-500 mb-1">Tipo</label>
+                            <select x-model="form.source_type" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[13px] outline-none">
+                                <option value="manual">Manual / Procedimento</option>
+                                <option value="regulatorio">Regulatório</option>
+                                <option value="contratual">Contratual</option>
+                                <option value="faq">FAQ</option>
+                                <option value="tecnico">Técnico</option>
+                                <option value="politica">Política Interna</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-surface-500 mb-1">Classificação</label>
+                            <select x-model="form.confidentiality_label" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[13px] outline-none">
+                                <option value="public">Público</option>
+                                <option value="internal">Interno</option>
+                                <option value="confidential">Confidencial</option>
+                                <option value="restricted">Restrito</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="border-t border-surface-100 px-6 py-4 flex items-center justify-end gap-3">
+                    <button @click="editorOpen = false" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] font-medium text-surface-500 hover:bg-surface-50">Cancelar</button>
+                    <button @click="saveSource()" :disabled="saving" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 transition-colors">
+                        <span x-text="saving ? 'Salvando...' : (editingId ? 'Atualizar' : 'Registrar')"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function evidencePage() {
+    return {
+        sources: [],
+        editorOpen: false, editingId: null, saving: false,
+        form: { name: '', description: '', source_type: 'manual', confidentiality_label: 'internal' },
+
+        async load() {
+            try { const d = await api.get('/api/v1/knowledge-sources'); this.sources = d.sources || []; } catch {}
+        },
+
+        openEditor(s) {
+            if (s) {
+                this.editingId = s.id;
+                this.form = { name: s.name || '', description: s.description || '', source_type: s.source_type || 'manual', confidentiality_label: s.confidentiality_label || 'internal' };
+            } else {
+                this.editingId = null;
+                this.form = { name: '', description: '', source_type: 'manual', confidentiality_label: 'internal' };
+            }
+            this.editorOpen = true;
+        },
+
+        async saveSource() {
+            if (!this.form.name.trim()) { showToast('Nome obrigatório', 'error'); return; }
+            this.saving = true;
+            try {
+                if (this.editingId) {
+                    await api.put('/api/v1/knowledge-sources/' + this.editingId, this.form);
+                    showToast('Base atualizada');
+                } else {
+                    await api.post('/api/v1/knowledge-sources', this.form);
+                    showToast('Base registrada');
+                }
+                this.editorOpen = false;
+                await this.load();
+            } catch(e) { showToast(e.message, 'error'); }
+            this.saving = false;
+        },
+
+        async deleteSource(id, name) {
+            if (!confirm(`Remover base "${name}"? Evidências vinculadas perderão a referência.`)) return;
+            try { await api.del('/api/v1/knowledge-sources/' + id); showToast('Base removida'); await this.load(); } catch { showToast('Erro', 'error'); }
+        },
+    }
+}
+</script>
+{% endblock %}

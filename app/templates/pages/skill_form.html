@@ -1,0 +1,422 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="skillForm('{{ skill_id | default('') }}')" x-init="load()" class="max-w-3xl">
+
+    <div class="mb-6">
+        <a href="/skills" class="inline-flex items-center gap-1 text-[12px] text-brand-500 font-medium hover:text-brand-700 mb-2">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
+            Voltar
+        </a>
+        <div class="flex items-center justify-between">
+            <h2 class="text-[16px] font-bold text-brand-900" x-text="isEdit ? 'Editar Skill — SKILL.md §5' : 'Nova Skill — SKILL.md §5'"></h2>
+            <button @click="showWizard = !showWizard"
+                    class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-semibold transition-all"
+                    :class="showWizard ? 'bg-violet-100 text-violet-700 ring-2 ring-violet-200' : 'bg-gradient-to-r from-violet-500 to-brand-500 text-white shadow-md hover:shadow-lg hover:scale-[1.02]'">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+                <span x-text="showWizard ? 'Fechar Wizard' : 'IA, me ajude'"></span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ══════════ WIZARD IA PANEL ══════════ -->
+    <div x-show="showWizard" x-transition.duration.300ms class="mb-8 rounded-2xl border-2 border-violet-200 bg-gradient-to-br from-violet-50 via-white to-brand-50 p-6 shadow-sm">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500 text-white">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+            </div>
+            <div>
+                <div class="text-[14px] font-bold text-violet-900">Wizard IA — Gerador de SKILL.md</div>
+                <div class="text-[11px] text-violet-500">Descreva a capacidade e a IA gera o SKILL.md canônico completo (§5)</div>
+            </div>
+        </div>
+        <div class="space-y-4">
+            <div>
+                <label class="block text-[12px] font-semibold text-violet-800 mb-1.5">Descreva a skill que você precisa</label>
+                <textarea x-model="wizardPrompt" rows="3" placeholder="Ex: Skill para consultar padrões de desenvolvimento via Context7 MCP..."
+                          class="w-full rounded-xl border border-violet-200 bg-white px-4 py-3 text-[13px] text-brand-900 placeholder:text-violet-300 focus:border-violet-400 focus:ring-2 focus:ring-violet-100 outline-none transition resize-none"></textarea>
+            </div>
+            <!-- MCP selector -->
+            <div x-show="mcpTools.length > 0">
+                <label class="block text-[11px] font-semibold text-violet-800 mb-1.5">Vincular Ferramentas MCP (Tool Bindings)</label>
+                <div class="flex flex-wrap gap-1.5">
+                    <template x-for="t in mcpTools" :key="t.id">
+                        <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 cursor-pointer transition-colors text-[11px]"
+                               :class="wizardMcpIds.includes(t.id) ? 'bg-violet-100 border-violet-300 text-violet-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-violet-200'">
+                            <input type="checkbox" :checked="wizardMcpIds.includes(t.id)" @change="toggleWizardMcp(t.id)" class="hidden">
+                            <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
+                            <span x-text="t.name"></span>
+                        </label>
+                    </template>
+                </div>
+            </div>
+            <div class="flex items-center gap-3 flex-wrap">
+                <select x-model="wizardKind" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none">
+                    <option value="subagent">Subagente</option>
+                    <option value="router">Roteador</option>
+                    <option value="orchestrator">Orquestrador</option>
+                </select>
+                <input x-model="wizardDomain" placeholder="Domínio (ex: dev)" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none w-32">
+                <select x-model="wizardExecMode" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none">
+                    <option value="fast">Fast</option>
+                    <option value="standard">Standard</option>
+                    <option value="rigorous">Rigorous</option>
+                </select>
+                <select x-model="wizardProvider" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none">
+                    <option value="openai">OpenAI</option><option value="maritaca">Maritaca AI</option>
+                </select>
+                <button @click="runWizardSkill()" :disabled="wizardLoading || !wizardPrompt.trim()"
+                        class="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-violet-600 disabled:opacity-40 transition-all">
+                    <svg x-show="wizardLoading" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <span x-text="wizardLoading ? 'Gerando SKILL.md...' : 'Gerar SKILL.md'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══════════ TABS ══════════ -->
+    <div class="flex items-center gap-1 mb-4">
+        <button @click="tab='editor'" class="rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors"
+                :class="tab==='editor' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Editor</button>
+        <button @click="tab='preview'; parseSkill()" class="rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors"
+                :class="tab==='preview' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Preview / Validação</button>
+    </div>
+
+    <!-- ══════════ EDITOR TAB ══════════ -->
+    <div x-show="tab==='editor'" class="space-y-5">
+
+        <!-- EXECUTION PROFILE SELECTOR -->
+        <div class="rounded-xl border border-surface-200 bg-white p-4">
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-brand-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+                    <span class="text-[12px] font-semibold text-brand-900">Execution Profile</span>
+                    <span x-show="!hasExplicitProfile" class="rounded-full bg-surface-100 px-2 py-0.5 text-[9px] font-medium text-surface-400">auto-inferido</span>
+                    <span x-show="hasExplicitProfile" class="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-medium text-emerald-600">declarado</span>
+                </div>
+            </div>
+            <div class="grid grid-cols-3 gap-3">
+                <button @click="setExecutionProfile('fast')" type="button"
+                        class="rounded-xl border-2 p-3 text-left transition-all"
+                        :class="detectedExecutionMode==='fast' ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-100' : 'border-surface-200 hover:border-surface-300'">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <svg class="w-4 h-4" :class="detectedExecutionMode==='fast'?'text-emerald-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+                        <span class="text-[13px] font-bold" :class="detectedExecutionMode==='fast'?'text-emerald-800':'text-surface-600'">Fast</span>
+                    </div>
+                    <div class="text-[10px] leading-relaxed" :class="detectedExecutionMode==='fast'?'text-emerald-600':'text-surface-400'">
+                        1 chamada LLM. Sem reflexão, sem evidence check. Ideal para agentes MCP e consultas.
+                    </div>
+                    <div class="mt-2 text-[9px] font-mono" :class="detectedExecutionMode==='fast'?'text-emerald-500':'text-surface-300'">~8-12s</div>
+                </button>
+                <button @click="setExecutionProfile('standard')" type="button"
+                        class="rounded-xl border-2 p-3 text-left transition-all"
+                        :class="detectedExecutionMode==='standard' ? 'border-brand-400 bg-brand-50 ring-2 ring-brand-100' : 'border-surface-200 hover:border-surface-300'">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <svg class="w-4 h-4" :class="detectedExecutionMode==='standard'?'text-brand-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <span class="text-[13px] font-bold" :class="detectedExecutionMode==='standard'?'text-brand-800':'text-surface-600'">Standard</span>
+                    </div>
+                    <div class="text-[10px] leading-relaxed" :class="detectedExecutionMode==='standard'?'text-brand-600':'text-surface-400'">
+                        2 chamadas LLM. Reflexão on-error, evidence heurística. Para análise e relatórios.
+                    </div>
+                    <div class="mt-2 text-[9px] font-mono" :class="detectedExecutionMode==='standard'?'text-brand-500':'text-surface-300'">~15-20s</div>
+                </button>
+                <button @click="setExecutionProfile('rigorous')" type="button"
+                        class="rounded-xl border-2 p-3 text-left transition-all"
+                        :class="detectedExecutionMode==='rigorous' ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-100' : 'border-surface-200 hover:border-surface-300'">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <svg class="w-4 h-4" :class="detectedExecutionMode==='rigorous'?'text-amber-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
+                        <span class="text-[13px] font-bold" :class="detectedExecutionMode==='rigorous'?'text-amber-800':'text-surface-600'">Rigorous</span>
+                    </div>
+                    <div class="text-[10px] leading-relaxed" :class="detectedExecutionMode==='rigorous'?'text-amber-600':'text-surface-400'">
+                        3+ chamadas LLM. Reflexão completa, evidence via LLM. Para compliance e financeiro.
+                    </div>
+                    <div class="mt-2 text-[9px] font-mono" :class="detectedExecutionMode==='rigorous'?'text-amber-500':'text-surface-300'">~25-40s</div>
+                </button>
+            </div>
+        </div>
+
+        <!-- SKILL.md textarea -->
+        <div>
+            <div class="flex items-center justify-between mb-1.5">
+                <label class="text-[12px] font-semibold text-brand-900">Conteúdo SKILL.md *</label>
+                <div class="relative" x-data="{mcpDropdown:false}">
+                    <button @click="mcpDropdown = !mcpDropdown" x-show="mcpTools.length > 0"
+                            class="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-100 transition-colors">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
+                        Inserir MCP
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                    </button>
+                    <div x-show="mcpDropdown" @click.away="mcpDropdown=false" x-transition
+                         class="absolute right-0 top-full mt-1 w-72 rounded-xl bg-white border border-surface-200 shadow-lg z-50 py-1 max-h-60 overflow-y-auto">
+                        <div class="px-3 py-1.5 text-[9px] font-bold text-surface-400 uppercase tracking-wider">Selecione para inserir</div>
+                        <template x-for="t in mcpTools" :key="t.id">
+                            <button @click="insertMcpBinding(t); mcpDropdown=false" class="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-surface-50 transition-colors">
+                                <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-100 text-teal-600 shrink-0">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
+                                </div>
+                                <div class="min-w-0">
+                                    <div class="text-[11px] font-semibold text-brand-900 truncate" x-text="t.name"></div>
+                                    <div class="text-[9px] text-surface-400 truncate" x-text="t.mcp_server || '—'"></div>
+                                </div>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+            </div>
+            <textarea x-model="form.raw_content" rows="24" placeholder="---&#10;id: urn:skill:dominio:tipo:slug&#10;version: 0.1.0&#10;kind: subagent&#10;owner: equipe&#10;stability: alpha&#10;---&#10;&#10;# Nome da Skill&#10;&#10;## Purpose&#10;..."
+                      class="w-full rounded-xl border border-surface-200 bg-white px-4 py-3 text-[12px] font-mono text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition resize-none leading-relaxed"></textarea>
+        </div>
+        <div>
+            <label class="text-[12px] font-semibold text-brand-900 mb-1.5 block">Tags</label>
+            <input x-model="form.tags" placeholder='["tag1","tag2"]' class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[12px] font-mono text-brand-900 placeholder:text-surface-300 outline-none focus:border-brand-400 transition">
+        </div>
+        <div class="flex items-center justify-end pt-2">
+            <button @click="save()" :disabled="saving" class="rounded-xl bg-brand-500 px-6 py-2.5 text-[13px] font-semibold text-white shadow-sm hover:bg-brand-600 disabled:opacity-40 transition-all">
+                <span x-text="saving ? 'Salvando...' : (isEdit ? 'Atualizar Skill' : 'Criar Skill')"></span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ══════════ PREVIEW TAB ══════════ -->
+    <div x-show="tab==='preview'" class="space-y-4">
+        <template x-if="parseResult">
+            <div class="space-y-4">
+                <div class="flex items-center gap-2 flex-wrap">
+                    <span class="inline-flex items-center gap-1 text-[12px] font-semibold" :class="parseResult.is_valid ? 'text-emerald-600' : 'text-rose-600'">
+                        <span x-text="parseResult.is_valid ? '✅' : '❌'"></span>
+                        <span x-text="parseResult.is_valid ? 'Markdown limpo' : 'Problemas encontrados'"></span>
+                    </span>
+                </div>
+                <div x-show="parseResult.errors?.length" class="space-y-1">
+                    <template x-for="w in parseResult.errors" :key="w"><p class="text-[11px] text-amber-600">⚠ <span x-text="w"></span></p></template>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                    <div><span class="text-[10px] text-surface-400 block">Nome</span><span class="text-[13px] font-semibold text-brand-900" x-text="parseResult.name || '—'"></span></div>
+                    <div><span class="text-[10px] text-surface-400 block">URN</span><span class="text-[12px] font-mono text-brand-900" x-text="parseResult.urn || '—'"></span></div>
+                    <div><span class="text-[10px] text-surface-400 block">Kind</span><span class="text-[12px] text-brand-900" x-text="parseResult.kind || '—'"></span></div>
+                    <div><span class="text-[10px] text-surface-400 block">Version</span><span class="text-[12px] font-mono text-brand-900" x-text="parseResult.version || '—'"></span></div>
+                </div>
+                <!-- Execution Profile in preview -->
+                <div class="rounded-lg border p-3" :class="parseResult.execution_mode==='fast'?'border-emerald-200 bg-emerald-50':parseResult.execution_mode==='rigorous'?'border-amber-200 bg-amber-50':'border-brand-200 bg-brand-50'">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4" :class="parseResult.execution_mode==='fast'?'text-emerald-600':parseResult.execution_mode==='rigorous'?'text-amber-600':'text-brand-600'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+                        <span class="text-[12px] font-semibold" :class="parseResult.execution_mode==='fast'?'text-emerald-800':parseResult.execution_mode==='rigorous'?'text-amber-800':'text-brand-800'" x-text="'Execution Profile: ' + (parseResult.execution_mode || 'standard')"></span>
+                        <span x-show="!parseResult.sections_found?.includes('Execution Profile')" class="rounded-full bg-white/60 px-2 py-0.5 text-[9px] text-surface-500">auto-inferido</span>
+                    </div>
+                </div>
+                <div x-show="parseResult.purpose"><h4 class="text-[10px] text-surface-400 font-semibold">Purpose</h4><p class="text-[12px] text-brand-900" x-text="parseResult.purpose"></p></div>
+                <div>
+                    <h4 class="text-[10px] text-surface-400 font-semibold mb-1.5">Seções encontradas</h4>
+                    <div class="flex flex-wrap gap-1.5">
+                        <template x-for="s in parseResult.sections_found || []" :key="s">
+                            <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700" x-text="s"></span>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </template>
+        <template x-if="!parseResult"><div class="text-center py-12 text-[13px] text-surface-400">Clique em "Preview / Validação" para validar o SKILL.md</div></template>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function skillForm(editId) {
+    return {
+        isEdit: !!editId,
+        saving: false, tab: 'editor',
+        showWizard: false, wizardPrompt: '', wizardLoading: false,
+        wizardKind: 'subagent', wizardDomain: '', wizardProvider: 'openai',
+        wizardExecMode: 'fast',
+        wizardMcpIds: [],
+        parseResult: null,
+        mcpTools: [],
+        form: { raw_content: '', tags: '[]' },
+
+        // ══════════════════════════════════════════════════
+        // Execution Profile — detecção reativa e manipulação
+        // Espelha a lógica de _parse_execution_mode e
+        // _infer_execution_mode do parser.py
+        // ══════════════════════════════════════════════════
+
+        get hasExplicitProfile() {
+            return (this.form.raw_content || '').includes('## Execution Profile');
+        },
+
+        get detectedExecutionMode() {
+            const content = this.form.raw_content || '';
+            // Parse explicit section
+            if (content.includes('## Execution Profile')) {
+                const match = content.match(/## Execution Profile[\s\S]*?(?:mode|modo):\s*(fast|standard|rigorous|rápido|rapido|padrão|padrao|rigoroso)/i);
+                if (match) {
+                    const map = {fast:'fast',rápido:'fast',rapido:'fast',standard:'standard',padrão:'standard',padrao:'standard',rigorous:'rigorous',rigoroso:'rigorous'};
+                    return map[match[1].toLowerCase()] || 'standard';
+                }
+                const section = content.match(/## Execution Profile[\s\S]*?(?=\n## |$)/)?.[0]?.toLowerCase() || '';
+                if (section.includes('fast') || section.includes('rápido')) return 'fast';
+                if (section.includes('rigorous') || section.includes('rigoroso')) return 'rigorous';
+                return 'standard';
+            }
+            // Auto-infer
+            const hasEvidence = /## Evidence Policy\s*\n[^\n#]{20,}/.test(content);
+            const hasGuardrails = /## Guardrails\s*\n[^\n#]{50,}/.test(content);
+            if (hasEvidence && hasGuardrails) return 'rigorous';
+            if (hasEvidence || hasGuardrails) return 'standard';
+            return 'fast';
+        },
+
+        setExecutionProfile(mode) {
+            const content = this.form.raw_content || '';
+            const profiles = {
+                fast: '## Execution Profile\nmode: fast\nreflection: off\nevidence: skip',
+                standard: '## Execution Profile\nmode: standard\nreflection: on-error\nevidence: optional',
+                rigorous: '## Execution Profile\nmode: rigorous\nreflection: always\nevidence: required',
+            };
+            const newSection = profiles[mode];
+
+            if (content.includes('## Execution Profile')) {
+                this.form.raw_content = content.replace(
+                    /## Execution Profile[\s\S]*?(?=\n## |$)/,
+                    newSection
+                );
+            } else {
+                const markers = ['## Examples', '## Telemetry', '## Gold Refs'];
+                let insertAt = content.length;
+                for (const m of markers) {
+                    const idx = content.indexOf(m);
+                    if (idx > 0 && idx < insertAt) insertAt = idx;
+                }
+                this.form.raw_content = content.substring(0, insertAt).trimEnd() + '\n\n' + newSection + '\n\n' + content.substring(insertAt);
+            }
+            showToast('Execution Profile: ' + mode);
+        },
+
+        // ══════════════════════════════════════════════════
+
+        async load() {
+            try { this.mcpTools = (await api.get('/api/v1/tools')).tools || []; } catch {}
+
+            if (editId) {
+                try {
+                    const skill = await api.get(`/api/v1/skills/${editId}`);
+                    this.form.raw_content = skill.raw_content || '';
+                    this.form.tags = skill.tags || '[]';
+                } catch(e) { showToast('Erro ao carregar skill', 'error'); }
+            }
+
+            const mcpParam = new URLSearchParams(window.location.search).get('mcp');
+            if (mcpParam && !editId) {
+                const tool = this.mcpTools.find(t => t.id === mcpParam);
+                if (tool) {
+                    this.showWizard = true;
+                    this.wizardMcpIds = [tool.id];
+                    this.wizardPrompt = `Skill que utiliza a ferramenta MCP "${tool.name}" (${tool.description || ''}) para ${this._parseOps(tool.operations)}`;
+                    showToast('MCP "' + tool.name + '" selecionado — descreva a skill e gere');
+                }
+            }
+        },
+
+        _parseOps(ops) {
+            try { const a = JSON.parse(ops || '[]'); return a.join(', '); } catch { return ops || ''; }
+        },
+
+        _generateBinding(tool) {
+            const ops = this._parseOps(tool.operations);
+            const cond = tool.requires_trusted_context ? '\n  - Condição: requires_trusted_context = true' : '\n  - Condição: sempre disponível';
+            return `- **${tool.name}**\n  - Servidor MCP: ${tool.mcp_server || 'http://localhost:PORT'}\n  - Operações: ${ops}${cond}\n  - Classificação: ${tool.sensitivity || 'internal'}\n  - Custo: $${(tool.cost_per_call || 0).toFixed(4)}/chamada\n  - Timeout: 30s\n  - Retry: 2x com backoff exponencial`;
+        },
+
+        toggleWizardMcp(id) {
+            const idx = this.wizardMcpIds.indexOf(id);
+            if (idx >= 0) this.wizardMcpIds.splice(idx, 1);
+            else this.wizardMcpIds.push(id);
+        },
+
+        insertMcpBinding(tool) {
+            const binding = this._generateBinding(tool);
+            const content = this.form.raw_content || '';
+            const section = '## Tool Bindings';
+            if (content.includes(section)) {
+                const idx = content.indexOf(section);
+                const afterHeader = idx + section.length;
+                const nextSection = content.indexOf('\n## ', afterHeader + 1);
+                const insertAt = nextSection > 0 ? nextSection : content.length;
+                this.form.raw_content = content.substring(0, insertAt) + '\n' + binding + '\n' + content.substring(insertAt);
+            } else {
+                const beforeOutput = content.indexOf('## Output');
+                if (beforeOutput > 0) {
+                    this.form.raw_content = content.substring(0, beforeOutput) + section + '\n' + binding + '\n\n' + content.substring(beforeOutput);
+                } else {
+                    this.form.raw_content = content + '\n\n' + section + '\n' + binding + '\n';
+                }
+            }
+            showToast('Tool Binding de "' + tool.name + '" inserido');
+        },
+
+        async runWizardSkill() {
+            if (!this.wizardPrompt.trim()) return;
+            this.wizardLoading = true;
+
+            let mcpContext = '';
+            if (this.wizardMcpIds.length) {
+                const bindings = this.wizardMcpIds.map(id => {
+                    const t = this.mcpTools.find(m => m.id === id);
+                    return t ? this._generateBinding(t) : '';
+                }).filter(Boolean).join('\n\n');
+                mcpContext = `\n\nINCLUA OBRIGATORIAMENTE a seguinte seção ## Tool Bindings no SKILL.md gerado:\n\n## Tool Bindings\n${bindings}`;
+            }
+
+            const execProfiles = {
+                fast: 'mode: fast\nreflection: off\nevidence: skip',
+                standard: 'mode: standard\nreflection: on-error\nevidence: optional',
+                rigorous: 'mode: rigorous\nreflection: always\nevidence: required',
+            };
+            const execContext = `\n\nINCLUA a seguinte seção ## Execution Profile no SKILL.md gerado:\n\n## Execution Profile\n${execProfiles[this.wizardExecMode]}`;
+
+            try {
+                const r = await api.post('/api/v1/wizard/skill', {
+                    description: this.wizardPrompt + mcpContext + execContext,
+                    kind: this.wizardKind,
+                    domain: this.wizardDomain,
+                    provider: this.wizardProvider,
+                });
+                this.form.raw_content = r.skill_md;
+                this.showWizard = false;
+                showToast('SKILL.md gerado pela IA — revise e ajuste');
+            } catch(e) { showToast('Erro: ' + e.message, 'error'); }
+            this.wizardLoading = false;
+        },
+
+        async parseSkill() {
+            if (!this.form.raw_content.trim()) { this.parseResult = null; return; }
+            try {
+                this.parseResult = await api.post('/api/v1/skills/parse', { raw_content: this.form.raw_content });
+            } catch(e) { showToast('Erro no parse', 'error'); }
+        },
+
+        async save() {
+            if (!this.form.raw_content.trim()) { showToast('Conteúdo obrigatório', 'error'); return; }
+            this.saving = true;
+            try {
+                if (this.isEdit) {
+                    const result = await api.put(`/api/v1/skills/${editId}`, this.form);
+                    showToast('Skill atualizada (v' + (result.version || '') + ')');
+                } else {
+                    const result = await api.post('/api/v1/skills', this.form);
+                    if (result.warnings && result.warnings.length > 0) {
+                        showToast('Skill criada com ' + result.warnings.length + ' aviso(s)', 'info');
+                    } else {
+                        showToast('Skill criada');
+                    }
+                }
+                setTimeout(() => window.location.href = '/skills', 1200);
+            } catch(e) {
+                showToast(e.message, 'error');
+            }
+            this.saving = false;
+        },
+    }
+}
+</script>
+{% endblock %}

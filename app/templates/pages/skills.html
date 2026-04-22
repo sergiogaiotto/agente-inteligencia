@@ -1,0 +1,183 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="skillsPage()" x-init="load()" class="flex gap-0 -m-4 lg:-m-6 h-[calc(100vh-3.5rem)]">
+
+    <!-- ══ LEFT: Skills list ══ -->
+    <div class="flex-1 flex flex-col overflow-hidden p-4 lg:p-6">
+        <div class="flex items-center justify-between mb-4">
+            <p class="text-[12px] text-surface-400">SKILL.md — definições de capacidades para seus agentes</p>
+            <a href="/skills/new" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[13px] font-semibold text-white shadow-sm hover:bg-brand-600 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                Nova Skill
+            </a>
+        </div>
+
+        <!-- Filters -->
+        <div class="flex items-center gap-2 mb-4">
+            <select x-model="filterKind" @change="applyFilters()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none">
+                <option value="">Todos tipos</option>
+                <option value="subagent">Subagent</option>
+                <option value="router">Router</option>
+                <option value="orchestrator">Orchestrator</option>
+            </select>
+            <select x-model="filterStability" @change="applyFilters()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none">
+                <option value="">Estabilidade</option>
+                <option value="alpha">Alpha</option>
+                <option value="beta">Beta</option>
+                <option value="stable">Stable</option>
+            </select>
+            <input x-model="searchText" @input="applyFilters()" placeholder="Buscar..." class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none w-40">
+            <span class="text-[10px] text-surface-400" x-text="filtered.length + '/' + allSkills.length + ' skill(s)'"></span>
+        </div>
+
+        <!-- Skills list -->
+        <div class="flex-1 overflow-y-auto scrollbar-thin space-y-1.5 pr-1">
+            <template x-for="skill in filtered" :key="skill.id">
+                <div class="group flex items-center gap-3 rounded-lg border bg-white px-4 py-2.5 cursor-pointer transition-all"
+                     :class="previewId === skill.id ? 'border-brand-400 bg-brand-50/30 shadow-sm' : 'border-surface-200 hover:border-brand-200 hover:shadow-sm'"
+                     @click="openPreview(skill)">
+                    <!-- Icon -->
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg shrink-0 text-[10px] font-bold"
+                         :class="skill.kind==='router'?'bg-brand-100 text-brand-600':skill.kind==='orchestrator'?'bg-violet-100 text-violet-600':'bg-teal-100 text-teal-600'"
+                         x-text="(skill.name||'SK').substring(0,2).toUpperCase()"></div>
+                    <!-- Info -->
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[13px] font-semibold text-brand-900 truncate" x-text="skill.name"></span>
+                            <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-400 shrink-0" x-text="'v' + (skill.version || '0.1.0')"></span>
+                        </div>
+                        <div class="flex items-center gap-1.5 mt-0.5">
+                            <span x-show="skill.kind" class="text-[9px] font-bold uppercase" :class="skill.kind==='router'?'text-brand-500':skill.kind==='orchestrator'?'text-violet-500':'text-teal-500'" x-text="skill.kind"></span>
+                            <span x-show="skill.stability" class="text-[9px]"
+                                  :class="skill.stability==='stable'?'text-emerald-500':skill.stability==='beta'?'text-amber-500':'text-surface-400'"
+                                  x-text="skill.stability"></span>
+                            <span x-show="skill.domain" class="text-[9px] text-violet-500" x-text="skill.domain"></span>
+                        </div>
+                    </div>
+                    <!-- Actions -->
+                    <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <button @click.stop="openPreview(skill)" class="p-1.5 rounded-md hover:bg-brand-50 text-surface-400 hover:text-brand-600" title="Visualizar">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                        </button>
+                        <a @click.stop :href="'/skills/' + skill.id + '/edit'" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                        </a>
+                        <button @click.stop="deleteSkill(skill.id, skill.name)" class="p-1.5 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600" title="Excluir">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="!loading && filtered.length === 0">
+                <div class="text-center py-12">
+                    <p class="text-[13px] text-surface-400 mb-3" x-text="allSkills.length ? 'Nenhuma skill encontrada para os filtros selecionados' : 'Nenhuma skill criada'"></p>
+                    <a x-show="!allSkills.length" href="/skills/new" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white">Criar Skill</a>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ══ RIGHT: Preview panel ══ -->
+    <aside x-show="previewId" x-transition.duration.200ms class="hidden lg:flex w-[420px] flex-col border-l border-surface-200 bg-white shrink-0 overflow-hidden">
+        <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3">
+            <div class="flex items-center gap-2 min-w-0">
+                <span class="text-[12px] font-semibold text-brand-900 truncate" x-text="previewSkill?.name || 'Preview'"></span>
+                <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-400 shrink-0" x-text="'v' + (previewSkill?.version || '0.1.0')"></span>
+            </div>
+            <div class="flex items-center gap-1">
+                <a :href="'/skills/' + previewId + '/edit'" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                </a>
+                <button @click="previewId = null; previewSkill = null" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="flex-1 overflow-y-auto scrollbar-thin p-5 space-y-4">
+            <!-- Badges -->
+            <div class="flex flex-wrap gap-1.5">
+                <span x-show="previewSkill?.kind" class="rounded-full bg-brand-50 px-2.5 py-0.5 text-[10px] font-bold text-brand-600" x-text="previewSkill?.kind"></span>
+                <span x-show="previewSkill?.stability" class="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
+                      :class="previewSkill?.stability==='stable'?'bg-emerald-50 text-emerald-700':previewSkill?.stability==='beta'?'bg-amber-50 text-amber-700':'bg-surface-100 text-surface-500'"
+                      x-text="previewSkill?.stability"></span>
+                <span x-show="previewSkill?.domain" class="rounded-full bg-violet-50 px-2.5 py-0.5 text-[10px] font-medium text-violet-600" x-text="previewSkill?.domain"></span>
+                <span x-show="previewSkill?.owner" class="rounded-full bg-surface-100 px-2.5 py-0.5 text-[10px] text-surface-500" x-text="previewSkill?.owner"></span>
+            </div>
+            <!-- Purpose -->
+            <div x-show="previewSkill?.purpose">
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Purpose</h4>
+                <p class="text-[12px] text-brand-900 leading-relaxed" x-text="previewSkill?.purpose"></p>
+            </div>
+            <!-- Tags -->
+            <div x-show="previewSkill?.tags && previewSkill?.tags !== '[]'">
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Tags</h4>
+                <p class="text-[11px] text-surface-500" x-text="previewSkill?.tags"></p>
+            </div>
+            <!-- Frontmatter -->
+            <div>
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Frontmatter</h4>
+                <div class="rounded-lg bg-surface-50 border border-surface-100 p-3 text-[11px] font-mono text-surface-600 space-y-0.5">
+                    <div><span class="text-surface-400">id:</span> <span x-text="previewSkill?.skill_urn || '—'"></span></div>
+                    <div><span class="text-surface-400">version:</span> <span x-text="previewSkill?.version || '0.1.0'"></span></div>
+                    <div><span class="text-surface-400">kind:</span> <span x-text="previewSkill?.kind || '—'"></span></div>
+                    <div><span class="text-surface-400">owner:</span> <span x-text="previewSkill?.owner || '—'"></span></div>
+                    <div><span class="text-surface-400">stability:</span> <span x-text="previewSkill?.stability || '—'"></span></div>
+                </div>
+            </div>
+            <!-- Raw content -->
+            <div>
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Conteúdo SKILL.md</h4>
+                <pre class="rounded-lg bg-brand-950 text-brand-200 p-4 text-[11px] font-mono overflow-x-auto whitespace-pre-wrap max-h-[50vh]"
+                     x-text="previewSkill?.raw_content || '—'"></pre>
+            </div>
+        </div>
+    </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function skillsPage() {
+    return {
+        allSkills: [], filtered: [], loading: true,
+        filterKind: '', filterStability: '', searchText: '',
+        previewId: null, previewSkill: null,
+
+        async load() {
+            try { const d = await api.get('/api/v1/skills'); this.allSkills = d.skills || []; } catch {}
+            this.applyFilters();
+            this.loading = false;
+        },
+
+        applyFilters() {
+            let result = this.allSkills;
+            if (this.filterKind) result = result.filter(s => s.kind === this.filterKind);
+            if (this.filterStability) result = result.filter(s => s.stability === this.filterStability);
+            if (this.searchText.trim()) {
+                const q = this.searchText.toLowerCase();
+                result = result.filter(s => (s.name||'').toLowerCase().includes(q) || (s.purpose||'').toLowerCase().includes(q) || (s.domain||'').toLowerCase().includes(q));
+            }
+            this.filtered = result;
+        },
+
+        openPreview(skill) {
+            this.previewId = skill.id;
+            this.previewSkill = skill;
+        },
+
+        async deleteSkill(id, name) {
+            if (!confirm(`Remover skill "${name}"?`)) return;
+            try {
+                await api.del(`/api/v1/skills/${id}`);
+                this.allSkills = this.allSkills.filter(s => s.id !== id);
+                this.applyFilters();
+                if (this.previewId === id) { this.previewId = null; this.previewSkill = null; }
+                showToast('Skill removida');
+            } catch { showToast('Erro', 'error'); }
+        },
+    }
+}
+</script>
+{% endblock %}

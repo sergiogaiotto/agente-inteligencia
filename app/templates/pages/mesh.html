@@ -1,0 +1,572 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="meshPage()" x-init="load()" class="flex gap-0 -m-4 lg:-m-6 h-[calc(100vh-3.5rem)]">
+
+    <!-- ══ MAIN CONTENT ══ -->
+    <div class="flex-1 overflow-y-auto scrollbar-thin p-4 lg:p-6">
+
+    <div class="flex items-center justify-between mb-5">
+        <p class="text-[12px] text-surface-400">Topologia de conexões entre agentes no AI Mesh</p>
+        <div class="flex gap-2">
+            <button @click="showGroupForm = true" class="inline-flex items-center gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-[12px] font-medium text-brand-700 hover:bg-brand-100 transition-colors">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.25 7.125C2.25 6.504 2.754 6 3.375 6h6c.621 0 1.125.504 1.125 1.125v3.75c0 .621-.504 1.125-1.125 1.125h-6a1.125 1.125 0 01-1.125-1.125v-3.75z"/></svg>
+                Novo Grupo
+            </button>
+            <button @click="openConnEditor(null)" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[13px] font-semibold text-white shadow-sm hover:bg-brand-600 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                Nova Conexão
+            </button>
+        </div>
+    </div>
+
+    <!-- New group form -->
+    <div x-show="showGroupForm" x-transition class="rounded-xl border border-violet-200 bg-violet-50/50 p-4 mb-5">
+        <div class="flex items-end gap-3">
+            <div class="flex-1"><label class="block text-[11px] font-semibold text-surface-500 mb-1">Nome do Grupo</label>
+            <input x-model="newGroupName" placeholder="Ex: Atendimento Nível 1" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-brand-400"></div>
+            <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Cor</label>
+            <div class="flex gap-1.5"><template x-for="c in groupColors" :key="c.id"><button @click="newGroupColor = c.id" class="h-8 w-8 rounded-lg border-2 transition-all" :class="newGroupColor === c.id ? 'border-brand-500 scale-110 shadow-md' : 'border-transparent'" :style="'background:' + c.bg"></button></template></div></div>
+            <button @click="addGroup()" class="rounded-lg bg-violet-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-violet-600">Criar Grupo</button>
+            <button @click="showGroupForm = false" class="rounded-lg border border-surface-200 px-3 py-2 text-[12px] text-surface-500 hover:bg-surface-50">Cancelar</button>
+        </div>
+    </div>
+
+    <!-- ══ CONEXÕES ══ -->
+    <div class="rounded-xl border border-surface-200 bg-white mb-5">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-surface-100 cursor-pointer select-none" @click="connsCollapsed = !connsCollapsed">
+            <div class="flex items-center gap-3">
+                <svg class="w-4 h-4 text-brand-500 transition-transform duration-200" :class="connsCollapsed ? '-rotate-90' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                <span class="text-[13px] font-bold text-brand-900">Conexões</span>
+                <span class="rounded-full bg-brand-50 px-2.5 py-0.5 text-[10px] font-semibold text-brand-600" x-text="topology.edges.length"></span>
+            </div>
+        </div>
+        <div x-show="!connsCollapsed" x-transition.duration.200ms>
+            <template x-if="topology.edges.length === 0">
+                <div class="px-5 py-8 text-center">
+                    <div class="flex items-center justify-center gap-4 mb-3 opacity-30">
+                        <div class="h-10 w-10 rounded-full bg-violet-200"></div>
+                        <svg class="w-6 h-6 text-surface-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
+                        <div class="h-10 w-10 rounded-full bg-teal-200"></div>
+                    </div>
+                    <p class="text-[12px] text-surface-400">Conecte seus agentes para formar pipelines de processamento</p>
+                </div>
+            </template>
+            <div class="py-2">
+                <template x-for="item in hierarchicalEdges" :key="item.edge?.id || ('h'+item.rootIdx)">
+                    <div>
+                    <!-- Chain header -->
+                    <div x-show="item.type === 'header'" class="flex items-center gap-3 px-5 py-2 bg-surface-50/80 border-b border-surface-100 cursor-pointer select-none" @click="collapsedChains[item.rootId] = !collapsedChains[item.rootId]">
+                        <span class="text-[14px] font-bold text-brand-600 min-w-[30px]" x-text="item.rootIdx + '.'"></span>
+                        <svg class="w-4 h-4 text-brand-400 transition-transform duration-200 shrink-0" :class="collapsedChains[item.rootId] ? '-rotate-90' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        <!-- Normal mode -->
+                        <div x-show="renamingChainId !== item.rootId" class="flex items-center gap-2 flex-1">
+                            <span class="text-[13px] font-bold text-brand-900" x-text="chainNames[item.rootId] || 'Pipeline ' + item.rootIdx"></span>
+                            <span class="text-[10px] text-surface-400">via</span>
+                            <span class="text-[11px] font-medium text-surface-500" x-text="nodeName(item.rootId)"></span>
+                            <span class="rounded-full bg-brand-100 px-2 py-0.5 text-[9px] font-semibold text-brand-600" x-text="item.edgeCount + ' conexão(ões)'"></span>
+                            <button @click.stop="startRenameChain(item.rootId, chainNames[item.rootId]||'')" class="p-1 rounded hover:bg-brand-100 text-surface-300 hover:text-brand-600 transition-colors" title="Renomear">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                            </button>
+                        </div>
+                        <!-- Rename mode -->
+                        <div x-show="renamingChainId === item.rootId" @click.stop class="flex items-center gap-2 flex-1">
+                            <input x-model="renameChainValue" @keydown.enter="confirmRenameChain(item.rootId)" @keydown.escape="renamingChainId = null"
+                                   placeholder="Nome do pipeline..." class="flex-1 max-w-xs rounded-lg border border-brand-300 bg-white px-2.5 py-1 text-[13px] font-semibold text-brand-900 outline-none focus:ring-2 focus:ring-brand-100">
+                            <button @click="confirmRenameChain(item.rootId)" class="rounded bg-brand-500 px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-brand-600">Salvar</button>
+                            <button @click="renamingChainId = null" class="rounded bg-surface-100 px-2.5 py-1 text-[10px] font-medium text-surface-500">Cancelar</button>
+                        </div>
+                        <!-- Pipeline actions -->
+                        <button @click.stop="openPipelineDetail(item.rootId, item.edgeCount)" class="shrink-0 inline-flex items-center gap-1 rounded-lg border border-surface-200 bg-white px-2.5 py-1 text-[10px] font-medium text-brand-600 hover:bg-brand-50 transition-colors" title="Detalhes do pipeline">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                            Detalhes
+                        </button>
+                        <a @click.stop :href="'/workspace?agent=' + item.rootId + '&mode=pipeline'" class="shrink-0 inline-flex items-center gap-1 rounded-lg bg-emerald-500 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-emerald-600 transition-colors" title="Testar pipeline">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+                            Testar
+                        </a>
+                        <button @click.stop="addConnectionToChain(item.rootId)" class="shrink-0 inline-flex items-center gap-1 rounded-lg border border-brand-200 bg-white px-2.5 py-1 text-[10px] font-medium text-brand-600 hover:bg-brand-50 transition-colors" title="Adicionar conexão">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                            Adicionar
+                        </button>
+                    </div>
+                    <!-- Edge row -->
+                    <div x-show="item.edge && item.type === 'edge' && !collapsedChains[item.rootId]" x-transition.duration.150ms
+                         class="group flex items-center gap-3 px-5 py-2.5 hover:bg-surface-50/50 transition-colors"
+                         :style="'padding-left:' + (20 + (item.depth||0) * 28) + 'px'">
+                        <span class="text-[12px] font-mono font-bold shrink-0 min-w-[50px]"
+                              :class="(item.depth||0)<=1?'text-brand-600':(item.depth||0)===2?'text-violet-500':'text-teal-500'"
+                              x-text="item.number"></span>
+                        <template x-if="(item.depth||0) > 1">
+                            <div class="flex items-center shrink-0">
+                                <div class="w-3 h-px" :class="(item.depth||0)===2?'bg-violet-200':'bg-teal-200'"></div>
+                                <div class="w-1.5 h-1.5 rounded-full" :class="(item.depth||0)===2?'bg-violet-300':'bg-teal-300'"></div>
+                                <div class="w-2 h-px" :class="(item.depth||0)===2?'bg-violet-200':'bg-teal-200'"></div>
+                            </div>
+                        </template>
+                        <div class="flex h-7 w-7 items-center justify-center rounded-full text-[8px] font-bold text-white shrink-0"
+                             :class="nodeKindColor(item.edge?.source)" x-text="nodeName(item.edge?.source).substring(0,2).toUpperCase()"></div>
+                        <div class="min-w-0 max-w-[140px]">
+                            <div class="text-[11px] font-semibold text-brand-900 truncate" x-text="nodeName(item.edge?.source)"></div>
+                        </div>
+                        <div class="flex items-center gap-1.5 shrink-0">
+                            <svg class="w-6 h-2.5 text-surface-300" viewBox="0 0 24 10"><line x1="0" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3,2"/><polygon points="18,1 24,5 18,9" fill="currentColor"/></svg>
+                            <span class="rounded-full px-2 py-0.5 text-[8px] font-bold uppercase tracking-wider"
+                                  :class="item.edge?.type==='sequential'?'bg-brand-50 text-brand-600':item.edge?.type==='parallel'?'bg-violet-50 text-violet-600':'bg-amber-50 text-amber-600'"
+                                  x-text="item.edge?.type"></span>
+                            <svg class="w-4 h-2.5 text-surface-300" viewBox="0 0 16 10"><line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3,2"/><polygon points="10,1 16,5 10,9" fill="currentColor"/></svg>
+                        </div>
+                        <div class="flex h-7 w-7 items-center justify-center rounded-full text-[8px] font-bold text-white shrink-0"
+                             :class="nodeKindColor(item.edge?.target)" x-text="nodeName(item.edge?.target).substring(0,2).toUpperCase()"></div>
+                        <div class="min-w-0 max-w-[140px]">
+                            <div class="text-[11px] font-semibold text-brand-900 truncate" x-text="nodeName(item.edge?.target)"></div>
+                        </div>
+                        <div class="flex-1"></div>
+                        <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                            <button @click="openConnEditor(item.edge)" class="p-1 rounded-md hover:bg-brand-50 text-surface-400 hover:text-brand-600" title="Editar">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                            </button>
+                            <button @click="deleteConnection(item.edge?.id)" class="p-1 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600" title="Excluir">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ GROUPS ══ -->
+    <div class="space-y-4">
+        <template x-for="group in groups" :key="group.id">
+            <div class="rounded-xl border overflow-hidden transition-all" :style="'border-color:' + getGroupColor(group.color).border">
+                <div class="flex items-center justify-between px-4 py-3 cursor-pointer select-none" :style="'background:' + getGroupColor(group.color).bg" @click="group.collapsed = !group.collapsed">
+                    <div class="flex items-center gap-3">
+                        <svg class="w-4 h-4 transition-transform duration-200" :class="group.collapsed ? '-rotate-90' : ''" :style="'color:' + getGroupColor(group.color).text" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        <span class="text-[13px] font-bold" :style="'color:' + getGroupColor(group.color).text" x-text="group.name"></span>
+                        <span class="rounded-full px-2 py-0.5 text-[10px] font-medium bg-white/60" :style="'color:' + getGroupColor(group.color).text" x-text="groupAgents(group).length + ' agente(s)'"></span>
+                    </div>
+                    <div class="flex items-center gap-1" @click.stop>
+                        <select @change="assignToGroup(group.id, $event.target.value); $event.target.value=''" class="rounded-lg border border-white/40 bg-white/50 px-2 py-1 text-[10px] outline-none max-w-[150px]" :style="'color:' + getGroupColor(group.color).text">
+                            <option value="">+ Agente</option>
+                            <template x-for="n in unassignedNodes" :key="n.id"><option :value="n.id" x-text="n.name"></option></template>
+                        </select>
+                        <button @click="renameGroup(group)" class="p-1 rounded hover:bg-white/30" :style="'color:' + getGroupColor(group.color).text"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg></button>
+                        <button @click="removeGroup(group.id)" class="p-1 rounded hover:bg-white/30" :style="'color:' + getGroupColor(group.color).text"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+                    </div>
+                </div>
+                <div x-show="!group.collapsed" x-transition.duration.200ms class="bg-white p-4">
+                    <template x-if="groupAgents(group).length === 0"><div class="text-center py-4 text-[12px] text-surface-400">Use "+ Agente" para adicionar</div></template>
+                    <div class="flex flex-wrap gap-3">
+                        <template x-for="node in groupAgents(group)" :key="node.id">
+                            <div class="flex items-center gap-2.5 rounded-xl border border-surface-200 bg-white px-3.5 py-2.5 shadow-sm hover:shadow-md transition-shadow">
+                                <div class="flex h-9 w-9 items-center justify-center rounded-full text-[10px] font-bold text-white shrink-0" :class="node.kind==='aobd'?'bg-violet-500':node.kind==='router'?'bg-brand-500':'bg-teal-500'" x-text="node.name?.substring(0,2).toUpperCase()"></div>
+                                <div><div class="text-[12px] font-semibold text-brand-900" x-text="node.name"></div><div class="text-[9px] text-surface-400" x-text="node.kind+' · '+node.model+' · v'+(node.version||'1.0.0')"></div></div>
+                                <button @click="unassignFromGroup(group.id, node.id)" class="ml-1 p-0.5 rounded text-surface-300 hover:text-rose-500"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </template>
+        <!-- Ungrouped -->
+        <template x-if="unassignedNodes.length > 0">
+            <div class="rounded-xl border border-dashed border-surface-300 overflow-hidden">
+                <div class="flex items-center justify-between px-4 py-3 bg-surface-50 cursor-pointer select-none" @click="ungroupedCollapsed = !ungroupedCollapsed">
+                    <div class="flex items-center gap-3">
+                        <svg class="w-4 h-4 text-surface-400 transition-transform duration-200" :class="ungroupedCollapsed ? '-rotate-90' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        <span class="text-[13px] font-semibold text-surface-500">Sem Grupo</span>
+                        <span class="rounded-full bg-surface-200 px-2 py-0.5 text-[10px] font-medium text-surface-500" x-text="unassignedNodes.length + ' agente(s)'"></span>
+                    </div>
+                </div>
+                <div x-show="!ungroupedCollapsed" x-transition.duration.200ms class="bg-white p-4">
+                    <div class="flex flex-wrap gap-3">
+                        <template x-for="node in unassignedNodes" :key="node.id">
+                            <div class="flex items-center gap-2.5 rounded-xl border border-dashed border-surface-200 bg-surface-50 px-3.5 py-2.5">
+                                <div class="flex h-9 w-9 items-center justify-center rounded-full text-[10px] font-bold text-white shrink-0" :class="node.kind==='aobd'?'bg-violet-500':node.kind==='router'?'bg-brand-500':'bg-teal-500'" x-text="node.name?.substring(0,2).toUpperCase()"></div>
+                                <div><div class="text-[12px] font-semibold text-brand-900" x-text="node.name"></div><div class="text-[9px] text-surface-400" x-text="node.kind+' · '+node.model+' · v'+(node.version||'1.0.0')"></div></div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    </div><!-- end main content -->
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <!-- RIGHT: Pipeline Detail Panel                      -->
+    <!-- ══════════════════════════════════════════════════ -->
+    <aside x-show="detailOpen" x-transition.duration.200ms class="hidden lg:flex w-[380px] flex-col border-l border-surface-200 bg-white shrink-0 overflow-hidden">
+        <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3">
+            <div class="flex items-center gap-2 min-w-0">
+                <svg class="w-4 h-4 text-brand-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l3 8m5-8l-3 8M7.5 5h9"/></svg>
+                <span class="text-[12px] font-semibold text-brand-900 truncate" x-text="detailName || 'Pipeline'"></span>
+            </div>
+            <div class="flex items-center gap-1">
+                <a :href="'/workspace?agent=' + detailRootId + '&mode=pipeline'" class="p-1.5 rounded-md hover:bg-emerald-50 text-surface-400 hover:text-emerald-600" title="Testar pipeline">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+                </a>
+                <button @click="detailOpen=false" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="flex-1 overflow-y-auto scrollbar-thin p-5 space-y-4">
+            <!-- Summary -->
+            <div class="rounded-xl bg-brand-50 border border-brand-100 p-4">
+                <div class="grid grid-cols-3 gap-3 text-center">
+                    <div><div class="text-[18px] font-bold text-brand-900" x-text="detailChain.length"></div><div class="text-[9px] text-brand-500 uppercase">Agentes</div></div>
+                    <div><div class="text-[18px] font-bold text-brand-900" x-text="detailPassthroughCount"></div><div class="text-[9px] text-amber-500 uppercase">Pass-through</div></div>
+                    <div><div class="text-[18px] font-bold text-brand-900" x-text="detailActiveCount"></div><div class="text-[9px] text-emerald-500 uppercase">Ativos (LLM)</div></div>
+                </div>
+            </div>
+
+            <!-- Chain agents -->
+            <div>
+                <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-3">Cadeia de Execução</h3>
+                <div class="space-y-0">
+                    <template x-for="(ag, i) in detailChain" :key="ag.id">
+                        <div class="flex gap-3">
+                            <div class="flex flex-col items-center">
+                                <div class="flex h-8 w-8 items-center justify-center rounded-full text-[9px] font-bold shrink-0"
+                                     :class="ag._passthrough ? 'bg-amber-100 text-amber-700 border-2 border-dashed border-amber-300' : (ag.kind==='aobd'?'bg-violet-100 text-violet-700':ag.kind==='router'?'bg-brand-100 text-brand-700':'bg-teal-100 text-teal-700')"
+                                     x-text="i+1"></div>
+                                <div x-show="i < detailChain.length - 1" class="w-px flex-1 min-h-[16px]" :class="ag._passthrough ? 'bg-amber-200 border-l border-dashed border-amber-300' : 'bg-surface-200'"></div>
+                            </div>
+                            <div class="pb-4 flex-1 min-w-0">
+                                <!-- Agent header -->
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    <span class="text-[12px] font-semibold text-brand-900" x-text="ag.name"></span>
+                                    <span class="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase"
+                                          :class="ag.kind==='aobd'?'bg-violet-50 text-violet-600':ag.kind==='router'?'bg-brand-50 text-brand-600':'bg-teal-50 text-teal-600'"
+                                          x-text="ag.kind==='aobd'?'AOBD':ag.kind==='router'?'AR':'SA'"></span>
+                                    <span x-show="ag._passthrough" class="rounded-full bg-amber-50 px-1.5 py-0.5 text-[8px] font-bold text-amber-600">PASS-THROUGH</span>
+                                </div>
+                                <!-- Config -->
+                                <div class="rounded-lg bg-surface-50 border border-surface-100 p-2.5 mt-2 space-y-1.5 text-[10px]">
+                                    <div class="flex justify-between"><span class="text-surface-400">Modelo</span><span class="font-mono font-medium text-brand-900" x-text="ag.model || '—'"></span></div>
+                                    <div class="flex justify-between"><span class="text-surface-400">Versão</span><span class="font-mono text-brand-900" x-text="'v' + (ag.version||'1.0.0')"></span></div>
+                                    <div x-show="ag.domain" class="flex justify-between"><span class="text-surface-400">Domínio</span><span class="text-brand-900" x-text="ag.domain"></span></div>
+                                    <div class="flex justify-between">
+                                        <span class="text-surface-400">Pipeline</span>
+                                        <span class="font-medium" :class="ag._passthrough ? 'text-amber-600' : 'text-emerald-600'" x-text="ag._passthrough ? 'Pass-through (0ms)' : 'Execução ativa'"></span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span class="text-surface-400">Evidência</span>
+                                        <span class="font-medium" :class="ag.require_evidence ? 'text-emerald-600' : 'text-surface-400'" x-text="ag.require_evidence ? 'Sim' : 'Não'"></span>
+                                    </div>
+                                </div>
+                                <!-- Skill -->
+                                <div x-show="ag._skill_name" class="rounded-lg border border-teal-100 bg-teal-50/30 p-2.5 mt-2">
+                                    <div class="flex items-center gap-1.5">
+                                        <span class="text-[10px] font-semibold text-teal-800" x-text="ag._skill_name"></span>
+                                        <span class="rounded-full bg-teal-100 px-1.5 py-0.5 text-[8px] font-mono text-teal-600" x-text="'v' + (ag._skill_version||'?')"></span>
+                                    </div>
+                                    <div x-show="ag._skill_exec_mode" class="flex items-center gap-1 mt-1">
+                                        <svg class="w-3 h-3" :class="ag._skill_exec_mode==='fast'?'text-emerald-500':ag._skill_exec_mode==='rigorous'?'text-amber-500':'text-brand-500'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+                                        <span class="text-[9px] font-semibold" :class="ag._skill_exec_mode==='fast'?'text-emerald-700':ag._skill_exec_mode==='rigorous'?'text-amber-700':'text-brand-700'" x-text="'Exec: ' + ag._skill_exec_mode"></span>
+                                    </div>
+                                    <p x-show="ag._skill_purpose" class="text-[9px] text-surface-500 mt-1 leading-relaxed" x-text="ag._skill_purpose?.substring(0,150)"></p>
+                                </div>
+                                <div x-show="!ag._skill_name && !ag._passthrough" class="text-[9px] text-surface-400 mt-1.5">Sem skill vinculada</div>
+                                <!-- Passthrough explanation -->
+                                <div x-show="ag._passthrough" class="text-[9px] text-amber-600 mt-1.5 leading-relaxed">
+                                    Sem SKILL.md + prompt genérico — ignorado em runtime, input propagado ao próximo agente.
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Connections -->
+            <div>
+                <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-2">Conexões</h3>
+                <div class="space-y-1.5">
+                    <template x-for="conn in detailConnections" :key="conn.id">
+                        <div class="flex items-center gap-2 rounded-lg bg-surface-50 px-3 py-2 text-[10px]">
+                            <span class="font-semibold text-brand-900 truncate max-w-[90px]" x-text="nodeName(conn.source)"></span>
+                            <span class="rounded-full px-1.5 py-0.5 text-[8px] font-bold uppercase shrink-0"
+                                  :class="conn.type==='sequential'?'bg-brand-50 text-brand-600':conn.type==='parallel'?'bg-violet-50 text-violet-600':'bg-amber-50 text-amber-600'"
+                                  x-text="conn.type"></span>
+                            <span class="font-semibold text-brand-900 truncate max-w-[90px]" x-text="nodeName(conn.target)"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- System Prompts summary -->
+            <div>
+                <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-2">System Prompts</h3>
+                <div class="space-y-2">
+                    <template x-for="ag in detailChain" :key="'sp-'+ag.id">
+                        <div class="rounded-lg border border-surface-100 overflow-hidden">
+                            <div class="flex items-center justify-between bg-surface-50 px-3 py-1.5">
+                                <span class="text-[10px] font-semibold text-brand-900" x-text="ag.name"></span>
+                                <span class="text-[9px] font-mono text-surface-300" x-text="(ag.system_prompt||'').length + ' chars'"></span>
+                            </div>
+                            <pre class="px-3 py-2 text-[9px] font-mono text-surface-600 whitespace-pre-wrap max-h-20 overflow-y-auto scrollbar-thin bg-white" x-text="ag.system_prompt?.substring(0, 300) || '—'"></pre>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ══ CONNECTION EDITOR MODAL ══ -->
+    <template x-if="connEditorOpen">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
+            <div class="fixed inset-0 bg-black/40" @click="connEditorOpen = false"></div>
+            <div class="relative z-10 w-full max-w-xl rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden">
+                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4">
+                    <h3 class="text-[15px] font-bold text-brand-900" x-text="editingConnId ? 'Editar Conexão' : 'Nova Conexão'"></h3>
+                    <button @click="connEditorOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+                </div>
+                <div class="px-6 py-5 space-y-5">
+                    <div class="flex items-center gap-4">
+                        <div class="flex-1">
+                            <label class="block text-[11px] font-semibold text-surface-500 mb-1.5">Agente Origem</label>
+                            <select x-model="connForm.source_agent_id" class="w-full rounded-xl border-2 border-surface-200 bg-white px-3 py-3 text-[13px] text-brand-900 outline-none focus:border-brand-400">
+                                <option value="">Selecione...</option>
+                                <template x-for="node in activeNodes" :key="node.id"><option :value="node.id" x-text="node.name + ' (' + node.kind + ')'"></option></template>
+                            </select>
+                        </div>
+                        <div class="flex flex-col items-center pt-5 shrink-0">
+                            <svg class="w-10 h-6 text-brand-400" viewBox="0 0 40 24"><line x1="2" y1="12" x2="30" y2="12" stroke="currentColor" stroke-width="2.5" stroke-dasharray="5,3"/><polygon points="30,6 40,12 30,18" fill="currentColor"/></svg>
+                        </div>
+                        <div class="flex-1">
+                            <label class="block text-[11px] font-semibold text-surface-500 mb-1.5">Agente Destino</label>
+                            <select x-model="connForm.target_agent_id" class="w-full rounded-xl border-2 border-surface-200 bg-white px-3 py-3 text-[13px] text-brand-900 outline-none focus:border-brand-400">
+                                <option value="">Selecione...</option>
+                                <template x-for="node in activeNodes" :key="node.id"><option :value="node.id" x-text="node.name + ' (' + node.kind + ')'"></option></template>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-2">Tipo de Conexão</label>
+                        <div class="grid grid-cols-3 gap-3">
+                            <button @click="connForm.connection_type = 'sequential'" type="button" class="rounded-xl border-2 p-3 text-center transition-all" :class="connForm.connection_type==='sequential' ? 'border-brand-400 bg-brand-50 ring-2 ring-brand-100' : 'border-surface-200 hover:border-surface-300'">
+                                <svg class="w-6 h-6 mx-auto mb-1.5" :class="connForm.connection_type==='sequential'?'text-brand-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
+                                <div class="text-[12px] font-semibold" :class="connForm.connection_type==='sequential'?'text-brand-900':'text-surface-500'">Sequencial</div>
+                            </button>
+                            <button @click="connForm.connection_type = 'parallel'" type="button" class="rounded-xl border-2 p-3 text-center transition-all" :class="connForm.connection_type==='parallel' ? 'border-violet-400 bg-violet-50 ring-2 ring-violet-100' : 'border-surface-200 hover:border-surface-300'">
+                                <svg class="w-6 h-6 mx-auto mb-1.5" :class="connForm.connection_type==='parallel'?'text-violet-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
+                                <div class="text-[12px] font-semibold" :class="connForm.connection_type==='parallel'?'text-violet-900':'text-surface-500'">Paralelo</div>
+                            </button>
+                            <button @click="connForm.connection_type = 'conditional'" type="button" class="rounded-xl border-2 p-3 text-center transition-all" :class="connForm.connection_type==='conditional' ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-100' : 'border-surface-200 hover:border-surface-300'">
+                                <svg class="w-6 h-6 mx-auto mb-1.5" :class="connForm.connection_type==='conditional'?'text-amber-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
+                                <div class="text-[12px] font-semibold" :class="connForm.connection_type==='conditional'?'text-amber-900':'text-surface-500'">Condicional</div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="border-t border-surface-100 px-6 py-4 flex items-center justify-end gap-3">
+                    <button @click="connEditorOpen = false" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] font-medium text-surface-500 hover:bg-surface-50">Cancelar</button>
+                    <button @click="saveConnection()" :disabled="savingConn" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+                        <span x-text="savingConn ? 'Salvando...' : (editingConnId ? 'Atualizar' : 'Criar Conexão')"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function meshPage() {
+    return {
+        topology: { nodes: [], edges: [] },
+        showGroupForm: false, connsCollapsed: false,
+        groups: [], newGroupName: '', newGroupColor: 'blue', ungroupedCollapsed: false,
+        connEditorOpen: false, editingConnId: null, savingConn: false,
+        connForm: { source_agent_id: '', target_agent_id: '', connection_type: 'sequential' },
+        chainNames: {}, collapsedChains: {},
+        renamingChainId: null, renameChainValue: '',
+        // ── Detail panel state ──
+        detailOpen: false, detailRootId: null, detailName: '',
+        detailChain: [], detailConnections: [],
+        // ── Agent details cache ──
+        _agentDetails: {},
+        _skillMap: {},
+
+        groupColors: [
+            {id:'blue',bg:'#dbeafe'},{id:'violet',bg:'#ede9fe'},{id:'teal',bg:'#ccfbf1'},{id:'amber',bg:'#fef3c7'},
+            {id:'rose',bg:'#ffe4e6'},{id:'emerald',bg:'#d1fae5'},{id:'sky',bg:'#e0f2fe'},{id:'orange',bg:'#ffedd5'},
+        ],
+        getGroupColor(id) {
+            const m = {blue:{bg:'#dbeafe',border:'#93c5fd',text:'#1e40af'},violet:{bg:'#ede9fe',border:'#c4b5fd',text:'#5b21b6'},teal:{bg:'#ccfbf1',border:'#5eead4',text:'#0f766e'},amber:{bg:'#fef3c7',border:'#fcd34d',text:'#92400e'},rose:{bg:'#ffe4e6',border:'#fda4af',text:'#9f1239'},emerald:{bg:'#d1fae5',border:'#6ee7b7',text:'#065f46'},sky:{bg:'#e0f2fe',border:'#7dd3fc',text:'#0369a1'},orange:{bg:'#ffedd5',border:'#fdba74',text:'#9a3412'}};
+            return m[id]||m.blue;
+        },
+
+        get activeNodes() { return this.topology.nodes.filter(n => n.status === 'active'); },
+        get unassignedNodes() { const a=new Set(); for(const g of this.groups) for(const id of g.agent_ids) a.add(id); return this.topology.nodes.filter(n => !a.has(n.id)); },
+        get detailPassthroughCount() { return this.detailChain.filter(a => a._passthrough).length; },
+        get detailActiveCount() { return this.detailChain.filter(a => !a._passthrough).length; },
+
+        get hierarchicalEdges() {
+            const edges = this.topology.edges;
+            if (!edges.length) return [];
+            const children = {};
+            const targetSet = new Set();
+            for (const e of edges) { if (!children[e.source]) children[e.source] = []; children[e.source].push(e); targetSet.add(e.target); }
+            let roots = [...new Set(edges.map(e => e.source))].filter(s => !targetSet.has(s));
+            if (!roots.length) roots = [...new Set(edges.map(e => e.source))];
+            const result = []; const visited = new Set();
+            function dfs(sourceId, prefix, depth, rootId) {
+                const childEdges = children[sourceId] || [];
+                childEdges.forEach((edge, idx) => {
+                    const num = prefix + '.' + (idx + 1);
+                    if (visited.has(edge.id)) return;
+                    visited.add(edge.id);
+                    result.push({ type: 'edge', edge, number: num, depth, rootId });
+                    dfs(edge.target, num, depth + 1, rootId);
+                });
+            }
+            let rootIdx = 0;
+            for (const rootId of roots) {
+                const rootEdges = children[rootId] || [];
+                if (!rootEdges.length) continue;
+                rootIdx++;
+                const headerIdx = result.length;
+                result.push({ type: 'header', rootIdx, rootId, edgeCount: 0, edge: null });
+                rootEdges.forEach((edge, idx) => {
+                    if (visited.has(edge.id)) return;
+                    visited.add(edge.id);
+                    result.push({ type: 'edge', edge, number: rootIdx + '.' + (idx + 1), depth: 1, rootId });
+                    dfs(edge.target, rootIdx + '.' + (idx + 1), 2, rootId);
+                });
+                result[headerIdx].edgeCount = result.length - headerIdx - 1;
+            }
+            for (const e of edges) { if (!visited.has(e.id)) result.push({ type: 'edge', edge: e, number: '—', depth: 0, rootId: null }); }
+            return result;
+        },
+
+        // ── Passthrough detection ──
+        _isPassthrough(agent) {
+            if (!agent) return false;
+            if (agent.skill_id) return false;
+            const sp = (agent.system_prompt || '').trim();
+            if (!sp || sp.length < 50) return true;
+            if (sp.length < 200) {
+                const lower = sp.toLowerCase();
+                const markers = ['você é um agente inteligente','you are an intelligent agent','você é um assistente','you are an assistant','você é um agente especializado'];
+                if (markers.some(m => lower.includes(m))) return true;
+            }
+            return false;
+        },
+
+        // ── Skill exec mode inference ──
+        _inferExecMode(raw) {
+            if (!raw) return '';
+            if (raw.includes('## Execution Profile')) {
+                const m = raw.match(/## Execution Profile[\s\S]*?(?:mode|modo):\s*(fast|standard|rigorous)/i);
+                return m ? m[1].toLowerCase() : 'standard';
+            }
+            const hasEv = /## Evidence Policy\s*\n[^\n#]{20,}/.test(raw);
+            const hasGr = /## Guardrails\s*\n[^\n#]{50,}/.test(raw);
+            if (hasEv && hasGr) return 'rigorous';
+            if (hasEv || hasGr) return 'standard';
+            return 'fast';
+        },
+
+        // ── Detail panel ──
+        async openPipelineDetail(rootId, edgeCount) {
+            this.detailRootId = rootId;
+            this.detailName = this.chainNames[rootId] || this.nodeName(rootId);
+            this.detailOpen = true;
+
+            // Resolve chain BFS
+            const edges = this.topology.edges;
+            const chain = [rootId]; const visited = new Set([rootId]); const queue = [rootId];
+            while (queue.length) {
+                const c = queue.shift();
+                for (const e of edges) {
+                    if (e.source === c && !visited.has(e.target)) { visited.add(e.target); chain.push(e.target); queue.push(e.target); }
+                }
+            }
+
+            // Connections for this pipeline
+            this.detailConnections = edges.filter(e => visited.has(e.source) && visited.has(e.target));
+
+            // Load full agent details
+            const detailAgents = [];
+            for (const agId of chain) {
+                let ag = this._agentDetails[agId];
+                if (!ag) {
+                    try { ag = await api.get('/api/v1/agents/' + agId); this._agentDetails[agId] = ag; } catch { ag = this.topology.nodes.find(n => n.id === agId) || {id: agId, name: '?'}; }
+                }
+                // Enrich with skill data
+                let skillName = null, skillVersion = null, skillPurpose = null, skillExecMode = null;
+                if (ag.skill_id && !this._skillMap[ag.skill_id]) {
+                    try { const sk = await api.get('/api/v1/skills/' + ag.skill_id); this._skillMap[ag.skill_id] = sk; } catch {}
+                }
+                const sk = this._skillMap[ag.skill_id];
+                if (sk) {
+                    skillName = sk.name; skillVersion = sk.version; skillPurpose = sk.purpose;
+                    skillExecMode = this._inferExecMode(sk.raw_content);
+                }
+                detailAgents.push({
+                    ...ag,
+                    _passthrough: this._isPassthrough(ag),
+                    _skill_name: skillName,
+                    _skill_version: skillVersion,
+                    _skill_purpose: skillPurpose,
+                    _skill_exec_mode: skillExecMode,
+                });
+            }
+            this.detailChain = detailAgents;
+        },
+
+        groupAgents(g) { return g.agent_ids.map(id => this.topology.nodes.find(n => n.id === id)).filter(Boolean); },
+        nodeName(id) { return this.topology.nodes.find(n => n.id === id)?.name || id?.substring(0,8) || '?'; },
+        nodeKind(id) { const n=this.topology.nodes.find(x=>x.id===id); return n ? n.kind : ''; },
+        nodeKindColor(id) { const k=this.topology.nodes.find(x=>x.id===id)?.kind; return k==='aobd'?'bg-violet-500':k==='router'?'bg-brand-500':'bg-teal-500'; },
+
+        openConnEditor(edge) {
+            if (edge) { this.editingConnId = edge.id; this.connForm = { source_agent_id: edge.source, target_agent_id: edge.target, connection_type: edge.type }; }
+            else { this.editingConnId = null; this.connForm = { source_agent_id: '', target_agent_id: '', connection_type: 'sequential' }; }
+            this.connEditorOpen = true;
+        },
+        addConnectionToChain(rootId) {
+            const chainEdges = this.hierarchicalEdges.filter(i => i.type === 'edge' && i.rootId === rootId);
+            let sourceId = rootId;
+            if (chainEdges.length) { const deepest = chainEdges.reduce((a, b) => (b.depth||0) > (a.depth||0) ? b : a); sourceId = deepest.edge.target; }
+            this.connForm = { source_agent_id: sourceId, target_agent_id: '', connection_type: 'sequential' };
+            this.editingConnId = null; this.connEditorOpen = true;
+        },
+        async saveConnection() {
+            if (!this.connForm.source_agent_id || !this.connForm.target_agent_id) { showToast('Selecione origem e destino', 'error'); return; }
+            if (this.connForm.source_agent_id === this.connForm.target_agent_id) { showToast('Origem e destino devem ser diferentes', 'error'); return; }
+            this.savingConn = true;
+            try {
+                if (this.editingConnId) { await api.put('/api/v1/mesh/connections/' + this.editingConnId, this.connForm); showToast('Conexão atualizada'); }
+                else { await api.post('/api/v1/mesh/connections', this.connForm); showToast('Conexão criada'); }
+                this.connEditorOpen = false; await this.load();
+            } catch(e) { showToast(e.message, 'error'); }
+            this.savingConn = false;
+        },
+        async deleteConnection(id) {
+            if (!confirm('Remover esta conexão?')) return;
+            try { await api.del('/api/v1/mesh/connections/'+id); await this.load(); showToast('Conexão removida'); } catch { showToast('Erro','error'); }
+        },
+
+        addGroup() { if(!this.newGroupName.trim()){showToast('Nome obrigatório','error');return;} this.groups.push({id:Date.now().toString(),name:this.newGroupName.trim(),color:this.newGroupColor,agent_ids:[],collapsed:false}); this.newGroupName=''; this.showGroupForm=false; this.persistGroups(); showToast('Grupo criado'); },
+        renameGroup(g) { const n=prompt('Novo nome:',g.name); if(n&&n.trim()){g.name=n.trim();this.persistGroups();} },
+        removeGroup(gid) { if(!confirm('Remover grupo?'))return; this.groups=this.groups.filter(g=>g.id!==gid); this.persistGroups(); showToast('Grupo removido'); },
+        assignToGroup(gid,aid) { if(!aid)return; for(const g of this.groups) g.agent_ids=g.agent_ids.filter(id=>id!==aid); const g=this.groups.find(x=>x.id===gid); if(g){g.agent_ids.push(aid);this.persistGroups();} },
+        unassignFromGroup(gid,aid) { const g=this.groups.find(x=>x.id===gid); if(g){g.agent_ids=g.agent_ids.filter(id=>id!==aid);this.persistGroups();} },
+        async persistGroups() { try{await api.put('/api/v1/settings',{mesh_groups:JSON.stringify(this.groups.map(g=>({id:g.id,name:g.name,color:g.color,agent_ids:g.agent_ids})))})}catch{} },
+        async loadGroups() { try{const d=await api.get('/api/v1/settings');const r=d.settings?.mesh_groups;if(r)this.groups=JSON.parse(r).map(g=>({...g,collapsed:false}));const cn=d.settings?.mesh_chain_names;if(cn)this.chainNames=JSON.parse(cn)}catch{} },
+        async persistChainNames() { try{await api.put('/api/v1/settings',{mesh_chain_names:JSON.stringify(this.chainNames)})}catch{} },
+        startRenameChain(rootId, currentName) { this.renamingChainId=rootId; this.renameChainValue=currentName||''; },
+        confirmRenameChain(rootId) { this.chainNames[rootId]=this.renameChainValue.trim(); this.renamingChainId=null; this.persistChainNames(); if(this.renameChainValue.trim()) showToast('Pipeline renomeado'); },
+
+        async load() { try{this.topology=await api.get('/api/v1/mesh/topology')}catch{} await this.loadGroups(); },
+    }
+}
+</script>
+{% endblock %}

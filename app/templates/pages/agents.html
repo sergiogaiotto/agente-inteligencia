@@ -1,0 +1,322 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="agentsPage()" x-init="load()" class="flex gap-0 -m-4 lg:-m-6 h-[calc(100vh-3.5rem)]">
+
+    <!-- ══ LEFT: Agents list ══ -->
+    <div class="flex-1 flex flex-col overflow-hidden p-4 lg:p-6">
+        <div class="flex items-center justify-between mb-4">
+            <p class="text-[12px] text-surface-400">Gerencie seus agentes de IA</p>
+            <a href="/agents/new" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[13px] font-semibold text-white shadow-sm hover:bg-brand-600 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                Novo Agente
+            </a>
+        </div>
+
+        <!-- Filters -->
+        <div class="flex items-center gap-2 mb-4 flex-wrap">
+            <select x-model="filterKind" @change="load()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none">
+                <option value="">Todos tipos</option>
+                <option value="aobd">AOBD</option>
+                <option value="router">Router</option>
+                <option value="subagent">Subagent</option>
+            </select>
+            <select x-model="filterDomain" @change="filterByDomain()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none">
+                <option value="">Todos domínios</option>
+                <template x-for="d in allDomains" :key="d.id"><option :value="d.name" x-text="d.name"></option></template>
+            </select>
+            <label class="flex items-center gap-1.5 text-[11px] text-surface-500 cursor-pointer select-none">
+                <input type="checkbox" x-model="showInactive" @change="load()" class="rounded border-surface-300">
+                Inativos
+            </label>
+            <span class="text-[10px] text-surface-400" x-text="agents.length + ' agente(s)'"></span>
+        </div>
+
+        <!-- Agent rows -->
+        <div class="flex-1 overflow-y-auto scrollbar-thin space-y-1.5 pr-1">
+            <template x-for="agent in agents" :key="agent.id">
+                <div class="group flex items-center gap-3 rounded-lg border px-4 py-2.5 cursor-pointer transition-all"
+                     :class="[
+                         previewId === agent.id ? 'border-brand-400 bg-brand-50/30 shadow-sm' : 'border-surface-200 hover:border-brand-200 hover:shadow-sm',
+                         agent.status !== 'active' ? 'opacity-50' : 'bg-white'
+                     ]"
+                     @click="openPreview(agent)">
+                    <!-- Avatar -->
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg shrink-0 text-[10px] font-bold text-white"
+                         :class="agent.kind==='aobd'?'bg-violet-500':agent.kind==='router'?'bg-brand-500':'bg-teal-500'"
+                         x-text="agent.name?.substring(0,2).toUpperCase()"></div>
+                    <!-- Info -->
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[13px] font-semibold text-brand-900 truncate" x-text="agent.name"></span>
+                            <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-400 shrink-0" x-text="'v' + (agent.version || '1.0.0')"></span>
+                            <span class="h-1.5 w-1.5 rounded-full shrink-0" :class="agent.status==='active'?'bg-emerald-400':'bg-surface-300'"></span>
+                            <!-- Pass-through badge in list -->
+                            <span x-show="isAgentPassthrough(agent)" class="rounded-full bg-amber-50 px-1.5 py-0.5 text-[8px] font-bold text-amber-600 shrink-0">PASS-THROUGH</span>
+                        </div>
+                        <div class="flex items-center gap-1.5 mt-0.5">
+                            <span class="text-[9px] font-bold uppercase" :class="agent.kind==='aobd'?'text-violet-500':agent.kind==='router'?'text-brand-500':'text-teal-500'" x-text="agent.kind==='aobd'?'AOBD':agent.kind==='router'?'AR':'SA'"></span>
+                            <span class="text-[9px] text-surface-400" x-text="agent.model"></span>
+                            <span x-show="agent._skill_name" class="text-[9px] text-teal-500 truncate max-w-[120px]" x-text="agent._skill_name"></span>
+                        </div>
+                    </div>
+                    <!-- Actions -->
+                    <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <a @click.stop :href="'/workspace?agent=' + agent.id" x-show="agent.status==='active'" class="p-1.5 rounded-md hover:bg-emerald-50 text-surface-400 hover:text-emerald-600" title="Testar">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+                        </a>
+                        <button @click.stop="openPreview(agent)" class="p-1.5 rounded-md hover:bg-brand-50 text-surface-400 hover:text-brand-600" title="Visualizar">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                        </button>
+                        <a @click.stop :href="'/agents/' + agent.id + '/edit'" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                        </a>
+                        <button @click.stop="toggleStatus(agent)" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400" :class="agent.status==='active'?'hover:text-amber-600':'hover:text-emerald-600'" :title="agent.status==='active'?'Desativar':'Ativar'">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.636 5.636a9 9 0 1012.728 0M12 3v9"/></svg>
+                        </button>
+                        <button @click.stop="deleteAgent(agent.id, agent.name)" class="p-1.5 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600" title="Excluir">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="!loading && agents.length === 0">
+                <div class="text-center py-12">
+                    <p class="text-[13px] text-surface-400 mb-3">Nenhum agente encontrado</p>
+                    <a href="/agents/new" class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white">Criar Agente</a>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ══ RIGHT: Preview panel ══ -->
+    <aside x-show="previewId" x-transition.duration.200ms class="hidden lg:flex w-[400px] flex-col border-l border-surface-200 bg-white shrink-0 overflow-hidden">
+        <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3">
+            <div class="flex items-center gap-2 min-w-0">
+                <div class="flex h-7 w-7 items-center justify-center rounded-lg text-[9px] font-bold text-white shrink-0"
+                     :class="previewAgent?.kind==='aobd'?'bg-violet-500':previewAgent?.kind==='router'?'bg-brand-500':'bg-teal-500'"
+                     x-text="(previewAgent?.name||'').substring(0,2).toUpperCase()"></div>
+                <span class="text-[12px] font-semibold text-brand-900 truncate" x-text="previewAgent?.name"></span>
+            </div>
+            <div class="flex items-center gap-1">
+                <a :href="'/workspace?agent=' + previewId" x-show="previewAgent?.status==='active'" class="p-1.5 rounded-md hover:bg-emerald-50 text-surface-400 hover:text-emerald-600" title="Testar">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+                </a>
+                <a :href="'/agents/' + previewId + '/edit'" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                </a>
+                <button @click="previewId=null; previewAgent=null" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="flex-1 overflow-y-auto scrollbar-thin p-5 space-y-4">
+            <!-- Badges -->
+            <div class="flex flex-wrap gap-1.5">
+                <span class="rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase"
+                      :class="previewAgent?.kind==='aobd'?'bg-violet-50 text-violet-700':previewAgent?.kind==='router'?'bg-brand-50 text-brand-700':'bg-teal-50 text-teal-700'"
+                      x-text="previewAgent?.kind==='aobd'?'AOBD — Orquestrador':previewAgent?.kind==='router'?'AR — Roteador':'SA — Subagente'"></span>
+                <span class="flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-medium"
+                      :class="previewAgent?.status==='active'?'bg-emerald-50 text-emerald-700':'bg-surface-100 text-surface-500'">
+                    <span class="h-1.5 w-1.5 rounded-full" :class="previewAgent?.status==='active'?'bg-emerald-400':'bg-surface-300'"></span>
+                    <span x-text="previewAgent?.status==='active'?'Ativo':'Inativo'"></span>
+                </span>
+                <span class="rounded-full bg-surface-100 px-2.5 py-0.5 text-[10px] font-mono text-surface-500" x-text="'v' + (previewAgent?.version || '1.0.0')"></span>
+            </div>
+
+            <!-- ══ PASS-THROUGH INDICATOR ══ -->
+            <div x-show="isAgentPassthrough(previewAgent)" class="rounded-lg border-2 border-dashed border-amber-300 bg-amber-50/50 px-3 py-2.5 flex items-center gap-2.5">
+                <svg class="w-4 h-4 text-amber-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+                <div>
+                    <span class="text-[11px] font-bold text-amber-800">Pass-through em Pipelines</span>
+                    <p class="text-[9px] text-amber-600 mt-0.5">Sem SKILL.md + prompt genérico — ignorado (0ms) no AI Mesh</p>
+                </div>
+            </div>
+
+            <!-- Description -->
+            <div x-show="previewAgent?.description">
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Descrição</h4>
+                <p class="text-[12px] text-brand-900 leading-relaxed" x-text="previewAgent?.description"></p>
+            </div>
+
+            <!-- Config grid -->
+            <div>
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Configuração</h4>
+                <div class="rounded-lg bg-surface-50 border border-surface-100 p-3 space-y-2 text-[11px]">
+                    <div class="flex justify-between"><span class="text-surface-400">Provedor</span><span class="font-medium text-brand-900" x-text="previewAgent?.llm_provider"></span></div>
+                    <div class="flex justify-between"><span class="text-surface-400">Modelo</span><span class="font-medium font-mono text-brand-900" x-text="previewAgent?.model"></span></div>
+                    <div class="flex justify-between"><span class="text-surface-400">Domínio</span><span class="font-medium text-brand-900" x-text="previewAgent?.domain || '—'"></span></div>
+                    <div class="flex justify-between">
+                        <span class="text-surface-400">Exige Evidência</span>
+                        <span class="font-medium" :class="previewAgent?.require_evidence?'text-emerald-600':'text-amber-600'" x-text="previewAgent?.require_evidence ? 'Sim' : 'Não'"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-surface-400">Pipeline</span>
+                        <span class="font-medium" :class="isAgentPassthrough(previewAgent) ? 'text-amber-600' : 'text-emerald-600'" x-text="isAgentPassthrough(previewAgent) ? 'Pass-through (0ms)' : 'Execução ativa (LLM)'"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Skill -->
+            <div>
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Skill Vinculada</h4>
+                <template x-if="previewAgent?._skill_name">
+                    <div class="rounded-lg border border-teal-100 bg-teal-50/30 p-3">
+                        <div class="flex items-center justify-between mb-1">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[12px] font-semibold text-teal-800" x-text="previewAgent?._skill_name"></span>
+                                <span x-show="previewAgent?._skill_version" class="rounded-full bg-teal-100 px-1.5 py-0.5 text-[9px] font-mono text-teal-600" x-text="'v' + previewAgent?._skill_version"></span>
+                                <span x-show="previewAgent?._skill_kind" class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] text-surface-500" x-text="previewAgent?._skill_kind"></span>
+                            </div>
+                            <a :href="'/skills/' + previewAgent?.skill_id + '/edit'" class="text-[10px] text-teal-600 hover:text-teal-800 font-medium">Editar</a>
+                        </div>
+                        <!-- Execution Profile of linked skill -->
+                        <div x-show="previewAgent?._skill_exec_mode" class="flex items-center gap-1.5 mt-1.5">
+                            <svg class="w-3 h-3" :class="previewAgent?._skill_exec_mode==='fast'?'text-emerald-500':previewAgent?._skill_exec_mode==='rigorous'?'text-amber-500':'text-brand-500'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+                            <span class="text-[10px] font-semibold" :class="previewAgent?._skill_exec_mode==='fast'?'text-emerald-700':previewAgent?._skill_exec_mode==='rigorous'?'text-amber-700':'text-brand-700'" x-text="'Execution Profile: ' + previewAgent?._skill_exec_mode"></span>
+                        </div>
+                        <!-- Purpose preview -->
+                        <p x-show="previewAgent?._skill_purpose" class="text-[10px] text-surface-500 mt-1.5 leading-relaxed" x-text="previewAgent?._skill_purpose?.substring(0,200)"></p>
+                    </div>
+                </template>
+                <p x-show="!previewAgent?._skill_name" class="text-[11px] text-surface-400">Nenhuma skill vinculada</p>
+            </div>
+
+            <!-- System Prompt -->
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider">System Prompt</h4>
+                    <span class="text-[9px] text-surface-300 font-mono" x-text="(previewAgent?.system_prompt||'').length + ' chars'"></span>
+                </div>
+                <pre class="rounded-lg bg-brand-950 text-brand-200 p-4 text-[11px] font-mono overflow-x-auto whitespace-pre-wrap max-h-[35vh]"
+                     x-text="previewAgent?.system_prompt || '—'"></pre>
+            </div>
+
+            <!-- Metadata -->
+            <div class="rounded-lg bg-surface-50 border border-surface-100 p-3 space-y-1.5 text-[10px]">
+                <div class="flex justify-between"><span class="text-surface-400">ID</span><span class="font-mono text-surface-500 truncate max-w-[180px]" x-text="previewAgent?.id"></span></div>
+                <div class="flex justify-between"><span class="text-surface-400">Criado</span><span class="text-surface-500" x-text="previewAgent?.created_at?.replace('T',' ').substring(0,16) || '—'"></span></div>
+            </div>
+        </div>
+    </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function agentsPage() {
+    return {
+        agents: [], allAgents: [], loading: true,
+        filterKind: '', filterDomain: '', showInactive: false,
+        allDomains: [],
+        previewId: null, previewAgent: null,
+        allSkills: [],
+
+        // ══════════════════════════════════════════════
+        // Pass-through detection — mirrors engine.py logic
+        // ══════════════════════════════════════════════
+        isAgentPassthrough(agent) {
+            if (!agent) return false;
+            if (agent.skill_id) return false;
+            const sp = (agent.system_prompt || '').trim();
+            if (!sp || sp.length < 50) return true;
+            if (sp.length < 200) {
+                const lower = sp.toLowerCase();
+                const markers = [
+                    'você é um agente inteligente',
+                    'you are an intelligent agent',
+                    'você é um assistente',
+                    'you are an assistant',
+                    'você é um agente especializado',
+                    'you are a specialized agent',
+                ];
+                if (markers.some(m => lower.includes(m))) return true;
+            }
+            return false;
+        },
+
+        async load() {
+            try {
+                const params = new URLSearchParams();
+                if (this.filterKind) params.set('kind', this.filterKind);
+                if (!this.showInactive) params.set('status', 'active');
+                const data = await api.get('/api/v1/agents?' + params);
+                const skillsData = await api.get('/api/v1/skills').catch(() => ({skills:[]}));
+                const skillMap = {};
+                for (const s of (skillsData.skills || [])) {
+                    skillMap[s.id] = {
+                        name: s.name,
+                        kind: s.kind || '',
+                        version: s.version || '0.1.0',
+                        purpose: s.purpose || '',
+                        exec_mode: '',  // will be inferred
+                    };
+                    // Infer execution mode from skill data
+                    const raw = s.raw_content || '';
+                    if (raw.includes('## Execution Profile')) {
+                        const match = raw.match(/## Execution Profile[\s\S]*?(?:mode|modo):\s*(fast|standard|rigorous)/i);
+                        if (match) skillMap[s.id].exec_mode = match[1].toLowerCase();
+                        else skillMap[s.id].exec_mode = 'standard';
+                    } else {
+                        const hasEvidence = /## Evidence Policy\s*\n[^\n#]{20,}/.test(raw);
+                        const hasGuardrails = /## Guardrails\s*\n[^\n#]{50,}/.test(raw);
+                        if (hasEvidence && hasGuardrails) skillMap[s.id].exec_mode = 'rigorous';
+                        else if (hasEvidence || hasGuardrails) skillMap[s.id].exec_mode = 'standard';
+                        else skillMap[s.id].exec_mode = 'fast';
+                    }
+                }
+                this.allSkills = skillsData.skills || [];
+                this.allAgents = (data.agents || []).map(a => {
+                    const sk = a.skill_id ? skillMap[a.skill_id] : null;
+                    return {
+                        ...a,
+                        _skill_name: sk?.name || null,
+                        _skill_kind: sk?.kind || null,
+                        _skill_version: sk?.version || null,
+                        _skill_purpose: sk?.purpose || null,
+                        _skill_exec_mode: sk?.exec_mode || null,
+                    };
+                });
+                this.agents = this.allAgents;
+                this.filterByDomain();
+            } catch(e) { showToast('Erro ao carregar agentes', 'error'); }
+            this.loading = false;
+            try { this.allDomains = (await api.get('/api/v1/domains')).domains || []; } catch {}
+        },
+
+        filterByDomain() {
+            if (!this.filterDomain) { this.agents = this.allAgents; return; }
+            this.agents = this.allAgents.filter(a => (a.domain||'').split(',').map(d=>d.trim()).includes(this.filterDomain));
+        },
+
+        openPreview(agent) { this.previewId = agent.id; this.previewAgent = agent; },
+
+        async toggleStatus(agent) {
+            const newStatus = agent.status === 'active' ? 'inactive' : 'active';
+            if (!confirm(`${newStatus === 'active' ? 'Ativar' : 'Desativar'} agente "${agent.name}"?`)) return;
+            try {
+                await fetch(`/api/v1/agents/${agent.id}/status?status=${newStatus}`, {method:'PATCH'});
+                agent.status = newStatus;
+                showToast(`Agente ${newStatus === 'active' ? 'ativado' : 'desativado'}`);
+                if (!this.showInactive && newStatus === 'inactive') {
+                    this.agents = this.agents.filter(a => a.id !== agent.id);
+                    if (this.previewId === agent.id) { this.previewId = null; this.previewAgent = null; }
+                }
+            } catch { showToast('Erro', 'error'); }
+        },
+
+        async deleteAgent(id, name) {
+            if (!confirm(`Remover agente "${name}" permanentemente?`)) return;
+            try {
+                await api.del(`/api/v1/agents/${id}`);
+                this.allAgents = this.allAgents.filter(a => a.id !== id);
+                this.agents = this.agents.filter(a => a.id !== id);
+                if (this.previewId === id) { this.previewId = null; this.previewAgent = null; }
+                showToast('Agente removido');
+            } catch { showToast('Erro', 'error'); }
+        },
+    }
+}
+</script>
+{% endblock %}
