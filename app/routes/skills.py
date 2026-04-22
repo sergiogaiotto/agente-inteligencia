@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from app.models.schemas import SkillCreateRaw, SkillCreateManual
 from app.core.database import skills_repo
 from app.skill_parser.parser import parse_skill_md, skill_to_db_dict
+from app.skill_parser.linter import lint_skill
 
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"])
 
@@ -20,6 +21,31 @@ async def get_skill(skill_id: str):
     s = await skills_repo.find_by_id(skill_id)
     if not s: raise HTTPException(404, "Skill não encontrada")
     return s
+
+@router.post("/lint", status_code=200)
+async def lint_skill_endpoint(data: SkillCreateRaw):
+    """Lint semântico de SKILL.md com foco em API Bindings declarativos.
+
+    Retorna lista de issues (severity, binding_id, code, message) sem
+    persistir nada. Útil para validar SKILL antes de criar ou publicar.
+    """
+    parsed = parse_skill_md(data.raw_content)
+    issues = lint_skill(parsed)
+    errors = [i for i in issues if i["severity"] == "error"]
+    warnings = [i for i in issues if i["severity"] == "warning"]
+    return {
+        "is_valid": parsed.is_valid and not errors,
+        "parse_errors": parsed.validation_errors,
+        "issues": issues,
+        "summary": {
+            "errors": len(errors),
+            "warnings": len(warnings),
+            "total": len(issues),
+        },
+        "execution_mode": parsed.execution_mode,
+        "bindings_count": len(parsed.api_bindings_parsed or []),
+    }
+
 
 @router.post("/parse", status_code=200)
 async def parse_skill(data: SkillCreateRaw):

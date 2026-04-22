@@ -3,7 +3,9 @@ sem LLM. Lê ## API Bindings do SKILL.md, resolve templates Jinja2
 sandboxed, chama APIs via conectores, aplica output_mapping (jsonpath-ng)
 e emite ContextDelta append-only.
 
-Fase 2 — single binding sem DAG. Paralelismo e depends_on ficam para Fase 3.
+Fase 2: single binding sem DAG.
+Fase 3: DAG via depends_on, paralelismo por nível, deep-merge de context.
+Fase 4: circuit breaker, on_failure=continue|compensate, dry_run.
 """
 
 import asyncio
@@ -15,7 +17,7 @@ import uuid
 from typing import Any
 
 import httpx
-from jinja2 import StrictUndefined
+from jinja2 import ChainableUndefined, StrictUndefined
 from jinja2.sandbox import SandboxedEnvironment
 from jsonpath_ng.ext import parse as jsonpath_parse
 
@@ -30,28 +32,33 @@ _MAX_CONTEXT_BYTES = 65536
 _RETRYABLE_METHODS = {"GET", "HEAD", "PUT", "DELETE", "OPTIONS"}
 _IDEMPOTENT_REQUIRED_METHODS = {"POST", "PATCH", "DELETE"}
 
-_jinja_env = SandboxedEnvironment(undefined=StrictUndefined, autoescape=False)
+_jinja_env_strict = SandboxedEnvironment(undefined=StrictUndefined, autoescape=False)
+# dry_run: vars ausentes viram string vazia em vez de erro — permite
+# resolver o plan mesmo quando contexto de níveis anteriores não foi
+# populado (já que dry_run pula a chamada HTTP).
+_jinja_env_lenient = SandboxedEnvironment(undefined=ChainableUndefined, autoescape=False)
 
 
 # ═══════════════════════════════════════════════════════
 # Templating — Jinja2 sandboxed
 # ═══════════════════════════════════════════════════════
 
-def _render(template: Any, scope: dict) -> Any:
+def _render(template: Any, scope: dict, lenient: bool = False) -> Any:
     if not isinstance(template, str):
         return template
     if "{{" not in template and "{%" not in template:
         return template
-    return _jinja_env.from_string(template).render(**scope)
+    env = _jinja_env_lenient if lenient else _jinja_env_strict
+    return env.from_string(template).render(**scope)
 
 
-def _render_deep(value: Any, scope: dict) -> Any:
+def _render_deep(value: Any, scope: dict, lenient: bool = False) -> Any:
     if isinstance(value, str):
-        return _render(value, scope)
+        return _render(value, scope, lenient=lenient)
     if isinstance(value, dict):
-        return {k: _render_deep(v, scope) for k, v in value.items()}
+        return {k: _render_deep(v, scope, lenient=lenient) for k, v in value.items()}
     if isinstance(value, list):
-        return [_render_deep(v, scope) for v in value]
+        return [_render_deep(v, scope, lenient=lenient) for v in value]
     return value
 
 
@@ -239,7 +246,292 @@ async def _sleep_backoff(mode: str, attempt: int) -> None:
 
 
 # ═══════════════════════════════════════════════════════
-# Orchestration
+# DAG helpers
+# ═══════════════════════════════════════════════════════
+
+def _topological_levels(bindings: list[dict]) -> tuple[list[list[dict]], list[str]]:
+    """Agrupa bindings em níveis topológicos.
+
+    Retorna (levels, errors). Cada nível é uma lista de bindings que podem
+    rodar em paralelo. Em caso de ciclo ou depends_on inexistente, retorna
+    levels=[] e errors populado.
+    """
+    errors: list[str] = []
+    by_id: dict[str, dict] = {}
+    for b in bindings:
+        bid = b.get("id")
+        if not bid:
+            errors.append("binding sem 'id'")
+            continue
+        if bid in by_id:
+            errors.append(f"binding_id duplicado: '{bid}'")
+            continue
+        by_id[bid] = b
+
+    if errors:
+        return [], errors
+
+    in_deg: dict[str, int] = {bid: 0 for bid in by_id}
+    deps_map: dict[str, list[str]] = {}
+    for bid, b in by_id.items():
+        deps = b.get("depends_on") or []
+        if isinstance(deps, str):
+            deps = [deps]
+        deps_map[bid] = list(deps)
+        for d in deps:
+            if d not in by_id:
+                errors.append(f"[{bid}] depends_on '{d}' não existe")
+            else:
+                in_deg[bid] += 1
+
+    if errors:
+        return [], errors
+
+    levels: list[list[dict]] = []
+    remaining = dict(in_deg)
+    while remaining:
+        ready_ids = [bid for bid, deg in remaining.items() if deg == 0]
+        if not ready_ids:
+            errors.append(f"ciclo detectado nos bindings: {sorted(remaining)}")
+            return [], errors
+        levels.append([by_id[bid] for bid in ready_ids])
+        for bid in ready_ids:
+            del remaining[bid]
+        for rem_bid in list(remaining):
+            deps = deps_map[rem_bid]
+            remaining[rem_bid] = sum(1 for d in deps if d in remaining)
+    return levels, errors
+
+
+def _deep_merge(dst: Any, src: Any) -> Any:
+    """Merge src em dst recursivamente — dicts mesclam campo a campo;
+    listas e escalares: src vence."""
+    if isinstance(dst, dict) and isinstance(src, dict):
+        out = dict(dst)
+        for k, v in src.items():
+            out[k] = _deep_merge(dst.get(k), v) if k in dst else v
+        return out
+    return src
+
+
+# ═══════════════════════════════════════════════════════
+# Circuit breaker (in-memory, per binding_id)
+# ═══════════════════════════════════════════════════════
+
+class _Breaker:
+    __slots__ = ("threshold", "cooldown_s", "fails", "opened_at")
+
+    def __init__(self, threshold: int = 5, cooldown_s: float = 30.0) -> None:
+        self.threshold = threshold
+        self.cooldown_s = cooldown_s
+        self.fails = 0
+        self.opened_at = 0.0
+
+    def allow(self) -> bool:
+        if self.fails < self.threshold:
+            return True
+        return (time.time() - self.opened_at) >= self.cooldown_s
+
+    def record(self, success: bool) -> None:
+        if success:
+            self.fails = 0
+            self.opened_at = 0.0
+        else:
+            self.fails += 1
+            if self.fails >= self.threshold:
+                self.opened_at = time.time()
+
+
+_BREAKERS: dict[str, _Breaker] = {}
+
+
+def _get_breaker(binding_id: str, cfg: dict) -> _Breaker:
+    br = _BREAKERS.get(binding_id)
+    if br is None:
+        br = _Breaker(
+            threshold=int(cfg.get("threshold", 5)),
+            cooldown_s=float(cfg.get("cooldown_s", 30.0)),
+        )
+        _BREAKERS[binding_id] = br
+    return br
+
+
+# ═══════════════════════════════════════════════════════
+# Planning — resolve connector + templates (sem I/O)
+# ═══════════════════════════════════════════════════════
+
+async def _plan_binding(binding: dict, scope: dict, lenient: bool = False) -> tuple[dict | None, str | None]:
+    """Resolve tudo que não requer I/O. Retorna (plan_dict, error).
+
+    plan_dict contém: connector, method, path, headers, query, body,
+    idempotency_key, resilience (resolvido), binding_id, raw.
+
+    lenient=True (dry_run): vars ausentes viram string vazia em vez de
+    erro — permite resolver plan de níveis que dependeriam de context
+    que só seria populado após chamadas HTTP reais.
+    """
+    binding_id = binding.get("id", "?")
+    connector_ref = binding.get("connector")
+    if not connector_ref:
+        return None, f"[{binding_id}] campo 'connector' ausente"
+
+    connector = await _resolve_connector(connector_ref)
+    if not connector:
+        return None, f"[{binding_id}] connector '{connector_ref}' não encontrado no registry"
+
+    resilience = binding.get("resilience") or {}
+    timeout_ms = int(resilience.get("timeout_ms") or connector.get("timeout_ms") or _DEFAULT_TIMEOUT_MS)
+    retry_cfg = resilience.get("retry") or {}
+    breaker_cfg = resilience.get("circuit_breaker") or {}
+
+    method = (binding.get("method") or "GET").upper()
+
+    try:
+        path = _render(binding.get("path", "/"), scope, lenient=lenient)
+        headers = _render_deep(binding.get("headers") or {}, scope, lenient=lenient)
+        query = _render_deep(binding.get("query") or {}, scope, lenient=lenient)
+        body = _render_deep(binding.get("body"), scope, lenient=lenient) if binding.get("body") is not None else None
+        idemp_tpl = binding.get("idempotency_key") or ""
+        idempotency_key = _render(idemp_tpl, scope, lenient=lenient) if idemp_tpl else ""
+    except Exception as e:
+        return None, f"[{binding_id}] erro ao renderizar template: {e}"
+
+    if method in _IDEMPOTENT_REQUIRED_METHODS and not idempotency_key and not lenient:
+        return None, f"[{binding_id}] idempotency_key é obrigatório para {method}"
+
+    if idempotency_key:
+        headers = dict(headers or {})
+        headers.setdefault("Idempotency-Key", idempotency_key)
+
+    plan = {
+        "binding_id": binding_id,
+        "connector": connector,
+        "method": method,
+        "path": path,
+        "headers": headers,
+        "query": query,
+        "body": body,
+        "idempotency_key": idempotency_key,
+        "timeout_ms": timeout_ms,
+        "retry": {
+            "max": int(retry_cfg.get("max", 0)),
+            "on": set(retry_cfg.get("on") or []),
+            "backoff": retry_cfg.get("backoff", "fixed"),
+        },
+        "breaker": breaker_cfg,
+        "on_failure": binding.get("on_failure", "fail"),
+        "output_mapping": binding.get("output_mapping") or [],
+    }
+    return plan, None
+
+
+# ═══════════════════════════════════════════════════════
+# Binding execution (post-plan)
+# ═══════════════════════════════════════════════════════
+
+async def _execute_planned_binding(
+    plan: dict,
+    agent: dict,
+    skill_parsed: Any,
+) -> dict:
+    """Executa um binding previamente resolvido. Retorna dict com
+    status, call_id, latency_ms, attempts, additions, error, etc.
+    Não muta contexto — caller decide como aplicar.
+    """
+    binding_id = plan["binding_id"]
+    connector = plan["connector"]
+    breaker_cfg = plan["breaker"] or {}
+    breaker = _get_breaker(binding_id, breaker_cfg) if breaker_cfg else None
+
+    if breaker and not breaker.allow():
+        return {
+            "binding_id": binding_id,
+            "call_id": "",
+            "status": 0,
+            "latency_ms": 0.0,
+            "attempts": 0,
+            "additions": {},
+            "error": f"[{binding_id}] circuit breaker aberto — chamada suprimida",
+            "skipped_by_breaker": True,
+        }
+
+    req_start = time.time()
+    resp, last_error, attempts = await _call_with_retry(
+        connector, plan["method"], plan["path"],
+        plan["headers"], plan["query"], plan["body"],
+        plan["timeout_ms"] / 1000.0,
+        plan["retry"]["max"], plan["retry"]["on"], plan["retry"]["backoff"],
+    )
+    latency_ms = round((time.time() - req_start) * 1000, 2)
+
+    status_code = resp.status_code if resp is not None else 0
+    resp_json: Any = None
+    if resp is not None:
+        try:
+            resp_json = resp.json()
+        except Exception:
+            resp_json = None
+
+    success = resp is not None and 200 <= status_code < 300
+    if breaker:
+        breaker.record(success)
+
+    call_id = str(uuid.uuid4())
+    try:
+        await api_call_logs_repo.create({
+            "id": call_id,
+            "connector_id": connector["id"],
+            "endpoint_id": "",
+            "agent_id": agent.get("id", ""),
+            "method": plan["method"],
+            "url": connector.get("base_url", "").rstrip("/") + plan["path"],
+            "request_headers": json.dumps(_redact_headers(plan["headers"]), ensure_ascii=False),
+            "request_body": json.dumps(plan["body"], ensure_ascii=False, default=str)[:5000]
+                             if plan["body"] is not None else "{}",
+            "response_body": (json.dumps(resp_json, ensure_ascii=False, default=str)[:5000]
+                              if resp_json is not None
+                              else (resp.text[:5000] if resp is not None else "")),
+            "status_code": status_code,
+            "latency_ms": latency_ms,
+        })
+    except Exception as e:
+        logger.warning("Falha ao persistir api_call_log: %s", e)
+
+    result = {
+        "binding_id": binding_id,
+        "call_id": call_id,
+        "status": status_code,
+        "latency_ms": latency_ms,
+        "attempts": attempts,
+        "additions": {},
+        "error": None,
+    }
+
+    if not success:
+        result["error"] = (
+            f"[{binding_id}] falha de rede: {last_error}"
+            if resp is None
+            else f"[{binding_id}] HTTP {status_code} — resposta não-2xx"
+        )
+        return result
+
+    mapping = plan["output_mapping"]
+    if not mapping:
+        result["error"] = f"[{binding_id}] output_mapping é obrigatório"
+        return result
+    if resp_json is None:
+        result["error"] = f"[{binding_id}] response não é JSON — output_mapping não pôde ser aplicado"
+        return result
+
+    additions, map_errors = _apply_output_mapping(resp_json, mapping, _MAX_CONTEXT_BYTES)
+    result["additions"] = additions
+    if map_errors:
+        result["error"] = f"[{binding_id}] output_mapping: " + "; ".join(map_errors)
+    return result
+
+
+# ═══════════════════════════════════════════════════════
+# Orchestration — DAG + paralelismo + deep-merge
 # ═══════════════════════════════════════════════════════
 
 async def execute_declarative(
@@ -248,12 +540,15 @@ async def execute_declarative(
     inputs: dict | None = None,
     context: dict | None = None,
     session_id: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
-    """Executa um agente no modo declarativo.
+    """Executa um agente no modo declarativo com DAG.
 
-    Fase 2: bindings rodam em ordem sequencial (sem DAG, sem paralelismo).
-    Cada binding pode ler variáveis de contextos já escritos por bindings
-    anteriores via {{ context.* }} em templates.
+    - depends_on → níveis topológicos.
+    - Bindings de um mesmo nível rodam em paralelo (asyncio.gather).
+    - Additions deep-merged no context.
+    - on_failure: fail | continue | compensate: <binding_id>.
+    - dry_run: resolve plan sem tocar na rede.
     """
     start = time.time()
     inputs = inputs or {}
@@ -268,42 +563,167 @@ async def execute_declarative(
 
     bindings = list(getattr(skill_parsed, "api_bindings_parsed", []) or [])
     if not bindings:
-        return {
-            "interaction_id": trace_id,
-            "agent_id": agent.get("id", ""),
-            "output": "",
-            "final_state": "failed",
-            "context": context,
-            "bindings_executed": [],
-            "errors": ["Nenhum API Binding encontrado no SKILL.md"],
-            "duration_ms": round((time.time() - start) * 1000, 2),
-            "mode": "declarative",
-        }
+        return _build_empty_result(trace_id, agent, context, start,
+                                    ["Nenhum API Binding encontrado no SKILL.md"])
 
+    bindings_by_id = {b["id"]: b for b in bindings}
+
+    # Auto-exclui do DAG bindings que são apenas alvos de compensação
+    # (não devem rodar no fluxo normal, só quando alguém falha).
+    compensation_targets: set[str] = set()
+    for b in bindings:
+        of = b.get("on_failure")
+        if isinstance(of, dict) and "compensate" in of:
+            compensation_targets.add(of["compensate"])
+        elif isinstance(of, str) and of.startswith("compensate:"):
+            compensation_targets.add(of.split(":", 1)[1].strip())
+
+    dag_bindings = [b for b in bindings if b.get("id") not in compensation_targets]
+    levels, dag_errors = _topological_levels(dag_bindings)
+    if dag_errors:
+        return _build_empty_result(trace_id, agent, context, start, dag_errors)
     executed: list[dict] = []
     errors: list[str] = []
+    compensations_fired: list[str] = []
+    dry_run_plans: list[dict] = []
+    fatal = False
 
-    for binding in bindings:
-        binding_id = binding.get("id", "?")
-        on_failure = binding.get("on_failure", "fail")
+    for level_idx, level in enumerate(levels):
+        if fatal:
+            break
 
-        step_error = await _run_binding(
-            binding=binding,
-            scope=scope,
-            context=context,
-            agent=agent,
-            skill_parsed=skill_parsed,
-            executed=executed,
+        # Planning: resolve connector + templates para cada binding do nível
+        plan_results = await asyncio.gather(
+            *[_plan_binding(b, scope, lenient=dry_run) for b in level],
+            return_exceptions=False,
         )
-        if step_error:
-            errors.append(step_error)
-            if on_failure == "fail":
-                break
-        # scope['context'] já é o mesmo dict de context, mutado em _run_binding
+
+        runnable_plans: list[dict] = []
+        for (plan, perr), binding in zip(plan_results, level):
+            if perr:
+                errors.append(perr)
+                on_failure = binding.get("on_failure", "fail")
+                if on_failure == "fail":
+                    fatal = True
+            elif plan is not None:
+                runnable_plans.append(plan)
+                if dry_run:
+                    dry_run_plans.append({
+                        "binding_id": plan["binding_id"],
+                        "level": level_idx,
+                        "method": plan["method"],
+                        "url": plan["connector"].get("base_url", "").rstrip("/") + plan["path"],
+                        "headers": _redact_headers(plan["headers"]),
+                        "query": plan["query"],
+                        "body": plan["body"],
+                        "timeout_ms": plan["timeout_ms"],
+                        "output_mapping_keys": [m.get("to") for m in plan["output_mapping"]],
+                    })
+
+        if fatal:
+            break
+
+        if dry_run:
+            # Registra execução simulada sem chamar HTTP
+            for p in runnable_plans:
+                executed.append({
+                    "binding_id": p["binding_id"],
+                    "call_id": "",
+                    "status": 0,
+                    "latency_ms": 0.0,
+                    "attempts": 0,
+                    "level": level_idx,
+                    "dry_run": True,
+                })
+            continue
+
+        # Execução paralela do nível
+        exec_results = await asyncio.gather(
+            *[_execute_planned_binding(p, agent, skill_parsed) for p in runnable_plans],
+            return_exceptions=False,
+        )
+
+        # Agrega additions com deep-merge (sequencial dentro do nível por
+        # determinismo: ordem do SKILL.md → last-write-wins em colisão)
+        level_additions: dict = {}
+        level_had_success = False
+        compensations_to_run: list[str] = []
+
+        for r, p in zip(exec_results, runnable_plans):
+            executed.append({**{k: r[k] for k in ("binding_id","call_id","status","latency_ms","attempts")},
+                             "level": level_idx})
+            if r.get("skipped_by_breaker"):
+                errors.append(r["error"])
+            elif r["error"]:
+                errors.append(r["error"])
+                bspec = bindings_by_id.get(p["binding_id"], {})
+                on_failure = bspec.get("on_failure", "fail")
+                if isinstance(on_failure, dict) and "compensate" in on_failure:
+                    compensations_to_run.append(on_failure["compensate"])
+                elif isinstance(on_failure, str) and on_failure.startswith("compensate:"):
+                    compensations_to_run.append(on_failure.split(":", 1)[1].strip())
+                elif on_failure == "fail":
+                    fatal = True
+            else:
+                level_had_success = True
+                level_additions = _deep_merge(level_additions, r["additions"])
+
+        if level_additions:
+            merged_additions = {
+                k: _deep_merge(context.get(k), v) for k, v in level_additions.items()
+            }
+            delta = ContextDelta(
+                agent_id=agent.get("id", ""),
+                skill_ref=getattr(skill_parsed.frontmatter, "id", "") if skill_parsed else "",
+                additions=merged_additions,
+            )
+            new_ctx = apply_context_delta(context, delta)
+            context.clear()
+            context.update(new_ctx)
+            scope["context"] = context
+
+        # Disparo de compensações — rodam imediatamente, sequencialmente,
+        # NÃO propagam fail adicional (já estamos compensando).
+        for comp_id in compensations_to_run:
+            comp_binding = bindings_by_id.get(comp_id)
+            if not comp_binding:
+                errors.append(f"compensação '{comp_id}' não encontrada")
+                continue
+            plan, perr = await _plan_binding(comp_binding, scope)
+            if perr:
+                errors.append(f"[compensate] {perr}")
+                continue
+            res = await _execute_planned_binding(plan, agent, skill_parsed)
+            compensations_fired.append(comp_id)
+            executed.append({
+                "binding_id": comp_id,
+                "call_id": res["call_id"],
+                "status": res["status"],
+                "latency_ms": res["latency_ms"],
+                "attempts": res["attempts"],
+                "level": level_idx,
+                "compensation_for": plan["binding_id"],
+            })
+            if res["error"]:
+                errors.append(f"[compensate] {res['error']}")
+            elif res["additions"]:
+                merged = {k: _deep_merge(context.get(k), v) for k, v in res["additions"].items()}
+                delta = ContextDelta(
+                    agent_id=agent.get("id", ""),
+                    skill_ref=getattr(skill_parsed.frontmatter, "id", "") if skill_parsed else "",
+                    additions=merged,
+                )
+                new_ctx = apply_context_delta(context, delta)
+                context.clear()
+                context.update(new_ctx)
+                scope["context"] = context
 
     duration_ms = round((time.time() - start) * 1000, 2)
+    any_success = any(200 <= e.get("status", 0) < 300 for e in executed)
 
-    if errors and not any(e.get("status", 0) >= 200 and e.get("status", 0) < 300 for e in executed):
+    if dry_run:
+        final_state = "dry_run"
+    elif errors and not any_success:
         final_state = "failed"
     elif errors:
         final_state = "partial"
@@ -314,7 +734,12 @@ async def execute_declarative(
         "bindings_executed": executed,
         "errors": errors,
         "context_keys": [k for k in context.keys() if not k.startswith("_")],
+        "compensations_fired": compensations_fired,
+        "dry_run": dry_run,
+        "levels": len(levels),
     }
+    if dry_run:
+        answer_payload["plans"] = dry_run_plans
 
     return {
         "interaction_id": trace_id,
@@ -326,122 +751,27 @@ async def execute_declarative(
         "errors": errors,
         "duration_ms": duration_ms,
         "mode": "declarative",
+        "dry_run": dry_run,
+        "dry_run_plans": dry_run_plans if dry_run else None,
+        "compensations_fired": compensations_fired,
     }
 
 
-async def _run_binding(
-    binding: dict,
-    scope: dict,
-    context: dict,
+def _build_empty_result(
+    trace_id: str,
     agent: dict,
-    skill_parsed: Any,
-    executed: list[dict],
-) -> str | None:
-    binding_id = binding.get("id", "?")
-    connector_ref = binding.get("connector")
-    if not connector_ref:
-        return f"[{binding_id}] campo 'connector' ausente"
-
-    connector = await _resolve_connector(connector_ref)
-    if not connector:
-        return f"[{binding_id}] connector '{connector_ref}' não encontrado no registry"
-
-    resilience = binding.get("resilience") or {}
-    timeout_ms = int(resilience.get("timeout_ms") or connector.get("timeout_ms") or _DEFAULT_TIMEOUT_MS)
-    timeout_s = timeout_ms / 1000.0
-    retry_cfg = resilience.get("retry") or {}
-    max_retries = int(retry_cfg.get("max", 0))
-    retry_on = set(retry_cfg.get("on") or [])
-    backoff = retry_cfg.get("backoff", "fixed")
-
-    method = (binding.get("method") or "GET").upper()
-
-    try:
-        path = _render(binding.get("path", "/"), scope)
-        headers = _render_deep(binding.get("headers") or {}, scope)
-        query = _render_deep(binding.get("query") or {}, scope)
-        body = _render_deep(binding.get("body"), scope) if binding.get("body") is not None else None
-        idemp_tpl = binding.get("idempotency_key") or ""
-        idempotency_key = _render(idemp_tpl, scope) if idemp_tpl else ""
-    except Exception as e:
-        return f"[{binding_id}] erro ao renderizar template: {e}"
-
-    if method in _IDEMPOTENT_REQUIRED_METHODS and not idempotency_key:
-        return f"[{binding_id}] idempotency_key é obrigatório para {method}"
-
-    if idempotency_key:
-        headers = dict(headers or {})
-        headers.setdefault("Idempotency-Key", idempotency_key)
-
-    req_start = time.time()
-    resp, last_error, attempts = await _call_with_retry(
-        connector, method, path, headers, query, body,
-        timeout_s, max_retries, retry_on, backoff,
-    )
-    latency_ms = round((time.time() - req_start) * 1000, 2)
-
-    status_code = resp.status_code if resp is not None else 0
-    resp_json: Any = None
-    if resp is not None:
-        try:
-            resp_json = resp.json()
-        except Exception:
-            resp_json = None
-
-    call_id = str(uuid.uuid4())
-    try:
-        await api_call_logs_repo.create({
-            "id": call_id,
-            "connector_id": connector["id"],
-            "endpoint_id": "",
-            "agent_id": agent.get("id", ""),
-            "method": method,
-            "url": connector.get("base_url", "").rstrip("/") + path,
-            "request_headers": json.dumps(_redact_headers(headers), ensure_ascii=False),
-            "request_body": json.dumps(body, ensure_ascii=False, default=str)[:5000] if body is not None else "{}",
-            "response_body": (json.dumps(resp_json, ensure_ascii=False, default=str)[:5000]
-                              if resp_json is not None
-                              else (resp.text[:5000] if resp is not None else "")),
-            "status_code": status_code,
-            "latency_ms": latency_ms,
-        })
-    except Exception as e:
-        logger.warning("Falha ao persistir api_call_log: %s", e)
-
-    executed.append({
-        "binding_id": binding_id,
-        "call_id": call_id,
-        "status": status_code,
-        "latency_ms": latency_ms,
-        "attempts": attempts,
-    })
-
-    if resp is None:
-        return f"[{binding_id}] falha de rede: {last_error}"
-    if not (200 <= status_code < 300):
-        return f"[{binding_id}] HTTP {status_code} — resposta não-2xx"
-
-    mapping = binding.get("output_mapping") or []
-    if not mapping:
-        return f"[{binding_id}] output_mapping é obrigatório"
-
-    if resp_json is None:
-        return f"[{binding_id}] response não é JSON — output_mapping não pôde ser aplicado"
-
-    current_size = len(json.dumps(context, ensure_ascii=False, default=str).encode("utf-8"))
-    budget = max(0, _MAX_CONTEXT_BYTES - current_size)
-    additions, map_errors = _apply_output_mapping(resp_json, mapping, budget)
-
-    delta = ContextDelta(
-        agent_id=agent.get("id", ""),
-        skill_ref=getattr(skill_parsed.frontmatter, "id", "") if skill_parsed else "",
-        additions=additions,
-        span_id=call_id,
-    )
-    merged = apply_context_delta(context, delta)
-    context.clear()
-    context.update(merged)
-
-    if map_errors:
-        return f"[{binding_id}] output_mapping: " + "; ".join(map_errors)
-    return None
+    context: dict,
+    start: float,
+    errors: list[str],
+) -> dict:
+    return {
+        "interaction_id": trace_id,
+        "agent_id": agent.get("id", ""),
+        "output": "",
+        "final_state": "failed",
+        "context": context,
+        "bindings_executed": [],
+        "errors": errors,
+        "duration_ms": round((time.time() - start) * 1000, 2),
+        "mode": "declarative",
+    }

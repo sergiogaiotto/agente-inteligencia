@@ -154,12 +154,12 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
 
     if not is_declarative and not data.message and not data.inputs:
         raise HTTPException(400, "Informe ao menos 'message' ou 'inputs'")
-    if is_declarative and not data.inputs and not data.context:
-        raise HTTPException(400, "Modo declarativo exige 'inputs' ou 'context'")
+    # Modo declarativo não exige inputs — bindings podem ser auto-contidos.
 
     start = time.time()
 
     if is_declarative:
+        dry_run = bool(data.options and data.options.dry_run)
         try:
             result = await execute_declarative(
                 agent=agent,
@@ -167,6 +167,7 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
                 inputs=data.inputs,
                 context=data.context,
                 session_id=data.session_id,
+                dry_run=dry_run,
             )
         except Exception as e:
             raise HTTPException(500, f"Erro no engine declarativo: {e}")
@@ -197,14 +198,19 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
             }, ensure_ascii=False),
         })
 
+        outputs_dict = {
+            "bindings_executed": executed,
+            "final_state": result.get("final_state", ""),
+            "compensations_fired": result.get("compensations_fired", []),
+        }
+        if dry_run:
+            outputs_dict["plans"] = result.get("dry_run_plans") or []
+            outputs_dict["dry_run"] = True
         return AgentInvokeResponse(
             session_id=result.get("interaction_id"),
             agent_id=agent_id,
             status=status,
-            outputs={
-                "bindings_executed": executed,
-                "final_state": result.get("final_state", ""),
-            },
+            outputs=outputs_dict,
             context=result.get("context", {}),
             trace_id=result.get("interaction_id"),
             duration_ms=duration,
