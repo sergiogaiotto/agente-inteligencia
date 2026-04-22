@@ -1,6 +1,6 @@
 """Schemas Pydantic — todas entidades da especificação."""
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Any
 
 class AgentCreate(BaseModel):
     name: str = Field(..., min_length=2)
@@ -42,6 +42,30 @@ class ChatMessage(BaseModel):
     channel: str = "api"; journey: Optional[str] = ""
     attachments: Optional[list] = None
     mode: Optional[str] = "agent"
+
+class InvokeOptions(BaseModel):
+    timeout_ms: Optional[int] = None
+    dry_run: Optional[bool] = False
+
+class AgentInvokeRequest(BaseModel):
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    context: Optional[dict[str, Any]] = None
+    session_id: Optional[str] = None
+    channel: Optional[str] = "api"
+    journey: Optional[str] = ""
+    message: Optional[str] = None
+    options: Optional[InvokeOptions] = None
+
+class AgentInvokeResponse(BaseModel):
+    session_id: Optional[str] = None
+    agent_id: str
+    status: str
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] = Field(default_factory=dict)
+    trace_id: Optional[str] = None
+    duration_ms: float = 0
+    evidence_score: Optional[float] = None
+    errors: list = Field(default_factory=list)
 
 class MeshConnectionCreate(BaseModel):
     source_agent_id: str; target_agent_id: str
