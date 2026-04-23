@@ -247,9 +247,90 @@
             <div class="relative z-10 w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-surface-200 overflow-hidden">
                 <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4">
                     <h3 class="text-[15px] font-bold text-brand-900" x-text="editingConnectorId ? 'Editar Conector' : 'Novo Conector'"></h3>
-                    <button @click="connectorFormOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+                    <div class="flex items-center gap-2">
+                        <button @click="introspectOpen = !introspectOpen"
+                                class="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm hover:shadow-md hover:brightness-110 transition-all">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z"/></svg>
+                            <span x-text="introspectOpen ? 'Fechar wizard' : 'IA, me ajude!'"></span>
+                        </button>
+                        <button @click="connectorFormOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+                    </div>
                 </div>
                 <div class="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
+                    <!-- ═══ WIZARD IA ═══ -->
+                    <div x-show="introspectOpen" x-transition class="rounded-xl border border-violet-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-4 space-y-3">
+                        <p class="text-[12px] text-violet-800 leading-relaxed">
+                            Cole a URL da API (docs, página inicial ou openapi.json direto). Eu tento descobrir
+                            o base_url, auth e endpoints automaticamente.
+                        </p>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-violet-900 mb-1">URL da API</label>
+                            <input x-model="introspectUrl" placeholder="https://api.exemplo.com ou https://api.exemplo.com/docs"
+                                   class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-violet-900 mb-1">Token (opcional — se o openapi.json exige auth)</label>
+                            <input x-model="introspectToken" type="password" placeholder="eyJhbGciOi..."
+                                   class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400">
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button @click="runIntrospect()" :disabled="introspecting || !introspectUrl.trim()"
+                                    class="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 px-4 py-2 text-[12px] font-semibold text-white hover:brightness-110 disabled:opacity-50">
+                                <svg x-show="introspecting" class="animate-spin w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4.93 4.93l4.24 4.24M14.83 14.83l4.24 4.24M14.83 9.17l4.24-4.24M14.83 9.17l3.53-3.53M4.93 19.07l3.53-3.53"/></svg>
+                                <span x-text="introspecting ? 'Descobrindo...' : 'Descobrir'"></span>
+                            </button>
+                            <span x-show="introspectStatus" x-text="introspectStatus" class="text-[11px] text-violet-700"></span>
+                        </div>
+                        <!-- Preview card -->
+                        <div x-show="introspectResult && introspectResult.found" x-transition class="rounded-lg bg-white border border-violet-200 p-3 space-y-2">
+                            <div class="text-[11px] text-violet-700 font-semibold">✓ OpenAPI encontrado em <span x-text="introspectResult?.spec_url" class="font-mono"></span></div>
+                            <div class="text-[12px] text-brand-900">
+                                <span class="font-semibold" x-text="introspectResult?.proposal?.name"></span> ·
+                                v<span x-text="introspectResult?.meta?.api_version || '?'"></span> ·
+                                <span x-text="introspectResult?.meta?.paths_count"></span> paths ·
+                                auth: <span class="font-mono" x-text="introspectResult?.proposal?.auth_type"></span>
+                            </div>
+                            <div x-show="introspectResult?.endpoints?.length" class="text-[11px] text-surface-600">
+                                <span x-text="introspectResult?.endpoints?.length"></span> endpoint(s) detectado(s).
+                                Marque abaixo os que quer importar junto com o conector:
+                            </div>
+                            <div x-show="introspectResult?.endpoints?.length" class="max-h-40 overflow-y-auto space-y-1 pr-1">
+                                <template x-for="(ep, i) in introspectResult?.endpoints || []" :key="i">
+                                    <label class="flex items-center gap-2 text-[11px] cursor-pointer hover:bg-violet-50 rounded px-1 py-0.5">
+                                        <input type="checkbox" x-model="introspectPicks[i]" class="rounded border-violet-300">
+                                        <span class="font-mono rounded px-1.5 py-0.5 text-[9px] font-bold" :class="methodColor(ep.method)" x-text="ep.method"></span>
+                                        <span class="font-mono text-surface-600 truncate" x-text="ep.path"></span>
+                                        <span class="text-surface-400 truncate" x-text="ep.name"></span>
+                                    </label>
+                                </template>
+                            </div>
+                            <div class="flex items-center gap-2 pt-1">
+                                <button @click="applyIntrospect()" type="button"
+                                        class="rounded-lg bg-violet-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-violet-700">
+                                    Aplicar ao formulário
+                                </button>
+                                <button @click="introspectResult = null" type="button"
+                                        class="rounded-lg border border-violet-200 px-3 py-1.5 text-[11px] font-medium text-violet-700 hover:bg-violet-50">
+                                    Descartar
+                                </button>
+                                <label class="flex items-center gap-1 text-[11px] text-surface-500 ml-auto">
+                                    <input type="checkbox" x-model="introspectImportAll"> marcar todos
+                                </label>
+                            </div>
+                        </div>
+                        <div x-show="introspectResult && !introspectResult.found" x-transition class="rounded-lg bg-amber-50 border border-amber-200 p-3 text-[11px] text-amber-800">
+                            <strong>Não encontrei o OpenAPI</strong><br>
+                            <span x-text="introspectResult?.hint"></span>
+                            <div x-show="introspectResult?.tried?.length" class="mt-2 text-surface-600">
+                                <span class="font-semibold">Tentativas:</span>
+                                <ul class="mt-1 space-y-0.5">
+                                    <template x-for="t in introspectResult?.tried || []">
+                                        <li class="font-mono">• <span x-text="t.url"></span> → HTTP <span x-text="t.status"></span></li>
+                                    </template>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
                     <div>
                         <label class="block text-[11px] font-semibold text-brand-900 mb-1">Nome *</label>
                         <input x-model="connForm.name" placeholder="Ex: SupeRAG, Fale com Dados..." class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[13px] outline-none focus:border-brand-400">
@@ -312,7 +393,21 @@
                         </div>
                     </div>
                 </div>
-                <div class="border-t border-surface-100 px-6 py-4 flex items-center justify-end gap-3">
+                <div class="border-t border-surface-100 px-6 py-4 flex items-center gap-3">
+                    <!-- Test connection + result badge -->
+                    <button @click="testInline()" :disabled="testingInline || !connForm.base_url" type="button"
+                            class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-[12px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-40">
+                        <svg x-show="!testingInline" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                        <svg x-show="testingInline" class="animate-spin w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" opacity="0.3"/><path d="M22 12c0-5.523-4.477-10-10-10"/></svg>
+                        <span x-text="testingInline ? 'Testando...' : 'Testar conexão'"></span>
+                    </button>
+                    <div x-show="testResult" x-transition class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium"
+                         :class="testResult?.ok ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'">
+                        <span x-text="testResult?.ok ? '✓' : '✗'"></span>
+                        <span x-text="(testResult?.status ?? 0) + ' · ' + (testResult?.latency_ms ?? 0) + 'ms'"></span>
+                        <span x-show="testResult?.hint || testResult?.error" :title="testResult?.hint || testResult?.error" class="underline decoration-dotted cursor-help">?</span>
+                    </div>
+                    <div class="flex-1"></div>
                     <button @click="connectorFormOpen = false" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] font-medium text-surface-500 hover:bg-surface-50">Cancelar</button>
                     <button @click="saveConnector()" :disabled="savingConn" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
                         <span x-text="savingConn ? 'Salvando...' : (editingConnectorId ? 'Atualizar' : 'Criar')"></span>
@@ -387,6 +482,11 @@ function apiConnectorsPage() {
         // Connector form
         connectorFormOpen: false, editingConnectorId: null, savingConn: false,
         connForm: { name:'', base_url:'', description:'', icon:'AP', color:'bg-brand-500', api_key:'', auth_type:'none', auth_header:'X-API-Key', health_path:'/api/health', timeout_ms:30000 },
+        // Test connection (pre-save)
+        testingInline: false, testResult: null,
+        // IA wizard (OpenAPI introspection)
+        introspectOpen: false, introspecting: false, introspectUrl: '', introspectToken: '',
+        introspectStatus: '', introspectResult: null, introspectPicks: {}, introspectImportAll: false,
         // Endpoint form
         endpointFormOpen: false, editingEndpointId: null, editingConnIdForEp: null, savingEp: false,
         epForm: { name:'', method:'GET', path:'', description:'', category:'geral', sample_body:'{}' },
@@ -499,14 +599,114 @@ function apiConnectorsPage() {
                 this.editingConnectorId = null;
                 this.connForm = { name:'', base_url:'', description:'', icon:'AP', color:'bg-brand-500', api_key:'', auth_type:'none', auth_header:'X-API-Key', health_path:'/api/health', timeout_ms:30000 };
             }
+            // reset wizard + test state
+            this.testResult = null; this.testingInline = false;
+            this.introspectOpen = false; this.introspectUrl = ''; this.introspectToken = '';
+            this.introspectResult = null; this.introspectPicks = {}; this.introspectStatus = '';
             this.connectorFormOpen = true;
         },
+
+        // ── Test inline (pre-save) ──
+        async testInline() {
+            if (!this.connForm.base_url.trim()) { showToast('Preencha a base_url', 'error'); return; }
+            this.testingInline = true; this.testResult = null;
+            try {
+                const r = await api.post('/api/v1/api-connectors/test-inline', {
+                    base_url: this.connForm.base_url,
+                    auth_type: this.connForm.auth_type,
+                    auth_header: this.connForm.auth_header,
+                    api_key: this.connForm.api_key,
+                    health_path: this.connForm.health_path,
+                    timeout_ms: this.connForm.timeout_ms,
+                });
+                this.testResult = r;
+                showToast(r.ok ? 'Conectado (' + r.latency_ms + 'ms)' : 'Falha HTTP ' + r.status, r.ok ? 'success' : 'error');
+            } catch(e) {
+                this.testResult = { ok: false, status: 0, error: e.message };
+                showToast('Erro: ' + e.message, 'error');
+            }
+            this.testingInline = false;
+        },
+
+        // ── IA wizard — introspect OpenAPI ──
+        async runIntrospect() {
+            const url = (this.introspectUrl || '').trim();
+            if (!url) return;
+            this.introspecting = true; this.introspectStatus = 'Buscando openapi.json...'; this.introspectResult = null;
+            try {
+                const r = await api.post('/api/v1/api-connectors/introspect', {
+                    url, bearer_token: this.introspectToken || '',
+                });
+                this.introspectResult = r;
+                if (r.found) {
+                    this.introspectStatus = '✓ Encontrado';
+                    // pre-select first 10 endpoints
+                    const picks = {};
+                    (r.endpoints || []).slice(0, 10).forEach((_, i) => picks[i] = true);
+                    this.introspectPicks = picks;
+                } else {
+                    this.introspectStatus = '⚠ Não encontrado';
+                }
+            } catch(e) {
+                this.introspectStatus = 'Erro: ' + e.message;
+                showToast(e.message, 'error');
+            }
+            this.introspecting = false;
+        },
+
+        applyIntrospect() {
+            const r = this.introspectResult;
+            if (!r || !r.found) return;
+            const p = r.proposal || {};
+            // preenche só campos que o usuário ainda não alterou
+            this.connForm.name = this.connForm.name || p.name || '';
+            this.connForm.base_url = p.base_url || this.connForm.base_url;
+            this.connForm.description = this.connForm.description || p.description || '';
+            this.connForm.icon = p.icon || this.connForm.icon;
+            this.connForm.color = p.color || this.connForm.color;
+            this.connForm.auth_type = p.auth_type || this.connForm.auth_type;
+            this.connForm.auth_header = p.auth_header || this.connForm.auth_header;
+            this.connForm.health_path = p.health_path || this.connForm.health_path;
+            this.connForm.timeout_ms = p.timeout_ms || this.connForm.timeout_ms;
+            showToast('Campos preenchidos. Revise e salve.');
+            this.introspectOpen = false;
+        },
+
+        // Selected endpoints queued for import after save
+        get _pendingEndpointsToImport() {
+            if (!this.introspectResult?.endpoints) return [];
+            return this.introspectResult.endpoints.filter((_, i) => this.introspectImportAll || this.introspectPicks[i]);
+        },
+
         async saveConnector() {
             if (!this.connForm.name.trim() || !this.connForm.base_url.trim()) { showToast('Nome e URL obrigatorios', 'error'); return; }
             this.savingConn = true;
             try {
-                if (this.editingConnectorId) { await api.put('/api/v1/api-connectors/' + this.editingConnectorId, this.connForm); showToast('Conector atualizado'); }
-                else { await api.post('/api/v1/api-connectors', this.connForm); showToast('Conector criado'); }
+                let connectorId = this.editingConnectorId;
+                if (connectorId) {
+                    await api.put('/api/v1/api-connectors/' + connectorId, this.connForm);
+                    showToast('Conector atualizado');
+                } else {
+                    const res = await api.post('/api/v1/api-connectors', this.connForm);
+                    connectorId = res.id;
+                    showToast('Conector criado');
+                }
+                // Auto-import endpoints discovered via wizard (se houver)
+                const pending = this._pendingEndpointsToImport;
+                if (pending.length && connectorId) {
+                    let imported = 0;
+                    for (const ep of pending) {
+                        try {
+                            await api.post('/api/v1/api-connectors/' + connectorId + '/endpoints', {
+                                name: ep.name, method: ep.method, path: ep.path,
+                                description: ep.description || '', category: ep.category || 'geral',
+                                sample_body: ep.sample_body || '{}',
+                            });
+                            imported++;
+                        } catch {}
+                    }
+                    if (imported) showToast(imported + ' endpoint(s) importado(s)');
+                }
                 this.connectorFormOpen = false; await this.load();
             } catch(e) { showToast(e.message, 'error'); }
             this.savingConn = false;

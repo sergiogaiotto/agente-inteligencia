@@ -5,6 +5,7 @@ proxy para execução, health check, e histórico de chamadas.
 """
 import uuid
 import json
+import re
 import time
 import logging
 import httpx
@@ -73,6 +74,23 @@ class ProxyRequest(BaseModel):
     body: Optional[dict] = None
     headers: Optional[dict] = None
     endpoint_id: Optional[str] = None
+
+
+class InlineTestRequest(BaseModel):
+    """Shape p/ testar conexão antes de salvar — usa os mesmos campos
+    do connector, mas não persiste nada."""
+    base_url: str
+    auth_type: Optional[str] = "none"
+    auth_header: Optional[str] = "X-API-Key"
+    api_key: Optional[str] = ""
+    health_path: Optional[str] = "/api/health"
+    timeout_ms: Optional[int] = 15000
+
+
+class IntrospectRequest(BaseModel):
+    url: str
+    bearer_token: Optional[str] = ""  # se a spec OpenAPI estiver atrás de auth
+    max_endpoints: Optional[int] = 25
 
 
 # ═══════════════════════════════════════════════════════
@@ -490,6 +508,357 @@ async def catalog_tree():
             "categories": by_cat,
         })
     return {"tree": tree}
+
+
+# ═══════════════════════════════════════════════════════
+# TEST INLINE — valida conexão ANTES de salvar
+# ═══════════════════════════════════════════════════════
+
+@router.post("/test-inline")
+async def test_inline(data: InlineTestRequest):
+    """Testa uma configuração de conector antes de persistir.
+
+    Recebe os mesmos campos do form (base_url, auth, health_path) e
+    dispara GET {base_url}{health_path}. Retorna {ok, status, latency_ms,
+    url, error?} — mesmo shape do /test tradicional.
+    """
+    base = (data.base_url or "").strip().rstrip("/")
+    if not base:
+        raise HTTPException(400, "base_url obrigatório")
+    path = data.health_path or "/api/health"
+    if not path.startswith("/"):
+        path = "/" + path
+    url = f"{base}{path}"
+    timeout = (data.timeout_ms or 15000) / 1000
+    headers = _build_auth_headers({
+        "auth_type": data.auth_type or "none",
+        "auth_header": data.auth_header or "X-API-Key",
+        "api_key": data.api_key or "",
+    })
+    start = time.time()
+    try:
+        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
+            r = await client.get(url)
+        latency = round((time.time() - start) * 1000, 2)
+        return {
+            "ok": 200 <= r.status_code < 400,
+            "status": r.status_code,
+            "latency_ms": latency,
+            "url": url,
+            "hint": _test_hint(r.status_code),
+        }
+    except httpx.ConnectError:
+        return {"ok": False, "status": 0, "error": f"Não foi possível conectar a {base}", "url": url,
+                "hint": "Verifique se a URL está correta e o host está acessível."}
+    except httpx.TimeoutException:
+        return {"ok": False, "status": 408, "error": "Timeout", "url": url,
+                "hint": "A API demorou mais que o timeout. Aumente timeout_ms ou verifique latência."}
+    except Exception as e:
+        return {"ok": False, "status": 500, "error": str(e)[:200], "url": url,
+                "hint": None}
+
+
+def _test_hint(status_code: int) -> Optional[str]:
+    if status_code == 401:
+        return "Auth falhou — confira auth_type e o token."
+    if status_code == 403:
+        return "Auth ok mas sem permissão — confira escopo do token."
+    if status_code == 404:
+        return "health_path não existe — tente /health, /healthz, / ou /api/health."
+    if 200 <= status_code < 300:
+        return None
+    if 300 <= status_code < 400:
+        return "Redirecionamento — pode funcionar ao salvar."
+    if 500 <= status_code:
+        return "Servidor retornou erro — a API pode estar fora do ar."
+    return None
+
+
+# ═══════════════════════════════════════════════════════
+# INTROSPECT — "IA, me ajude!" preenche via OpenAPI
+# ═══════════════════════════════════════════════════════
+
+_OPENAPI_CANDIDATE_PATHS = (
+    "/openapi.json",
+    "/api/openapi.json",
+    "/v1/openapi.json",
+    "/v3/api-docs",
+    "/swagger.json",
+    "/docs/openapi.json",
+)
+
+
+@router.post("/introspect")
+async def introspect(data: IntrospectRequest):
+    """Descobre um conector a partir de uma URL com OpenAPI/Swagger.
+
+    Tenta: URL bruta → paths comuns de openapi.json. Se achou, mapeia para
+    sugestões de conector + lista de endpoints. Nunca salva nada — só
+    propõe. O frontend decide o que aplicar.
+    """
+    raw = (data.url or "").strip()
+    if not raw:
+        raise HTTPException(400, "url obrigatória")
+    if "://" not in raw:
+        raw = "https://" + raw
+
+    parsed = httpx.URL(raw)
+    origin = f"{parsed.scheme}://{parsed.host}" + (f":{parsed.port}" if parsed.port and parsed.port not in (80, 443) else "")
+
+    # Strip anchor/query; se path termina em .json usamos direto
+    url_path = (parsed.path or "/").rstrip("/")
+    candidate_urls: list[str] = []
+    if url_path.endswith(".json") or url_path.endswith("/api-docs"):
+        candidate_urls.append(f"{origin}{url_path}")
+    else:
+        # 1. candidatos na raiz do host
+        for p in _OPENAPI_CANDIDATE_PATHS:
+            candidate_urls.append(f"{origin}{p}")
+        # 2. candidatos combinados com path do usuário (ex: /api/v3 + /openapi.json)
+        if url_path and url_path not in ("/", ""):
+            # remove /docs/swagger etc para tentar sob o prefixo "real" da API
+            base_path = re.sub(r"/(docs|swagger(?:-ui)?|redoc)\b.*$", "", url_path).rstrip("/")
+            if base_path:
+                for p in _OPENAPI_CANDIDATE_PATHS:
+                    cand = f"{origin}{base_path}{p}"
+                    if cand not in candidate_urls:
+                        candidate_urls.append(cand)
+        # 3. URL original (pode ser um Swagger UI que vamos parsear)
+        candidate_urls.append(f"{origin}{url_path or '/'}")
+
+    headers = {"Accept": "application/json, text/html"}
+    if data.bearer_token and data.bearer_token.strip():
+        headers["Authorization"] = f"Bearer {data.bearer_token.strip()}"
+
+    spec: Optional[dict] = None
+    tried: list = []
+    final_url = ""
+    auth_hint: Optional[str] = None
+    async with httpx.AsyncClient(timeout=15, headers=headers, follow_redirects=True) as client:
+        for cand in candidate_urls:
+            try:
+                r = await client.get(cand)
+            except Exception as e:
+                tried.append({"url": cand, "status": 0, "error": str(e)[:120]})
+                continue
+            ct = (r.headers.get("content-type") or "").lower()
+            tried.append({"url": cand, "status": r.status_code, "content_type": ct[:60]})
+            if r.status_code == 401 or r.status_code == 403:
+                auth_hint = (
+                    "A URL de OpenAPI exige autenticação. Cole um bearer token no campo 'Token (opcional)' "
+                    "e tente novamente."
+                )
+                continue
+            if r.status_code != 200:
+                continue
+            # Tenta parsear JSON direto
+            if "json" in ct:
+                try:
+                    candidate_spec = r.json()
+                except Exception:
+                    candidate_spec = None
+                if isinstance(candidate_spec, dict) and ("openapi" in candidate_spec or "swagger" in candidate_spec):
+                    spec = candidate_spec
+                    final_url = cand
+                    break
+            # HTML? Procura hint de Swagger UI com URL do spec embutida
+            if "html" in ct:
+                hinted = _extract_openapi_url_from_html(r.text, origin)
+                if hinted and hinted not in [t["url"] for t in tried]:
+                    try:
+                        r2 = await client.get(hinted)
+                        ct2 = (r2.headers.get("content-type") or "").lower()
+                        tried.append({"url": hinted, "status": r2.status_code, "content_type": ct2[:60], "via": "html-hint"})
+                        if r2.status_code == 200 and "json" in ct2:
+                            candidate_spec = r2.json()
+                            if isinstance(candidate_spec, dict) and ("openapi" in candidate_spec or "swagger" in candidate_spec):
+                                spec = candidate_spec
+                                final_url = hinted
+                                break
+                    except Exception as e:
+                        tried.append({"url": hinted, "status": 0, "error": str(e)[:120], "via": "html-hint"})
+
+    if not spec:
+        return {
+            "found": False,
+            "tried": tried,
+            "origin": origin,
+            "hint": auth_hint or (
+                "Não encontrei openapi.json nas rotas comuns. Se você tem a URL exata do spec, "
+                "cole-a inteira. Se a API não expõe OpenAPI, preencha manualmente."
+            ),
+        }
+
+    # ── Extração ──
+    info = spec.get("info") or {}
+    title = (info.get("title") or "").strip()
+    version = (info.get("version") or "").strip()
+    description = (info.get("description") or "").strip()
+
+    # base_url vem de servers[0].url — pode ser relativo
+    servers = spec.get("servers") or []
+    base_url_proposal = origin
+    if servers and isinstance(servers, list):
+        first = servers[0].get("url", "") if isinstance(servers[0], dict) else ""
+        if first:
+            if first.startswith(("http://", "https://")):
+                base_url_proposal = first.rstrip("/")
+            else:
+                base_url_proposal = (origin + "/" + first.lstrip("/")).rstrip("/")
+
+    # auth a partir de securitySchemes
+    sec_schemes = (spec.get("components", {}) or {}).get("securitySchemes", {}) or {}
+    auth_type = "none"
+    auth_header = "X-API-Key"
+    for _name, sch in sec_schemes.items():
+        if not isinstance(sch, dict):
+            continue
+        st = (sch.get("type") or "").lower()
+        if st == "http":
+            scheme = (sch.get("scheme") or "").lower()
+            if scheme == "bearer":
+                auth_type = "bearer"
+                auth_header = "Authorization"
+                break
+            if scheme == "basic":
+                auth_type = "basic"
+                auth_header = "Authorization"
+                break
+        if st == "apikey":
+            auth_type = "api_key"
+            auth_header = sch.get("name") or "X-API-Key"
+            break
+        if st in ("oauth2", "openidconnect"):
+            auth_type = "bearer"
+            auth_header = "Authorization"
+            break
+
+    # health_path candidato: /health, /healthz, /api/health, / (fallback)
+    paths_obj = spec.get("paths") or {}
+    health_candidates = ["/health", "/healthz", "/api/health", "/status", "/"]
+    health_path = next((p for p in health_candidates if p in paths_obj), "/api/health")
+
+    # Endpoints list (top N, prioriza os com operationId ou summary)
+    endpoints: list = []
+    max_eps = max(1, min(data.max_endpoints or 25, 100))
+    for path, methods in paths_obj.items():
+        if not isinstance(methods, dict):
+            continue
+        for method, op in methods.items():
+            if method.lower() not in ("get", "post", "put", "patch", "delete"):
+                continue
+            if not isinstance(op, dict):
+                continue
+            summary = (op.get("summary") or op.get("operationId") or f"{method.upper()} {path}").strip()
+            desc = (op.get("description") or "").strip()
+            tags = op.get("tags") or []
+            category = tags[0] if tags and isinstance(tags, list) else "geral"
+            body_example = _build_body_example(op, spec)
+            endpoints.append({
+                "name": summary[:80],
+                "method": method.upper(),
+                "path": path,
+                "description": desc[:300],
+                "category": str(category)[:40],
+                "sample_body": json.dumps(body_example, ensure_ascii=False)[:2000] if body_example else "{}",
+            })
+            if len(endpoints) >= max_eps:
+                break
+        if len(endpoints) >= max_eps:
+            break
+
+    # Visual: cor deterministicamente a partir do nome; ícone = 2 letras
+    colors = ["bg-brand-500", "bg-violet-500", "bg-teal-500", "bg-emerald-600",
+               "bg-amber-500", "bg-rose-500", "bg-indigo-500", "bg-orange-500"]
+    color = colors[(sum(ord(c) for c in (title or "A")) % len(colors))]
+    icon = "".join(c for c in title.upper() if c.isalnum())[:2] or "AP"
+
+    return {
+        "found": True,
+        "spec_url": final_url,
+        "origin": origin,
+        "proposal": {
+            "name": title or parsed.host.split(".")[0].title(),
+            "base_url": base_url_proposal,
+            "description": description[:500],
+            "icon": icon,
+            "color": color,
+            "auth_type": auth_type,
+            "auth_header": auth_header,
+            "health_path": health_path,
+            "timeout_ms": 30000,
+        },
+        "meta": {
+            "openapi_version": spec.get("openapi") or spec.get("swagger"),
+            "api_version": version,
+            "paths_count": len(paths_obj),
+            "endpoints_discovered": len(endpoints),
+        },
+        "endpoints": endpoints,
+        "tried": tried,
+    }
+
+
+def _extract_openapi_url_from_html(html: str, origin: str) -> Optional[str]:
+    """Detecta a URL do openapi.json num HTML de Swagger UI / ReDoc.
+
+    Ex: Swagger UI gera `<script>... url: "/openapi.json" ...</script>`.
+    ReDoc: `<redoc spec-url="/openapi.json">`.
+    """
+    if not html:
+        return None
+    # ReDoc
+    m = re.search(r'spec-url=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    if m:
+        url = m.group(1)
+        return url if url.startswith("http") else origin + (url if url.startswith("/") else "/" + url)
+    # Swagger UI
+    m = re.search(r'url:\s*["\']([^"\']+\.(?:json|yaml|yml))["\']', html, re.IGNORECASE)
+    if m:
+        url = m.group(1)
+        return url if url.startswith("http") else origin + (url if url.startswith("/") else "/" + url)
+    # Swagger UI v3+ com urls:[{url: ...}]
+    m = re.search(r'urls:\s*\[\s*\{\s*url:\s*["\']([^"\']+)["\']', html)
+    if m:
+        url = m.group(1)
+        return url if url.startswith("http") else origin + (url if url.startswith("/") else "/" + url)
+    return None
+
+
+def _build_body_example(op: dict, spec: dict) -> Optional[dict]:
+    """Extrai um exemplo de body do OpenAPI, seguindo $ref quando possível."""
+    rb = op.get("requestBody") or {}
+    content = rb.get("content") or {}
+    js = content.get("application/json") or {}
+    if "example" in js:
+        return js["example"]
+    examples = js.get("examples") or {}
+    if examples:
+        first = next(iter(examples.values()), None)
+        if isinstance(first, dict) and "value" in first:
+            return first["value"]
+    schema = js.get("schema") or {}
+    ref = schema.get("$ref")
+    if ref and ref.startswith("#/"):
+        parts = ref[2:].split("/")
+        cur = spec
+        for p in parts:
+            cur = cur.get(p) if isinstance(cur, dict) else None
+            if cur is None:
+                break
+        schema = cur or schema
+    if isinstance(schema, dict) and "example" in schema:
+        return schema["example"]
+    # Skeleton a partir de properties (útil p/ POSTs)
+    props = (schema or {}).get("properties") if isinstance(schema, dict) else None
+    if isinstance(props, dict):
+        skel = {}
+        for k, v in list(props.items())[:10]:
+            t = (v.get("type") if isinstance(v, dict) else "") or "string"
+            skel[k] = {"string": "", "integer": 0, "number": 0, "boolean": False,
+                       "array": [], "object": {}}.get(t, "")
+        return skel
+    return None
 
 
 # ═══════════════════════════════════════════════════════
