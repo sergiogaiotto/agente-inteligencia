@@ -15,6 +15,9 @@ class AgentCreate(BaseModel):
     status: Optional[str] = "active"
     config: Optional[str] = "{}"
     require_evidence: Optional[bool] = True
+    temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
+    accepts_images: Optional[bool] = False
+    accepts_documents: Optional[bool] = False
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None
@@ -24,6 +27,9 @@ class AgentUpdate(BaseModel):
     config: Optional[str] = None; status: Optional[str] = None
     version: Optional[str] = None
     require_evidence: Optional[bool] = None
+    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    accepts_images: Optional[bool] = None
+    accepts_documents: Optional[bool] = None
 
 class SkillCreateRaw(BaseModel):
     raw_content: str = Field(..., min_length=10)

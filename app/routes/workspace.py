@@ -130,6 +130,66 @@ async def upload_file(file: UploadFile = File(...)):
     }
 
 
+_IMAGE_MIME_PREFIXES = ("image/",)
+_TEXT_MIME_PREFIXES = ("text/",)
+_DOC_MIME_EXACT = {
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    "application/rtf", "application/json", "application/xml",
+    "application/x-yaml", "application/x-markdown",
+}
+
+
+def _classify_attachment(mime: str) -> str:
+    """Retorna 'image' | 'document' | 'unknown'.
+
+    Tudo que começa com image/* → image. text/* e MIMEs comuns de office
+    → document. Resto → unknown (será filtrado se ambas as flags forem
+    false).
+    """
+    mime = (mime or "").lower()
+    if any(mime.startswith(p) for p in _IMAGE_MIME_PREFIXES):
+        return "image"
+    if mime in _DOC_MIME_EXACT or any(mime.startswith(p) for p in _TEXT_MIME_PREFIXES):
+        return "document"
+    return "document"  # fallback — melhor assumir doc e deixar a flag decidir
+
+
+async def _filter_attachments_by_agent(attachments: list, agent_id: str) -> tuple[list, list]:
+    """Filtra attachments conforme flags accepts_images / accepts_documents
+    do agente. Retorna (aceitos, rejeitados_meta) — rejeitados vão para
+    o trace para o usuário ver o que foi podado."""
+    if not attachments:
+        return [], []
+    from app.core.database import agents_repo
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        return attachments, []
+    accepts_img = bool(agent.get("accepts_images") or 0)
+    accepts_doc = bool(agent.get("accepts_documents") or 0)
+    accepted, rejected = [], []
+    for att in attachments:
+        kind = _classify_attachment(att.get("type", ""))
+        allowed = (kind == "image" and accepts_img) or (kind == "document" and accepts_doc)
+        if allowed:
+            accepted.append(att)
+        else:
+            rejected.append({
+                "name": att.get("name", ""),
+                "type": att.get("type", ""),
+                "kind": kind,
+                "reason": f"Agente não aceita {kind}s — habilite em 'Editar Agente'",
+            })
+    return accepted, rejected
+
+
 @router.post("/chat")
 async def chat(data: ChatMessage):
     """Executa interação (agente individual ou pipeline mesh)."""
@@ -143,6 +203,8 @@ async def chat(data: ChatMessage):
                     "size": att.get("size", 0),
                     "content": att.get("text_content", ""),
                 })
+        # Filtra conforme flags do agente
+        attachments, rejected_attachments = await _filter_attachments_by_agent(attachments, data.agent_id)
 
         if data.mode == "pipeline":
             from app.agents.engine import execute_pipeline
@@ -168,6 +230,9 @@ async def chat(data: ChatMessage):
             trace_persist = {k: result.get(k) for k in ["interaction_id","agent_id","final_state","evidence_score","transitions","duration_ms","trace","pipeline_steps","mode"]}
             await interactions_repo.update(iid, {"trace_data": json.dumps(trace_persist, ensure_ascii=False, default=str)})
 
+        # Sinaliza attachments rejeitados para que o frontend possa mostrar
+        if rejected_attachments:
+            result["rejected_attachments"] = rejected_attachments
         return result
     except ValueError as e:
         raise HTTPException(404, str(e))

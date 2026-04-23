@@ -23,11 +23,17 @@ async def get_agent(agent_id: str):
     if not a: raise HTTPException(404, "Agente não encontrado")
     return a
 
+_BOOL_FIELDS = ("require_evidence", "accepts_images", "accepts_documents")
+
+
 @router.post("", status_code=201)
 async def create_agent(data: AgentCreate):
     aid = str(uuid.uuid4())
     d = {"id": aid, **data.model_dump()}
-    d["require_evidence"] = 1 if d.get("require_evidence", True) else 0
+    # SQLite não tem bool — converter os flags para int
+    for f in _BOOL_FIELDS:
+        if f in d and d[f] is not None:
+            d[f] = 1 if d[f] else 0
     await agents_repo.create(d)
     await audit_repo.create({"entity_type":"agent","entity_id":aid,"action":"created","details":json.dumps({"name":data.name,"kind":data.kind,"version":data.version})})
     return {"id": aid, "message": "Agente criado"}
@@ -37,15 +43,19 @@ async def update_agent(agent_id: str, data: AgentUpdate):
     existing = await agents_repo.find_by_id(agent_id)
     if not existing: raise HTTPException(404)
     upd = {k:v for k,v in data.model_dump().items() if v is not None}
-    # require_evidence=False é válido, não filtrar
+    # require_evidence=False / accepts_*=False são valores válidos —
+    # model_dump() com exclude_none já preserva eles, mas a comparação
+    # inicial `if v is not None` faz o filtro correto. Explícito apenas
+    # para require_evidence por retrocompat.
     if data.require_evidence is not None and "require_evidence" not in upd:
         upd["require_evidence"] = data.require_evidence
     # Convert bool to int for SQLite
-    if "require_evidence" in upd:
-        upd["require_evidence"] = 1 if upd["require_evidence"] else 0
+    for f in _BOOL_FIELDS:
+        if f in upd:
+            upd[f] = 1 if upd[f] else 0
     if not upd: raise HTTPException(400, "Nenhum campo")
     # Auto-bump version se campos significativos mudaram
-    significant = {"system_prompt","model","llm_provider","skill_id","kind"}
+    significant = {"system_prompt","model","llm_provider","skill_id","kind","temperature"}
     if any(k in upd for k in significant) and "version" not in upd:
         upd["version"] = _bump_version(existing.get("version","1.0.0"))
     return await agents_repo.update(agent_id, upd)

@@ -67,9 +67,15 @@ class DeepAgentHarness:
     def __init__(self, agent_config: dict, max_iterations: int = 3, mcp_tools: list = None):
         self.config = agent_config
         self.max_iterations = max_iterations
+        # temperature pode vir como None/str/float — normaliza para float com fallback
+        try:
+            _temp = float(agent_config.get("temperature") if agent_config.get("temperature") is not None else 0.7)
+        except (TypeError, ValueError):
+            _temp = 0.7
         self.provider = get_provider(
             agent_config.get("llm_provider", "openai"),
             model=agent_config.get("model"),
+            temperature=_temp,
         )
         self.mcp_tools = mcp_tools or []
         self.openai_tools = []
