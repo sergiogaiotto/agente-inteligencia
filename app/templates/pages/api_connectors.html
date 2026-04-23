@@ -1087,9 +1087,11 @@ function apiConnectorsPage() {
             if (!conn.base_url) { showToast('Connector sem base_url', 'error'); return; }
             this.epDiscovering = true;
             try {
-                const bearer = (conn.auth_type === 'bearer' && conn.api_key) ? conn.api_key : '';
+                // Passa connector_id → backend usa _build_auth_headers e suporta
+                // cookie/bearer/api_key/basic nativamente (sem depender do frontend
+                // saber qual header montar).
                 const r = await api.post('/api/v1/api-connectors/introspect', {
-                    url: conn.base_url, bearer_token: bearer, max_endpoints: 100,
+                    url: conn.base_url, connector_id: conn.id, max_endpoints: 100,
                 });
                 if (r.found) {
                     this.epDiscoveredEndpoints = r.endpoints || [];
@@ -1221,11 +1223,10 @@ function apiConnectorsPage() {
             if (!baseUrl) { showToast('Connector sem base_url — não dá pra descobrir', 'error'); return; }
             this.epDiscovering = true;
             try {
-                // reusa o token/auth do próprio connector (quando bearer)
-                const conn = node;
-                const bearer = (conn?.auth_type === 'bearer' && conn?.api_key) ? conn.api_key : '';
+                // Passa connector_id → backend injeta auth do connector automaticamente
+                // (cookie, bearer, api_key, basic — tudo suportado).
                 const r = await api.post('/api/v1/api-connectors/introspect', {
-                    url: baseUrl, bearer_token: bearer, max_endpoints: 100,
+                    url: baseUrl, connector_id: connId, max_endpoints: 100,
                 });
                 if (r.found) {
                     this.epDiscoveredEndpoints = r.endpoints || [];

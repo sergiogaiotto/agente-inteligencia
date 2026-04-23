@@ -89,7 +89,8 @@ class InlineTestRequest(BaseModel):
 
 class IntrospectRequest(BaseModel):
     url: str
-    bearer_token: Optional[str] = ""  # se a spec OpenAPI estiver atrás de auth
+    bearer_token: Optional[str] = ""  # retrocompat: quando não há connector_id
+    connector_id: Optional[str] = ""  # preferível: usa auth do connector (cookie, bearer, api_key, basic)
     max_endpoints: Optional[int] = 25
 
 
@@ -728,8 +729,23 @@ async def introspect(data: IntrospectRequest):
         candidate_urls.append(f"{origin}{url_path or '/'}")
 
     headers = {"Accept": "application/json, text/html"}
-    if data.bearer_token and data.bearer_token.strip():
+    auth_source = "none"
+    # Preferível: usar auth do próprio connector (cobre cookie/bearer/api_key/basic)
+    if data.connector_id:
+        conn_repo, _, _ = _repos()
+        conn = await conn_repo.find_by_id(data.connector_id.strip())
+        if conn:
+            auth_headers = _build_auth_headers(conn)
+            # _build_auth_headers devolve Content-Type: json — aqui preferimos
+            # preservar o Accept que já setamos. Remove o Content-Type pra não
+            # sobrepor um GET.
+            auth_headers.pop("Content-Type", None)
+            headers.update(auth_headers)
+            auth_source = f"connector:{conn.get('auth_type','none')}"
+    # Retrocompat: bearer_token avulso (quando não há connector ainda)
+    elif data.bearer_token and data.bearer_token.strip():
         headers["Authorization"] = f"Bearer {data.bearer_token.strip()}"
+        auth_source = "bearer_inline"
 
     spec: Optional[dict] = None
     tried: list = []
@@ -780,14 +796,23 @@ async def introspect(data: IntrospectRequest):
                         tried.append({"url": hinted, "status": 0, "error": str(e)[:120], "via": "html-hint"})
 
     if not spec:
+        # Hint mais útil quando a auth via connector ainda não bastou
+        hint_not_found = (
+            "Não encontrei openapi.json nas rotas comuns. Se você tem a URL exata do spec, "
+            "cole-a inteira. Se a API não expõe OpenAPI, preencha manualmente."
+        )
+        if auth_hint and auth_source != "none":
+            # já tentou com auth mas ainda deu 401/403
+            auth_hint = (
+                f"Tentei com auth do connector ({auth_source}) mas o servidor ainda retornou 401/403. "
+                "Verifique se o token/cookie está válido (renove via 'Gerar cookie via login' no form do connector)."
+            )
         return {
             "found": False,
             "tried": tried,
             "origin": origin,
-            "hint": auth_hint or (
-                "Não encontrei openapi.json nas rotas comuns. Se você tem a URL exata do spec, "
-                "cole-a inteira. Se a API não expõe OpenAPI, preencha manualmente."
-            ),
+            "auth_source": auth_source,
+            "hint": auth_hint or hint_not_found,
         }
 
     # ── Extração ──
@@ -884,6 +909,7 @@ async def introspect(data: IntrospectRequest):
         "found": True,
         "spec_url": final_url,
         "origin": origin,
+        "auth_source": auth_source,
         "proposal": {
             "name": title or parsed.host.split(".")[0].title(),
             "base_url": base_url_proposal,
