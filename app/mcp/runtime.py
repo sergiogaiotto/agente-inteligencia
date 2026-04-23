@@ -437,6 +437,11 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
             pt['description'] = matched.get('description') or ''
             pt['db_id'] = matched.get('id', '')
             pt['auth_requirements'] = matched.get('auth_requirements', '')
+            # Credenciais precisam ser propagadas para execute_tool_call
+            # poder montar o header Authorization. Antes só auth_requirements
+            # era copiado — resultado: Tavily respondia {"error":"invalid_token"}.
+            pt['auth_token'] = matched.get('auth_token', '') or ''
+            pt['auth_config'] = matched.get('auth_config', '{}') or '{}'
             if not pt.get('operations') and matched.get('operations'):
                 try: pt['operations'] = json.loads(matched['operations'])
                 except: pt['operations'] = []

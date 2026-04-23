@@ -58,6 +58,7 @@ async def health():
         "tools_list_discovery": "_discover_server_tools" in runtime_src,   # PR #4
         "name_resolver": "_resolve_tool_name" in runtime_src,              # PR #4
         "prompt_hardening": "REGRA CRÍTICA" in engine_src,                 # PR #3
+        "auth_token_propagation": "pt['auth_token'] = matched.get" in runtime_src,  # this PR
     }
     fingerprint = hashlib.sha256(
         (engine_src + runtime_src).encode("utf-8")
