@@ -40,4 +40,31 @@ app.include_router(api_connectors_router)
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "app": settings.app_name, "version": "2.0.0", "spec": "§1-§24 implemented"}
+    """Health + identidade do código rodando.
+
+    mcp_features expõe features esperadas — permite conferir, sem
+    inspecionar stdout, se o servidor está de fato rodando o código
+    mais recente após merge + restart.
+    """
+    import hashlib
+    from pathlib import Path as _P
+    engine_src = (_P(__file__).parent / "agents" / "engine.py").read_text(encoding="utf-8", errors="replace")
+    runtime_src = (_P(__file__).parent / "mcp" / "runtime.py").read_text(encoding="utf-8", errors="replace")
+    features = {
+        "force_tool_choice": "_should_force_tool_call" in engine_src,      # PR #6
+        "tool_choice_forced_log": "MCP tool_choice=forced" in engine_src,  # PR #6
+        "tools_list_discovery": "_discover_server_tools" in runtime_src,   # PR #4
+        "name_resolver": "_resolve_tool_name" in runtime_src,              # PR #4
+        "prompt_hardening": "REGRA CRÍTICA" in engine_src,                 # PR #3
+    }
+    fingerprint = hashlib.sha256(
+        (engine_src + runtime_src).encode("utf-8")
+    ).hexdigest()[:12]
+    return {
+        "status": "ok",
+        "app": settings.app_name,
+        "version": "2.0.0",
+        "spec": "§1-§24 implemented",
+        "mcp_features": features,
+        "code_fingerprint": fingerprint,
+    }
