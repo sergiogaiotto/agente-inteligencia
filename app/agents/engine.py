@@ -134,6 +134,33 @@ class DeepAgentHarness:
             )
         return "\n".join(parts)
 
+    def _should_force_tool_call(self) -> bool:
+        """Detecta se o SKILL.md pede invocação explícita de tool no Workflow.
+
+        Heurística: procura na seção Workflow por verbos de invocação
+        acoplados ao nome de uma das tools MCP disponíveis, ou por
+        palavras-chave fortes ("chame", "conecte ao", "consulte via"…).
+        """
+        if not self.mcp_tools:
+            return False
+        skill = self.config.get("_parsed_skill", {}) or {}
+        workflow = (skill.get("workflow") or "").lower()
+        if not workflow:
+            return False
+        # palavras-chave imperativas + nomes de tools
+        invoke_verbs = ("conectar ao", "chame", "chamar", "consulte", "consultar",
+                         "execute", "executar", "use a ferramenta", "via mcp",
+                         "buscar via", "search via", "fetch via")
+        if any(v in workflow for v in invoke_verbs):
+            return True
+        for t in self.mcp_tools:
+            name = (t.get("name") or "").lower()
+            # token básico do nome (ex: "tavily" de "Tavily MCP Server")
+            primary = name.split()[0] if name else ""
+            if primary and primary in workflow:
+                return True
+        return False
+
     async def reason(self, state: AgentState) -> AgentState:
         """Nó de raciocínio com suporte a tool calling MCP."""
         system = self._build_system_prompt()
@@ -143,12 +170,37 @@ class DeepAgentHarness:
         handler = get_langfuse_handler(trace_name=f"agent_{self.config.get('id', 'x')}")
         callbacks = [handler] if handler else []
 
+        # tool_choice="required" força invocação de QUALQUER função na
+        # primeira chamada quando a SKILL mostra claramente a intenção
+        # (Workflow com verbo de invocação ou nome da tool). Sem isso o
+        # LLM frequentemente prefere fabricar o shape do Output Contract.
+        # Se só uma tool está registrada, força ESSA tool especificamente.
+        force_tool = self._should_force_tool_call()
+        iteration = state.get("iteration", 0)
+        first_pass = iteration == 0
+
         if self.openai_tools:
-            llm_with_tools = llm.bind_tools(self.openai_tools)
+            if force_tool and first_pass:
+                if len(self.openai_tools) == 1:
+                    tool_name_forced = self.openai_tools[0]["function"]["name"]
+                    tool_choice = {"type": "function", "function": {"name": tool_name_forced}}
+                    logger.info(f"MCP tool_choice=forced to '{tool_name_forced}' (first pass)")
+                else:
+                    tool_choice = "required"
+                    logger.info("MCP tool_choice='required' (first pass, multiple tools)")
+                llm_with_tools = llm.bind_tools(self.openai_tools, tool_choice=tool_choice)
+            else:
+                llm_with_tools = llm.bind_tools(self.openai_tools)
         else:
             llm_with_tools = llm
 
         response = await llm_with_tools.ainvoke(messages, config={"callbacks": callbacks})
+        if self.openai_tools:
+            _tc = getattr(response, "tool_calls", None) or []
+            logger.info(
+                f"LLM response: tool_calls={len(_tc)} "
+                f"content_len={len(getattr(response, 'content', '') or '')}"
+            )
 
         if self.openai_tools and hasattr(response, 'tool_calls') and response.tool_calls:
             from langchain_core.messages import ToolMessage
@@ -156,6 +208,10 @@ class DeepAgentHarness:
 
             current_messages = messages + [response]
             max_tool_rounds = 5
+            # Depois da primeira chamada (que foi forced se aplicável), o
+            # modelo precisa poder gerar resposta final livremente —
+            # rebindamos SEM tool_choice para as rodadas subsequentes.
+            llm_with_tools_auto = llm.bind_tools(self.openai_tools)
 
             for round_n in range(max_tool_rounds):
                 if not hasattr(response, 'tool_calls') or not response.tool_calls:
@@ -166,20 +222,20 @@ class DeepAgentHarness:
                     tool_args = tc.get("args", {})
                     tool_id = tc.get("id", f"call_{round_n}")
 
-                    logger.info(f"MCP Tool Call: {tool_name}({json.dumps(tool_args, ensure_ascii=False)[:200]})")
+                    logger.info(f"MCP Tool Call [round={round_n}]: {tool_name}({json.dumps(tool_args, ensure_ascii=False)[:200]})")
 
                     result_text = await execute_tool_call(
                         tool_name, tool_args, self.mcp_tools, timeout=30
                     )
 
-                    logger.info(f"MCP Tool Result: {result_text[:200]}")
+                    logger.info(f"MCP Tool Result [round={round_n}, {len(result_text)}B]: {result_text[:200]}")
 
                     current_messages.append(ToolMessage(
                         content=result_text,
                         tool_call_id=tool_id,
                     ))
 
-                response = await llm_with_tools.ainvoke(current_messages, config={"callbacks": callbacks})
+                response = await llm_with_tools_auto.ainvoke(current_messages, config={"callbacks": callbacks})
                 current_messages.append(response)
 
             return {**state, "messages": [response], "iteration": state.get("iteration", 0) + 1}
