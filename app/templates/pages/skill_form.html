@@ -142,10 +142,12 @@
                 <div class="flex items-center gap-2">
                     <!-- ═════ Inserir API (connector declarativo) ═════ -->
                     <div class="relative" x-data="{apiDropdown:false}">
-                        <button @click="apiDropdown = !apiDropdown" x-show="apiEndpointsFlat.length > 0" type="button"
+                        <button @click="apiDropdown = !apiDropdown" type="button"
+                                :title="apiEndpointsFlat.length === 0 ? 'Nenhum endpoint cadastrado — clique para ver como cadastrar' : apiEndpointsFlat.length + ' endpoint(s) disponível(eis)'"
                                 class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-violet-50 to-fuchsia-50 border border-violet-200 px-2.5 py-1 text-[11px] font-medium text-violet-700 hover:from-violet-100 hover:to-fuchsia-100 transition-colors">
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg>
                             Inserir API
+                            <span x-show="apiEndpointsFlat.length > 0" class="rounded-full bg-violet-200 px-1.5 py-0.5 text-[9px] font-bold" x-text="apiEndpointsFlat.length"></span>
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
                         </button>
                         <div x-show="apiDropdown" @click.away="apiDropdown=false" x-transition
@@ -166,8 +168,23 @@
                                     </div>
                                 </button>
                             </template>
-                            <div x-show="apiEndpointsFlat.length === 0" class="px-3 py-3 text-[11px] text-surface-400 text-center">
-                                Nenhum endpoint cadastrado. Cadastre em /api-connectors primeiro.
+                            <!-- ══ Empty state ══ -->
+                            <div x-show="apiEndpointsFlat.length === 0" class="px-4 py-4 space-y-2">
+                                <div class="flex items-start gap-2">
+                                    <svg class="w-5 h-5 text-violet-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                                    <div class="text-[11px] text-surface-700 leading-relaxed">
+                                        <strong class="block text-brand-900 mb-0.5">Nenhum endpoint cadastrado</strong>
+                                        Cadastre um connector com endpoints em <strong>API Connectors</strong> para usar este recurso.
+                                    </div>
+                                </div>
+                                <a href="/api_connectors" target="_blank"
+                                   class="block w-full text-center rounded-lg bg-violet-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-violet-700">
+                                    Ir para API Connectors →
+                                </a>
+                                <button @click="_reloadApiConnectors(); apiDropdown=false" type="button"
+                                        class="block w-full text-center rounded-lg border border-violet-200 px-3 py-1 text-[10px] font-medium text-violet-700 hover:bg-violet-50">
+                                    ↻ Recarregar lista
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -351,10 +368,8 @@ function skillForm(editId) {
 
         // ══════════════════════════════════════════════════
 
-        async load() {
-            try { this.mcpTools = (await api.get('/api/v1/tools')).tools || []; } catch {}
+        async _reloadApiConnectors() {
             try {
-                // carrega connectors + endpoints via catalog/tree
                 const t = await api.get('/api/v1/api-connectors/catalog/tree');
                 this.apiConnectors = (t.tree || []).map(c => ({
                     id: c.id,
@@ -362,7 +377,19 @@ function skillForm(editId) {
                     base_url: c.base_url,
                     endpoints: Object.values(c.categories || {}).flat(),
                 }));
-            } catch { this.apiConnectors = []; }
+                const n = this.apiEndpointsFlat.length;
+                if (n > 0) {
+                    showToast(n + ' endpoint(s) carregado(s)');
+                }
+            } catch(e) {
+                this.apiConnectors = [];
+                showToast('Erro ao carregar connectors: ' + e.message, 'error');
+            }
+        },
+
+        async load() {
+            try { this.mcpTools = (await api.get('/api/v1/tools')).tools || []; } catch {}
+            await this._reloadApiConnectors();
 
             if (editId) {
                 try {
