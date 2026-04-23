@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS agents (
     domain TEXT, skill_id TEXT, llm_provider TEXT DEFAULT 'openai',
     model TEXT DEFAULT 'gpt-4o', system_prompt TEXT, config TEXT DEFAULT '{}',
     status TEXT DEFAULT 'active', version TEXT DEFAULT '1.0.0',
+    temperature REAL DEFAULT 0.7,
+    accepts_images INTEGER DEFAULT 0,
+    accepts_documents INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (skill_id) REFERENCES skills(id)
 );
@@ -308,6 +311,26 @@ async def init_db():
         if "require_evidence" not in acols:
             try:
                 await db.execute("ALTER TABLE agents ADD COLUMN require_evidence INTEGER DEFAULT 1")
+                await db.commit()
+            except Exception:
+                pass
+
+        # Migração: temperature / accepts_images / accepts_documents em agents
+        if "temperature" not in acols:
+            try:
+                await db.execute("ALTER TABLE agents ADD COLUMN temperature REAL DEFAULT 0.7")
+                await db.commit()
+            except Exception:
+                pass
+        if "accepts_images" not in acols:
+            try:
+                await db.execute("ALTER TABLE agents ADD COLUMN accepts_images INTEGER DEFAULT 0")
+                await db.commit()
+            except Exception:
+                pass
+        if "accepts_documents" not in acols:
+            try:
+                await db.execute("ALTER TABLE agents ADD COLUMN accepts_documents INTEGER DEFAULT 0")
                 await db.commit()
             except Exception:
                 pass
