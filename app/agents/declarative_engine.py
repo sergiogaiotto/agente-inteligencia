@@ -149,6 +149,13 @@ def _build_auth_headers(connector: dict) -> dict:
         headers["Authorization"] = f"Bearer {api_key}"
     elif auth_type == "basic":
         headers["Authorization"] = f"Basic {base64.b64encode(api_key.encode()).decode()}"
+    elif auth_type == "cookie":
+        cookie_name = (header_name or "").strip()
+        value = api_key.strip()
+        if "=" in value and (not cookie_name or cookie_name.lower() in ("cookie", "")):
+            headers["Cookie"] = value
+        else:
+            headers["Cookie"] = f"{cookie_name or 'session'}={value}"
     return headers
 
 

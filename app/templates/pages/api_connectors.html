@@ -364,22 +364,62 @@
                     </div>
                     <!-- Auth -->
                     <div>
-                        <label class="block text-[11px] font-semibold text-brand-900 mb-1.5">Autenticacao</label>
-                        <div class="grid grid-cols-4 gap-2">
-                            <template x-for="at in ['none','api_key','bearer','basic']" :key="at">
+                        <label class="block text-[11px] font-semibold text-brand-900 mb-1.5">Autenticação</label>
+                        <div class="grid grid-cols-5 gap-2">
+                            <template x-for="at in ['none','api_key','bearer','basic','cookie']" :key="at">
                                 <button @click="connForm.auth_type = at" type="button" class="rounded-lg border-2 px-2 py-2 text-center text-[10px] font-medium transition-all"
-                                        :class="connForm.auth_type === at ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-500 hover:border-surface-300'" x-text="at === 'api_key' ? 'API Key' : at === 'bearer' ? 'Bearer' : at === 'basic' ? 'Basic' : 'Nenhuma'"></button>
+                                        :class="connForm.auth_type === at ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-500 hover:border-surface-300'" x-text="at === 'api_key' ? 'API Key' : at === 'bearer' ? 'Bearer' : at === 'basic' ? 'Basic' : at === 'cookie' ? 'Cookie' : 'Nenhuma'"></button>
                             </template>
                         </div>
                     </div>
                     <div x-show="connForm.auth_type !== 'none'" x-transition class="space-y-3">
-                        <div>
-                            <label class="block text-[11px] font-semibold text-brand-900 mb-1" x-text="connForm.auth_type === 'api_key' ? 'Header Name' : 'Credencial'"></label>
-                            <input x-show="connForm.auth_type === 'api_key'" x-model="connForm.auth_header" placeholder="X-API-Key" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[13px] font-mono outline-none focus:border-brand-400">
+                        <div x-show="connForm.auth_type === 'api_key' || connForm.auth_type === 'cookie'">
+                            <label class="block text-[11px] font-semibold text-brand-900 mb-1"
+                                   x-text="connForm.auth_type === 'cookie' ? 'Nome do Cookie' : 'Header Name'"></label>
+                            <input x-model="connForm.auth_header"
+                                   :placeholder="connForm.auth_type === 'cookie' ? 'session, qi_session, connect.sid...' : 'X-API-Key'"
+                                   class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[13px] font-mono outline-none focus:border-brand-400">
                         </div>
                         <div>
-                            <label class="block text-[11px] font-semibold text-brand-900 mb-1" x-text="connForm.auth_type === 'basic' ? 'user:password' : 'Token / Key'"></label>
-                            <input x-model="connForm.api_key" type="password" placeholder="sk-..." class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[13px] font-mono outline-none focus:border-brand-400">
+                            <label class="block text-[11px] font-semibold text-brand-900 mb-1"
+                                   x-text="connForm.auth_type === 'basic' ? 'user:password' : connForm.auth_type === 'cookie' ? 'Valor do Cookie' : 'Token / Key'"></label>
+                            <input x-model="connForm.api_key" type="password"
+                                   :placeholder="connForm.auth_type === 'cookie' ? 'abc123... ou name=value' : 'sk-...'"
+                                   class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[13px] font-mono outline-none focus:border-brand-400">
+                        </div>
+                        <!-- ═ Helper: Login → Cookie ═ -->
+                        <div x-show="connForm.auth_type === 'cookie'" x-transition
+                             class="rounded-lg border border-teal-200 bg-teal-50 p-3 space-y-2">
+                            <button @click="loginHelperOpen = !loginHelperOpen" type="button"
+                                    class="flex items-center gap-1.5 text-[12px] font-semibold text-teal-800 hover:text-teal-900">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+                                <span x-text="loginHelperOpen ? '▼ Fechar ajudante de login' : '▶ Gerar cookie via login (auto)'"></span>
+                            </button>
+                            <div x-show="loginHelperOpen" x-transition class="space-y-2 pt-1">
+                                <p class="text-[11px] text-teal-700 leading-relaxed">
+                                    APIs cookie-based (como <code>fale-com-seus-dados</code>) só entregam o token no
+                                    header <code>Set-Cookie</code>. Preencha abaixo e eu faço login pra você, extraio
+                                    o cookie e colo no campo acima.
+                                </p>
+                                <div>
+                                    <label class="block text-[10px] font-semibold text-teal-900 mb-1">Login URL (absoluta)</label>
+                                    <input x-model="loginHelper.url" placeholder="https://.../api/auth/login"
+                                           class="w-full rounded-lg border border-teal-200 bg-white px-2 py-1.5 text-[12px] font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-semibold text-teal-900 mb-1">Body JSON (ex: {"login":"...","password":"..."})</label>
+                                    <textarea x-model="loginHelper.body" rows="2" placeholder='{"login":"","password":""}'
+                                              class="w-full rounded-lg border border-teal-200 bg-white px-2 py-1.5 text-[11px] font-mono resize-none"></textarea>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button @click="runLoginHelper()" :disabled="loginHelper.running || !loginHelper.url" type="button"
+                                            class="rounded-lg bg-teal-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-700 disabled:opacity-50">
+                                        <span x-text="loginHelper.running ? 'Logando...' : 'Fazer login e extrair cookie'"></span>
+                                    </button>
+                                    <span x-show="loginHelper.status" x-text="loginHelper.status" class="text-[11px]"
+                                          :class="loginHelper.ok ? 'text-teal-700' : 'text-rose-700'"></span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="grid grid-cols-2 gap-3">
@@ -487,6 +527,9 @@ function apiConnectorsPage() {
         // IA wizard (OpenAPI introspection)
         introspectOpen: false, introspecting: false, introspectUrl: '', introspectToken: '',
         introspectStatus: '', introspectResult: null, introspectPicks: {}, introspectImportAll: false,
+        // Login helper (para auth_type=cookie)
+        loginHelperOpen: false,
+        loginHelper: { url: '', body: '{"login":"","password":""}', running: false, status: '', ok: false },
         // Endpoint form
         endpointFormOpen: false, editingEndpointId: null, editingConnIdForEp: null, savingEp: false,
         epForm: { name:'', method:'GET', path:'', description:'', category:'geral', sample_body:'{}' },
@@ -652,6 +695,37 @@ function apiConnectorsPage() {
                 showToast(e.message, 'error');
             }
             this.introspecting = false;
+        },
+
+        async runLoginHelper() {
+            let body;
+            try { body = JSON.parse(this.loginHelper.body); }
+            catch(e) { this.loginHelper.status = 'JSON do body inválido'; this.loginHelper.ok = false; return; }
+            this.loginHelper.running = true; this.loginHelper.status = 'Fazendo login...'; this.loginHelper.ok = false;
+            try {
+                const r = await api.post('/api/v1/api-connectors/extract-cookie', {
+                    login_url: this.loginHelper.url.trim(),
+                    login_body: body,
+                    cookie_name: this.connForm.auth_header || '',
+                });
+                if (r.ok) {
+                    this.connForm.auth_header = r.cookie_name;
+                    this.connForm.api_key = r.cookie_value;
+                    this.loginHelper.status = '✓ Cookie "' + r.cookie_name + '" extraído e colado';
+                    this.loginHelper.ok = true;
+                    showToast('Cookie extraído com sucesso');
+                } else {
+                    this.loginHelper.status = '✗ ' + (r.error || 'falha no login');
+                    this.loginHelper.ok = false;
+                    if (r.available_cookies?.length) {
+                        this.loginHelper.status += ' (disponíveis: ' + r.available_cookies.join(', ') + ')';
+                    }
+                }
+            } catch(e) {
+                this.loginHelper.status = '✗ ' + e.message;
+                this.loginHelper.ok = false;
+            }
+            this.loginHelper.running = false;
         },
 
         applyIntrospect() {
