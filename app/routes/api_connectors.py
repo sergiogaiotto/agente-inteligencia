@@ -93,6 +93,18 @@ class IntrospectRequest(BaseModel):
     max_endpoints: Optional[int] = 25
 
 
+class ExtractCookieRequest(BaseModel):
+    """Faz um POST de login e extrai o cookie da response Set-Cookie.
+
+    Útil para APIs cookie-based (session auth) onde o token não volta
+    no body do JSON, só no header Set-Cookie.
+    """
+    login_url: str              # URL completa do endpoint de login
+    login_body: dict            # body JSON a enviar (ex: {"login":"...","password":"..."})
+    cookie_name: Optional[str] = ""  # se vazio, tenta detectar do primeiro Set-Cookie
+    timeout_ms: Optional[int] = 15000
+
+
 # ═══════════════════════════════════════════════════════
 # DB helpers — auto-bootstrap tabelas e repositórios
 # ═══════════════════════════════════════════════════════
@@ -575,6 +587,95 @@ def _test_hint(status_code: int) -> Optional[str]:
 
 
 # ═══════════════════════════════════════════════════════
+# EXTRACT-COOKIE — auxilia auth session-based (Set-Cookie)
+# ═══════════════════════════════════════════════════════
+
+@router.post("/extract-cookie")
+async def extract_cookie(data: ExtractCookieRequest):
+    """Faz um POST de login e extrai o valor do cookie de sessão do
+    header Set-Cookie da resposta.
+
+    Retorna {ok, cookie_name, cookie_value, status, error?}.
+    """
+    if not data.login_url.strip():
+        raise HTTPException(400, "login_url obrigatório")
+    timeout = (data.timeout_ms or 15000) / 1000
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            r = await client.post(
+                data.login_url.strip(),
+                json=data.login_body or {},
+                headers={"Content-Type": "application/json"},
+            )
+    except httpx.ConnectError as e:
+        return {"ok": False, "status": 0, "error": f"Não consegui conectar: {e}"}
+    except httpx.TimeoutException:
+        return {"ok": False, "status": 408, "error": "Timeout no login"}
+    except Exception as e:
+        return {"ok": False, "status": 500, "error": str(e)[:200]}
+
+    # coleta TODOS os Set-Cookie
+    set_cookies_raw: list[str] = []
+    try:
+        # httpx.Headers.get_list for multi-valued headers
+        set_cookies_raw = r.headers.get_list("set-cookie")
+    except Exception:
+        sc = r.headers.get("set-cookie")
+        if sc:
+            set_cookies_raw = [sc]
+
+    if not set_cookies_raw:
+        # provável falha de login — body pode ter detail
+        try:
+            body_preview = r.json()
+        except Exception:
+            body_preview = r.text[:300]
+        return {
+            "ok": False,
+            "status": r.status_code,
+            "error": "Login não retornou nenhum Set-Cookie. Verifique credenciais.",
+            "body_preview": body_preview,
+        }
+
+    # Parse cookies: "name=value; Path=/; HttpOnly; ..."
+    parsed_cookies: list[dict] = []
+    for raw in set_cookies_raw:
+        first = raw.split(";", 1)[0].strip()
+        if "=" in first:
+            name, value = first.split("=", 1)
+            parsed_cookies.append({"name": name.strip(), "value": value.strip(), "raw": raw[:400]})
+
+    # Escolhe o cookie: por nome se informado, senão o primeiro
+    chosen = None
+    if data.cookie_name:
+        target = data.cookie_name.strip()
+        for c in parsed_cookies:
+            if c["name"] == target:
+                chosen = c
+                break
+        if not chosen:
+            return {
+                "ok": False, "status": r.status_code,
+                "error": f"Cookie '{target}' não encontrado. Disponíveis: "
+                          + ", ".join(c["name"] for c in parsed_cookies),
+                "available_cookies": [c["name"] for c in parsed_cookies],
+            }
+    else:
+        chosen = parsed_cookies[0] if parsed_cookies else None
+
+    if not chosen:
+        return {"ok": False, "status": r.status_code, "error": "Nenhum cookie parseável."}
+
+    return {
+        "ok": 200 <= r.status_code < 300,
+        "status": r.status_code,
+        "cookie_name": chosen["name"],
+        "cookie_value": chosen["value"],
+        "all_cookie_names": [c["name"] for c in parsed_cookies],
+    }
+
+
+# ═══════════════════════════════════════════════════════
 # INTROSPECT — "IA, me ajude!" preenche via OpenAPI
 # ═══════════════════════════════════════════════════════
 
@@ -725,8 +826,14 @@ async def introspect(data: IntrospectRequest):
                 auth_header = "Authorization"
                 break
         if st == "apikey":
-            auth_type = "api_key"
-            auth_header = sch.get("name") or "X-API-Key"
+            # OpenAPI: apiKey pode estar em: header | query | cookie
+            in_loc = (sch.get("in") or "").lower()
+            if in_loc == "cookie":
+                auth_type = "cookie"
+                auth_header = sch.get("name") or "session"
+            else:
+                auth_type = "api_key"
+                auth_header = sch.get("name") or "X-API-Key"
             break
         if st in ("oauth2", "openidconnect"):
             auth_type = "bearer"
@@ -879,4 +986,14 @@ def _build_auth_headers(connector: dict) -> dict:
     elif auth_type == "basic":
         import base64
         headers["Authorization"] = f"Basic {base64.b64encode(api_key.encode()).decode()}"
+    elif auth_type == "cookie":
+        # Cookie-based session auth. auth_header é o NOME do cookie
+        # (ex: "qi_session"). api_key é o VALOR do cookie.
+        # Aceita também o formato "name=value" colado direto no api_key.
+        cookie_name = (header_name or "").strip()
+        value = api_key.strip()
+        if "=" in value and (not cookie_name or cookie_name.lower() in ("cookie", "")):
+            headers["Cookie"] = value
+        else:
+            headers["Cookie"] = f"{cookie_name or 'session'}={value}"
     return headers
