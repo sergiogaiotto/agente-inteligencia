@@ -433,6 +433,12 @@ function skillForm(editId) {
         },
 
         _generateApiBinding(item) {
+            // IMPORTANTE: nao escrever duplas-chaves literais no source — o Jinja
+            // do servidor interpreta antes do JS rodar. Construimos por concat.
+            const OB = '{' + '{';
+            const CB = '}' + '}';
+            const t = (expr) => OB + ' ' + expr + ' ' + CB;  // ex: t("inputs.x") -> template Jinja
+
             const id = this._slugify(item.ep_name || (item.method + '_' + item.path));
             const method = item.method;
             const needsBody = !['GET', 'DELETE', 'HEAD'].includes(method);
@@ -445,8 +451,7 @@ function skillForm(editId) {
                     const sample = JSON.parse(item.sample_body || '{}');
                     const keys = Object.keys(sample || {});
                     if (keys.length) {
-                        // cada key vira uma linha com 4 espaços ("    key: "{{ inputs.key }}"")
-                        const lines2 = keys.map(k => `    ${k}: "{{ inputs.${k} }}"`).join('\n');
+                        const lines2 = keys.map(k => `    ${k}: "${t('inputs.' + k)}"`).join('\n');
                         bodyYaml = `  body:\n${lines2}`;
                     } else {
                         bodyYaml = `  body: {}`;
@@ -454,8 +459,8 @@ function skillForm(editId) {
                 } catch { bodyYaml = `  body: {}`; }
             }
 
-            // Substitui placeholders {param} do path por {{ inputs.param }}
-            const pathTpl = (item.path || '/').replace(/\{(\w+)\}/g, '{{ inputs.$1 }}');
+            // Substitui placeholders {param} do path por template Jinja inputs.param
+            const pathTpl = (item.path || '/').replace(/\{(\w+)\}/g, (_, p) => t('inputs.' + p));
 
             const lines = [
                 `- id: ${id}`,
@@ -464,7 +469,7 @@ function skillForm(editId) {
                 `  path: ${pathTpl}`,
             ];
             if (needsIdempotency) {
-                lines.push(`  idempotency_key: "{{ session_id }}"`);
+                lines.push(`  idempotency_key: "${t('session_id')}"`);
             }
             if (bodyYaml) lines.push(bodyYaml);
             lines.push(
