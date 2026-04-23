@@ -139,27 +139,61 @@
         <div>
             <div class="flex items-center justify-between mb-1.5">
                 <label class="text-[12px] font-semibold text-brand-900">Conteúdo SKILL.md *</label>
-                <div class="relative" x-data="{mcpDropdown:false}">
-                    <button @click="mcpDropdown = !mcpDropdown" x-show="mcpTools.length > 0"
-                            class="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-100 transition-colors">
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
-                        Inserir MCP
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
-                    </button>
-                    <div x-show="mcpDropdown" @click.away="mcpDropdown=false" x-transition
-                         class="absolute right-0 top-full mt-1 w-72 rounded-xl bg-white border border-surface-200 shadow-lg z-50 py-1 max-h-60 overflow-y-auto">
-                        <div class="px-3 py-1.5 text-[9px] font-bold text-surface-400 uppercase tracking-wider">Selecione para inserir</div>
-                        <template x-for="t in mcpTools" :key="t.id">
-                            <button @click="insertMcpBinding(t); mcpDropdown=false" class="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-surface-50 transition-colors">
-                                <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-100 text-teal-600 shrink-0">
-                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
-                                </div>
-                                <div class="min-w-0">
-                                    <div class="text-[11px] font-semibold text-brand-900 truncate" x-text="t.name"></div>
-                                    <div class="text-[9px] text-surface-400 truncate" x-text="t.mcp_server || '—'"></div>
-                                </div>
-                            </button>
-                        </template>
+                <div class="flex items-center gap-2">
+                    <!-- ═════ Inserir API (connector declarativo) ═════ -->
+                    <div class="relative" x-data="{apiDropdown:false}">
+                        <button @click="apiDropdown = !apiDropdown" x-show="apiEndpointsFlat.length > 0" type="button"
+                                class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-violet-50 to-fuchsia-50 border border-violet-200 px-2.5 py-1 text-[11px] font-medium text-violet-700 hover:from-violet-100 hover:to-fuchsia-100 transition-colors">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg>
+                            Inserir API
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        </button>
+                        <div x-show="apiDropdown" @click.away="apiDropdown=false" x-transition
+                             class="absolute right-0 top-full mt-1 w-96 rounded-xl bg-white border border-violet-200 shadow-lg z-50 py-1 max-h-80 overflow-y-auto">
+                            <div class="px-3 py-1.5 text-[9px] font-bold text-violet-400 uppercase tracking-wider">Selecione um endpoint</div>
+                            <div class="px-3 py-1 text-[10px] text-surface-500 border-b border-surface-100 bg-violet-50">
+                                Adiciona <code class="text-violet-700">## API Bindings</code> + define <code class="text-violet-700">execution_mode: declarative</code>
+                            </div>
+                            <template x-for="item in apiEndpointsFlat" :key="item.key">
+                                <button @click="insertApiBinding(item); apiDropdown=false" type="button" class="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-violet-50 transition-colors">
+                                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-100 text-violet-700 shrink-0 font-mono text-[9px] font-bold" x-text="item.method"></div>
+                                    <div class="min-w-0 flex-1">
+                                        <div class="text-[11px] font-semibold text-brand-900 truncate"><span x-text="item.ep_name"></span></div>
+                                        <div class="text-[9px] text-surface-400 truncate">
+                                            <span class="font-semibold text-violet-600" x-text="item.conn_name"></span>
+                                            <span class="font-mono" x-text="' · ' + item.path"></span>
+                                        </div>
+                                    </div>
+                                </button>
+                            </template>
+                            <div x-show="apiEndpointsFlat.length === 0" class="px-3 py-3 text-[11px] text-surface-400 text-center">
+                                Nenhum endpoint cadastrado. Cadastre em /api-connectors primeiro.
+                            </div>
+                        </div>
+                    </div>
+                    <!-- ═════ Inserir MCP (tools clássicos) ═════ -->
+                    <div class="relative" x-data="{mcpDropdown:false}">
+                        <button @click="mcpDropdown = !mcpDropdown" x-show="mcpTools.length > 0" type="button"
+                                class="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-100 transition-colors">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
+                            Inserir MCP
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        </button>
+                        <div x-show="mcpDropdown" @click.away="mcpDropdown=false" x-transition
+                             class="absolute right-0 top-full mt-1 w-72 rounded-xl bg-white border border-surface-200 shadow-lg z-50 py-1 max-h-60 overflow-y-auto">
+                            <div class="px-3 py-1.5 text-[9px] font-bold text-surface-400 uppercase tracking-wider">Selecione para inserir</div>
+                            <template x-for="t in mcpTools" :key="t.id">
+                                <button @click="insertMcpBinding(t); mcpDropdown=false" type="button" class="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-surface-50 transition-colors">
+                                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-100 text-teal-600 shrink-0">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
+                                    </div>
+                                    <div class="min-w-0">
+                                        <div class="text-[11px] font-semibold text-brand-900 truncate" x-text="t.name"></div>
+                                        <div class="text-[9px] text-surface-400 truncate" x-text="t.mcp_server || '—'"></div>
+                                    </div>
+                                </button>
+                            </template>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -232,7 +266,30 @@ function skillForm(editId) {
         wizardMcpIds: [],
         parseResult: null,
         mcpTools: [],
+        apiConnectors: [],  // lista de connectors registrados
         form: { raw_content: '', tags: '[]' },
+
+        // Achata connectors + endpoints para a lista do dropdown "Inserir API"
+        get apiEndpointsFlat() {
+            const out = [];
+            for (const c of (this.apiConnectors || [])) {
+                for (const ep of (c.endpoints || [])) {
+                    out.push({
+                        key: c.id + ':' + ep.id,
+                        conn_id: c.id,
+                        conn_name: c.name,
+                        conn_ref: c.name,   // usado no YAML como `connector:`
+                        base_url: c.base_url,
+                        ep_id: ep.id,
+                        ep_name: ep.name,
+                        method: (ep.method || 'GET').toUpperCase(),
+                        path: ep.path || '/',
+                        sample_body: ep.sample_body || '{}',
+                    });
+                }
+            }
+            return out;
+        },
 
         // ══════════════════════════════════════════════════
         // Execution Profile — detecção reativa e manipulação
@@ -296,6 +353,16 @@ function skillForm(editId) {
 
         async load() {
             try { this.mcpTools = (await api.get('/api/v1/tools')).tools || []; } catch {}
+            try {
+                // carrega connectors + endpoints via catalog/tree
+                const t = await api.get('/api/v1/api-connectors/catalog/tree');
+                this.apiConnectors = (t.tree || []).map(c => ({
+                    id: c.id,
+                    name: c.name,
+                    base_url: c.base_url,
+                    endpoints: Object.values(c.categories || {}).flat(),
+                }));
+            } catch { this.apiConnectors = []; }
 
             if (editId) {
                 try {
@@ -352,6 +419,130 @@ function skillForm(editId) {
                 }
             }
             showToast('Tool Binding de "' + tool.name + '" inserido');
+        },
+
+        // ══════════════════════════════════════════════════
+        // Inserir API Binding (modo declarativo — sem LLM)
+        // ══════════════════════════════════════════════════
+
+        _slugify(s) {
+            return (s || '').toLowerCase()
+                .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+                .slice(0, 40) || 'binding';
+        },
+
+        _generateApiBinding(item) {
+            const id = this._slugify(item.ep_name || (item.method + '_' + item.path));
+            const method = item.method;
+            const needsBody = !['GET', 'DELETE', 'HEAD'].includes(method);
+            const needsIdempotency = ['POST', 'PATCH', 'DELETE'].includes(method);
+
+            // Gera body a partir do sample_body do endpoint
+            let bodyYaml = '';
+            if (needsBody) {
+                try {
+                    const sample = JSON.parse(item.sample_body || '{}');
+                    const keys = Object.keys(sample || {});
+                    if (keys.length) {
+                        // cada key vira uma linha com 4 espaços ("    key: "{{ inputs.key }}"")
+                        const lines2 = keys.map(k => `    ${k}: "{{ inputs.${k} }}"`).join('\n');
+                        bodyYaml = `  body:\n${lines2}`;
+                    } else {
+                        bodyYaml = `  body: {}`;
+                    }
+                } catch { bodyYaml = `  body: {}`; }
+            }
+
+            // Substitui placeholders {param} do path por {{ inputs.param }}
+            const pathTpl = (item.path || '/').replace(/\{(\w+)\}/g, '{{ inputs.$1 }}');
+
+            const lines = [
+                `- id: ${id}`,
+                `  connector: ${item.conn_ref}`,
+                `  method: ${method}`,
+                `  path: ${pathTpl}`,
+            ];
+            if (needsIdempotency) {
+                lines.push(`  idempotency_key: "{{ session_id }}"`);
+            }
+            if (bodyYaml) lines.push(bodyYaml);
+            lines.push(
+                `  resilience:`,
+                `    timeout_ms: 30000`,
+                `    retry:`,
+                `      max: 1`,
+                `      backoff: exponential`,
+                `      on: ["5xx", "timeout"]`,
+                `  on_failure: fail`,
+                `  output_mapping:`,
+                `    - from: "$"`,
+                `      to: resposta`,
+                `      max_bytes: 32768`,
+            );
+            return lines.join('\n');
+        },
+
+        // Garante que o frontmatter tem `execution_mode: declarative`
+        _ensureDeclarativeFrontmatter(content) {
+            const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+            if (!fmMatch) {
+                // Sem frontmatter — injeta um mínimo
+                const fm = '---\nid: urn:skill:dominio:tipo:slug\nversion: 0.1.0\nkind: subagent\nexecution_mode: declarative\nstability: alpha\n---\n\n';
+                return fm + content;
+            }
+            const fmBody = fmMatch[1];
+            if (/^execution_mode\s*:/m.test(fmBody)) {
+                // já tem — só garante que está como declarative
+                const updated = fmBody.replace(/^execution_mode\s*:.*$/m, 'execution_mode: declarative');
+                return content.replace(fmMatch[0], `---\n${updated}\n---`);
+            }
+            // adiciona a linha antes do ---
+            const updated = fmBody + '\nexecution_mode: declarative';
+            return content.replace(fmMatch[0], `---\n${updated}\n---`);
+        },
+
+        insertApiBinding(item) {
+            let content = this.form.raw_content || '';
+            content = this._ensureDeclarativeFrontmatter(content);
+
+            const binding = this._generateApiBinding(item);
+            const sectionHeader = '## API Bindings';
+            const fenced = '```yaml\n' + binding + '\n```';
+
+            if (content.includes(sectionHeader)) {
+                // Já existe a seção — adiciona o binding dentro do bloco yaml existente ou cria novo abaixo
+                const idx = content.indexOf(sectionHeader);
+                const afterHeader = idx + sectionHeader.length;
+                const nextSection = content.indexOf('\n## ', afterHeader + 1);
+                const sectionEnd = nextSection > 0 ? nextSection : content.length;
+                const sectionText = content.substring(afterHeader, sectionEnd);
+                const yamlMatch = sectionText.match(/```(?:yaml|yml)?\s*\n([\s\S]*?)```/);
+                if (yamlMatch) {
+                    // adiciona dentro do yaml existente
+                    const existingYaml = yamlMatch[1].trimEnd();
+                    const newYaml = existingYaml + '\n\n' + binding;
+                    content = content.substring(0, afterHeader + sectionText.indexOf(yamlMatch[0]))
+                            + '```yaml\n' + newYaml + '\n```'
+                            + content.substring(afterHeader + sectionText.indexOf(yamlMatch[0]) + yamlMatch[0].length);
+                } else {
+                    // seção existe mas sem fenced block — adiciona um
+                    content = content.substring(0, sectionEnd)
+                            + '\n' + fenced + '\n'
+                            + content.substring(sectionEnd);
+                }
+            } else {
+                // Cria a seção antes do ## Output Contract ou no final
+                const beforeOutput = content.indexOf('## Output');
+                const block = '\n' + sectionHeader + '\n' + fenced + '\n';
+                if (beforeOutput > 0) {
+                    content = content.substring(0, beforeOutput) + block + '\n' + content.substring(beforeOutput);
+                } else {
+                    content = content + '\n' + block;
+                }
+            }
+            this.form.raw_content = content;
+            showToast('API Binding "' + item.ep_name + '" inserido (execution_mode=declarative)');
         },
 
         async runWizardSkill() {
