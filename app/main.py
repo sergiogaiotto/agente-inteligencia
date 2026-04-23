@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.core.database import init_db
 from app.routes import agents, skills, workspace, mesh, dashboard, frontend, wizard, users
 from app.routes.api_connectors import router as api_connectors_router
+from app.routes.mcp_diagnostics import router as mcp_diagnostics_router
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -37,6 +38,7 @@ app.include_router(users.domains_router)
 app.include_router(frontend.router)
 
 app.include_router(api_connectors_router)
+app.include_router(mcp_diagnostics_router)
 
 @app.get("/api/health")
 async def health():
