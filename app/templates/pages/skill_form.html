@@ -50,6 +50,28 @@
                     </template>
                 </div>
             </div>
+            <!-- API endpoint selector -->
+            <div x-show="apiEndpointsFlat.length > 0">
+                <div class="flex items-center justify-between mb-1.5">
+                    <label class="block text-[11px] font-semibold text-violet-800">Vincular API (endpoint) — modo declarativo</label>
+                    <a href="/api_connectors" target="_blank" class="text-[10px] text-violet-500 hover:text-violet-700">Gerenciar →</a>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    <template x-for="item in apiEndpointsFlat" :key="item.key">
+                        <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 cursor-pointer transition-colors text-[11px]"
+                               :class="wizardApiKeys.includes(item.key) ? 'bg-fuchsia-100 border-fuchsia-300 text-fuchsia-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-fuchsia-200'">
+                            <input type="checkbox" :checked="wizardApiKeys.includes(item.key)" @change="toggleWizardApi(item.key)" class="hidden">
+                            <span class="font-mono font-bold text-[9px]" x-text="item.method"></span>
+                            <span x-text="item.ep_name"></span>
+                            <span class="text-[9px] text-surface-400" x-text="'· ' + item.conn_name"></span>
+                        </label>
+                    </template>
+                </div>
+            </div>
+            <div x-show="apiEndpointsFlat.length === 0 && mcpTools.length > 0" class="rounded-lg border border-dashed border-violet-200 bg-violet-50/50 px-3 py-2 text-[10px] text-violet-600">
+                Nenhum endpoint de API cadastrado.
+                <a href="/api_connectors" target="_blank" class="font-semibold underline hover:text-violet-800">Cadastrar em API Connectors →</a>
+            </div>
             <div class="flex items-center gap-3 flex-wrap">
                 <select x-model="wizardKind" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none">
                     <option value="subagent">Subagente</option>
@@ -281,6 +303,7 @@ function skillForm(editId) {
         wizardKind: 'subagent', wizardDomain: '', wizardProvider: 'openai',
         wizardExecMode: 'fast',
         wizardMcpIds: [],
+        wizardApiKeys: [],
         parseResult: null,
         mcpTools: [],
         apiConnectors: [],  // lista de connectors registrados
@@ -425,6 +448,12 @@ function skillForm(editId) {
             const idx = this.wizardMcpIds.indexOf(id);
             if (idx >= 0) this.wizardMcpIds.splice(idx, 1);
             else this.wizardMcpIds.push(id);
+        },
+
+        toggleWizardApi(key) {
+            const idx = this.wizardApiKeys.indexOf(key);
+            if (idx >= 0) this.wizardApiKeys.splice(idx, 1);
+            else this.wizardApiKeys.push(key);
         },
 
         insertMcpBinding(tool) {
@@ -590,6 +619,17 @@ function skillForm(editId) {
                 mcpContext = `\n\nINCLUA OBRIGATORIAMENTE a seguinte seção ## Tool Bindings no SKILL.md gerado:\n\n## Tool Bindings\n${bindings}`;
             }
 
+            let apiContext = '';
+            if (this.wizardApiKeys.length) {
+                const apiBindings = this.wizardApiKeys.map(k => {
+                    const item = this.apiEndpointsFlat.find(i => i.key === k);
+                    return item ? this._generateApiBinding(item) : '';
+                }).filter(Boolean).join('\n\n');
+                if (apiBindings) {
+                    apiContext = `\n\nINCLUA OBRIGATORIAMENTE no frontmatter YAML a chave \`execution_mode: declarative\` E a seguinte seção ## API Bindings (bloco fenced \`\`\`yaml) no SKILL.md gerado, preservando exatamente o YAML abaixo:\n\n## API Bindings\n\`\`\`yaml\n${apiBindings}\n\`\`\``;
+                }
+            }
+
             const execProfiles = {
                 fast: 'mode: fast\nreflection: off\nevidence: skip',
                 standard: 'mode: standard\nreflection: on-error\nevidence: optional',
@@ -599,7 +639,7 @@ function skillForm(editId) {
 
             try {
                 const r = await api.post('/api/v1/wizard/skill', {
-                    description: this.wizardPrompt + mcpContext + execContext,
+                    description: this.wizardPrompt + mcpContext + apiContext + execContext,
                     kind: this.wizardKind,
                     domain: this.wizardDomain,
                     provider: this.wizardProvider,
