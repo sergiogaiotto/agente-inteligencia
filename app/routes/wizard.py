@@ -1,480 +1,183 @@
-{% extends "layouts/base.html" %}
+"""Rotas do Wizard IA — geração assistida de agentes e skills."""
+import json
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional
+from app.core.llm_providers import get_provider
+import logging
 
-{% block content %}
-<div x-data="agentForm('{{ agent_id | default('') }}')" x-init="load()">
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/v1/wizard", tags=["wizard"])
 
-    <div class="max-w-2xl">
-        <div class="mb-6">
-            <a href="/agents" class="inline-flex items-center gap-1 text-[12px] text-brand-500 font-medium hover:text-brand-700 mb-2">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
-                Voltar
-            </a>
-            <div class="flex items-center justify-between">
-                <h2 class="text-[16px] font-bold text-brand-900" x-text="isEdit ? 'Editar Agente' : 'Novo Agente'"></h2>
-            </div>
-        </div>
 
-        <!-- Step indicator -->
-        <div class="flex items-center gap-2 mb-8">
-            <template x-for="(s, i) in steps" :key="i">
-                <div class="flex items-center gap-2">
-                    <button @click="step = i" class="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors"
-                            :class="step === i ? 'bg-brand-500 text-white' : step > i ? 'bg-emerald-100 text-emerald-700' : 'bg-surface-100 text-surface-400'">
-                        <span x-text="step > i ? '✓' : (i + 1)"></span>
-                        <span x-text="s" class="hidden sm:inline"></span>
-                    </button>
-                    <svg x-show="i < steps.length - 1" class="w-4 h-4 text-surface-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
-                </div>
-            </template>
-        </div>
+class WizardAgentRequest(BaseModel):
+    description: str
+    domain: Optional[str] = ""
+    provider: str = "openai"
+    model: Optional[str] = ""  # vazio → provider usa default da config
 
-        <!-- Step 1: Básico -->
-        <div x-show="step === 0" class="space-y-5">
-            <div>
-                <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Nome do Agente *</label>
-                <input x-model="form.name" type="text" placeholder="Ex: Agente de Análise de Dados"
-                       class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition">
-            </div>
-            <div>
-                <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Descrição</label>
-                <textarea x-model="form.description" rows="3" placeholder="O que este agente faz..."
-                          class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition resize-none"></textarea>
-            </div>
-            <div class="grid grid-cols-3 gap-4">
-                <div>
-                    <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Tipo (Camada)</label>
-                    <select x-model="form.kind" class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 outline-none transition">
-                        <option value="subagent">Subagente (SA)</option>
-                        <option value="router">Roteador (AR)</option>
-                        <option value="aobd">Orquestrador (AOBD)</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Domínio</label>
-                    <div class="flex flex-wrap gap-1.5 rounded-lg border border-surface-200 bg-white px-3 py-2 min-h-[42px]">
-                        <template x-for="d in availableDomains" :key="d.id">
-                            <label class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 cursor-pointer text-[11px] transition-colors"
-                                   :class="isDomainSelected(d.name) ? 'bg-brand-100 text-brand-700 font-medium' : 'bg-surface-50 text-surface-500 hover:bg-surface-100'">
-                                <input type="checkbox" :checked="isDomainSelected(d.name)" @change="toggleDomain(d.name)" class="hidden">
-                                <span x-text="d.name"></span>
-                            </label>
-                        </template>
-                        <input x-model="newDomainInput" @keydown.enter.prevent="addNewDomain()" placeholder="+ novo" class="text-[11px] outline-none w-16 bg-transparent placeholder:text-surface-300">
-                    </div>
-                </div>
-                <div>
-                    <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Versão</label>
-                    <input x-model="form.version" type="text" placeholder="1.0.0"
-                           class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] font-mono text-brand-900 placeholder:text-surface-300 outline-none transition">
-                </div>
-            </div>
-            <!-- Vincular Skill -->
-            <div>
-                <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Skill Vinculada (SKILL.md)</label>
-                <div class="flex gap-2">
-                    <select x-model="form.skill_id" class="flex-1 rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 outline-none transition">
-                        <option value="">— Nenhuma skill vinculada —</option>
-                        <template x-for="sk in availableSkills" :key="sk.id">
-                            <option :value="sk.id" x-text="sk.name + ' (' + (sk.kind||'subagent') + ' · v' + (sk.version||'0.1.0') + ')'"></option>
-                        </template>
-                    </select>
-                    <a href="/skills/new" class="rounded-lg border border-surface-200 px-3 py-2.5 text-[11px] font-medium text-surface-500 hover:bg-surface-50 whitespace-nowrap flex items-center gap-1">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
-                        Nova
-                    </a>
-                </div>
-                <p class="mt-1 text-[10px] text-surface-400">O SKILL.md define o contrato executável: Purpose, Workflow, Tool Bindings, Output Contract, Guardrails</p>
-                <!-- Preview da skill selecionada -->
-                <template x-if="form.skill_id && selectedSkillPreview">
-                    <div class="mt-2 rounded-lg border border-brand-100 bg-brand-50/30 p-3">
-                        <div class="flex items-center justify-between mb-1.5">
-                            <div class="flex items-center gap-2">
-                                <span class="text-[12px] font-semibold text-brand-900" x-text="selectedSkillPreview.name"></span>
-                                <span class="rounded-full bg-brand-100 px-2 py-0.5 text-[10px] font-medium text-brand-600" x-text="selectedSkillPreview.kind"></span>
-                                <span class="rounded-full bg-surface-100 px-2 py-0.5 text-[10px] font-mono text-surface-400" x-text="'v' + (selectedSkillPreview.version || '0.1.0')"></span>
-                            </div>
-                            <a :href="'/skills/' + form.skill_id + '/edit'" target="_blank" class="inline-flex items-center gap-1 rounded-lg bg-white border border-brand-200 px-2.5 py-1 text-[10px] font-medium text-brand-600 hover:bg-brand-50 transition-colors">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
-                                Editar Skill
-                            </a>
-                        </div>
-                        <p class="text-[11px] text-surface-500" x-text="selectedSkillPreview.purpose?.substring(0, 200) || 'Sem purpose definido'"></p>
-                    </div>
-                </template>
-            </div>
-            <!-- Exigir Evidência -->
-            <div class="rounded-lg border border-surface-200 bg-surface-50 px-4 py-3">
-                <label class="flex items-center justify-between cursor-pointer">
-                    <div>
-                        <span class="text-[12px] font-semibold text-brand-900">Exigir Evidência (RAG)</span>
-                        <p class="text-[10px] text-surface-400 mt-0.5">Quando ativo, a FSM consulta bases de conhecimento e recusa se não encontrar evidências. Desative para agentes criativos ou que usam conhecimento do próprio LLM.</p>
-                    </div>
-                    <div class="relative ml-4 shrink-0">
-                        <input type="checkbox" x-model="form.require_evidence" class="sr-only peer">
-                        <div class="w-9 h-5 rounded-full transition-colors peer-checked:bg-brand-500 bg-surface-300"></div>
-                        <div class="absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4"></div>
-                    </div>
-                </label>
-            </div>
-            <!-- Capacidades de entrada (multimodal) -->
-            <div class="rounded-lg border border-surface-200 bg-surface-50 px-4 py-3 space-y-3">
-                <div class="text-[12px] font-semibold text-brand-900">Tipos de arquivo aceitos</div>
-                <p class="text-[10px] text-surface-400 -mt-2">Se o usuário anexar um arquivo não aceito, ele é filtrado e o agente recebe apenas o que pode processar.</p>
-                <label class="flex items-center justify-between cursor-pointer">
-                    <div class="flex items-center gap-2">
-                        <svg class="w-4 h-4 text-surface-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>
-                        <span class="text-[12px] text-brand-900">Imagens</span>
-                        <span class="text-[9px] font-mono text-surface-400">(png, jpg, gif, webp)</span>
-                    </div>
-                    <div class="relative ml-4 shrink-0">
-                        <input type="checkbox" x-model="form.accepts_images" class="sr-only peer">
-                        <div class="w-9 h-5 rounded-full transition-colors peer-checked:bg-brand-500 bg-surface-300"></div>
-                        <div class="absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4"></div>
-                    </div>
-                </label>
-                <label class="flex items-center justify-between cursor-pointer">
-                    <div class="flex items-center gap-2">
-                        <svg class="w-4 h-4 text-surface-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m.75 12l3 3m0 0l3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
-                        <span class="text-[12px] text-brand-900">Documentos</span>
-                        <span class="text-[9px] font-mono text-surface-400">(pdf, docx, xlsx, csv, txt, md, json, xml...)</span>
-                    </div>
-                    <div class="relative ml-4 shrink-0">
-                        <input type="checkbox" x-model="form.accepts_documents" class="sr-only peer">
-                        <div class="w-9 h-5 rounded-full transition-colors peer-checked:bg-brand-500 bg-surface-300"></div>
-                        <div class="absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4"></div>
-                    </div>
-                </label>
-                <p x-show="!form.accepts_images && !form.accepts_documents" class="text-[10px] text-amber-600">⚠ Agente não aceita anexos — qualquer arquivo enviado pelo usuário será rejeitado.</p>
-            </div>
-            <!-- ══ PASS-THROUGH INDICATOR ══ -->
-            <div x-show="isPassthrough" x-transition class="rounded-lg border-2 border-dashed border-amber-300 bg-amber-50/50 px-4 py-3">
-                <div class="flex items-start gap-3">
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 shrink-0 mt-0.5">
-                        <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
-                    </div>
-                    <div>
-                        <div class="text-[12px] font-semibold text-amber-800">Pass-through em Pipelines</div>
-                        <p class="text-[11px] text-amber-700 mt-0.5 leading-relaxed">
-                            Este agente não tem SKILL.md e seu prompt é genérico. Em pipelines do AI Mesh, ele será
-                            <strong>ignorado automaticamente</strong> (0ms) — o input passa direto ao próximo agente da cadeia.
-                        </p>
-                        <p class="text-[10px] text-amber-600 mt-1.5">
-                            Para que o agente processe ativamente: vincule um SKILL.md acima ou escreva um system prompt detalhado (200+ caracteres) no passo "Prompt".
-                        </p>
-                    </div>
-                </div>
-            </div>
-        </div>
 
-        <!-- Step 2: LLM -->
-        <div x-show="step === 1" class="space-y-5">
-            <div>
-                <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Provedor LLM</label>
-                <div class="grid grid-cols-3 gap-3">
-                    <button @click="form.llm_provider = 'openai'; setDefaultModel()" type="button"
-                            :class="form.llm_provider === 'openai' ? 'border-brand-400 bg-brand-50 ring-2 ring-brand-100' : 'border-surface-200 hover:border-surface-300'"
-                            class="flex items-center gap-3 rounded-lg border p-4 transition-all">
-                        <span class="text-lg">🟢</span>
-                        <div class="text-left"><div class="text-[13px] font-semibold text-brand-900">OpenAI</div><div class="text-[11px] text-surface-400">GPT-4o, GPT-4.1, o3, o4</div></div>
-                    </button>
-                    <button @click="form.llm_provider = 'maritaca'; setDefaultModel()" type="button"
-                            :class="form.llm_provider === 'maritaca' ? 'border-brand-400 bg-brand-50 ring-2 ring-brand-100' : 'border-surface-200 hover:border-surface-300'"
-                            class="flex items-center gap-3 rounded-lg border p-4 transition-all">
-                        <span class="text-lg">🔵</span>
-                        <div class="text-left"><div class="text-[13px] font-semibold text-brand-900">Maritaca AI</div><div class="text-[11px] text-surface-400">Sabiá-3, Sabiá-2</div></div>
-                    </button>
-                    <button @click="form.llm_provider = 'ollama'; setDefaultModel()" type="button"
-                            :class="form.llm_provider === 'ollama' ? 'border-brand-400 bg-brand-50 ring-2 ring-brand-100' : 'border-surface-200 hover:border-surface-300'"
-                            class="flex items-center gap-3 rounded-lg border p-4 transition-all">
-                        <span class="text-lg">🦙</span>
-                        <div class="text-left"><div class="text-[13px] font-semibold text-brand-900">Ollama</div><div class="text-[11px] text-surface-400">Gaia 4b, Gemma 4, ...</div></div>
-                    </button>
-                </div>
-            </div>
-            <div>
-                <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Modelo</label>
-                <select x-model="form.model" class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 outline-none transition">
-                    <template x-for="m in availableModels" :key="m.id">
-                        <option :value="m.id" x-text="m.name + ' — ' + m.context + ' (' + m.tier + ')'"></option>
-                    </template>
-                </select>
-            </div>
-            <!-- Temperatura -->
-            <div>
-                <div class="flex items-center justify-between mb-1.5">
-                    <label class="text-[12px] font-semibold text-brand-900">Temperatura</label>
-                    <div class="flex items-center gap-2">
-                        <span class="rounded-md bg-brand-50 px-2 py-0.5 text-[11px] font-mono font-semibold text-brand-700" x-text="Number(form.temperature).toFixed(1)"></span>
-                        <span class="text-[10px] text-surface-400" x-text="form.temperature <= 0.3 ? 'determinístico' : form.temperature <= 0.7 ? 'equilibrado' : form.temperature <= 1.2 ? 'criativo' : 'muito criativo'"></span>
-                    </div>
-                </div>
-                <div class="flex items-center gap-3">
-                    <span class="text-[10px] text-surface-400 font-mono w-6 text-right">0.0</span>
-                    <input type="range" min="0" max="2" step="0.1" x-model.number="form.temperature"
-                           class="flex-1 h-2 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-brand-500">
-                    <span class="text-[10px] text-surface-400 font-mono w-6">2.0</span>
-                </div>
-                <p class="text-[10px] text-surface-400 mt-1.5">Baixa (0.0–0.3): respostas previsíveis, ideal para extração/classificação. Média (0.4–0.8): equilibrado. Alta (1.0–2.0): respostas variadas, ideal para brainstorm/criação.</p>
-            </div>
-        </div>
+class WizardSkillRequest(BaseModel):
+    description: str
+    kind: str = "subagent"
+    domain: Optional[str] = ""
+    provider: str = "openai"
+    model: Optional[str] = ""
 
-        <!-- Step 3: System Prompt -->
-        <div x-show="step === 2" class="space-y-5">
-            <!-- Carregar de prompt salvo -->
-            <div x-show="savedPrompts.length > 0" class="rounded-lg border border-brand-100 bg-brand-50/30 p-3">
-                <label class="block text-[11px] font-semibold text-brand-700 mb-1.5">Carregar de System Prompt salvo</label>
-                <div class="flex gap-2">
-                    <select @change="applySavedPrompt($event.target.value)" class="flex-1 rounded-lg border border-brand-200 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none">
-                        <option value="">— Selecionar prompt salvo —</option>
-                        <template x-for="sp in savedPrompts" :key="sp.id">
-                            <option :value="sp.id" x-text="sp.name + ' (' + sp.kind + ' · ' + sp.category + ')' + (sp.is_default ? ' ★' : '')"></option>
-                        </template>
-                    </select>
-                    {% if user_role == 'root' %}
-                    <a href="/settings?tab=prompts" class="rounded-lg border border-surface-200 px-3 py-2 text-[11px] font-medium text-surface-500 hover:bg-surface-50 whitespace-nowrap">Gerenciar</a>
-                    {% endif %}
-                </div>
-            </div>
-            <div>
-                <div class="flex items-center justify-between mb-1.5">
-                    <label class="text-[12px] font-semibold text-brand-900">System Prompt</label>
-                    <div class="flex items-center gap-2">
-                        <!-- Pass-through warning on prompt step -->
-                        <span x-show="isPassthrough" class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
-                            Pass-through ativo
-                        </span>
-                        <button @click="refineField('system_prompt', 'Melhore este system prompt: torne-o mais específico, adicione formato de saída e guardrails')" :disabled="refining"
-                                class="inline-flex items-center gap-1 rounded-lg bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-600 hover:bg-violet-100 disabled:opacity-40 transition-colors">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
-                            <span x-text="refining ? 'Refinando...' : 'IA, refine'"></span>
-                        </button>
-                    </div>
-                </div>
-                <textarea x-model="form.system_prompt" rows="12" placeholder="Instruções detalhadas para o agente..."
-                          class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] font-mono text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition resize-none"></textarea>
-                <div class="flex items-center justify-between mt-1">
-                    <span class="text-[10px] text-surface-400" x-text="(form.system_prompt||'').length + ' caracteres'"></span>
-                    <span x-show="isPassthrough" class="text-[10px] text-amber-600">Mínimo 200 caracteres com instruções específicas para desativar pass-through</span>
-                </div>
-            </div>
-        </div>
 
-        <!-- Step 4: Revisão -->
-        <div x-show="step === 3" class="space-y-4">
-            <!-- Pass-through banner on review -->
-            <div x-show="isPassthrough" class="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50 px-4 py-3 flex items-center gap-3">
-                <svg class="w-5 h-5 text-amber-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
-                <div>
-                    <span class="text-[12px] font-bold text-amber-800">Este agente será pass-through em pipelines</span>
-                    <p class="text-[10px] text-amber-600 mt-0.5">Sem SKILL.md + prompt genérico — será ignorado (0ms) no AI Mesh. Vincule uma skill ou escreva um prompt detalhado para que processe ativamente.</p>
-                </div>
-            </div>
-            <div class="rounded-xl border border-surface-200 bg-white p-5 space-y-3">
-                <div class="flex justify-between"><span class="text-[12px] text-surface-400">Nome</span><span class="text-[13px] font-medium text-brand-900" x-text="form.name || '—'"></span></div>
-                <div class="flex justify-between"><span class="text-[12px] text-surface-400">Tipo</span><span class="text-[13px] font-medium text-brand-900" x-text="form.kind==='aobd'?'AOBD — Orquestrador':form.kind==='router'?'AR — Roteador':'SA — Subagente'"></span></div>
-                <div class="flex justify-between"><span class="text-[12px] text-surface-400">Versão</span><span class="text-[13px] font-mono font-medium text-brand-900" x-text="'v' + (form.version || '1.0.0')"></span></div>
-                <div class="flex justify-between"><span class="text-[12px] text-surface-400">Provedor / Modelo</span><span class="text-[13px] font-medium text-brand-900" x-text="form.llm_provider + ' / ' + form.model"></span></div>
-                <div class="flex justify-between"><span class="text-[12px] text-surface-400">Temperatura</span><span class="text-[13px] font-mono font-medium text-brand-900" x-text="Number(form.temperature).toFixed(1) + ' (' + (form.temperature <= 0.3 ? 'determinístico' : form.temperature <= 0.7 ? 'equilibrado' : form.temperature <= 1.2 ? 'criativo' : 'muito criativo') + ')'"></span></div>
-                <div class="flex justify-between">
-                    <span class="text-[12px] text-surface-400">Aceita anexos</span>
-                    <span class="text-[13px] font-medium text-brand-900">
-                        <span x-show="form.accepts_images || form.accepts_documents">
-                            <span x-show="form.accepts_images">🖼 imagens</span>
-                            <span x-show="form.accepts_images && form.accepts_documents"> + </span>
-                            <span x-show="form.accepts_documents">📄 documentos</span>
-                        </span>
-                        <span x-show="!form.accepts_images && !form.accepts_documents" class="text-surface-400">Nenhum</span>
-                    </span>
-                </div>
-                <div class="flex justify-between">
-                    <span class="text-[12px] text-surface-400">Skill Vinculada</span>
-                    <span class="text-[13px] font-medium" :class="selectedSkillPreview ? 'text-brand-900' : 'text-surface-300'" x-text="selectedSkillPreview ? selectedSkillPreview.name + ' (v' + (selectedSkillPreview.version||'0.1.0') + ')' : 'Nenhuma'"></span>
-                </div>
-                <div class="flex justify-between">
-                    <span class="text-[12px] text-surface-400">Exigir Evidência (RAG)</span>
-                    <span class="text-[13px] font-medium" :class="form.require_evidence ? 'text-emerald-600' : 'text-amber-600'" x-text="form.require_evidence ? 'Sim — consulta bases' : 'Não — usa conhecimento do LLM'"></span>
-                </div>
-                <div class="flex justify-between">
-                    <span class="text-[12px] text-surface-400">Pipeline</span>
-                    <span class="text-[13px] font-medium" :class="isPassthrough ? 'text-amber-600' : 'text-emerald-600'" x-text="isPassthrough ? 'Pass-through (0ms)' : 'Execução ativa (LLM)'"></span>
-                </div>
-                <div class="border-t border-surface-100 pt-3">
-                    <span class="text-[12px] text-surface-400">System Prompt</span>
-                    <p class="mt-1 text-[12px] text-brand-900 font-mono bg-surface-50 rounded-lg p-3 max-h-40 overflow-y-auto whitespace-pre-wrap" x-text="form.system_prompt?.substring(0, 500) || '—'"></p>
-                </div>
-            </div>
-        </div>
+class WizardRefineRequest(BaseModel):
+    current_content: str
+    instruction: str
+    field: str = "all"
+    provider: str = "openai"
+    model: Optional[str] = ""
 
-        <!-- Navigation -->
-        <div class="flex items-center justify-between mt-8 pt-5 border-t border-surface-100">
-            <button @click="step = Math.max(0, step - 1)" x-show="step > 0" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] font-medium text-surface-500 hover:bg-surface-50 transition-colors">Voltar</button>
-            <div x-show="step === 0"></div>
-            <button x-show="step < steps.length - 1" @click="step++" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 transition-colors">Próximo</button>
-            <button x-show="step === steps.length - 1" @click="save()" :disabled="saving" class="rounded-lg bg-emerald-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50 transition-colors">
-                <span x-text="saving ? 'Salvando...' : (isEdit ? 'Atualizar' : 'Criar Agente')"></span>
-            </button>
-        </div>
-    </div>
-</div>
-{% endblock %}
 
-{% block scripts %}
-<script>
-function agentForm(editId) {
-    return {
-        isEdit: !!editId, step: 0, saving: false, refining: false,
-        steps: ['Básico', 'LLM', 'Prompt', 'Revisão'],
-        showWizard: false, wizardPrompt: '', wizardLoading: false, wizardResult: null, wizardProvider: 'openai',
-        allModels: {openai: [], maritaca: [], ollama: []},
-        savedPrompts: [],
-        availableSkills: [],
-        availableDomains: [],
-        newDomainInput: '',
-        form: {
-            name: '', description: '', kind: 'subagent', domain: '', skill_id: '',
-            llm_provider: 'openai', model: 'gpt-4o',
-            system_prompt: 'Você é um agente inteligente e especializado.',
-            version: '1.0.0',
-            require_evidence: true,
-            temperature: 0.7,
-            accepts_images: false,
-            accepts_documents: false,
-        },
-        get availableModels() { return this.allModels[this.form.llm_provider] || []; },
-        get selectedSkillPreview() { return this.availableSkills.find(s => s.id === this.form.skill_id) || null; },
+@router.post("/agent")
+async def wizard_agent(data: WizardAgentRequest):
+    """Wizard IA: gera configuração completa de agente a partir de descrição livre."""
+    try:
+        llm = get_provider(data.provider, model=(data.model or None))
+        response = await llm.generate([
+            {"role": "system", "content": """Você é um arquiteto de agentes de IA. 
+Dado uma descrição do usuário, gere a configuração completa de um agente.
 
-        // ══════════════════════════════════════════════════════
-        // PASS-THROUGH DETECTION — espelha _is_passthrough() do engine.py
-        // ══════════════════════════════════════════════════════
-        get isPassthrough() {
-            // Tem skill vinculado → não é pass-through
-            if (this.form.skill_id) return false;
-
-            const sp = (this.form.system_prompt || '').trim();
-
-            // Sem prompt ou muito curto
-            if (!sp || sp.length < 50) return true;
-
-            // Prompt curto com marcadores genéricos
-            if (sp.length < 200) {
-                const lower = sp.toLowerCase();
-                const markers = [
-                    'você é um agente inteligente',
-                    'you are an intelligent agent',
-                    'você é um assistente',
-                    'you are an assistant',
-                    'você é um agente especializado',
-                    'you are a specialized agent',
-                ];
-                if (markers.some(m => lower.includes(m))) return true;
-            }
-
-            return false;
-        },
-
-        isDomainSelected(name) {
-            const domains = (this.form.domain || '').split(',').map(d => d.trim()).filter(Boolean);
-            return domains.includes(name);
-        },
-        toggleDomain(name) {
-            let domains = (this.form.domain || '').split(',').map(d => d.trim()).filter(Boolean);
-            if (domains.includes(name)) domains = domains.filter(d => d !== name);
-            else domains.push(name);
-            this.form.domain = domains.join(', ');
-        },
-        async addNewDomain() {
-            const name = this.newDomainInput.trim();
-            if (!name) return;
-            try { await api.post('/api/v1/domains', { name }); } catch {}
-            this.newDomainInput = '';
-            await this.loadDomains();
-            this.toggleDomain(name);
-        },
-        async loadDomains() {
-            try { this.availableDomains = (await api.get('/api/v1/domains')).domains || []; } catch {}
-        },
-
-        async load() {
-            await this.loadModels();
-            await this.loadSavedPrompts();
-            await this.loadDomains();
-            await this.loadSkills();
-            if (!editId) return;
-            try {
-                const a = await api.get(`/api/v1/agents/${editId}`);
-                this.form = {...this.form, ...a};
-                // SQLite devolve bool como 0/1 — normalizar
-                this.form.require_evidence = !!a.require_evidence;
-                this.form.accepts_images = !!a.accepts_images;
-                this.form.accepts_documents = !!a.accepts_documents;
-                // temperature pode vir como string — forçar número
-                this.form.temperature = a.temperature != null ? Number(a.temperature) : 0.7;
-            } catch { showToast('Erro ao carregar', 'error'); }
-        },
-        async loadSkills() {
-            try { const d = await api.get('/api/v1/skills'); this.availableSkills = d.skills || []; } catch { this.availableSkills = []; }
-        },
-        async loadSavedPrompts() {
-            try { const d = await api.get('/api/v1/system-prompts'); this.savedPrompts = d.prompts || []; } catch { this.savedPrompts = []; }
-        },
-        applySavedPrompt(id) {
-            if (!id) return;
-            const sp = this.savedPrompts.find(p => p.id === id);
-            if (sp) { this.form.system_prompt = sp.prompt_text; showToast('Prompt "' + sp.name + '" aplicado'); }
-        },
-        async loadModels() {
-            try {
-                const d = await api.get('/api/v1/wizard/models');
-                this.allModels = d;
-            } catch { this.allModels = {openai: [{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship'}], maritaca: [{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship'}], ollama: [{id:'Gemma-3-Gaia-PT-BR-4b-it-GGUF',name:'Gaia 4b',context:'128K',tier:'efficient'}]}; }
-        },
-        setDefaultModel() {
-            const models = this.allModels[this.form.llm_provider] || [];
-            if (models.length && !models.find(m => m.id === this.form.model)) {
-                this.form.model = models[0].id;
-            }
-        },
-        async runWizardAgent() {
-            if (!this.wizardPrompt.trim()) return;
-            this.wizardLoading = true; this.wizardResult = null;
-            try {
-                const r = await api.post('/api/v1/wizard/agent', {description: this.wizardPrompt, provider: this.wizardProvider});
-                this.wizardResult = r.agent;
-            } catch(e) { showToast('Erro no wizard: ' + e.message, 'error'); }
-            this.wizardLoading = false;
-        },
-        applyWizardAgent() {
-            if (!this.wizardResult) return;
-            const w = this.wizardResult;
-            this.form.name = w.name || this.form.name;
-            this.form.description = w.description || this.form.description;
-            this.form.kind = w.kind || this.form.kind;
-            this.form.domain = w.domain || this.form.domain;
-            this.form.system_prompt = w.system_prompt || this.form.system_prompt;
-            this.showWizard = false;
-            showToast('Configuração aplicada ao formulário');
-        },
-        async refineField(field, instruction) {
-            this.refining = true;
-            try {
-                const r = await api.post('/api/v1/wizard/refine', {current_content: this.form[field], instruction, field, provider: this.form.llm_provider, model: this.form.model});
-                this.form[field] = r.refined;
-                showToast('Campo refinado pela IA');
-            } catch(e) { showToast('Erro: ' + e.message, 'error'); }
-            this.refining = false;
-        },
-        async save() {
-            if (!this.form.name.trim()) { showToast('Nome obrigatório', 'error'); this.step = 0; return; }
-            this.saving = true;
-            try {
-                if (this.isEdit) { await api.put(`/api/v1/agents/${editId}`, this.form); showToast('Agente atualizado'); }
-                else { await api.post('/api/v1/agents', this.form); showToast('Agente criado'); }
-                setTimeout(() => window.location.href = '/agents', 800);
-            } catch(e) { showToast(e.message, 'error'); }
-            this.saving = false;
-        },
-    }
+Responda APENAS com JSON válido (sem markdown, sem ```), contendo:
+{
+  "name": "Nome curto e descritivo do agente",
+  "description": "Descrição detalhada do que o agente faz",
+  "kind": "aobd|router|subagent",
+  "domain": "domínio de negócio (ex: financeiro, rh, operacoes)",
+  "system_prompt": "System prompt completo e detalhado para o agente, com persona, capacidades, restrições e formato de resposta",
+  "suggested_skills": ["lista de skills que o agente precisaria"],
+  "suggested_tools": ["lista de ferramentas MCP sugeridas"]
 }
-</script>
-{% endblock %}
+
+Regras:
+- kind=aobd para orquestradores de domínio que interpretam intenção
+- kind=router para processos de negócio que decompõem em tarefas
+- kind=subagent para tarefas atômicas e específicas
+- O system_prompt deve ser rico, com instruções claras, formato de saída e guardrails"""},
+            {"role": "user", "content": data.description},
+        ])
+        content = response["content"].strip()
+        if content.startswith("```"):
+            import re
+            m = re.search(r"```(?:json)?\s*(.*?)```", content, re.DOTALL)
+            if m: content = m.group(1).strip()
+        result = json.loads(content)
+        return {"status": "ok", "agent": result}
+    except json.JSONDecodeError:
+        return {"status": "ok", "agent": {"name": "", "description": data.description, "kind": "subagent", "domain": data.domain, "system_prompt": content, "suggested_skills": [], "suggested_tools": []}}
+    except Exception as e:
+        raise HTTPException(500, f"Erro no wizard: {str(e)}")
+
+
+@router.post("/skill")
+async def wizard_skill(data: WizardSkillRequest):
+    """Wizard IA: gera SKILL.md canônico completo a partir de descrição livre."""
+    try:
+        llm = get_provider(data.provider, model=(data.model or None))
+        response = await llm.generate([
+            {"role": "system", "content": f"""Você é um arquiteto de skills para plataforma multi-agente.
+Gere um SKILL.md completo seguindo a anatomia canônica.
+
+O SKILL.md deve conter EXATAMENTE esta estrutura:
+
+---
+id: urn:skill:{data.domain or 'geral'}:{data.kind}:SLUG_AQUI
+version: 0.1.0
+kind: {data.kind}
+owner: equipe-ia
+stability: alpha
+---
+
+# Nome do Skill
+
+## Purpose
+Declaração imperativa do que este agente faz e do que NÃO faz.
+
+## Activation Criteria
+Condições sob as quais este skill deve ser selecionado.
+
+## Inputs
+Schema tipado do envelope esperado em formato JSON Schema.
+
+## Workflow
+Sequência de passos do workflow. Para subagentes, linear. Para roteadores, DAG.
+
+## Tool Bindings
+Lista de tools MCP permitidas com condições de uso.
+
+## Output Contract
+Schema tipado da saída esperada.
+
+## Failure Modes
+Enumeração de falhas e ação prescrita.
+
+## Evidence Policy
+Bases autorizadas e thresholds de evidência (quando aplicável).
+
+## Guardrails
+Políticas de conteúdo, PII, jurisdição.
+
+## Budget
+Limites de tokens, tempo e custo.
+
+## Examples
+Pares entrada/saída para avaliação.
+
+Gere o SKILL.md completo em formato markdown. Seja específico e detalhado."""},
+            {"role": "user", "content": data.description},
+        ])
+        return {"status": "ok", "skill_md": response["content"]}
+    except Exception as e:
+        raise HTTPException(500, f"Erro no wizard: {str(e)}")
+
+
+@router.post("/refine")
+async def wizard_refine(data: WizardRefineRequest):
+    """Wizard IA: refina/melhora um campo ou conteúdo existente."""
+    try:
+        llm = get_provider(data.provider, model=(data.model or None))
+        response = await llm.generate([
+            {"role": "system", "content": "Você é um especialista em refinamento de configurações de IA. Melhore o conteúdo conforme a instrução do usuário. Responda APENAS com o conteúdo melhorado, sem explicações adicionais."},
+            {"role": "user", "content": f"Campo: {data.field}\n\nConteúdo atual:\n{data.current_content}\n\nInstrução de melhoria:\n{data.instruction}"},
+        ])
+        return {"status": "ok", "refined": response["content"]}
+    except Exception as e:
+        raise HTTPException(500, f"Erro no wizard: {str(e)}")
+
+
+@router.get("/models")
+async def list_available_models():
+    """Lista modelos disponíveis por provedor."""
+    return {
+        "openai": [
+            {"id": "gpt-4o", "name": "GPT-4o", "context": "128K", "tier": "flagship"},
+            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "context": "128K", "tier": "efficient"},
+            {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "context": "128K", "tier": "legacy"},
+            {"id": "gpt-4.1", "name": "GPT-4.1", "context": "1M", "tier": "flagship"},
+            {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "context": "1M", "tier": "efficient"},
+            {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano", "context": "1M", "tier": "nano"},
+            {"id": "o4-mini", "name": "o4 Mini (reasoning)", "context": "200K", "tier": "reasoning"},
+            {"id": "o3", "name": "o3 (reasoning)", "context": "200K", "tier": "reasoning"},
+            {"id": "o3-mini", "name": "o3 Mini (reasoning)", "context": "200K", "tier": "reasoning"},
+            {"id": "o1", "name": "o1 (reasoning)", "context": "200K", "tier": "reasoning"},
+            {"id": "o1-mini", "name": "o1 Mini (reasoning)", "context": "128K", "tier": "reasoning"},
+        ],
+        "maritaca": [
+            {"id": "sabia-4", "name": "Sabiá-4", "context": "128K", "tier": "flagship"},
+            {"id": "sabia-3", "name": "Sabiá-3", "context": "32K", "tier": "flagship"},
+            {"id": "sabia-3-2025-01-15", "name": "Sabiá-3 (Jan/25)", "context": "32K", "tier": "flagship"},
+            {"id": "sabia-2-medium", "name": "Sabiá-2 Medium", "context": "16K", "tier": "efficient"},
+            {"id": "sabia-2-small", "name": "Sabiá-2 Small", "context": "8K", "tier": "small"},
+        ],
+        "ollama": [
+            {"id": "Gemma-3-Gaia-PT-BR-4b-it-GGUF", "name": "Gaia 4b", "context": "128K", "tier": "flagship"},
+            {"id": "gemma4:e4b", "name": "Gemma 4 4B", "context": "128K", "tier": "flagship"},
+            {"id": "gemma3:4b", "name": "Gemma 3 4B", "context": "128K", "tier": "efficient"},
+            {"id": "gemma3:1b", "name": "Gemma 3 1B", "context": "32K", "tier": "small"},
+            {"id": "gemma3:12b", "name": "Gemma 3 12B", "context": "128K", "tier": "flagship"},
+        ],
+    }
