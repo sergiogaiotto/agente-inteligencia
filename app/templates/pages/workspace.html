@@ -258,6 +258,12 @@
                             <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.total_steps||lastTrace.transitions?.length||0"></div><div class="text-[9px] text-surface-400 uppercase">Transições</div></div>
                             <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.evidence_count||0"></div><div class="text-[9px] text-surface-400 uppercase">Evidências</div></div>
                             <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.mcp_tools?.length||0"></div><div class="text-[9px] text-surface-400 uppercase">MCP Tools</div></div>
+                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.api_tools_count||0"></div><div class="text-[9px] text-surface-400 uppercase">API Tools</div></div>
+                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"
+                                 :title="(lastTrace.trace?.tokens?.input||0).toLocaleString('pt-BR')+' in (último prompt) + '+(lastTrace.trace?.tokens?.output||0).toLocaleString('pt-BR')+' out (gerados) · '+(lastTrace.trace?.tokens?.calls||0)+' chamada(s) LLM · billing total: '+(lastTrace.trace?.tokens?.total_billed||0).toLocaleString('pt-BR')">
+                                <div class="text-[16px] font-bold text-brand-900" x-text="(lastTrace.trace?.tokens?.total||0).toLocaleString('pt-BR')"></div>
+                                <div class="text-[9px] text-surface-400 uppercase">Tokens</div>
+                            </div>
                         </div>
                     </div>
                     <div>
