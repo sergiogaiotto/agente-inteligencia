@@ -799,7 +799,7 @@ class SettingsSave(BaseModel):
     maritaca_model: Optional[str] = "sabia-3"
     maritaca_url: Optional[str] = "https://chat.maritaca.ai/api"
     ollama_url: Optional[str] = "http://187.77.46.137:32768"
-    ollama_model: Optional[str] = "gemma3:4b"
+    ollama_model: Optional[str] = "Gemma-3-Gaia-PT-BR-4b-it-GGUF"
     langfuse_public: Optional[str] = ""
     langfuse_secret: Optional[str] = ""
     langfuse_host: Optional[str] = "https://cloud.langfuse.com"
