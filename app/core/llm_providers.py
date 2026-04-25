@@ -98,11 +98,58 @@ class MaritacaProvider(LLMProvider):
             }
 
 
+class OllamaProvider(LLMProvider):
+    """Provedor Ollama via endpoint OpenAI-compatível (/v1/chat/completions).
+
+    Ollama expõe API compatível com OpenAI nativamente — basta apontar o
+    `base_url` para `<host>/v1`. API key é aceita como qualquer string
+    (geralmente "ollama" por convenção).
+    """
+
+    def __init__(self, model: str | None = None, temperature: float = 0.7):
+        settings = get_settings()
+        self.model = model or settings.ollama_model
+        self.api_url = settings.ollama_api_url.rstrip("/")
+        self.api_key = settings.ollama_api_key or "ollama"
+        self.temperature = temperature
+
+    def get_langchain_llm(self):
+        return ChatOpenAI(
+            model=self.model,
+            api_key=self.api_key,
+            base_url=f"{self.api_url}/v1",
+            temperature=self.temperature,
+        )
+
+    async def generate(self, messages: list[dict], **kwargs) -> dict:
+        async with httpx.AsyncClient(timeout=180) as client:
+            response = await client.post(
+                f"{self.api_url}/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": self.temperature,
+                    **kwargs,
+                },
+            )
+            data = response.json()
+            return {
+                "content": data["choices"][0]["message"]["content"],
+                "model": self.model,
+                "usage": data.get("usage", {}),
+            }
+
+
 def get_provider(provider_name: str = "openai", **kwargs) -> LLMProvider:
     """Factory de provedores."""
     providers = {
         "openai": OpenAIProvider,
         "maritaca": MaritacaProvider,
+        "ollama": OllamaProvider,
     }
     provider_class = providers.get(provider_name)
     if not provider_class:
