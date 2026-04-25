@@ -200,7 +200,21 @@ class DeepAgentHarness:
         else:
             llm_with_tools = llm
 
-        response = await llm_with_tools.ainvoke(messages, config={"callbacks": callbacks})
+        try:
+            response = await llm_with_tools.ainvoke(messages, config={"callbacks": callbacks})
+        except Exception as e:
+            # Alguns modelos (Ollama com Gemma/Llama pequenos, etc) não suportam
+            # tool calling no formato OpenAI. Detecta pela mensagem do provider
+            # e refaz a chamada SEM tools — o agente perde acesso a MCP nesta
+            # rodada mas consegue responder em modo texto.
+            err_str = str(e).lower()
+            no_tools_signals = ("does not support tools", "tools not supported", "tool_choice", "function_call is not supported")
+            if any(s in err_str for s in no_tools_signals) and self.openai_tools:
+                logger.warning(f"LLM '{self.config.get('model','?')}' não suporta tools — refazendo sem MCP. Erro original: {str(e)[:200]}")
+                response = await llm.ainvoke(messages, config={"callbacks": callbacks})
+                # Curto-circuita: sem tools não há tool_calls a processar.
+                return {**state, "messages": [response], "iteration": state.get("iteration", 0) + 1}
+            raise
         if self.openai_tools:
             _tc = getattr(response, "tool_calls", None) or []
             logger.info(
