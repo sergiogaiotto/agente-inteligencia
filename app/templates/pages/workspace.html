@@ -78,11 +78,12 @@
                             </div>
                         </template>
                         <!-- ══ CONTENT: raw vs formatted toggle ══ -->
-                        <div x-show="msg.role==='assistant' && !richViewMsgs[i]" x-html="msg.role==='assistant'?formatMarkdown(msg.content):msg.content"></div>
-                        <div x-show="msg.role==='assistant' && richViewMsgs[i]" x-html="renderRichContent(msg.content)"></div>
+                        <div x-show="msg.role==='assistant' && msg._systemNote" x-html="msg.content"></div>
+                        <div x-show="msg.role==='assistant' && !msg._systemNote && !richViewMsgs[i]" x-html="msg.role==='assistant'?formatMarkdown(msg.content):msg.content"></div>
+                        <div x-show="msg.role==='assistant' && !msg._systemNote && richViewMsgs[i]" x-html="renderRichContent(msg.content)"></div>
                         <div x-show="msg.role==='user'" x-text="msg.content"></div>
                         <!-- ══ FOOTER ══ -->
-                        <div x-show="msg.role==='assistant'" class="flex items-center gap-1 mt-2 pt-1.5 border-t border-surface-100">
+                        <div x-show="msg.role==='assistant' && !msg._systemNote" class="flex items-center gap-1 mt-2 pt-1.5 border-t border-surface-100">
                             <span class="text-[10px] opacity-60 flex-1" x-text="msg.created_at?.replace('T',' ').substring(11,16)||''"></span>
                             <!-- Format toggle button -->
                             <button x-show="isStructuredContent(msg.content)" @click="richViewMsgs[i]=!richViewMsgs[i]"
@@ -146,12 +147,40 @@
                     </span>
                 </template>
             </div>
-            <div class="flex items-end gap-2 max-w-3xl mx-auto">
+            <div class="flex items-end gap-2 max-w-3xl mx-auto relative">
+                <!-- ══ SLASH COMMAND POPOVER ══ -->
+                <div x-show="slashOpen" x-transition.duration.150ms @click.away="slashOpen=false"
+                     class="absolute bottom-full left-12 right-12 mb-2 rounded-xl border border-violet-200 bg-white shadow-lg z-40 overflow-hidden">
+                    <div class="px-3 py-1.5 border-b border-violet-100 bg-violet-50 text-[9px] font-bold text-violet-700 uppercase tracking-wider flex items-center justify-between">
+                        <span>Comandos</span>
+                        <span class="text-[9px] text-violet-400 normal-case">↑↓ navegar · Enter selecionar · Esc fechar</span>
+                    </div>
+                    <template x-for="(cmd, idx) in filteredSlashCmds" :key="cmd.name">
+                        <button type="button" @click="runSlashCommand(cmd.name)"
+                                class="w-full text-left px-3 py-2 hover:bg-violet-50 transition-colors flex items-start gap-3 border-b border-surface-50 last:border-0"
+                                :class="idx === slashHighlight ? 'bg-violet-50' : ''">
+                            <code class="rounded bg-violet-100 px-1.5 py-0.5 text-[11px] font-mono font-bold text-violet-700 shrink-0 mt-0.5" x-text="'/' + cmd.name"></code>
+                            <div class="min-w-0 flex-1">
+                                <div class="text-[12px] font-semibold text-brand-900" x-text="cmd.title"></div>
+                                <div class="text-[10px] text-surface-500" x-text="cmd.desc"></div>
+                            </div>
+                        </button>
+                    </template>
+                    <div x-show="filteredSlashCmds.length === 0" class="px-3 py-3 text-[11px] text-surface-400 text-center">Nenhum comando corresponde</div>
+                </div>
                 <label class="flex h-10 w-10 items-center justify-center rounded-xl border border-surface-200 text-surface-400 hover:text-brand-600 hover:border-brand-300 cursor-pointer transition-colors shrink-0" :class="!selectedAgentId?'opacity-30 pointer-events-none':''">
                     <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"/></svg>
                     <input type="file" class="hidden" @change="handleFileSelect($event)" multiple :disabled="!selectedAgentId">
                 </label>
-                <textarea x-ref="chatInput" x-model="input" @keydown.enter.prevent="if(!$event.shiftKey)send()" placeholder="Digite sua mensagem..." rows="1" class="flex-1 resize-none rounded-xl border border-surface-200 bg-surface-50 px-4 py-2.5 text-[13px] text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition" :disabled="!selectedAgentId||sending" @input="$el.style.height='auto';$el.style.height=Math.min($el.scrollHeight,120)+'px'"></textarea>
+                <textarea x-ref="chatInput" x-model="input"
+                          @input="onInputChange(); $el.style.height='auto'; $el.style.height=Math.min($el.scrollHeight,360)+'px'"
+                          @keydown.enter.prevent="onEnterKey($event)"
+                          @keydown.arrow-down.prevent="if(slashOpen) slashHighlight = Math.min(slashHighlight+1, filteredSlashCmds.length-1)"
+                          @keydown.arrow-up.prevent="if(slashOpen) slashHighlight = Math.max(slashHighlight-1, 0)"
+                          @keydown.escape="slashOpen=false"
+                          placeholder="Digite sua mensagem... (ou / para comandos · Shift+Enter quebra linha)" rows="2"
+                          style="min-height:44px; max-height:360px;"
+                          class="flex-1 resize-y rounded-xl border border-surface-200 bg-surface-50 px-4 py-2.5 text-[13px] leading-relaxed text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition scrollbar-thin" :disabled="!selectedAgentId||sending"></textarea>
                 <button @click="send()" :disabled="!selectedAgentId||(!input.trim()&&!pendingFiles.length)||sending" class="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-30 transition-colors shrink-0"><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg></button>
             </div>
         </div>
@@ -264,6 +293,12 @@ function workspacePage() {
         pendingFiles:[],
         execMode:'agent',
         pipelineRoots:[],
+        slashOpen:false, slashHighlight:0, _agentSchemaCache:{},
+        slashCmds:[
+            {name:'help', title:'Sumário do agente', desc:'Mostra propósito, skill, modo de execução e capacidades'},
+            {name:'params', title:'Parâmetros de entrada', desc:'Lista os inputs esperados (do ## Inputs e API Bindings)'},
+            {name:'template', title:'Template JSON', desc:'Insere um JSON pré-preenchido com os inputs no campo de mensagem'},
+        ],
         progressSteps:[], progressMinimized:false,
         liveLog:[], logMinimized:false, _logStart:0, _animTimers:[], _pulseInterval:null, _pulseCount:0,
         richViewMsgs:{},
@@ -503,6 +538,133 @@ function workspacePage() {
             }catch{this.pipelineRoots=[];}
         },
         newSession(){this.currentSessionId=null;this.messages=[];this.lastTrace=null;this.pendingFiles=[];this.liveLog=[];this.richViewMsgs={};this._clearAnimTimers()},
+
+        // ─────────────────────────────────────
+        // Slash commands (/help, /params, /template)
+        // ─────────────────────────────────────
+        get filteredSlashCmds(){
+            const q=(this.input||'').trim();
+            if(!q.startsWith('/')) return [];
+            const term=q.slice(1).toLowerCase();
+            if(!term) return this.slashCmds;
+            return this.slashCmds.filter(c=>c.name.startsWith(term)||c.title.toLowerCase().includes(term));
+        },
+        onInputChange(){
+            const v=(this.input||'').trim();
+            const open=v.startsWith('/')&&!v.includes('\n');
+            if(open!==this.slashOpen){this.slashOpen=open;this.slashHighlight=0}
+            else if(open&&this.slashHighlight>=this.filteredSlashCmds.length) this.slashHighlight=0;
+        },
+        onEnterKey(ev){
+            if(ev.shiftKey){this.input+='\n';return}
+            if(this.slashOpen&&this.filteredSlashCmds.length){
+                const cmd=this.filteredSlashCmds[this.slashHighlight]||this.filteredSlashCmds[0];
+                this.runSlashCommand(cmd.name);
+                return;
+            }
+            // Plain "/cmd" sem popover (caso já tenha sido fechado mas o texto bate)
+            const v=(this.input||'').trim();
+            if(v.startsWith('/')){
+                const name=v.slice(1).split(/\s+/)[0].toLowerCase();
+                if(this.slashCmds.some(c=>c.name===name)){this.runSlashCommand(name);return}
+            }
+            this.send();
+        },
+        async _fetchAgentSchema(){
+            if(!this.selectedAgentId) return null;
+            if(this._agentSchemaCache[this.selectedAgentId]) return this._agentSchemaCache[this.selectedAgentId];
+            try{
+                const data=await api.get(`/api/v1/agents/${this.selectedAgentId}/inputs-schema`);
+                this._agentSchemaCache[this.selectedAgentId]=data;
+                return data;
+            }catch(e){showToast('Erro ao carregar schema: '+e.message,'error');return null}
+        },
+        _pushSystemMessage(html){
+            this.messages.push({role:'assistant',content:html,_systemNote:true,_agentName:'Sistema',_agentKind:'system',created_at:new Date().toISOString()});
+            this.$nextTick(()=>this.scrollToBottom());
+        },
+        async runSlashCommand(name){
+            this.slashOpen=false;this.input='';
+            if(!this.selectedAgentId){showToast('Selecione um agente primeiro','error');return}
+            if(this.execMode==='pipeline'){showToast('Comandos de inspeção indisponíveis em modo Pipeline','info');return}
+            const data=await this._fetchAgentSchema();
+            if(!data) return;
+            if(name==='help') this._pushSystemMessage(this._renderHelp(data));
+            else if(name==='params') this._pushSystemMessage(this._renderParams(data));
+            else if(name==='template'){const tpl=this._buildInputTemplate(data); if(tpl){this.input=tpl; showToast('Template inserido — edite os valores e envie');}else{showToast('Sem inputs estruturados para este agente','info')}}
+        },
+        _allInputNames(data){
+            const fromSchema=Object.keys(data?.inputs_schema?.properties||{});
+            const fromBindings=data?.inputs_referenced||[];
+            return Array.from(new Set([...fromSchema, ...fromBindings]));
+        },
+        _buildInputTemplate(data){
+            const names=this._allInputNames(data);
+            if(!names.length) return '';
+            const props=data?.inputs_schema?.properties||{};
+            const required=new Set(data?.inputs_schema?.required||[]);
+            const obj={};
+            for(const n of names){
+                const spec=props[n]||{};
+                const t=spec.type||'string';
+                if('default' in spec) obj[n]=spec.default;
+                else if(t==='integer'||t==='number') obj[n]=0;
+                else if(t==='boolean') obj[n]=false;
+                else if(t==='array') obj[n]=[];
+                else if(t==='object') obj[n]={};
+                else obj[n]=required.has(n)?'<obrigatório>':'';
+            }
+            return JSON.stringify(obj,null,2);
+        },
+        _renderHelp(d){
+            const a=d.agent||{};const s=d.skill;const mode=d.execution_mode||'standard';
+            const modeColor={fast:'emerald',standard:'brand',rigorous:'amber',declarative:'violet'}[mode]||'brand';
+            const bindings=d.api_bindings||[];
+            return `
+<div class="space-y-2 text-[12px]">
+  <div class="font-bold text-brand-900 text-[13px]">${this._esc(a.name||'Agente')}</div>
+  <div class="flex flex-wrap gap-1.5 text-[10px]">
+    <span class="rounded-full bg-brand-50 px-2 py-0.5 text-brand-700 font-semibold">${this._esc(a.kind||'')}</span>
+    <span class="rounded-full bg-surface-100 px-2 py-0.5 text-surface-600 font-mono">${this._esc(a.model||'')}</span>
+    <span class="rounded-full bg-surface-100 px-2 py-0.5 text-surface-600">v${this._esc(a.version||'?')}</span>
+    <span class="rounded-full bg-${modeColor}-50 px-2 py-0.5 text-${modeColor}-700 font-semibold">mode: ${this._esc(mode)}</span>
+  </div>
+  ${s?`<div class="rounded-lg bg-teal-50 border border-teal-100 px-3 py-2"><div class="text-[10px] font-bold text-teal-700 uppercase tracking-wider mb-0.5">Skill</div><div class="text-[12px] font-semibold text-teal-900">${this._esc(s.name)} <span class="font-mono text-[10px] text-teal-600">v${this._esc(s.version)}</span></div>${s.purpose?`<div class="text-[11px] text-teal-700 mt-1">${this._esc(s.purpose)}</div>`:''}</div>`:'<div class="text-[11px] text-surface-400 italic">Agente sem skill vinculada.</div>'}
+  ${bindings.length?`<div><div class="text-[10px] font-bold text-violet-700 uppercase tracking-wider mb-1">API Bindings (${bindings.length})</div><div class="space-y-1">${bindings.map(b=>`<div class="flex items-center gap-2 rounded bg-violet-50 border border-violet-100 px-2 py-1"><span class="font-mono text-[9px] font-bold text-violet-700 shrink-0">${this._esc(b.method)}</span><span class="font-mono text-[10px] text-brand-900 truncate">${this._esc(b.path)}</span><span class="text-[9px] text-surface-400 ml-auto">${this._esc(b.connector)}</span></div>`).join('')}</div></div>`:''}
+  <div class="pt-1 text-[11px] text-surface-500">Use <code class="rounded bg-surface-100 px-1 font-mono text-violet-700">/params</code> para ver inputs ou <code class="rounded bg-surface-100 px-1 font-mono text-violet-700">/template</code> para gerar um JSON pré-preenchido.</div>
+</div>`;
+        },
+        _renderParams(d){
+            const names=this._allInputNames(d);
+            const props=d?.inputs_schema?.properties||{};
+            const required=new Set(d?.inputs_schema?.required||[]);
+            const fromBindings=new Set(d?.inputs_referenced||[]);
+            if(!names.length){
+                const _ob='{'+'{', _cb='}'+'}';
+                return '<div class="text-[12px] text-surface-500">Nenhum parâmetro de entrada estruturado foi declarado para este agente.<br><span class="text-[11px] text-surface-400">Adicione a seção <code class="font-mono text-violet-600">## Inputs</code> com JSON Schema na SKILL.md, ou use API Bindings com variáveis <code class="font-mono text-violet-600">'+_ob+' inputs.X '+_cb+'</code>.</span></div>';
+            }
+            const rows=names.map(n=>{
+                const spec=props[n]||{};
+                const t=spec.type||'—';
+                const isReq=required.has(n);
+                const fromB=fromBindings.has(n);
+                const desc=spec.description||(fromB?'Referenciado em API Bindings':'');
+                return `<tr class="border-b border-surface-100 last:border-0">
+  <td class="py-1.5 pr-2 align-top"><code class="font-mono text-[11px] text-violet-700 font-semibold">${this._esc(n)}</code>${isReq?'<span class="ml-1 text-rose-500" title="obrigatório">*</span>':''}</td>
+  <td class="py-1.5 pr-2 align-top text-[10px] text-surface-500 font-mono">${this._esc(t)}</td>
+  <td class="py-1.5 align-top text-[11px] text-surface-700">${this._esc(desc)}</td>
+</tr>`;
+            }).join('');
+            return `
+<div class="space-y-2 text-[12px]">
+  <div class="font-bold text-brand-900">Parâmetros de entrada</div>
+  <table class="w-full text-left">
+    <thead><tr class="border-b border-surface-200"><th class="py-1 pr-2 text-[9px] font-bold text-surface-400 uppercase">Nome</th><th class="py-1 pr-2 text-[9px] font-bold text-surface-400 uppercase">Tipo</th><th class="py-1 text-[9px] font-bold text-surface-400 uppercase">Descrição</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <div class="text-[10px] text-surface-400"><span class="text-rose-500">*</span> obrigatório · use <code class="rounded bg-surface-100 px-1 font-mono text-violet-700">/template</code> para inserir um JSON pré-preenchido</div>
+</div>`;
+        },
 
         // ─────────────────────────────────────
         // Session load / rename / delete
