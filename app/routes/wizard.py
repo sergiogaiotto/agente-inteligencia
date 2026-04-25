@@ -174,7 +174,7 @@ async def list_available_models():
             {"id": "sabia-2-small", "name": "Sabiá-2 Small", "context": "8K", "tier": "small"},
         ],
         "ollama": [
-            {"id": "Gemma-3-Gaia-PT-BR-4b-it-GGUF", "name": "Gaia 4b", "context": "128K", "tier": "flagship"},
+            {"id": "Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest", "name": "Gaia 4b", "context": "128K", "tier": "flagship"},
             {"id": "gemma4:e4b", "name": "Gemma 4 4B", "context": "128K", "tier": "flagship"},
             {"id": "gemma3:4b", "name": "Gemma 3 4B", "context": "128K", "tier": "efficient"},
             {"id": "gemma3:1b", "name": "Gemma 3 1B", "context": "32K", "tier": "small"},
