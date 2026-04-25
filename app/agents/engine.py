@@ -542,24 +542,44 @@ async def execute_interaction(
         }
         result = await graph.ainvoke(state)
         draft = result["messages"][-1].content if result["messages"] else ""
-        # Acumula tokens de todas as AIMessages (LangChain >= 0.2 usa usage_metadata)
-        tin = tout = ttot = 0
+        # Coleta usage por chamada LLM e calcula tokens da interação.
+        # IMPORTANTE: somar input_tokens ingenuamente conta o histórico/system
+        # prompt N vezes (cada chamada da reflexão/tool-loop reenvia tudo).
+        # Convenção da métrica:
+        #   input  = input da ÚLTIMA chamada (representa o tamanho final do prompt)
+        #   output = SOMA dos outputs (cada geração é única)
+        #   total  = input + output
+        #   calls  = quantas chamadas LLM aconteceram nesta interação
+        per_call: list[dict] = []
         for _m in (result.get("messages") or []):
             um = getattr(_m, "usage_metadata", None) or {}
             if um:
-                tin += int(um.get("input_tokens") or 0)
-                tout += int(um.get("output_tokens") or 0)
-                ttot += int(um.get("total_tokens") or 0)
+                per_call.append({
+                    "input": int(um.get("input_tokens") or 0),
+                    "output": int(um.get("output_tokens") or 0),
+                })
                 continue
             rm = getattr(_m, "response_metadata", None) or {}
             tu = (rm.get("token_usage") or rm.get("usage") or {}) if isinstance(rm, dict) else {}
             if tu:
-                tin += int(tu.get("prompt_tokens") or tu.get("input_tokens") or 0)
-                tout += int(tu.get("completion_tokens") or tu.get("output_tokens") or 0)
-                ttot += int(tu.get("total_tokens") or 0)
-        if not ttot:
-            ttot = tin + tout
-        ctx.metadata["tokens"] = {"input": tin, "output": tout, "total": ttot}
+                per_call.append({
+                    "input": int(tu.get("prompt_tokens") or tu.get("input_tokens") or 0),
+                    "output": int(tu.get("completion_tokens") or tu.get("output_tokens") or 0),
+                })
+        if per_call:
+            tin_last = per_call[-1]["input"]
+            tout_sum = sum(c["output"] for c in per_call)
+            tin_billed_sum = sum(c["input"] for c in per_call)  # útil para custo/billing
+            ctx.metadata["tokens"] = {
+                "input": tin_last,
+                "output": tout_sum,
+                "total": tin_last + tout_sum,
+                "calls": len(per_call),
+                "input_billed_sum": tin_billed_sum,
+                "total_billed": tin_billed_sum + tout_sum,
+            }
+        else:
+            ctx.metadata["tokens"] = {"input": 0, "output": 0, "total": 0, "calls": 0, "input_billed_sum": 0, "total_billed": 0}
     except Exception as llm_err:
         err_str = str(llm_err)
         if "404" in err_str or "not found" in err_str.lower():
