@@ -1,800 +1,456 @@
-"""Engine declarativo — executa agents com execution_mode=declarative
-sem LLM. Lê ## API Bindings do SKILL.md, resolve templates Jinja2
-sandboxed, chama APIs via conectores, aplica output_mapping (jsonpath-ng)
-e emite ContextDelta append-only.
-
-Fase 2: single binding sem DAG.
-Fase 3: DAG via depends_on, paralelismo por nível, deep-merge de context.
-Fase 4: circuit breaker, on_failure=continue|compensate, dry_run.
-"""
-
-import asyncio
-import base64
-import json
-import logging
-import re
-import time
 import uuid
-from typing import Any
+import json
+import os
+import re
+import ast
+import aiofiles
+from pathlib import Path
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import JSONResponse
+from app.models.schemas import ChatMessage
+from app.agents.engine import execute_interaction
+from app.core.database import interactions_repo, turns_repo
 
-import httpx
-from jinja2 import ChainableUndefined, StrictUndefined
-from jinja2.sandbox import SandboxedEnvironment
-from jsonpath_ng.ext import parse as jsonpath_parse
+UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "uploads"
 
-from app.a2a.protocol import ContextDelta, apply_context_delta
-from app.core.database import api_connectors_repo, api_call_logs_repo
-
-logger = logging.getLogger(__name__)
-
-_DEFAULT_TIMEOUT_MS = 30000
-_DEFAULT_MAX_OUTPUT_BYTES = 4096
-_MAX_CONTEXT_BYTES = 65536
-_RETRYABLE_METHODS = {"GET", "HEAD", "PUT", "DELETE", "OPTIONS"}
-_IDEMPOTENT_REQUIRED_METHODS = {"POST", "PATCH", "DELETE"}
-
-_jinja_env_strict = SandboxedEnvironment(undefined=StrictUndefined, autoescape=False)
-# dry_run: vars ausentes viram string vazia em vez de erro — permite
-# resolver o plan mesmo quando contexto de níveis anteriores não foi
-# populado (já que dry_run pula a chamada HTTP).
-_jinja_env_lenient = SandboxedEnvironment(undefined=ChainableUndefined, autoescape=False)
-_PURE_JINJA_EXPR_RE = re.compile(r"^\s*{{\s*(.+?)\s*}}\s*$", re.DOTALL)
-
-# ═══════════════════════════════════════════════════════
-# Templating — Jinja2 sandboxed
-# ═══════════════════════════════════════════════════════
-
-def _render(template: Any, scope: dict, lenient: bool = False) -> Any:
-    if not isinstance(template, str):
-        return template
-    if "{{" not in template and "{%" not in template:
-        return template
-    env = _jinja_env_lenient if lenient else _jinja_env_strict
-    pure_expr = _PURE_JINJA_EXPR_RE.match(template)
-    if pure_expr:
-        # Quando o template é só uma expressão Jinja (ex: "{{ inputs.datamart_ids }}"),
-        # preserva o tipo original (lista, inteiro, dict, etc) em vez de converter para string.
-        expr = pure_expr.group(1)
-        return env.compile_expression(expr)(**scope)
-    return env.from_string(template).render(**scope)
+router = APIRouter(prefix="/api/v1/workspace", tags=["workspace"])
 
 
-def _render_deep(value: Any, scope: dict, lenient: bool = False) -> Any:
-    if isinstance(value, str):
-        return _render(value, scope, lenient=lenient)
-    if isinstance(value, dict):
-        return {k: _render_deep(v, scope, lenient=lenient) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_render_deep(v, scope, lenient=lenient) for v in value]
+def _extract_inputs_schema(inputs_section: str) -> dict | None:
+    if not inputs_section:
+        return None
+    match = re.search(r"```(?:json)?\s*\n(.*?)\n```", inputs_section, re.DOTALL)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(1))
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+
+
+def _coerce_input_value(value, spec: dict):
+    if not isinstance(spec, dict):
+        return value
+    expected = spec.get("type")
+    if expected == "integer":
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            txt = value.strip()
+            if txt == "":
+                return value
+            return int(txt)
+    if expected == "number":
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            txt = value.strip()
+            if txt == "":
+                return value
+            return float(txt)
+    if expected == "boolean":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            txt = value.strip().lower()
+            if txt in {"true", "1", "yes", "sim"}:
+                return True
+            if txt in {"false", "0", "no", "nao", "não"}:
+                return False
+    if expected == "array":
+        item_spec = spec.get("items", {}) if isinstance(spec.get("items"), dict) else {}
+        if isinstance(value, list):
+            return [_coerce_input_value(v, item_spec) for v in value]
+        if isinstance(value, str):
+            txt = value.strip()
+            if not txt:
+                return []
+            try:
+                parsed = json.loads(txt)
+                if isinstance(parsed, list):
+                    return [_coerce_input_value(v, item_spec) for v in parsed]
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+            # fallback para "1,2,3" ou valor único "4"
+            if "," in txt:
+                parts = [p.strip() for p in txt.split(",") if p.strip()]
+                return [_coerce_input_value(p, item_spec) for p in parts]
+            return [_coerce_input_value(txt, item_spec)]
+        return [value]
     return value
 
 
-# ═══════════════════════════════════════════════════════
-# Context path helpers
-# ═══════════════════════════════════════════════════════
-
-def _set_dotted(target: dict, path: str, value: Any) -> None:
-    parts = path.split(".")
-    cur = target
-    for p in parts[:-1]:
-        if p not in cur or not isinstance(cur[p], dict):
-            cur[p] = {}
-        cur = cur[p]
-    cur[parts[-1]] = value
-
-
-def _apply_output_mapping(
-    response_data: Any,
-    mapping: list,
-    bytes_budget: int,
-) -> tuple[dict, list[str]]:
-    additions: dict = {}
-    errors: list[str] = []
-    used = 0
-    for m in mapping or []:
-        if not isinstance(m, dict):
-            errors.append(f"output_mapping item não é objeto: {m}")
-            continue
-        src = m.get("from")
-        dst = m.get("to")
-        max_bytes = int(m.get("max_bytes", _DEFAULT_MAX_OUTPUT_BYTES))
-        if not src or not dst:
-            errors.append(f"output_mapping inválido (from/to ausente): {m}")
-            continue
-        try:
-            expr = jsonpath_parse(src)
-            matches = [x.value for x in expr.find(response_data)]
-        except Exception as e:
-            errors.append(f"JSONPath inválido '{src}': {e}")
-            continue
-        if not matches:
-            errors.append(f"JSONPath '{src}' não encontrou valor")
-            continue
-        val = matches[0] if len(matches) == 1 else matches
-        serialized = json.dumps(val, ensure_ascii=False, default=str)
-        size = len(serialized.encode("utf-8"))
-        if size > max_bytes:
-            overflow = size - max_bytes
-            errors.append(
-                f"Valor em '{dst}' ({size}B) excede max_bytes={max_bytes} (+{overflow}B). "
-                "Refine o JSONPath em 'from' ou aumente 'max_bytes' no output_mapping."
-            )
-            continue
-        used += size
-        if used > bytes_budget:
-            errors.append("Orçamento de contexto esgotado — mapeamento truncado")
-            break
-        _set_dotted(additions, dst, val)
-    return additions, errors
-
-
-# ═══════════════════════════════════════════════════════
-# Connector & auth
-# ═══════════════════════════════════════════════════════
-
-async def _resolve_connector(ref: str) -> dict | None:
-    """Resolve por name primeiro, depois por id."""
-    all_conns = await api_connectors_repo.find_all(limit=500)
-    for c in all_conns:
-        if c.get("name") == ref or c.get("id") == ref:
-            return c
-    return None
-
-
-def _build_auth_headers(connector: dict) -> dict:
-    """Monta headers de autenticação a partir do connector registry.
-
-    Secrets NUNCA são expostos ao templating — só entram no header
-    da request aqui. Replicado de app/routes/api_connectors.py para
-    evitar import circular.
-    """
-    headers = {"Content-Type": "application/json"}
-    auth_type = connector.get("auth_type", "none")
-    api_key = connector.get("api_key", "") or ""
-    if not api_key:
-        return headers
-    header_name = connector.get("auth_header", "X-API-Key")
-    if auth_type == "api_key":
-        headers[header_name] = api_key
-    elif auth_type == "bearer":
-        headers["Authorization"] = f"Bearer {api_key}"
-    elif auth_type == "basic":
-        headers["Authorization"] = f"Basic {base64.b64encode(api_key.encode()).decode()}"
-    elif auth_type == "cookie":
-        cookie_name = (header_name or "").strip()
-        value = api_key.strip()
-        if "=" in value and (not cookie_name or cookie_name.lower() in ("cookie", "")):
-            headers["Cookie"] = value
-        else:
-            headers["Cookie"] = f"{cookie_name or 'session'}={value}"
-    return headers
-
-
-def _redact_headers(headers: dict) -> dict:
-    sensitive = {"authorization", "x-api-key", "cookie", "set-cookie", "idempotency-key"}
-    return {
-        k: ("<redacted>" if k.lower() in sensitive else v)
-        for k, v in (headers or {}).items()
-    }
-
-
-# ═══════════════════════════════════════════════════════
-# HTTP execution
-# ═══════════════════════════════════════════════════════
-
-async def _execute_http_call(
-    connector: dict,
-    method: str,
-    path: str,
-    headers: dict,
-    query: dict,
-    body: Any,
-    timeout_s: float,
-) -> httpx.Response:
-    base = connector.get("base_url", "").rstrip("/")
-    url = f"{base}{path}" if path.startswith("/") else f"{base}/{path}"
-    auth = _build_auth_headers(connector)
-    final_headers = {**auth, **(headers or {})}
-    method_u = method.upper()
-    async with httpx.AsyncClient(timeout=timeout_s, headers=final_headers) as client:
-        if method_u == "GET":
-            return await client.get(url, params=query or None)
-        if method_u == "POST":
-            return await client.post(url, json=body, params=query or None)
-        if method_u == "PUT":
-            return await client.put(url, json=body, params=query or None)
-        if method_u == "PATCH":
-            return await client.patch(url, json=body, params=query or None)
-        if method_u == "DELETE":
-            return await client.delete(url, params=query or None)
-        if method_u == "HEAD":
-            return await client.head(url, params=query or None)
-        raise ValueError(f"Método HTTP não suportado: {method}")
-
-
-async def _call_with_retry(
-    connector: dict,
-    method: str,
-    path: str,
-    headers: dict,
-    query: dict,
-    body: Any,
-    timeout_s: float,
-    max_retries: int,
-    retry_on: set,
-    backoff: str,
-) -> tuple[httpx.Response | None, str | None, int]:
-    """Retorna (response|None, last_error|None, attempts)."""
-    attempts = 0
-    last_error: str | None = None
-    while attempts <= max_retries:
-        attempts += 1
-        try:
-            resp = await _execute_http_call(connector, method, path, headers, query, body, timeout_s)
-            retry_needed = (
-                500 <= resp.status_code < 600 and "5xx" in retry_on
-                and attempts <= max_retries
-            )
-            if retry_needed:
-                await _sleep_backoff(backoff, attempts)
-                continue
-            return resp, None, attempts
-        except httpx.TimeoutException as e:
-            last_error = f"timeout: {e}"
-            if "timeout" in retry_on and attempts <= max_retries:
-                await _sleep_backoff(backoff, attempts)
-                continue
-            return None, last_error, attempts
-        except httpx.NetworkError as e:
-            last_error = f"network: {e}"
-            if "network" in retry_on and attempts <= max_retries:
-                await _sleep_backoff(backoff, attempts)
-                continue
-            return None, last_error, attempts
-        except Exception as e:
-            return None, f"unexpected: {e}", attempts
-    return None, last_error, attempts
-
-
-async def _sleep_backoff(mode: str, attempt: int) -> None:
-    if mode == "exponential":
-        await asyncio.sleep(min(0.2 * (2 ** attempt), 5.0))
-    else:
-        await asyncio.sleep(0.2)
-
-
-# ═══════════════════════════════════════════════════════
-# DAG helpers
-# ═══════════════════════════════════════════════════════
-
-def _topological_levels(bindings: list[dict]) -> tuple[list[list[dict]], list[str]]:
-    """Agrupa bindings em níveis topológicos.
-
-    Retorna (levels, errors). Cada nível é uma lista de bindings que podem
-    rodar em paralelo. Em caso de ciclo ou depends_on inexistente, retorna
-    levels=[] e errors populado.
-    """
-    errors: list[str] = []
-    by_id: dict[str, dict] = {}
-    for b in bindings:
-        bid = b.get("id")
-        if not bid:
-            errors.append("binding sem 'id'")
-            continue
-        if bid in by_id:
-            errors.append(f"binding_id duplicado: '{bid}'")
-            continue
-        by_id[bid] = b
-
-    if errors:
-        return [], errors
-
-    in_deg: dict[str, int] = {bid: 0 for bid in by_id}
-    deps_map: dict[str, list[str]] = {}
-    for bid, b in by_id.items():
-        deps = b.get("depends_on") or []
-        if isinstance(deps, str):
-            deps = [deps]
-        deps_map[bid] = list(deps)
-        for d in deps:
-            if d not in by_id:
-                errors.append(f"[{bid}] depends_on '{d}' não existe")
-            else:
-                in_deg[bid] += 1
-
-    if errors:
-        return [], errors
-
-    levels: list[list[dict]] = []
-    remaining = dict(in_deg)
-    while remaining:
-        ready_ids = [bid for bid, deg in remaining.items() if deg == 0]
-        if not ready_ids:
-            errors.append(f"ciclo detectado nos bindings: {sorted(remaining)}")
-            return [], errors
-        levels.append([by_id[bid] for bid in ready_ids])
-        for bid in ready_ids:
-            del remaining[bid]
-        for rem_bid in list(remaining):
-            deps = deps_map[rem_bid]
-            remaining[rem_bid] = sum(1 for d in deps if d in remaining)
-    return levels, errors
-
-
-def _deep_merge(dst: Any, src: Any) -> Any:
-    """Merge src em dst recursivamente — dicts mesclam campo a campo;
-    listas e escalares: src vence."""
-    if isinstance(dst, dict) and isinstance(src, dict):
-        out = dict(dst)
-        for k, v in src.items():
-            out[k] = _deep_merge(dst.get(k), v) if k in dst else v
+def _coerce_inputs_by_schema(inputs: dict, schema: dict | None) -> dict:
+    if not schema or not isinstance(inputs, dict):
+        return inputs
+    out = dict(inputs)
+    props = schema.get("properties")
+    required = set(schema.get("required") or [])
+    if not isinstance(props, dict):
         return out
-    return src
-
-
-# ═══════════════════════════════════════════════════════
-# Circuit breaker (in-memory, per binding_id)
-# ═══════════════════════════════════════════════════════
-
-class _Breaker:
-    __slots__ = ("threshold", "cooldown_s", "fails", "opened_at")
-
-    def __init__(self, threshold: int = 5, cooldown_s: float = 30.0) -> None:
-        self.threshold = threshold
-        self.cooldown_s = cooldown_s
-        self.fails = 0
-        self.opened_at = 0.0
-
-    def allow(self) -> bool:
-        if self.fails < self.threshold:
-            return True
-        return (time.time() - self.opened_at) >= self.cooldown_s
-
-    def record(self, success: bool) -> None:
-        if success:
-            self.fails = 0
-            self.opened_at = 0.0
-        else:
-            self.fails += 1
-            if self.fails >= self.threshold:
-                self.opened_at = time.time()
-
-
-_BREAKERS: dict[str, _Breaker] = {}
-
-
-def _get_breaker(binding_id: str, cfg: dict) -> _Breaker:
-    br = _BREAKERS.get(binding_id)
-    if br is None:
-        br = _Breaker(
-            threshold=int(cfg.get("threshold", 5)),
-            cooldown_s=float(cfg.get("cooldown_s", 30.0)),
-        )
-        _BREAKERS[binding_id] = br
-    return br
-
-
-# ═══════════════════════════════════════════════════════
-# Planning — resolve connector + templates (sem I/O)
-# ═══════════════════════════════════════════════════════
-
-async def _plan_binding(binding: dict, scope: dict, lenient: bool = False) -> tuple[dict | None, str | None]:
-    """Resolve tudo que não requer I/O. Retorna (plan_dict, error).
-
-    plan_dict contém: connector, method, path, headers, query, body,
-    idempotency_key, resilience (resolvido), binding_id, raw.
-
-    lenient=True (dry_run): vars ausentes viram string vazia em vez de
-    erro — permite resolver plan de níveis que dependeriam de context
-    que só seria populado após chamadas HTTP reais.
-    """
-    binding_id = binding.get("id", "?")
-    connector_ref = binding.get("connector")
-    if not connector_ref:
-        return None, f"[{binding_id}] campo 'connector' ausente"
-
-    connector = await _resolve_connector(connector_ref)
-    if not connector:
-        return None, f"[{binding_id}] connector '{connector_ref}' não encontrado no registry"
-
-    resilience = binding.get("resilience") or {}
-    timeout_ms = int(resilience.get("timeout_ms") or connector.get("timeout_ms") or _DEFAULT_TIMEOUT_MS)
-    retry_cfg = resilience.get("retry") or {}
-    breaker_cfg = resilience.get("circuit_breaker") or {}
-
-    method = (binding.get("method") or "GET").upper()
-
-    try:
-        path = _render(binding.get("path", "/"), scope, lenient=lenient)
-        headers = _render_deep(binding.get("headers") or {}, scope, lenient=lenient)
-        query = _render_deep(binding.get("query") or {}, scope, lenient=lenient)
-        body = _render_deep(binding.get("body"), scope, lenient=lenient) if binding.get("body") is not None else None
-        idemp_tpl = binding.get("idempotency_key") or ""
-        idempotency_key = _render(idemp_tpl, scope, lenient=lenient) if idemp_tpl else ""
-    except Exception as e:
-        return None, f"[{binding_id}] erro ao renderizar template: {e}"
-
-    if method in _IDEMPOTENT_REQUIRED_METHODS and not idempotency_key and not lenient:
-        return None, f"[{binding_id}] idempotency_key é obrigatório para {method}"
-
-    if idempotency_key:
-        headers = dict(headers or {})
-        headers.setdefault("Idempotency-Key", idempotency_key)
-
-    plan = {
-        "binding_id": binding_id,
-        "connector": connector,
-        "method": method,
-        "path": path,
-        "headers": headers,
-        "query": query,
-        "body": body,
-        "idempotency_key": idempotency_key,
-        "timeout_ms": timeout_ms,
-        "retry": {
-            "max": int(retry_cfg.get("max", 0)),
-            "on": set(retry_cfg.get("on") or []),
-            "backoff": retry_cfg.get("backoff", "fixed"),
-        },
-        "breaker": breaker_cfg,
-        "on_failure": binding.get("on_failure", "fail"),
-        "output_mapping": binding.get("output_mapping") or [],
-    }
-    return plan, None
-
-
-# ═══════════════════════════════════════════════════════
-# Binding execution (post-plan)
-# ═══════════════════════════════════════════════════════
-
-async def _execute_planned_binding(
-    plan: dict,
-    agent: dict,
-    skill_parsed: Any,
-) -> dict:
-    """Executa um binding previamente resolvido. Retorna dict com
-    status, call_id, latency_ms, attempts, additions, error, etc.
-    Não muta contexto — caller decide como aplicar.
-    """
-    binding_id = plan["binding_id"]
-    connector = plan["connector"]
-    breaker_cfg = plan["breaker"] or {}
-    breaker = _get_breaker(binding_id, breaker_cfg) if breaker_cfg else None
-
-    if breaker and not breaker.allow():
-        return {
-            "binding_id": binding_id,
-            "call_id": "",
-            "status": 0,
-            "latency_ms": 0.0,
-            "attempts": 0,
-            "additions": {},
-            "error": f"[{binding_id}] circuit breaker aberto — chamada suprimida",
-            "skipped_by_breaker": True,
-        }
-
-    req_start = time.time()
-    resp, last_error, attempts = await _call_with_retry(
-        connector, plan["method"], plan["path"],
-        plan["headers"], plan["query"], plan["body"],
-        plan["timeout_ms"] / 1000.0,
-        plan["retry"]["max"], plan["retry"]["on"], plan["retry"]["backoff"],
-    )
-    latency_ms = round((time.time() - req_start) * 1000, 2)
-
-    status_code = resp.status_code if resp is not None else 0
-    resp_json: Any = None
-    if resp is not None:
+    for field, spec in props.items():
+        if field not in out:
+            continue
+        val = out.get(field)
+        if isinstance(val, str) and val.strip() == "" and field not in required:
+            # Campo opcional vazio: remove para evitar erro de validação downstream.
+            out.pop(field, None)
+            continue
         try:
-            resp_json = resp.json()
-        except Exception:
-            resp_json = None
+            out[field] = _coerce_input_value(val, spec if isinstance(spec, dict) else {})
+        except (ValueError, TypeError):
+            # Mantém valor original se coercão falhar; a validação de destino decide.
+            out[field] = val
+    return out
 
-    success = resp is not None and 200 <= status_code < 300
-    if breaker:
-        breaker.record(success)
 
-    call_id = str(uuid.uuid4())
+@router.get("/sessions")
+async def list_sessions(agent_id: str = None, limit: int = 30, offset: int = 0):
+    f = {}
+    if agent_id: f["agent_id"] = agent_id
+    sessions = await interactions_repo.find_all(limit=limit, offset=offset, **f)
+    return {"sessions": sessions, "total": await interactions_repo.count(**f)}
+
+
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: str):
+    s = await interactions_repo.find_by_id(session_id)
+    if not s: raise HTTPException(404, "Sessão não encontrada")
+    msgs = await turns_repo.find_all(interaction_id=session_id, limit=200)
+
+    # Restaurar trace_data persistido
+    trace_data = None
+    if s.get("trace_data"):
+        try:
+            trace_data = json.loads(s["trace_data"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Pipeline steps para enriquecer mensagens com metadata de agente
+    pipeline_steps = trace_data.get("pipeline_steps", []) if trace_data else []
+
+    messages = []
+    assistant_idx = 0
+    for t in reversed(msgs):
+        if t.get("user_text_redacted"):
+            messages.append({"role": "user", "content": t["user_text_redacted"], "created_at": t.get("created_at", "")})
+        if t.get("output_text_redacted"):
+            content = t["output_text_redacted"]
+            # Converter JSON legado de recusa/escalação
+            if content.startswith("{") and '"type"' in content:
+                try:
+                    p = json.loads(content)
+                    if p.get("type") == "refusal":
+                        content = f"⚠ Recusa controlada: {p.get('reason','')}\n\nPróximo passo: {p.get('next_step','')}"
+                    elif p.get("type") == "escalation":
+                        content = f"🔺 Escalação: {p.get('reason','')}"
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+
+            msg = {"role": "assistant", "content": content, "created_at": t.get("created_at", "")}
+
+            # Enriquecer com metadata do pipeline step correspondente
+            if pipeline_steps and assistant_idx < len(pipeline_steps):
+                step = pipeline_steps[assistant_idx]
+                msg["_agentName"] = step.get("agent_name", "")
+                msg["_agentKind"] = step.get("agent_kind", "")
+                msg["_duration"] = step.get("duration_ms", 0)
+                # Reconstruir trace individual do step
+                msg["_trace"] = {
+                    "interaction_id": step.get("interaction_id"),
+                    "agent_id": step.get("agent_id"),
+                    "final_state": step.get("final_state"),
+                    "evidence_score": step.get("evidence_score", 0),
+                    "transitions": step.get("transitions", []),
+                    "duration_ms": step.get("duration_ms", 0),
+                    "trace": step.get("trace", {}),
+                    "mode": "agent",
+                    "pipeline_steps": pipeline_steps,
+                }
+                assistant_idx += 1
+
+            messages.append(msg)
+
+    return {"session": s, "messages": messages, "trace": trace_data}
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    if not await interactions_repo.delete(session_id): raise HTTPException(404)
+    return {"message": "Sessão removida"}
+
+
+@router.patch("/sessions/{session_id}")
+async def rename_session(session_id: str, title: str = ""):
+    s = await interactions_repo.find_by_id(session_id)
+    if not s: raise HTTPException(404)
+    await interactions_repo.update(session_id, {"title": title})
+    return {"message": "Sessão renomeada", "title": title}
+
+
+@router.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Upload de arquivo para uso pelo agente na sessão."""
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    file_id = str(uuid.uuid4())[:8]
+    safe_name = f"{file_id}_{file.filename.replace(' ', '_')}"
+    file_path = UPLOAD_DIR / safe_name
+
+    content_bytes = await file.read()
+    async with aiofiles.open(str(file_path), "wb") as f:
+        await f.write(content_bytes)
+
+    # Tentar ler como texto para passar ao agente
+    text_content = None
     try:
-        await api_call_logs_repo.create({
-            "id": call_id,
-            "connector_id": connector["id"],
-            "endpoint_id": "",
-            "agent_id": agent.get("id", ""),
-            "method": plan["method"],
-            "url": connector.get("base_url", "").rstrip("/") + plan["path"],
-            "request_headers": json.dumps(_redact_headers(plan["headers"]), ensure_ascii=False),
-            "request_body": json.dumps(plan["body"], ensure_ascii=False, default=str)[:5000]
-                             if plan["body"] is not None else "{}",
-            "response_body": (json.dumps(resp_json, ensure_ascii=False, default=str)[:5000]
-                              if resp_json is not None
-                              else (resp.text[:5000] if resp is not None else "")),
-            "status_code": status_code,
-            "latency_ms": latency_ms,
-        })
-    except Exception as e:
-        logger.warning("Falha ao persistir api_call_log: %s", e)
+        text_content = content_bytes.decode("utf-8")
+        if len(text_content) > 50000:
+            text_content = text_content[:50000] + "\n\n[...truncado em 50.000 caracteres]"
+    except (UnicodeDecodeError, ValueError):
+        text_content = f"[Arquivo binário: {file.filename}, {len(content_bytes)} bytes, tipo: {file.content_type}]"
 
-    result = {
-        "binding_id": binding_id,
-        "call_id": call_id,
-        "status": status_code,
-        "latency_ms": latency_ms,
-        "attempts": attempts,
-        "additions": {},
-        "error": None,
-        "response_data": resp_json if resp_json is not None else (resp.text if resp is not None else None),
+    return {
+        "file_id": file_id,
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "size": len(content_bytes),
+        "path": str(safe_name),
+        "text_content": text_content,
     }
 
-    if not success:
-        result["error"] = (
-            f"[{binding_id}] falha de rede: {last_error}"
-            if resp is None
-            else f"[{binding_id}] HTTP {status_code} — resposta não-2xx"
-        )
-        return result
 
-    mapping = plan["output_mapping"]
-    if not mapping:
-        result["error"] = f"[{binding_id}] output_mapping é obrigatório"
-        return result
-    if resp_json is None:
-        result["error"] = f"[{binding_id}] response não é JSON — output_mapping não pôde ser aplicado"
-        return result
-
-    additions, map_errors = _apply_output_mapping(resp_json, mapping, _MAX_CONTEXT_BYTES)
-    result["additions"] = additions
-    if map_errors:
-        result["error"] = f"[{binding_id}] output_mapping: " + "; ".join(map_errors)
-    return result
+_IMAGE_MIME_PREFIXES = ("image/",)
+_TEXT_MIME_PREFIXES = ("text/",)
+_DOC_MIME_EXACT = {
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    "application/rtf", "application/json", "application/xml",
+    "application/x-yaml", "application/x-markdown",
+}
 
 
-# ═══════════════════════════════════════════════════════
-# Orchestration — DAG + paralelismo + deep-merge
-# ═══════════════════════════════════════════════════════
+def _classify_attachment(mime: str) -> str:
+    """Retorna 'image' | 'document' | 'unknown'.
 
-async def execute_declarative(
-    agent: dict,
-    skill_parsed: Any,
-    inputs: dict | None = None,
-    context: dict | None = None,
-    session_id: str | None = None,
-    dry_run: bool = False,
-) -> dict:
-    """Executa um agente no modo declarativo com DAG.
-
-    - depends_on → níveis topológicos.
-    - Bindings de um mesmo nível rodam em paralelo (asyncio.gather).
-    - Additions deep-merged no context.
-    - on_failure: fail | continue | compensate: <binding_id>.
-    - dry_run: resolve plan sem tocar na rede.
+    Tudo que começa com image/* → image. text/* e MIMEs comuns de office
+    → document. Resto → unknown (será filtrado se ambas as flags forem
+    false).
     """
-    start = time.time()
-    inputs = inputs or {}
-    context = dict(context or {})
-    trace_id = session_id or str(uuid.uuid4())
+    mime = (mime or "").lower()
+    if any(mime.startswith(p) for p in _IMAGE_MIME_PREFIXES):
+        return "image"
+    if mime in _DOC_MIME_EXACT or any(mime.startswith(p) for p in _TEXT_MIME_PREFIXES):
+        return "document"
+    return "document"  # fallback — melhor assumir doc e deixar a flag decidir
 
-    scope = {
-        "inputs": inputs,
-        "context": context,
-        "session_id": trace_id,
-    }
 
-    bindings = list(getattr(skill_parsed, "api_bindings_parsed", []) or [])
-    if not bindings:
-        return _build_empty_result(trace_id, agent, context, start,
-                                    ["Nenhum API Binding encontrado no SKILL.md"])
+async def _filter_attachments_by_agent(attachments: list, agent_id: str) -> tuple[list, list]:
+    """Filtra attachments conforme flags accepts_images / accepts_documents
+    do agente. Retorna (aceitos, rejeitados_meta) — rejeitados vão para
+    o trace para o usuário ver o que foi podado."""
+    if not attachments:
+        return [], []
+    from app.core.database import agents_repo
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        return attachments, []
+    accepts_img = bool(agent.get("accepts_images") or 0)
+    accepts_doc = bool(agent.get("accepts_documents") or 0)
+    accepted, rejected = [], []
+    for att in attachments:
+        kind = _classify_attachment(att.get("type", ""))
+        allowed = (kind == "image" and accepts_img) or (kind == "document" and accepts_doc)
+        if allowed:
+            accepted.append(att)
+        else:
+            rejected.append({
+                "name": att.get("name", ""),
+                "type": att.get("type", ""),
+                "kind": kind,
+                "reason": f"Agente não aceita {kind}s — habilite em 'Editar Agente'",
+            })
+    return accepted, rejected
 
-    bindings_by_id = {b["id"]: b for b in bindings}
 
-    # Auto-exclui do DAG bindings que são apenas alvos de compensação
-    # (não devem rodar no fluxo normal, só quando alguém falha).
-    compensation_targets: set[str] = set()
-    for b in bindings:
-        of = b.get("on_failure")
-        if isinstance(of, dict) and "compensate" in of:
-            compensation_targets.add(of["compensate"])
-        elif isinstance(of, str) and of.startswith("compensate:"):
-            compensation_targets.add(of.split(":", 1)[1].strip())
+@router.post("/chat")
+async def chat(data: ChatMessage):
+    """Executa interação (agente individual ou pipeline mesh)."""
+    try:
+        attachments = []
+        if data.attachments:
+            for att in data.attachments:
+                attachments.append({
+                    "name": att.get("filename", ""),
+                    "type": att.get("content_type", ""),
+                    "size": att.get("size", 0),
+                    "content": att.get("text_content", ""),
+                })
+        # Filtra conforme flags do agente
+        attachments, rejected_attachments = await _filter_attachments_by_agent(attachments, data.agent_id)
 
-    dag_bindings = [b for b in bindings if b.get("id") not in compensation_targets]
-    levels, dag_errors = _topological_levels(dag_bindings)
-    if dag_errors:
-        return _build_empty_result(trace_id, agent, context, start, dag_errors)
-    executed: list[dict] = []
-    errors: list[str] = []
-    compensations_fired: list[str] = []
-    dry_run_plans: list[dict] = []
-    first_success_response_data: Any = None
-    fatal = False
+        if data.mode == "pipeline":
+            from app.agents.engine import execute_pipeline
+            result = await execute_pipeline(
+                entry_agent_id=data.agent_id,
+                user_input=data.message,
+                channel=data.channel,
+                attachments=attachments,
+            )
+        else:
+            # Auto-rotear para engine declarativo se a skill do agente declara
+            # execution_mode=declarative — assim a chamada à API real é feita
+            # em vez do LLM apenas comentar sobre.
+            from app.core.database import agents_repo, skills_repo
+            from app.skill_parser.parser import parse_skill_md
 
-    for level_idx, level in enumerate(levels):
-        if fatal:
-            break
+            parsed_skill = None
+            agent_obj = await agents_repo.find_by_id(data.agent_id)
+            if agent_obj and agent_obj.get("skill_id"):
+                sk = await skills_repo.find_by_id(agent_obj["skill_id"])
+                if sk and sk.get("raw_content"):
+                    parsed_skill = parse_skill_md(sk["raw_content"])
 
-        # Planning: resolve connector + templates para cada binding do nível
-        plan_results = await asyncio.gather(
-            *[_plan_binding(b, scope, lenient=dry_run) for b in level],
-            return_exceptions=False,
-        )
+            is_declarative = bool(parsed_skill and parsed_skill.execution_mode == "declarative")
 
-        runnable_plans: list[dict] = []
-        for (plan, perr), binding in zip(plan_results, level):
-            if perr:
-                errors.append(perr)
-                on_failure = binding.get("on_failure", "fail")
-                if on_failure == "fail":
-                    fatal = True
-            elif plan is not None:
-                runnable_plans.append(plan)
-                if dry_run:
-                    dry_run_plans.append({
-                        "binding_id": plan["binding_id"],
-                        "level": level_idx,
-                        "method": plan["method"],
-                        "url": plan["connector"].get("base_url", "").rstrip("/") + plan["path"],
-                        "headers": _redact_headers(plan["headers"]),
-                        "query": plan["query"],
-                        "body": plan["body"],
-                        "timeout_ms": plan["timeout_ms"],
-                        "output_mapping_keys": [m.get("to") for m in plan["output_mapping"]],
+            if is_declarative:
+                from app.agents.declarative_engine import execute_declarative
+
+                # Inputs vêm da mensagem: se for JSON válido usa direto; senão
+                # joga em {"question": <texto>} (campo mais comum).
+                msg = (data.message or "").strip()
+                inputs: dict = {}
+                if msg.startswith("{") and msg.endswith("}"):
+                    try:
+                        parsed_msg = json.loads(msg)
+                        if isinstance(parsed_msg, dict):
+                            inputs = parsed_msg
+                    except json.JSONDecodeError:
+                        # fallback para dict estilo Python: {'a': 1}
+                        try:
+                            parsed_msg = ast.literal_eval(msg)
+                            if isinstance(parsed_msg, dict):
+                                inputs = parsed_msg
+                        except (ValueError, SyntaxError):
+                            pass
+                if not inputs and msg:
+                    inputs = {"question": msg}
+
+                schema = _extract_inputs_schema(parsed_skill.inputs)
+                inputs = _coerce_inputs_by_schema(inputs, schema)
+
+                decl = await execute_declarative(
+                    agent=agent_obj,
+                    skill_parsed=parsed_skill,
+                    inputs=inputs,
+                    context=None,
+                    session_id=data.session_id,
+                    dry_run=False,
+                )
+
+                # Adapta saída para o formato esperado pelo workspace.
+                # Prioriza context.resposta (output_mapping comum) sobre o JSON
+                # cru de bindings_executed.
+                ctx_dict = decl.get("context") or {}
+                output_text = ""
+                if "resposta" in ctx_dict:
+                    r = ctx_dict["resposta"]
+                    output_text = r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, indent=2)
+                elif decl.get("api_response") is not None:
+                    api_resp = decl.get("api_response")
+                    output_text = api_resp if isinstance(api_resp, str) else json.dumps(api_resp, ensure_ascii=False, indent=2)
+                else:
+                    output_text = decl.get("output", "")
+
+                executed = decl.get("bindings_executed") or []
+                errors = decl.get("errors") or []
+                any_success = any(200 <= b.get("status", 0) < 300 for b in executed)
+                final_state = decl.get("final_state", "completed")
+
+                diag_level = "success" if (any_success and not errors) else ("warning" if any_success else "danger")
+                diag_text = (
+                    f"Modo declarativo: {len(executed)} binding(s) executado(s)" +
+                    (f" · {len(errors)} erro(s)" if errors else "")
+                )
+
+                exec_log = []
+                for b in executed:
+                    st = b.get("status", 0)
+                    lvl = "success" if 200 <= st < 300 else "danger"
+                    exec_log.append({
+                        "cat": "api",
+                        "icon": "🌐",
+                        "title": f"{b.get('method','?')} {b.get('path','?')}",
+                        "detail": f"status={st} · {b.get('connector','')}",
+                        "level": lvl,
                     })
 
-        if fatal:
-            break
-
-        if dry_run:
-            # Registra execução simulada sem chamar HTTP
-            for p in runnable_plans:
-                executed.append({
-                    "binding_id": p["binding_id"],
-                    "call_id": "",
-                    "status": 0,
-                    "latency_ms": 0.0,
-                    "attempts": 0,
-                    "level": level_idx,
-                    "dry_run": True,
-                })
-            continue
-
-        # Execução paralela do nível
-        exec_results = await asyncio.gather(
-            *[_execute_planned_binding(p, agent, skill_parsed) for p in runnable_plans],
-            return_exceptions=False,
-        )
-
-        # Agrega additions com deep-merge (sequencial dentro do nível por
-        # determinismo: ordem do SKILL.md → last-write-wins em colisão)
-        level_additions: dict = {}
-        level_had_success = False
-        compensations_to_run: list[str] = []
-
-        for r, p in zip(exec_results, runnable_plans):
-            executed.append({**{k: r[k] for k in ("binding_id","call_id","status","latency_ms","attempts")},
-                             "level": level_idx})
-            if r.get("skipped_by_breaker"):
-                errors.append(r["error"])
-            elif r["error"]:
-                errors.append(r["error"])
-                bspec = bindings_by_id.get(p["binding_id"], {})
-                on_failure = bspec.get("on_failure", "fail")
-                if isinstance(on_failure, dict) and "compensate" in on_failure:
-                    compensations_to_run.append(on_failure["compensate"])
-                elif isinstance(on_failure, str) and on_failure.startswith("compensate:"):
-                    compensations_to_run.append(on_failure.split(":", 1)[1].strip())
-                elif on_failure == "fail":
-                    fatal = True
+                result = {
+                    "interaction_id": decl.get("interaction_id"),
+                    "agent_id": data.agent_id,
+                    "output": output_text,
+                    "final_state": final_state,
+                    "evidence_score": 0.0,
+                    "transitions": [],
+                    "duration_ms": decl.get("duration_ms"),
+                    "status": "completed",
+                    "mode": "declarative",
+                    "errors": errors,
+                    "trace": {
+                        "total_steps": len(executed),
+                        "evidence_count": 0,
+                        "evidence_sources": [],
+                        "diagnostics": [{"level": diag_level, "text": diag_text}],
+                        "agent_name": agent_obj.get("name", ""),
+                        "agent_kind": agent_obj.get("kind", ""),
+                        "agent_model": "(declarativo)",
+                        "agent_provider": "declarative",
+                        "agent_version": agent_obj.get("version", "1.0.0"),
+                        "agent_domain": agent_obj.get("domain", ""),
+                        "skill_detail": {
+                            "name": parsed_skill.name,
+                            "version": parsed_skill.frontmatter.version,
+                            "execution_mode": "declarative",
+                        },
+                        "mcp_tools": [],
+                        "api_tools_count": len(executed),
+                        "api_bindings_executed": executed,
+                        "tokens": {"input": 0, "output": 0, "total": 0, "calls": 0, "input_billed_sum": 0, "total_billed": 0},
+                        "execution_log": exec_log,
+                    },
+                }
             else:
-                level_had_success = True
-                if first_success_response_data is None:
-                    first_success_response_data = r.get("response_data")
-                level_additions = _deep_merge(level_additions, r["additions"])
-
-        if level_additions:
-            merged_additions = {
-                k: _deep_merge(context.get(k), v) for k, v in level_additions.items()
-            }
-            delta = ContextDelta(
-                agent_id=agent.get("id", ""),
-                skill_ref=getattr(skill_parsed.frontmatter, "id", "") if skill_parsed else "",
-                additions=merged_additions,
-            )
-            new_ctx = apply_context_delta(context, delta)
-            context.clear()
-            context.update(new_ctx)
-            scope["context"] = context
-
-        # Disparo de compensações — rodam imediatamente, sequencialmente,
-        # NÃO propagam fail adicional (já estamos compensando).
-        for comp_id in compensations_to_run:
-            comp_binding = bindings_by_id.get(comp_id)
-            if not comp_binding:
-                errors.append(f"compensação '{comp_id}' não encontrada")
-                continue
-            plan, perr = await _plan_binding(comp_binding, scope)
-            if perr:
-                errors.append(f"[compensate] {perr}")
-                continue
-            res = await _execute_planned_binding(plan, agent, skill_parsed)
-            compensations_fired.append(comp_id)
-            executed.append({
-                "binding_id": comp_id,
-                "call_id": res["call_id"],
-                "status": res["status"],
-                "latency_ms": res["latency_ms"],
-                "attempts": res["attempts"],
-                "level": level_idx,
-                "compensation_for": plan["binding_id"],
-            })
-            if res["error"]:
-                errors.append(f"[compensate] {res['error']}")
-            elif res["additions"]:
-                merged = {k: _deep_merge(context.get(k), v) for k, v in res["additions"].items()}
-                delta = ContextDelta(
-                    agent_id=agent.get("id", ""),
-                    skill_ref=getattr(skill_parsed.frontmatter, "id", "") if skill_parsed else "",
-                    additions=merged,
+                result = await execute_interaction(
+                    agent_id=data.agent_id,
+                    user_input=data.message,
+                    session_id=data.session_id,
+                    channel=data.channel,
+                    journey=data.journey or "",
+                    attachments=attachments,
                 )
-                new_ctx = apply_context_delta(context, delta)
-                context.clear()
-                context.update(new_ctx)
-                scope["context"] = context
 
-    duration_ms = round((time.time() - start) * 1000, 2)
-    any_success = any(200 <= e.get("status", 0) < 300 for e in executed)
+        # Persistir trace_data
+        iid = result.get("interaction_id")
+        if iid:
+            trace_persist = {k: result.get(k) for k in ["interaction_id","agent_id","final_state","evidence_score","transitions","duration_ms","trace","pipeline_steps","mode"]}
+            await interactions_repo.update(iid, {"trace_data": json.dumps(trace_persist, ensure_ascii=False, default=str)})
 
-    if dry_run:
-        final_state = "dry_run"
-    elif errors and not any_success:
-        final_state = "failed"
-    elif errors:
-        final_state = "partial"
-    else:
-        final_state = "completed"
-
-    answer_payload = {
-        "bindings_executed": executed,
-        "errors": errors,
-        "context_keys": [k for k in context.keys() if not k.startswith("_")],
-        "compensations_fired": compensations_fired,
-        "dry_run": dry_run,
-        "levels": len(levels),
-    }
-    if dry_run:
-        answer_payload["plans"] = dry_run_plans
-
-    return {
-        "interaction_id": trace_id,
-        "agent_id": agent.get("id", ""),
-        "output": json.dumps(answer_payload, ensure_ascii=False, indent=2),
-        "final_state": final_state,
-        "context": context,
-        "api_response": first_success_response_data,
-        "bindings_executed": executed,
-        "errors": errors,
-        "duration_ms": duration_ms,
-        "mode": "declarative",
-        "dry_run": dry_run,
-        "dry_run_plans": dry_run_plans if dry_run else None,
-        "compensations_fired": compensations_fired,
-    }
-
-
-def _build_empty_result(
-    trace_id: str,
-    agent: dict,
-    context: dict,
-    start: float,
-    errors: list[str],
-) -> dict:
-    return {
-        "interaction_id": trace_id,
-        "agent_id": agent.get("id", ""),
-        "output": "",
-        "final_state": "failed",
-        "context": context,
-        "bindings_executed": [],
-        "errors": errors,
-        "duration_ms": round((time.time() - start) * 1000, 2),
-        "mode": "declarative",
-    }
+        # Sinaliza attachments rejeitados para que o frontend possa mostrar
+        if rejected_attachments:
+            result["rejected_attachments"] = rejected_attachments
+        return result
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Erro na execução: {str(e)}")
