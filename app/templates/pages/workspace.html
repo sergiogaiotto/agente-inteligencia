@@ -41,10 +41,12 @@
             </div>
             <select x-show="execMode==='agent'" x-model="selectedAgentId" @change="newSession()" class="rounded-lg border border-surface-200 bg-surface-50 px-3 py-1.5 text-[12px] text-brand-900 outline-none min-w-[200px]">
                 <option value="">Selecione um agente</option>
+                <option x-show="selectedAgentId && !agents.some(a=>a.id===selectedAgentId)" :value="selectedAgentId" x-text="selectedAgentFallbackLabel"></option>
                 <template x-for="a in agents" :key="a.id"><option :value="a.id" x-text="a.name+' (v'+(a.version||'1.0.0')+' · '+a.model+')'"></option></template>
             </select>
             <select x-show="execMode==='pipeline'" x-model="selectedAgentId" @change="newSession()" class="rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-[12px] text-brand-900 outline-none min-w-[200px]">
                 <option value="">Selecione pipeline</option>
+                <option x-show="selectedAgentId && !pipelineRoots.some(p=>p.id===selectedAgentId)" :value="selectedAgentId" x-text="selectedPipelineFallbackLabel"></option>
                 <template x-for="p in pipelineRoots" :key="p.id"><option :value="p.id" x-text="p.name+' → '+p.chainLen+' agente(s)'"></option></template>
             </select>
             <template x-if="selectedAgentId"><span class="flex items-center gap-1 text-[10px] font-medium" :class="execMode==='pipeline'?'text-violet-600':'text-emerald-600'"><span class="h-1.5 w-1.5 rounded-full pulse-dot" :class="execMode==='pipeline'?'bg-violet-400':'bg-emerald-400'"></span><span x-text="execMode==='pipeline'?'Pipeline':'Conectado'"></span></span></template>
@@ -587,6 +589,18 @@ function workspacePage() {
             if(!term) return this.slashCmds;
             return this.slashCmds.filter(c=>c.name.startsWith(term)||c.title.toLowerCase().includes(term));
         },
+        get selectedAgentFallbackLabel(){
+            const fromTrace=this.lastTrace?.trace?.agent_name;
+            const fromList=this.agents.find(a=>a.id===this.selectedAgentId)?.name;
+            return (fromTrace||fromList||'Agente da sessão')+' (indisponível na lista)';
+        },
+        get selectedPipelineFallbackLabel(){
+            const firstStep=this.lastTrace?.pipeline_steps?.[0];
+            const rootName=this.pipelineRoots.find(p=>p.id===this.selectedAgentId)?.name;
+            const nm=firstStep?.agent_name||rootName||'Pipeline da sessão';
+            const len=this.lastTrace?.pipeline_steps?.length||1;
+            return `${nm} → ${len} agente(s)`;
+        },
         onInputChange(){
             const v=(this.input||'').trim();
             const open=v.startsWith('/')&&!v.includes('\n');
@@ -714,7 +728,9 @@ function workspacePage() {
                 this.lastTrace=d.trace||null;
                 const isPipelineSession = d.trace?.mode==='pipeline'||(d.trace?.pipeline_steps?.length>0);
                 this.execMode=isPipelineSession?'pipeline':'agent';
-                if(d.session?.agent_id) this.selectedAgentId=d.session.agent_id;
+                const pipelineEntryId=d.trace?.pipeline_steps?.[0]?.agent_id||d.trace?.agent_id;
+                const sessionAgentId=d.session?.agent_id;
+                this.selectedAgentId=isPipelineSession?(pipelineEntryId||sessionAgentId||''):(sessionAgentId||pipelineEntryId||'');
                 this.activeTraceIdx=-1;this.richViewMsgs={};
                 for(let i=this.messages.length-1;i>=0;i--){if(this.messages[i]._trace){this.activeTraceIdx=i;break}}
                 this._restoreLog(d.trace);
