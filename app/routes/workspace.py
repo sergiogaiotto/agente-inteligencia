@@ -215,14 +215,124 @@ async def chat(data: ChatMessage):
                 attachments=attachments,
             )
         else:
-            result = await execute_interaction(
-                agent_id=data.agent_id,
-                user_input=data.message,
-                session_id=data.session_id,
-                channel=data.channel,
-                journey=data.journey or "",
-                attachments=attachments,
-            )
+            # Auto-rotear para engine declarativo se a skill do agente declara
+            # execution_mode=declarative — assim a chamada à API real é feita
+            # em vez do LLM apenas comentar sobre.
+            from app.core.database import agents_repo, skills_repo
+            from app.skill_parser.parser import parse_skill_md
+
+            parsed_skill = None
+            agent_obj = await agents_repo.find_by_id(data.agent_id)
+            if agent_obj and agent_obj.get("skill_id"):
+                sk = await skills_repo.find_by_id(agent_obj["skill_id"])
+                if sk and sk.get("raw_content"):
+                    parsed_skill = parse_skill_md(sk["raw_content"])
+
+            is_declarative = bool(parsed_skill and parsed_skill.execution_mode == "declarative")
+
+            if is_declarative:
+                from app.agents.declarative_engine import execute_declarative
+
+                # Inputs vêm da mensagem: se for JSON válido usa direto; senão
+                # joga em {"question": <texto>} (campo mais comum).
+                msg = (data.message or "").strip()
+                inputs: dict = {}
+                if msg.startswith("{") and msg.endswith("}"):
+                    try:
+                        parsed_msg = json.loads(msg)
+                        if isinstance(parsed_msg, dict):
+                            inputs = parsed_msg
+                    except json.JSONDecodeError:
+                        pass
+                if not inputs and msg:
+                    inputs = {"question": msg}
+
+                decl = await execute_declarative(
+                    agent=agent_obj,
+                    skill_parsed=parsed_skill,
+                    inputs=inputs,
+                    context=None,
+                    session_id=data.session_id,
+                    dry_run=False,
+                )
+
+                # Adapta saída para o formato esperado pelo workspace.
+                # Prioriza context.resposta (output_mapping comum) sobre o JSON
+                # cru de bindings_executed.
+                ctx_dict = decl.get("context") or {}
+                output_text = ""
+                if "resposta" in ctx_dict:
+                    r = ctx_dict["resposta"]
+                    output_text = r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, indent=2)
+                else:
+                    output_text = decl.get("output", "")
+
+                executed = decl.get("bindings_executed") or []
+                errors = decl.get("errors") or []
+                any_success = any(200 <= b.get("status", 0) < 300 for b in executed)
+                final_state = decl.get("final_state", "completed")
+
+                diag_level = "success" if (any_success and not errors) else ("warning" if any_success else "danger")
+                diag_text = (
+                    f"Modo declarativo: {len(executed)} binding(s) executado(s)" +
+                    (f" · {len(errors)} erro(s)" if errors else "")
+                )
+
+                exec_log = []
+                for b in executed:
+                    st = b.get("status", 0)
+                    lvl = "success" if 200 <= st < 300 else "danger"
+                    exec_log.append({
+                        "cat": "api",
+                        "icon": "🌐",
+                        "title": f"{b.get('method','?')} {b.get('path','?')}",
+                        "detail": f"status={st} · {b.get('connector','')}",
+                        "level": lvl,
+                    })
+
+                result = {
+                    "interaction_id": decl.get("interaction_id"),
+                    "agent_id": data.agent_id,
+                    "output": output_text,
+                    "final_state": final_state,
+                    "evidence_score": 0.0,
+                    "transitions": [],
+                    "duration_ms": decl.get("duration_ms"),
+                    "status": "completed",
+                    "mode": "declarative",
+                    "errors": errors,
+                    "trace": {
+                        "total_steps": len(executed),
+                        "evidence_count": 0,
+                        "evidence_sources": [],
+                        "diagnostics": [{"level": diag_level, "text": diag_text}],
+                        "agent_name": agent_obj.get("name", ""),
+                        "agent_kind": agent_obj.get("kind", ""),
+                        "agent_model": "(declarativo)",
+                        "agent_provider": "declarative",
+                        "agent_version": agent_obj.get("version", "1.0.0"),
+                        "agent_domain": agent_obj.get("domain", ""),
+                        "skill_detail": {
+                            "name": parsed_skill.name,
+                            "version": parsed_skill.frontmatter.version,
+                            "execution_mode": "declarative",
+                        },
+                        "mcp_tools": [],
+                        "api_tools_count": len(executed),
+                        "api_bindings_executed": executed,
+                        "tokens": {"input": 0, "output": 0, "total": 0, "calls": 0, "input_billed_sum": 0, "total_billed": 0},
+                        "execution_log": exec_log,
+                    },
+                }
+            else:
+                result = await execute_interaction(
+                    agent_id=data.agent_id,
+                    user_input=data.message,
+                    session_id=data.session_id,
+                    channel=data.channel,
+                    journey=data.journey or "",
+                    attachments=attachments,
+                )
 
         # Persistir trace_data
         iid = result.get("interaction_id")
