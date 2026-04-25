@@ -35,7 +35,16 @@
 
         <!-- OpenAI -->
         <div class="rounded-xl border border-surface-200 bg-white p-5 mb-5">
-            <div class="flex items-center gap-3 mb-4"><span class="text-lg">🟢</span><div><div class="text-[13px] font-semibold text-brand-900">OpenAI</div><div class="text-[11px] text-surface-400">GPT-4o, GPT-4.1, o3, o4</div></div></div>
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-3"><span class="text-lg">🟢</span><div><div class="text-[13px] font-semibold text-brand-900">OpenAI</div><div class="text-[11px] text-surface-400">GPT-4o, GPT-4.1, o3, o4</div></div></div>
+                <button @click="testProvider('openai')" :disabled="testing.openai" type="button"
+                        class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:opacity-50"
+                        :class="testResults.openai?.ok ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : (testResults.openai && !testResults.openai.ok ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-surface-200 bg-white text-brand-600 hover:bg-brand-50')">
+                    <svg x-show="!testing.openai" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg>
+                    <svg x-show="testing.openai" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <span x-text="testing.openai ? 'Testando...' : 'Testar'"></span>
+                </button>
+            </div>
             <div class="space-y-3">
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">API Key</label>
                 <div class="flex gap-2"><input :type="showKeys.openai?'text':'password'" x-model="config.openai_key" placeholder="sk-..." class="flex-1 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-brand-400">
@@ -44,12 +53,28 @@
                 <select x-model="config.openai_model" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] text-brand-900 outline-none">
                     <template x-for="m in models.openai" :key="m.id"><option :value="m.id" x-text="m.name+' — '+m.context+' ('+m.tier+')'"></option></template>
                 </select></div>
+                <template x-if="testResults.openai">
+                    <div class="rounded-lg px-3 py-2 text-[11px] leading-relaxed" :class="testResults.openai.ok ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'">
+                        <div class="flex items-center gap-2"><span x-text="testResults.openai.ok ? '✓' : '✗'" class="font-bold"></span><span class="font-semibold" x-text="testResults.openai.ok ? 'Conectado' : 'Falhou'"></span><span class="text-[10px] font-mono opacity-70" x-text="testResults.openai.latency_ms+'ms'"></span></div>
+                        <div x-show="testResults.openai.sample" class="mt-1 font-mono text-[10px] opacity-80" x-text="'→ '+testResults.openai.sample"></div>
+                        <div x-show="testResults.openai.error" class="mt-1 text-[10px] opacity-90" x-text="testResults.openai.error"></div>
+                    </div>
+                </template>
             </div>
         </div>
 
         <!-- Maritaca -->
         <div class="rounded-xl border border-surface-200 bg-white p-5 mb-5">
-            <div class="flex items-center gap-3 mb-4"><span class="text-lg">🔵</span><div><div class="text-[13px] font-semibold text-brand-900">Maritaca AI</div><div class="text-[11px] text-surface-400">Sabiá-3, Sabiá-2</div></div></div>
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-3"><span class="text-lg">🔵</span><div><div class="text-[13px] font-semibold text-brand-900">Maritaca AI</div><div class="text-[11px] text-surface-400">Sabiá-3, Sabiá-2</div></div></div>
+                <button @click="testProvider('maritaca')" :disabled="testing.maritaca" type="button"
+                        class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:opacity-50"
+                        :class="testResults.maritaca?.ok ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : (testResults.maritaca && !testResults.maritaca.ok ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-surface-200 bg-white text-brand-600 hover:bg-brand-50')">
+                    <svg x-show="!testing.maritaca" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg>
+                    <svg x-show="testing.maritaca" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <span x-text="testing.maritaca ? 'Testando...' : 'Testar'"></span>
+                </button>
+            </div>
             <div class="space-y-3">
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">API Key</label>
                 <div class="flex gap-2"><input :type="showKeys.maritaca?'text':'password'" x-model="config.maritaca_key" placeholder="mrt-..." class="flex-1 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-brand-400">
@@ -60,12 +85,28 @@
                 </select></div>
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">API URL</label>
                 <input x-model="config.maritaca_url" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono text-brand-900 outline-none"></div>
+                <template x-if="testResults.maritaca">
+                    <div class="rounded-lg px-3 py-2 text-[11px] leading-relaxed" :class="testResults.maritaca.ok ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'">
+                        <div class="flex items-center gap-2"><span x-text="testResults.maritaca.ok ? '✓' : '✗'" class="font-bold"></span><span class="font-semibold" x-text="testResults.maritaca.ok ? 'Conectado' : 'Falhou'"></span><span class="text-[10px] font-mono opacity-70" x-text="testResults.maritaca.latency_ms+'ms'"></span></div>
+                        <div x-show="testResults.maritaca.sample" class="mt-1 font-mono text-[10px] opacity-80" x-text="'→ '+testResults.maritaca.sample"></div>
+                        <div x-show="testResults.maritaca.error" class="mt-1 text-[10px] opacity-90" x-text="testResults.maritaca.error"></div>
+                    </div>
+                </template>
             </div>
         </div>
 
         <!-- Ollama -->
         <div class="rounded-xl border border-surface-200 bg-white p-5 mb-5">
-            <div class="flex items-center gap-3 mb-4"><span class="text-lg">🦙</span><div><div class="text-[13px] font-semibold text-brand-900">Ollama</div><div class="text-[11px] text-surface-400">Modelos locais (Gemma 4, ...)</div></div></div>
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-3"><span class="text-lg">🦙</span><div><div class="text-[13px] font-semibold text-brand-900">Ollama</div><div class="text-[11px] text-surface-400">Modelos locais (Gemma 4, ...)</div></div></div>
+                <button @click="testProvider('ollama')" :disabled="testing.ollama" type="button"
+                        class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:opacity-50"
+                        :class="testResults.ollama?.ok ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : (testResults.ollama && !testResults.ollama.ok ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-surface-200 bg-white text-brand-600 hover:bg-brand-50')">
+                    <svg x-show="!testing.ollama" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg>
+                    <svg x-show="testing.ollama" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <span x-text="testing.ollama ? 'Testando...' : 'Testar'"></span>
+                </button>
+            </div>
             <div class="space-y-3">
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">API URL</label>
                 <input x-model="config.ollama_url" placeholder="http://host:port" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-brand-400"></div>
@@ -74,6 +115,13 @@
                     <template x-for="m in models.ollama" :key="m.id"><option :value="m.id" x-text="m.name+' — '+m.context+' ('+m.tier+')'"></option></template>
                 </select></div>
                 <p class="text-[10px] text-surface-400">Ollama dispensa API key. Use endpoint compatível com OpenAI: <code class="font-mono text-violet-600">{{ '{base_url}/v1/chat/completions' }}</code></p>
+                <template x-if="testResults.ollama">
+                    <div class="rounded-lg px-3 py-2 text-[11px] leading-relaxed" :class="testResults.ollama.ok ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'">
+                        <div class="flex items-center gap-2"><span x-text="testResults.ollama.ok ? '✓' : '✗'" class="font-bold"></span><span class="font-semibold" x-text="testResults.ollama.ok ? 'Conectado' : 'Falhou'"></span><span class="text-[10px] font-mono opacity-70" x-text="testResults.ollama.latency_ms+'ms'"></span></div>
+                        <div x-show="testResults.ollama.sample" class="mt-1 font-mono text-[10px] opacity-80" x-text="'→ '+testResults.ollama.sample"></div>
+                        <div x-show="testResults.ollama.error" class="mt-1 text-[10px] opacity-90" x-text="testResults.ollama.error"></div>
+                    </div>
+                </template>
             </div>
         </div>
 
@@ -388,6 +436,8 @@ function settingsPage() {
         /* ── Platform ── */
         showKeys: {openai:false,maritaca:false,langfuse:false},
         models: {openai:[],maritaca:[],ollama:[]},
+        testing: {openai:false, maritaca:false, ollama:false},
+        testResults: {openai:null, maritaca:null, ollama:null},
         saving: false, lastSaved: '', dirty: false, _snapshot: '',
         config: {
             openai_key:'',openai_model:'gpt-4.1',
@@ -420,6 +470,27 @@ function settingsPage() {
             this.$watch('config',()=>{this.dirty=JSON.stringify(this.config)!==this._snapshot},{deep:true});
             if (this.tab === 'users') await this.loadUsers();
             if (this.tab === 'prompts') await this.loadPrompts();
+        },
+
+        async testProvider(name) {
+            const map = {
+                openai:   {model: this.config.openai_model,   api_key: this.config.openai_key,   base_url: ''},
+                maritaca: {model: this.config.maritaca_model, api_key: this.config.maritaca_key, base_url: this.config.maritaca_url},
+                ollama:   {model: this.config.ollama_model,   api_key: '',                       base_url: this.config.ollama_url},
+            };
+            const cfg = map[name]; if(!cfg){return}
+            if(!cfg.model){showToast('Selecione um modelo','error');return}
+            this.testing[name] = true;
+            this.testResults[name] = null;
+            try{
+                const r = await api.post('/api/v1/settings/test-provider', {provider:name, ...cfg});
+                this.testResults[name] = r;
+                showToast(r.ok ? `${name}: OK (${r.latency_ms}ms)` : `${name}: ${r.error||'falhou'}`, r.ok?'success':'error');
+            }catch(e){
+                this.testResults[name] = {ok:false, error:e.message||'erro desconhecido', latency_ms:0};
+                showToast('Erro: '+e.message, 'error');
+            }
+            this.testing[name] = false;
         },
 
         async savePlatform() {
