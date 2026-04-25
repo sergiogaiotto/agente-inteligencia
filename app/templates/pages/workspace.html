@@ -80,7 +80,7 @@
                         <!-- ══ CONTENT: raw vs formatted toggle ══ -->
                         <div x-show="msg.role==='assistant' && msg._systemNote" x-html="msg.content"></div>
                         <div x-show="msg.role==='assistant' && !msg._systemNote && !richViewMsgs[i]" x-html="msg.role==='assistant'?formatMarkdown(msg.content):msg.content"></div>
-                        <div x-show="msg.role==='assistant' && !msg._systemNote && richViewMsgs[i]" x-html="renderRichContent(msg.content)"></div>
+                        <div x-show="msg.role==='assistant' && !msg._systemNote && richViewMsgs[i]" class="rounded-xl border border-violet-200/80 bg-gradient-to-b from-violet-50/70 to-white p-3 shadow-sm" x-html="renderRichContent(msg.content)"></div>
                         <div x-show="msg.role==='user'" x-text="msg.content"></div>
                         <!-- ══ FOOTER ══ -->
                         <div x-show="msg.role==='assistant' && !msg._systemNote" class="flex items-center gap-1 mt-2 pt-1.5 border-t border-surface-100">
@@ -317,6 +317,9 @@ function workspacePage() {
         isStructuredContent(content) {
             if (!content) return false;
             const t = content.trim();
+            // User-facing rule: if it looks like key:value OR contains braces, show format toggle.
+            if (/[{}]/.test(t)) return true;
+            if (/["'\w-]+\s*:\s*[^\s]/.test(t)) return true;
             if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) return true;
             if (t.includes('\\n') && t.length > 100) return true;
             return false;
@@ -394,18 +397,35 @@ function workspacePage() {
         },
 
         _renderResultCards(results) {
-            let html = `<div class="text-[10px] font-semibold text-surface-400 uppercase tracking-wider mb-2">${results.length} resultado(s)</div><div class="space-y-2.5">`;
+            let html = `
+                <div class="flex items-center justify-between mb-2.5">
+                    <div class="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-violet-700">
+                        <span class="inline-block h-1.5 w-1.5 rounded-full bg-violet-500"></span>
+                        ${results.length} resultado(s)
+                    </div>
+                    <span class="text-[10px] text-surface-400">Visualização formatada</span>
+                </div>
+                <div class="space-y-2.5">
+            `;
             for (const r of results) {
                 const title = r.title || r.name || '—';
                 const link = r.link || r.url || r.href || '';
                 const snippet = r.snippet || r.description || r.summary || r.abstract || r.text || '';
+                const domain = this._hostFromUrl(link);
 
-                html += `<div class="rounded-xl border border-surface-200 bg-surface-50 p-3.5 hover:shadow-sm transition-shadow">`;
+                html += `<div class="rounded-xl border border-surface-200 bg-white/90 p-3.5 shadow-[0_1px_0_rgba(15,23,42,0.03)] hover:shadow-md hover:border-violet-200 transition-all">`;
 
                 // Title (linked if URL available)
                 if (link) {
-                    html += `<a href="${this._esc(link)}" target="_blank" rel="noopener" class="text-[13px] font-semibold text-brand-600 hover:text-brand-800 hover:underline leading-snug">${this._esc(title)}</a>`;
-                    html += `<div class="text-[9px] text-surface-300 mt-0.5 truncate font-mono">${this._esc(link)}</div>`;
+                    html += `
+                        <a href="${this._esc(link)}" target="_blank" rel="noopener" class="text-[13px] font-semibold text-brand-700 hover:text-violet-700 hover:underline leading-snug">
+                            ${this._esc(title)}
+                        </a>
+                        <div class="mt-1 flex items-center gap-2">
+                            ${domain ? `<span class="inline-flex max-w-[220px] items-center rounded-full bg-surface-100 px-2 py-0.5 text-[9px] font-mono text-surface-500 truncate">${this._esc(domain)}</span>` : ''}
+                            <span class="text-[9px] text-surface-300 truncate font-mono">${this._esc(link)}</span>
+                        </div>
+                    `;
                 } else {
                     html += `<div class="text-[13px] font-semibold text-brand-900 leading-snug">${this._esc(title)}</div>`;
                 }
@@ -433,10 +453,17 @@ function workspacePage() {
         },
 
         _renderObjectCard(obj) {
-            let html = '<div class="rounded-xl border border-surface-200 bg-surface-50 p-4 space-y-2">';
+            let html = `
+                <div class="mb-2 inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-violet-700">
+                    <span class="inline-block h-1.5 w-1.5 rounded-full bg-violet-500"></span>
+                    Estruturado
+                </div>
+                <div class="rounded-xl border border-surface-200 bg-white/90 p-4 space-y-2">
+            `;
             for (const [k, v] of Object.entries(obj)) {
                 if (v === null || v === undefined) continue;
                 let valHtml;
+
                 if (typeof v === 'string') {
                     valHtml = `<span class="text-brand-900">${this._esc(v.substring(0, 500))}</span>`;
                 } else if (Array.isArray(v)) {
@@ -454,6 +481,11 @@ function workspacePage() {
             }
             html += '</div>';
             return html;
+        },
+
+        _hostFromUrl(url){
+            if(!url) return '';
+            try{return new URL(url).hostname.replace(/^www\./,'')}catch{return ''}
         },
 
         _renderRichMarkdown(text) {
