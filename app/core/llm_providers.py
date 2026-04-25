@@ -90,12 +90,7 @@ class MaritacaProvider(LLMProvider):
                     **kwargs,
                 },
             )
-            data = response.json()
-            return {
-                "content": data["choices"][0]["message"]["content"],
-                "model": self.model,
-                "usage": data.get("usage", {}),
-            }
+            return _parse_openai_compatible_response(response, provider="maritaca", model=self.model)
 
 
 class OllamaProvider(LLMProvider):
@@ -136,12 +131,42 @@ class OllamaProvider(LLMProvider):
                     **kwargs,
                 },
             )
-            data = response.json()
-            return {
-                "content": data["choices"][0]["message"]["content"],
-                "model": self.model,
-                "usage": data.get("usage", {}),
-            }
+            return _parse_openai_compatible_response(response, provider="ollama", model=self.model)
+
+
+def _parse_openai_compatible_response(response, provider: str, model: str) -> dict:
+    """Parse seguro de respostas OpenAI-compatíveis. Levanta exceção com
+    mensagem clara quando o servidor retorna erro ou resposta malformada."""
+    try:
+        data = response.json()
+    except Exception:
+        raise RuntimeError(
+            f"{provider}: resposta inválida (status {response.status_code}, "
+            f"body[:200]={response.text[:200]!r})"
+        )
+
+    if response.status_code >= 400:
+        err = data.get("error") if isinstance(data, dict) else None
+        msg = err.get("message") if isinstance(err, dict) else (err or data.get("message") or response.text[:300])
+        raise RuntimeError(f"{provider} HTTP {response.status_code}: {msg}")
+
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not choices:
+        # Provedor pode ter retornado erro com status 200 (Maritaca/Ollama fazem isso)
+        err = data.get("error") if isinstance(data, dict) else None
+        msg = err.get("message") if isinstance(err, dict) else (err or data.get("message") or "campo 'choices' ausente")
+        raise RuntimeError(f"{provider}: {msg} (model={model})")
+
+    try:
+        content = choices[0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise RuntimeError(f"{provider}: estrutura inesperada em choices[0].message.content ({e})")
+
+    return {
+        "content": content or "",
+        "model": data.get("model") or model,
+        "usage": data.get("usage", {}),
+    }
 
 
 def get_provider(provider_name: str = "openai", **kwargs) -> LLMProvider:
