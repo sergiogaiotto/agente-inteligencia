@@ -14,7 +14,7 @@ class WizardAgentRequest(BaseModel):
     description: str
     domain: Optional[str] = ""
     provider: str = "openai"
-    model: str = "gpt-4o"
+    model: str = "gpt-4.1"
 
 
 class WizardSkillRequest(BaseModel):
@@ -22,7 +22,7 @@ class WizardSkillRequest(BaseModel):
     kind: str = "subagent"
     domain: Optional[str] = ""
     provider: str = "openai"
-    model: str = "gpt-4o"
+    model: str = "gpt-4.1"
 
 
 class WizardRefineRequest(BaseModel):
@@ -30,7 +30,7 @@ class WizardRefineRequest(BaseModel):
     instruction: str
     field: str = "all"
     provider: str = "openai"
-    model: str = "gpt-4o"
+    model: str = "gpt-4.1"
 
 
 @router.post("/agent")
@@ -167,9 +167,19 @@ async def list_available_models():
             {"id": "o1-mini", "name": "o1 Mini (reasoning)", "context": "128K", "tier": "reasoning"},
         ],
         "maritaca": [
+            {"id": "sabia-4", "name": "Sabiá-4", "context": "128K", "tier": "flagship"},
             {"id": "sabia-3", "name": "Sabiá-3", "context": "32K", "tier": "flagship"},
             {"id": "sabia-3-2025-01-15", "name": "Sabiá-3 (Jan/25)", "context": "32K", "tier": "flagship"},
             {"id": "sabia-2-medium", "name": "Sabiá-2 Medium", "context": "16K", "tier": "efficient"},
             {"id": "sabia-2-small", "name": "Sabiá-2 Small", "context": "8K", "tier": "small"},
+        ],
+        "ollama": [
+            {"id": "gemma4:e4b", "name": "Gemma 4 4B", "context": "128K", "tier": "efficient"},
+            {"id": "gemma3:4b", "name": "Gemma 3 4B", "context": "128K", "tier": "efficient"},
+            {"id": "gemma3:1b", "name": "Gemma 3 1B", "context": "32K", "tier": "small"},
+            {"id": "gemma3:12b", "name": "Gemma 3 12B", "context": "128K", "tier": "flagship"},
+            {"id": "llama3.2:3b", "name": "Llama 3.2 3B", "context": "128K", "tier": "efficient"},
+            {"id": "llama3.1:8b", "name": "Llama 3.1 8B", "context": "128K", "tier": "flagship"},
+            {"id": "qwen2.5:7b", "name": "Qwen 2.5 7B", "context": "32K", "tier": "flagship"},
         ],
     }
