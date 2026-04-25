@@ -24,9 +24,9 @@ class Settings(BaseSettings):
     maritaca_api_url: str = "https://chat.maritaca.ai/api"
     maritaca_model: str = "sabia-3"
 
-    ollama_api_url: str = "http://187.77.46.137:32768"
+    ollama_api_url: str = "http://187.77.46.137:11434"
     ollama_api_key: str = ""
-    ollama_model: str = "Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest"
+    ollama_model: str = "hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest"
 
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
