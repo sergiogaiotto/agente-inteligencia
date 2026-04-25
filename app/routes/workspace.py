@@ -1,7 +1,8 @@
-"""Workspace — execução de interações via FSM §15 + upload de arquivos."""
 import uuid
 import json
 import os
+import re
+import ast
 import aiofiles
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -13,6 +14,99 @@ from app.core.database import interactions_repo, turns_repo
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "uploads"
 
 router = APIRouter(prefix="/api/v1/workspace", tags=["workspace"])
+
+
+def _extract_inputs_schema(inputs_section: str) -> dict | None:
+    if not inputs_section:
+        return None
+    match = re.search(r"```(?:json)?\s*\n(.*?)\n```", inputs_section, re.DOTALL)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(1))
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+
+
+def _coerce_input_value(value, spec: dict):
+    if not isinstance(spec, dict):
+        return value
+    expected = spec.get("type")
+    if expected == "integer":
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            txt = value.strip()
+            if txt == "":
+                return value
+            return int(txt)
+    if expected == "number":
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            txt = value.strip()
+            if txt == "":
+                return value
+            return float(txt)
+    if expected == "boolean":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            txt = value.strip().lower()
+            if txt in {"true", "1", "yes", "sim"}:
+                return True
+            if txt in {"false", "0", "no", "nao", "não"}:
+                return False
+    if expected == "array":
+        item_spec = spec.get("items", {}) if isinstance(spec.get("items"), dict) else {}
+        if isinstance(value, list):
+            return [_coerce_input_value(v, item_spec) for v in value]
+        if isinstance(value, str):
+            txt = value.strip()
+            if not txt:
+                return []
+            try:
+                parsed = json.loads(txt)
+                if isinstance(parsed, list):
+                    return [_coerce_input_value(v, item_spec) for v in parsed]
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+            # fallback para "1,2,3" ou valor único "4"
+            if "," in txt:
+                parts = [p.strip() for p in txt.split(",") if p.strip()]
+                return [_coerce_input_value(p, item_spec) for p in parts]
+            return [_coerce_input_value(txt, item_spec)]
+        return [value]
+    return value
+
+
+def _coerce_inputs_by_schema(inputs: dict, schema: dict | None) -> dict:
+    if not schema or not isinstance(inputs, dict):
+        return inputs
+    out = dict(inputs)
+    props = schema.get("properties")
+    required = set(schema.get("required") or [])
+    if not isinstance(props, dict):
+        return out
+    for field, spec in props.items():
+        if field not in out:
+            continue
+        val = out.get(field)
+        if isinstance(val, str) and val.strip() == "" and field not in required:
+            # Campo opcional vazio: remove para evitar erro de validação downstream.
+            out.pop(field, None)
+            continue
+        try:
+            out[field] = _coerce_input_value(val, spec if isinstance(spec, dict) else {})
+        except (ValueError, TypeError):
+            # Mantém valor original se coercão falhar; a validação de destino decide.
+            out[field] = val
+    return out
 
 
 @router.get("/sessions")
@@ -243,9 +337,18 @@ async def chat(data: ChatMessage):
                         if isinstance(parsed_msg, dict):
                             inputs = parsed_msg
                     except json.JSONDecodeError:
-                        pass
+                        # fallback para dict estilo Python: {'a': 1}
+                        try:
+                            parsed_msg = ast.literal_eval(msg)
+                            if isinstance(parsed_msg, dict):
+                                inputs = parsed_msg
+                        except (ValueError, SyntaxError):
+                            pass
                 if not inputs and msg:
                     inputs = {"question": msg}
+
+                schema = _extract_inputs_schema(parsed_skill.inputs)
+                inputs = _coerce_inputs_by_schema(inputs, schema)
 
                 decl = await execute_declarative(
                     agent=agent_obj,
