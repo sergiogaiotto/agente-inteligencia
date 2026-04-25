@@ -442,7 +442,7 @@ function settingsPage() {
         config: {
             openai_key:'',openai_model:'gpt-4.1',
             maritaca_key:'',maritaca_model:'sabia-4',maritaca_url:'https://chat.maritaca.ai/api',
-            ollama_url:'http://187.77.46.137:32768',ollama_model:'Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',
+            ollama_url:'http://187.77.46.137:11434',ollama_model:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',
             langfuse_public:'',langfuse_secret:'',langfuse_host:'https://cloud.langfuse.com',
             max_iterations:25,timeout:120,
         },
@@ -464,7 +464,7 @@ function settingsPage() {
         async load() {
             const urlTab = new URLSearchParams(window.location.search).get('tab');
             if (urlTab && ['platform','prompts','users'].includes(urlTab)) this.tab = urlTab;
-            try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship'}],maritaca:[{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship'}],ollama:[{id:'Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4Bi',context:'128K',tier:'efficient'}]};}
+            try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship'}],maritaca:[{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship'}],ollama:[{id:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4Bi',context:'128K',tier:'efficient'}]};}
             try{const d=await api.get('/api/v1/settings');const s=d.settings||{};for(const[k,v]of Object.entries(s)){if(k in this.config)this.config[k]=(k==='max_iterations'||k==='timeout')?parseInt(v)||this.config[k]:v;}}catch{}
             this._snapshot=JSON.stringify(this.config);
             this.$watch('config',()=>{this.dirty=JSON.stringify(this.config)!==this._snapshot},{deep:true});
