@@ -827,6 +827,93 @@ async def save_settings(data: SettingsSave):
     return {"message": "Configurações salvas", "keys_saved": len(settings_dict)}
 
 
+class ProviderTestRequest(BaseModel):
+    provider: str  # openai | maritaca | ollama
+    model: str
+    api_key: Optional[str] = ""
+    base_url: Optional[str] = ""
+
+
+@router.post("/settings/test-provider")
+async def test_provider(data: ProviderTestRequest):
+    """Testa conectividade com um provedor LLM usando os valores informados.
+
+    Não persiste nada; usa as credenciais/URL recebidas no body para fazer
+    uma chamada trivial e medir latência. Retorna {ok, latency_ms, sample, error}.
+    """
+    import time as _time
+    import httpx
+    provider = (data.provider or "").lower().strip()
+    if provider not in {"openai", "maritaca", "ollama"}:
+        raise HTTPException(400, f"Provedor inválido: {data.provider}")
+    if not data.model:
+        raise HTTPException(400, "Modelo obrigatório")
+
+    # Resolve base_url e api_key conforme provedor
+    if provider == "openai":
+        base_url = (data.base_url or "https://api.openai.com").rstrip("/")
+        chat_url = f"{base_url}/v1/chat/completions" if not base_url.endswith("/v1") else f"{base_url}/chat/completions"
+        api_key = data.api_key or ""
+        if not api_key:
+            return {"ok": False, "error": "API Key obrigatória para OpenAI"}
+    elif provider == "maritaca":
+        base_url = (data.base_url or "https://chat.maritaca.ai/api").rstrip("/")
+        chat_url = f"{base_url}/v1/chat/completions"
+        api_key = data.api_key or ""
+        if not api_key:
+            return {"ok": False, "error": "API Key obrigatória para Maritaca"}
+    else:  # ollama
+        base_url = (data.base_url or "http://localhost:11434").rstrip("/")
+        chat_url = f"{base_url}/v1/chat/completions"
+        api_key = data.api_key or "ollama"
+
+    payload = {
+        "model": data.model,
+        "messages": [
+            {"role": "system", "content": "Você é um agente de teste. Responda em uma única palavra."},
+            {"role": "user", "content": "Diga: pong"},
+        ],
+        "temperature": 0.0,
+        "max_tokens": 16,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    start = _time.time()
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(chat_url, json=payload, headers=headers)
+        latency = round((_time.time() - start) * 1000, 0)
+        if r.status_code >= 400:
+            try:
+                err = r.json()
+                msg = err.get("error", {}).get("message") if isinstance(err.get("error"), dict) else (err.get("error") or err.get("message") or r.text[:300])
+            except Exception:
+                msg = r.text[:300]
+            return {"ok": False, "status": r.status_code, "latency_ms": latency, "error": str(msg)[:400]}
+        data_resp = r.json()
+        try:
+            sample = data_resp["choices"][0]["message"]["content"][:120]
+        except Exception:
+            sample = ""
+        usage = data_resp.get("usage") or {}
+        return {
+            "ok": True,
+            "status": r.status_code,
+            "latency_ms": latency,
+            "model": data_resp.get("model") or data.model,
+            "sample": sample,
+            "tokens": usage.get("total_tokens") or 0,
+        }
+    except httpx.ConnectError as e:
+        return {"ok": False, "latency_ms": round((_time.time() - start) * 1000, 0), "error": f"Falha de conexão: {str(e)[:200]}"}
+    except httpx.TimeoutException:
+        return {"ok": False, "latency_ms": round((_time.time() - start) * 1000, 0), "error": "Timeout (30s)"}
+    except Exception as e:
+        return {"ok": False, "latency_ms": round((_time.time() - start) * 1000, 0), "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+
 # ═══ System Prompts ═══
 
 class SystemPromptCreate(BaseModel):
