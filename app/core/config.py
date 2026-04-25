@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite+aiosqlite:///{BASE_DIR}/data/agente_inteligencia.db"
 
     openai_api_key: str = ""
-    openai_model: str = "gpt-4o"
+    openai_model: str = "gpt-4.1"
 
     maritaca_api_key: str = ""
     maritaca_api_url: str = "https://chat.maritaca.ai/api"
@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     ollama_api_url: str = "http://187.77.46.137:32768"
     ollama_api_key: str = ""
-    ollama_model: str = "gemma3:4b"
+    ollama_model: str = "Gemma-3-Gaia-PT-BR-4b-it-GGUF"
 
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
