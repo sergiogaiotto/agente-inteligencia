@@ -12,6 +12,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any
@@ -37,7 +38,7 @@ _jinja_env_strict = SandboxedEnvironment(undefined=StrictUndefined, autoescape=F
 # resolver o plan mesmo quando contexto de níveis anteriores não foi
 # populado (já que dry_run pula a chamada HTTP).
 _jinja_env_lenient = SandboxedEnvironment(undefined=ChainableUndefined, autoescape=False)
-
+_PURE_JINJA_EXPR_RE = re.compile(r"^\s*{{\s*(.+?)\s*}}\s*$", re.DOTALL)
 
 # ═══════════════════════════════════════════════════════
 # Templating — Jinja2 sandboxed
@@ -49,6 +50,12 @@ def _render(template: Any, scope: dict, lenient: bool = False) -> Any:
     if "{{" not in template and "{%" not in template:
         return template
     env = _jinja_env_lenient if lenient else _jinja_env_strict
+    pure_expr = _PURE_JINJA_EXPR_RE.match(template)
+    if pure_expr:
+        # Quando o template é só uma expressão Jinja (ex: "{{ inputs.datamart_ids }}"),
+        # preserva o tipo original (lista, inteiro, dict, etc) em vez de converter para string.
+        expr = pure_expr.group(1)
+        return env.compile_expression(expr)(**scope)
     return env.from_string(template).render(**scope)
 
 
