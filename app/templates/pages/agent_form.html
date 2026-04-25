@@ -187,7 +187,7 @@
                             :class="form.llm_provider === 'ollama' ? 'border-brand-400 bg-brand-50 ring-2 ring-brand-100' : 'border-surface-200 hover:border-surface-300'"
                             class="flex items-center gap-3 rounded-lg border p-4 transition-all">
                         <span class="text-lg">🦙</span>
-                        <div class="text-left"><div class="text-[13px] font-semibold text-brand-900">Ollama</div><div class="text-[11px] text-surface-400">Gemma 4, ...</div></div>
+                        <div class="text-left"><div class="text-[13px] font-semibold text-brand-900">Ollama</div><div class="text-[11px] text-surface-400">Gaia 4b, Gemma 4, ...</div></div>
                     </button>
                 </div>
             </div>
@@ -427,7 +427,7 @@ function agentForm(editId) {
             try {
                 const d = await api.get('/api/v1/wizard/models');
                 this.allModels = d;
-            } catch { this.allModels = {openai: [{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship'}], maritaca: [{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship'}], ollama: [{id:'gemma4:e4b',name:'Gemma 4 e4B',context:'128K',tier:'efficient'}]}; }
+            } catch { this.allModels = {openai: [{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship'}], maritaca: [{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship'}], ollama: [{id:'Gemma-3-Gaia-PT-BR-4b-it-GGUF',name:'Gaia 4b',context:'128K',tier:'efficient'}]}; }
         },
         setDefaultModel() {
             const models = this.allModels[this.form.llm_provider] || [];
