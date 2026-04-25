@@ -114,7 +114,11 @@ def _apply_output_mapping(
         serialized = json.dumps(val, ensure_ascii=False, default=str)
         size = len(serialized.encode("utf-8"))
         if size > max_bytes:
-            errors.append(f"Valor em '{dst}' ({size}B) excede max_bytes={max_bytes}")
+            overflow = size - max_bytes
+            errors.append(
+                f"Valor em '{dst}' ({size}B) excede max_bytes={max_bytes} (+{overflow}B). "
+                "Refine o JSONPath em 'from' ou aumente 'max_bytes' no output_mapping."
+            )
             continue
         used += size
         if used > bytes_budget:
@@ -519,6 +523,7 @@ async def _execute_planned_binding(
         "attempts": attempts,
         "additions": {},
         "error": None,
+        "response_data": resp_json if resp_json is not None else (resp.text if resp is not None else None),
     }
 
     if not success:
@@ -600,6 +605,7 @@ async def execute_declarative(
     errors: list[str] = []
     compensations_fired: list[str] = []
     dry_run_plans: list[dict] = []
+    first_success_response_data: Any = None
     fatal = False
 
     for level_idx, level in enumerate(levels):
@@ -680,6 +686,8 @@ async def execute_declarative(
                     fatal = True
             else:
                 level_had_success = True
+                if first_success_response_data is None:
+                    first_success_response_data = r.get("response_data")
                 level_additions = _deep_merge(level_additions, r["additions"])
 
         if level_additions:
@@ -761,6 +769,7 @@ async def execute_declarative(
         "output": json.dumps(answer_payload, ensure_ascii=False, indent=2),
         "final_state": final_state,
         "context": context,
+        "api_response": first_success_response_data,
         "bindings_executed": executed,
         "errors": errors,
         "duration_ms": duration_ms,
