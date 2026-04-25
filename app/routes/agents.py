@@ -139,6 +139,106 @@ def _validate_inputs(inputs: dict, schema: dict) -> list[str]:
     return errors
 
 
+_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][\w\.]*)\s*\}\}")
+
+
+def _walk_strings(node, sink: list[str]):
+    """Coleta todas as strings dentro de uma estrutura YAML aninhada."""
+    if isinstance(node, str):
+        sink.append(node)
+    elif isinstance(node, dict):
+        for v in node.values():
+            _walk_strings(v, sink)
+    elif isinstance(node, list):
+        for v in node:
+            _walk_strings(v, sink)
+
+
+def _extract_referenced_inputs(api_bindings_parsed: list) -> list[str]:
+    """Extrai variáveis `inputs.X` referenciadas em qualquer string Jinja
+    dentro dos API bindings parseados. Retorna nomes únicos, ordenados."""
+    if not api_bindings_parsed:
+        return []
+    strings: list[str] = []
+    for binding in api_bindings_parsed:
+        _walk_strings(binding, strings)
+    found: set[str] = set()
+    for s in strings:
+        for m in _TEMPLATE_VAR_RE.findall(s):
+            if m.startswith("inputs."):
+                name = m[len("inputs."):]
+                if name:
+                    found.add(name)
+    return sorted(found)
+
+
+def _summarize_bindings(api_bindings_parsed: list) -> list[dict]:
+    out = []
+    for b in api_bindings_parsed or []:
+        if not isinstance(b, dict):
+            continue
+        out.append({
+            "id": b.get("id"),
+            "method": b.get("method", "GET"),
+            "path": b.get("path", ""),
+            "connector": b.get("connector", ""),
+        })
+    return out
+
+
+@router.get("/{agent_id}/inputs-schema")
+async def get_agent_inputs_schema(agent_id: str):
+    """Retorna metadados de inputs do agente para auxiliar o chat do workspace.
+
+    Inclui: identificação do agente, sumário da skill, JSON Schema da seção
+    ## Inputs, lista de variáveis `inputs.*` referenciadas nos API bindings,
+    e sumário dos bindings (id/method/path/connector).
+    """
+    from app.skill_parser.parser import parse_skill_md
+
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
+
+    payload = {
+        "agent": {
+            "id": agent_id,
+            "name": agent.get("name"),
+            "kind": agent.get("kind"),
+            "model": agent.get("model"),
+            "version": agent.get("version"),
+            "domain": agent.get("domain"),
+            "llm_provider": agent.get("llm_provider"),
+        },
+        "skill": None,
+        "inputs_schema": None,
+        "inputs_referenced": [],
+        "api_bindings": [],
+        "execution_mode": None,
+    }
+
+    if not agent.get("skill_id"):
+        return payload
+
+    skill_row = await skills_repo.find_by_id(agent["skill_id"])
+    if not skill_row or not skill_row.get("raw_content"):
+        return payload
+
+    parsed = parse_skill_md(skill_row["raw_content"])
+    payload["skill"] = {
+        "id": skill_row.get("id"),
+        "name": parsed.name,
+        "urn": parsed.frontmatter.id,
+        "version": parsed.frontmatter.version,
+        "purpose": (parsed.purpose or "").strip()[:500],
+    }
+    payload["execution_mode"] = parsed.execution_mode
+    payload["inputs_schema"] = _extract_inputs_schema(parsed.inputs)
+    payload["api_bindings"] = _summarize_bindings(parsed.api_bindings_parsed)
+    payload["inputs_referenced"] = _extract_referenced_inputs(parsed.api_bindings_parsed)
+    return payload
+
+
 @router.post("/{agent_id}/invoke", response_model=AgentInvokeResponse)
 async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeResponse:
     from app.agents.engine import execute_interaction
