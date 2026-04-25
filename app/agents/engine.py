@@ -444,6 +444,7 @@ async def execute_interaction(
                 "_stability": parsed.frontmatter.stability,
                 "_urn": parsed.frontmatter.id,
                 "_execution_mode": parsed.execution_mode,
+                "_api_bindings_count": len(getattr(parsed, "api_bindings_parsed", []) or []),
             }
 
     agent["_parsed_skill"] = skill_data
@@ -492,7 +493,14 @@ async def execute_interaction(
     from app.core.config import get_settings
     settings = get_settings()
     provider = agent.get("llm_provider", "openai")
-    api_key = settings.openai_api_key if provider == "openai" else settings.maritaca_api_key
+    if provider == "openai":
+        api_key = settings.openai_api_key
+    elif provider == "maritaca":
+        api_key = settings.maritaca_api_key
+    elif provider == "ollama":
+        api_key = settings.ollama_api_key or "ollama"  # Ollama dispensa key
+    else:
+        api_key = ""
     if not api_key or api_key.startswith(("sk-your", "your-", "mrt-your", "change")):
         draft = (
             f"⚠ API Key do provedor '{provider}' não configurada.\n\n"
@@ -534,6 +542,24 @@ async def execute_interaction(
         }
         result = await graph.ainvoke(state)
         draft = result["messages"][-1].content if result["messages"] else ""
+        # Acumula tokens de todas as AIMessages (LangChain >= 0.2 usa usage_metadata)
+        tin = tout = ttot = 0
+        for _m in (result.get("messages") or []):
+            um = getattr(_m, "usage_metadata", None) or {}
+            if um:
+                tin += int(um.get("input_tokens") or 0)
+                tout += int(um.get("output_tokens") or 0)
+                ttot += int(um.get("total_tokens") or 0)
+                continue
+            rm = getattr(_m, "response_metadata", None) or {}
+            tu = (rm.get("token_usage") or rm.get("usage") or {}) if isinstance(rm, dict) else {}
+            if tu:
+                tin += int(tu.get("prompt_tokens") or tu.get("input_tokens") or 0)
+                tout += int(tu.get("completion_tokens") or tu.get("output_tokens") or 0)
+                ttot += int(tu.get("total_tokens") or 0)
+        if not ttot:
+            ttot = tin + tout
+        ctx.metadata["tokens"] = {"input": tin, "output": tout, "total": ttot}
     except Exception as llm_err:
         err_str = str(llm_err)
         if "404" in err_str or "not found" in err_str.lower():
@@ -707,6 +733,8 @@ def _build_result(
             "system_prompt": system_prompt_summary,
             "skill_detail": skill_detail,
             "mcp_tools": mcp_tools_detail or [],
+            "api_tools_count": int(skill_data.get("_api_bindings_count") or 0),
+            "tokens": ctx.metadata.get("tokens") or {"input": 0, "output": 0, "total": 0},
             "execution_log": exec_log,
         },
     }
