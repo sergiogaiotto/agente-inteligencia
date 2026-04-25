@@ -711,9 +711,10 @@ function workspacePage() {
             try{
                 const d=await api.get(`/api/v1/workspace/sessions/${sid}`);
                 this.currentSessionId=sid;this.messages=d.messages||[];
-                if(d.session?.agent_id) this.selectedAgentId=d.session.agent_id;
                 this.lastTrace=d.trace||null;
-                if(d.trace?.mode==='pipeline'||d.trace?.pipeline_steps?.length) this.execMode='pipeline';
+                const isPipelineSession = d.trace?.mode==='pipeline'||(d.trace?.pipeline_steps?.length>0);
+                this.execMode=isPipelineSession?'pipeline':'agent';
+                if(d.session?.agent_id) this.selectedAgentId=d.session.agent_id;
                 this.activeTraceIdx=-1;this.richViewMsgs={};
                 for(let i=this.messages.length-1;i>=0;i--){if(this.messages[i]._trace){this.activeTraceIdx=i;break}}
                 this._restoreLog(d.trace);
