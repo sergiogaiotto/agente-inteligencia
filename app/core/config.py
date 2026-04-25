@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     ollama_api_url: str = "http://187.77.46.137:32768"
     ollama_api_key: str = ""
-    ollama_model: str = "Gemma-3-Gaia-PT-BR-4b-it-GGUF"
+    ollama_model: str = "Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest"
 
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
