@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     maritaca_api_url: str = "https://chat.maritaca.ai/api"
     maritaca_model: str = "sabia-3"
 
+    ollama_api_url: str = "http://187.77.46.137:32768"
+    ollama_api_key: str = ""
+    ollama_model: str = "gemma3:4b"
+
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
