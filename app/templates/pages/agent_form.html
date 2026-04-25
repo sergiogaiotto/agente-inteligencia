@@ -333,7 +333,7 @@ function agentForm(editId) {
         newDomainInput: '',
         form: {
             name: '', description: '', kind: 'subagent', domain: '', skill_id: '',
-            llm_provider: 'openai', model: 'gpt-4o',
+            llm_provider: 'openai', model: 'gpt-4.1',
             system_prompt: 'Você é um agente inteligente e especializado.',
             version: '1.0.0',
             require_evidence: true,
@@ -427,7 +427,7 @@ function agentForm(editId) {
             try {
                 const d = await api.get('/api/v1/wizard/models');
                 this.allModels = d;
-            } catch { this.allModels = {openai: [{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship'}], maritaca: [{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship'}], ollama: [{id:'Gemma-3-Gaia-PT-BR-4b-it-GGUF',name:'Gaia 4b',context:'128K',tier:'efficient'}]}; }
+            } catch { this.allModels = {openai: [{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship'}], maritaca: [{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship'}], ollama: [{id:'Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4b',context:'128K',tier:'efficient'}]}; }
         },
         setDefaultModel() {
             const models = this.allModels[this.form.llm_provider] || [];
