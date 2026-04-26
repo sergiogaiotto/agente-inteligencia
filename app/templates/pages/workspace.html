@@ -254,10 +254,30 @@
                         </div>
                     </div>
                     <div>
+                        <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-2">Execução detalhada</h3>
+                        <template x-if="traceExecutionLog().length>0">
+                            <div class="space-y-1.5">
+                                <template x-for="(e,i) in traceExecutionLog()" :key="i">
+                                    <div class="rounded-lg border px-2.5 py-2" :class="e.level==='success'?'border-emerald-200 bg-emerald-50/70':e.level==='warning'?'border-amber-200 bg-amber-50/70':e.level==='danger'?'border-rose-200 bg-rose-50/70':'border-surface-200 bg-surface-50'">
+                                        <div class="flex items-start gap-2">
+                                            <span class="text-[12px] shrink-0" x-text="e.icon||'•'"></span>
+                                            <div class="min-w-0 flex-1">
+                                                <div class="text-[11px] font-semibold text-brand-900 break-words" x-text="e.title||'Etapa'"></div>
+                                                <div x-show="e.detail" class="text-[10px] text-surface-500 break-words mt-0.5" x-text="e.detail"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                        <template x-if="traceExecutionLog().length===0">
+                            <div class="rounded-lg bg-surface-50 px-3 py-3 text-[11px] text-surface-400 text-center">Sem log detalhado persistido para esta execução.</div>
+                        </template>
+                    </div>
+                    <div>
                         <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-2">Métricas</h3>
                         <div class="grid grid-cols-2 gap-2">
-                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.duration_ms?.toFixed(0)||'—'"></div><div class="text-[9px] text-surface-400 uppercase">Latência (ms)</div></div>
-                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.total_steps||lastTrace.transitions?.length||0"></div><div class="text-[9px] text-surface-400 uppercase">Transições</div></div>
+                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.duration_ms?.toFixed(0)||'—'"></div><div class="text-[9px] text-surface-400 uppercase">Latência (ms)</div></div>                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.total_steps||lastTrace.transitions?.length||0"></div><div class="text-[9px] text-surface-400 uppercase">Transições</div></div>
                             <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.evidence_count||0"></div><div class="text-[9px] text-surface-400 uppercase">Evidências</div></div>
                             <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.mcp_tools?.length||0"></div><div class="text-[9px] text-surface-400 uppercase">MCP Tools</div></div>
                             <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.api_tools_count||0"></div><div class="text-[9px] text-surface-400 uppercase">API Tools</div></div>
@@ -941,6 +961,10 @@ function workspacePage() {
         fsmColor(s){return{'PolicyCheck':'bg-blue-100 text-blue-700','RetrieveEvidence':'bg-cyan-100 text-cyan-700','DraftAnswer':'bg-violet-100 text-violet-700','VerifyEvidence':'bg-amber-100 text-amber-700','Recommend':'bg-emerald-100 text-emerald-700','Refuse':'bg-rose-100 text-rose-700','Escalate':'bg-red-100 text-red-700','LogAndClose':'bg-surface-200 text-surface-600'}[s]||'bg-brand-100 text-brand-700'},
         fsmLabel(s){return{'Intake':'Recepção','PolicyCheck':'Verificação de Política','RetrieveEvidence':'Busca de Evidências','DraftAnswer':'Geração de Rascunho (LLM)','VerifyEvidence':'Verificação de Evidência','Recommend':'Recomendação','Refuse':'Recusa','Escalate':'Escalação','LogAndClose':'Registro e Fechamento'}[s]||s},
         fsmDesc(s){return{'Intake':'Recebe e contextualiza a solicitação do usuário','PolicyCheck':'Avalia permissões do ator e políticas OPA','RetrieveEvidence':'Retriever + Reranker consultam bases autorizadas','DraftAnswer':'DeepAgent Harness gera resposta via LLM','VerifyEvidence':'Evidence Checker valida consistência e cobertura','Recommend':'Resposta verificada entregue ao requisitante','Refuse':'Evidência insuficiente ou conflito de política','Escalate':'Risco detectado — encaminhado a supervisão humana','LogAndClose':'Decisão, fontes e métricas registradas no audit log'}[s]||''},
+        traceExecutionLog(){
+            const base=this.lastTrace||{};
+            return base.trace?.execution_log||base.execution_log||[];
+        },
         getDiagnostics(){
             const d=this.lastTrace?.trace?.diagnostics||[];
             const steps=this.lastTrace?.pipeline_steps;
