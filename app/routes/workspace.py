@@ -3,6 +3,7 @@ import json
 import os
 import re
 import ast
+import time
 import aiofiles
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -364,7 +365,11 @@ async def chat(data: ChatMessage):
                 # cru de bindings_executed.
                 ctx_dict = decl.get("context") or {}
                 output_text = ""
-                if "resposta" in ctx_dict:
+                has_mapping_overflow = any("excede max_bytes" in str(err or "") for err in (decl.get("errors") or []))
+                if has_mapping_overflow and decl.get("api_response") is not None:
+                    api_resp = decl.get("api_response")
+                    output_text = api_resp if isinstance(api_resp, str) else json.dumps(api_resp, ensure_ascii=False, indent=2)
+                elif "resposta" in ctx_dict:
                     r = ctx_dict["resposta"]
                     output_text = r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, indent=2)
                 elif decl.get("api_response") is not None:
@@ -430,6 +435,47 @@ async def chat(data: ChatMessage):
                         "execution_log": exec_log,
                     },
                 }
+
+                # Persistência de sessão/turnos para modo declarativo:
+                # - reutiliza session_id informado (consulta futura)
+                # - cria nova sessão quando necessário
+                requested_session_id = (data.session_id or "").strip() or None
+                interaction_id = requested_session_id or decl.get("interaction_id")
+                existing_session = await interactions_repo.find_by_id(interaction_id) if interaction_id else None
+                if not interaction_id:
+                    interaction_id = str(uuid.uuid4())
+                if not existing_session:
+                    await interactions_repo.create({
+                        "id": interaction_id,
+                        "title": (data.message or "")[:80].strip(),
+                        "agent_id": data.agent_id,
+                        "channel": data.channel,
+                        "journey_id": data.journey or "",
+                        "state": "LogAndClose",
+                        "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    })
+                    next_turn = 1
+                else:
+                    old_turns = await turns_repo.find_all(interaction_id=interaction_id, limit=500)
+                    next_turn = max((int(t.get("turn_number") or 0) for t in old_turns), default=0) + 1
+                    await interactions_repo.update(interaction_id, {
+                        "state": "LogAndClose",
+                        "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    })
+
+                await turns_repo.create({
+                    "id": str(uuid.uuid4()),
+                    "turn_number": next_turn,
+                    "user_text_redacted": data.message,
+                    "interaction_id": interaction_id,
+                })
+                await turns_repo.create({
+                    "id": str(uuid.uuid4()),
+                    "turn_number": next_turn + 1,
+                    "output_text_redacted": output_text,
+                    "interaction_id": interaction_id,
+                })
+                result["interaction_id"] = interaction_id
             else:
                 result = await execute_interaction(
                     agent_id=data.agent_id,
