@@ -165,6 +165,47 @@ class DeepAgentHarness:
             primary = name.split()[0] if name else ""
             if primary and primary in workflow:
                 return True
+                return False
+
+    def _needs_reflection(self, response: AIMessage, state: AgentState) -> bool:
+        """Decide se vale uma rodada extra de reflexão.
+
+        Objetivo de desempenho: evitar loops de reflexão quando a primeira
+        resposta já está suficientemente boa.
+        """
+        if state.get("iteration", 0) + 1 >= state.get("max_iterations", 1):
+            return False
+
+        skill = self.config.get("_parsed_skill", {}) or {}
+        exec_mode = (skill.get("_execution_mode") or "standard").lower()
+        if exec_mode == "fast":
+            return False
+
+        content = (getattr(response, "content", "") or "").strip()
+        if not content:
+            return True
+
+        # Heurística de "resposta provavelmente ruim"
+        if len(content) < 40:
+            return True
+
+        # Se o skill exige contrato JSON explícito, tenta validar minimamente.
+        output_contract = (skill.get("output_contract") or "").lower()
+        expects_json = "json" in output_contract or '"type"' in output_contract
+        if expects_json and content.startswith("{"):
+            try:
+                json.loads(content)
+            except Exception:
+                return True
+
+        # Em standard, só reflete em casos claros de baixa qualidade.
+        if exec_mode == "standard":
+            return False
+
+        # Em rigorous, executa reflexão apenas quando há sinal de risco.
+        guardrails = (skill.get("guardrails") or "").strip()
+        if guardrails and "não" in content.lower() and len(content) < 120:
+            return True
         return False
 
     async def reason(self, state: AgentState) -> AgentState:
@@ -213,7 +254,9 @@ class DeepAgentHarness:
                 logger.warning(f"LLM '{self.config.get('model','?')}' não suporta tools — refazendo sem MCP. Erro original: {str(e)[:200]}")
                 response = await llm.ainvoke(messages, config={"callbacks": callbacks})
                 # Curto-circuita: sem tools não há tool_calls a processar.
-                return {**state, "messages": [response], "iteration": state.get("iteration", 0) + 1}
+                md = dict(state.get("metadata") or {})
+                md["reflect_recommended"] = self._needs_reflection(response, state)
+                return {**state, "messages": [response], "iteration": state.get("iteration", 0) + 1, "metadata": md}
             raise
         if self.openai_tools:
             _tc = getattr(response, "tool_calls", None) or []
@@ -258,9 +301,13 @@ class DeepAgentHarness:
                 response = await llm_with_tools_auto.ainvoke(current_messages, config={"callbacks": callbacks})
                 current_messages.append(response)
 
-            return {**state, "messages": [response], "iteration": state.get("iteration", 0) + 1}
+            md = dict(state.get("metadata") or {})
+            md["reflect_recommended"] = self._needs_reflection(response, state)
+            return {**state, "messages": [response], "iteration": state.get("iteration", 0) + 1, "metadata": md}
 
-        return {**state, "messages": [response], "iteration": state.get("iteration", 0) + 1}
+        md = dict(state.get("metadata") or {})
+        md["reflect_recommended"] = self._needs_reflection(response, state)
+        return {**state, "messages": [response], "iteration": state.get("iteration", 0) + 1, "metadata": md}
 
     async def reflect(self, state: AgentState) -> AgentState:
         """Nó de reflexão — avalia e refina."""
@@ -287,6 +334,8 @@ class DeepAgentHarness:
             return "end"
         last = state["messages"][-1] if state["messages"] else None
         if last and "SATISFATÓRIO" in getattr(last, "content", "").upper():
+            return "end"
+        if not (state.get("metadata") or {}).get("reflect_recommended", False):
             return "end"
         return "reflect"
 
@@ -539,7 +588,8 @@ async def execute_interaction(
                 mcp_tools_detail = [{"name": t.get("name",""), "server": t.get("mcp_server",""), "ops": t.get("operations",[])} for t in mcp_tools]
                 logger.info(f"MCP tools resolved: {[t.get('name') for t in mcp_tools]}")
 
-        # Execution Profile: fast=1 (sem reflexão), standard=2, rigorous=3
+        # Execution Profile + reflexão adaptativa:
+        # fast=1, standard=2 (2ª rodada apenas se heurística sinalizar), rigorous=3 idem.
         _max_iter = 1 if exec_profile == "fast" else (2 if exec_profile == "standard" else 3)
         harness = DeepAgentHarness(agent, max_iterations=_max_iter, mcp_tools=mcp_tools)
         graph = harness.build_graph()
@@ -815,7 +865,7 @@ def _build_execution_log(
 
     # ── Execution Profile ──
     _exec_mode = skill_data.get("_execution_mode", "standard") if skill_data else "standard"
-    _mode_labels = {"fast": "Fast — 1 LLM call, sem reflexão, sem evidence check", "standard": "Standard — reflexão on-error, evidence heurística", "rigorous": "Rigorous — reflexão completa, evidence via LLM"}
+    _mode_labels = {"fast": "Fast — 1 LLM call, sem reflexão, sem evidence check", "standard": "Standard — reflexão adaptativa (somente quando necessário), evidence heurística", "rigorous": "Rigorous — reflexão adaptativa + evidence via LLM"}
     _mode_level = {"fast": "info", "standard": "info", "rigorous": "warning"}
     _add("skill", "⚡", f"Execution Profile: {_exec_mode}", _mode_labels.get(_exec_mode, ""), _mode_level.get(_exec_mode, "info"))
 
