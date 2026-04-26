@@ -262,25 +262,35 @@
                         </div>
                     </div>
                     <div>
-                        <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-2">Execução detalhada</h3>
-                        <template x-if="traceExecutionLog().length>0">
-                            <div class="space-y-1.5">
-                                <template x-for="(e,i) in traceExecutionLog()" :key="i">
-                                    <div class="rounded-lg border px-2.5 py-2" :class="e.level==='success'?'border-emerald-200 bg-emerald-50/70':e.level==='warning'?'border-amber-200 bg-amber-50/70':e.level==='danger'?'border-rose-200 bg-rose-50/70':'border-surface-200 bg-surface-50'">
-                                        <div class="flex items-start gap-2">
-                                            <span class="text-[12px] shrink-0" x-text="e.icon||'•'"></span>
-                                            <div class="min-w-0 flex-1">
-                                                <div class="text-[11px] font-semibold text-brand-900 break-words" x-text="e.title||'Etapa'"></div>
-                                                <div x-show="e.detail" class="text-[10px] text-surface-500 break-words mt-0.5" x-text="e.detail"></div>
+                        <div class="mb-2 flex items-center justify-between">
+                            <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider">Execução detalhada</h3>
+                            <button @click="detailedExecutionExpanded=!detailedExecutionExpanded" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors" :class="detailedExecutionExpanded ? 'bg-surface-100 text-surface-500 hover:bg-surface-200' : 'bg-brand-50 text-brand-600 hover:bg-brand-100'">
+                                <span x-text="detailedExecutionExpanded ? 'Recolher' : 'Expandir'"></span>
+                                <svg class="h-3 w-3 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" :class="detailedExecutionExpanded ? '' : 'rotate-180'">
+                                    <path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div x-show="detailedExecutionExpanded">
+                            <template x-if="traceExecutionLog().length>0">
+                                <div class="space-y-1.5">
+                                    <template x-for="(e,i) in traceExecutionLog()" :key="i">
+                                        <div class="rounded-lg border px-2.5 py-2" :class="e.level==='success'?'border-emerald-200 bg-emerald-50/70':e.level==='warning'?'border-amber-200 bg-amber-50/70':e.level==='danger'?'border-rose-200 bg-rose-50/70':'border-surface-200 bg-surface-50'">
+                                            <div class="flex items-start gap-2">
+                                                <span class="text-[12px] shrink-0" x-text="e.icon||'•'"></span>
+                                                <div class="min-w-0 flex-1">
+                                                    <div class="text-[11px] font-semibold text-brand-900 break-words" x-text="e.title||'Etapa'"></div>
+                                                    <div x-show="e.detail" class="text-[10px] text-surface-500 break-words mt-0.5" x-text="e.detail"></div>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                </template>
-                            </div>
-                        </template>
-                        <template x-if="traceExecutionLog().length===0">
-                            <div class="rounded-lg bg-surface-50 px-3 py-3 text-[11px] text-surface-400 text-center">Sem log detalhado persistido para esta execução.</div>
-                        </template>
+                                    </template>
+                                </div>
+                            </template>
+                            <template x-if="traceExecutionLog().length===0">
+                                <div class="rounded-lg bg-surface-50 px-3 py-3 text-[11px] text-surface-400 text-center">Sem log detalhado persistido para esta execução.</div>
+                            </template>
+                        </div>
                     </div>
                     <div>
                         <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-2">Métricas</h3>
@@ -338,6 +348,8 @@ function workspacePage() {
         progressSteps:[], progressMinimized:false,
         liveLog:[], logMinimized:false, _logStart:0, _animTimers:[], _pulseInterval:null, _pulseCount:0,
         richViewMsgs:{},
+        diagnosticExpanded:true,
+        detailedExecutionExpanded:true,
         diagnosticExpanded:true,
         get progressDone(){return this.progressSteps.filter(s=>s.status==='done'||s.status==='error').length},
         get selectedAgentInfo(){return this.agents.find(a=>a.id===this.selectedAgentId)||null},
