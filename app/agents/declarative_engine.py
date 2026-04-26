@@ -671,7 +671,10 @@ async def execute_declarative(
 
         for r, p in zip(exec_results, runnable_plans):
             executed.append({**{k: r[k] for k in ("binding_id","call_id","status","latency_ms","attempts")},
-                             "level": level_idx})
+                             "level": level_idx,
+                             "response_data": r.get("response_data")})
+            if 200 <= r.get("status", 0) < 300 and first_success_response_data is None:
+                first_success_response_data = r.get("response_data")
             if r.get("skipped_by_breaker"):
                 errors.append(r["error"])
             elif r["error"]:
@@ -686,8 +689,6 @@ async def execute_declarative(
                     fatal = True
             else:
                 level_had_success = True
-                if first_success_response_data is None:
-                    first_success_response_data = r.get("response_data")
                 level_additions = _deep_merge(level_additions, r["additions"])
 
         if level_additions:
