@@ -243,8 +243,16 @@
                         <template x-if="!lastTrace.trace?.evidence_count"><div class="rounded-lg bg-surface-50 px-3 py-3 text-center"><p class="text-[11px] text-surface-400">Sem evidências consultadas</p><a href="/rag" class="text-[10px] text-brand-500 font-medium">Registrar bases</a></div></template>
                     </div>
                     <div>
-                        <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-2">Diagnóstico</h3>
-                        <div class="space-y-1.5">
+                        <div class="mb-2 flex items-center justify-between">
+                            <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider">Diagnóstico</h3>
+                            <button @click="diagnosticExpanded=!diagnosticExpanded" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors" :class="diagnosticExpanded ? 'bg-surface-100 text-surface-500 hover:bg-surface-200' : 'bg-brand-50 text-brand-600 hover:bg-brand-100'">
+                                <span x-text="diagnosticExpanded ? 'Recolher' : 'Expandir'"></span>
+                                <svg class="h-3 w-3 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" :class="diagnosticExpanded ? '' : 'rotate-180'">
+                                    <path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div x-show="diagnosticExpanded" class="space-y-1.5">
                             <template x-for="d in getDiagnostics()" :key="d.text">
                                 <div class="flex gap-2 rounded-lg px-3 py-2" :class="d.level==='success'?'bg-emerald-50':d.level==='warning'?'bg-amber-50':d.level==='danger'?'bg-rose-50':'bg-brand-50'">
                                     <span class="shrink-0 mt-0.5" x-text="d.level==='success'?'✓':d.level==='warning'?'⚠':d.level==='danger'?'✗':'ℹ'"></span>
@@ -330,6 +338,7 @@ function workspacePage() {
         progressSteps:[], progressMinimized:false,
         liveLog:[], logMinimized:false, _logStart:0, _animTimers:[], _pulseInterval:null, _pulseCount:0,
         richViewMsgs:{},
+        diagnosticExpanded:true,
         get progressDone(){return this.progressSteps.filter(s=>s.status==='done'||s.status==='error').length},
         get selectedAgentInfo(){return this.agents.find(a=>a.id===this.selectedAgentId)||null},
 
