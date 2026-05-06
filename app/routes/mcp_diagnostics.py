@@ -84,12 +84,16 @@ async def probe(req: ProbeRequest):
         if parsed_bindings:
             mcp_tools = await match_with_registry(parsed_bindings, tools_repo)
 
-    # redact secrets for response
+    # redact secrets for response — substitui token por fingerprint do plaintext
+    # (consistente para o mesmo segredo, mas não-reversível). auth_config inteiro
+    # é redacted porque pode conter chaves OAuth2 e PEMs.
+    from app.core.secrets import fingerprint as _secret_fp
+
     def _redact_tool(t: dict) -> dict:
         out = dict(t)
         if out.get("auth_token"):
-            tok = out["auth_token"]
-            out["auth_token"] = f"{tok[:8]}…{tok[-4:]}" if len(tok) > 12 else "<present>"
+            fp = _secret_fp(out["auth_token"])
+            out["auth_token"] = f"<fp:{fp}>" if fp else "<present>"
         ac = out.get("auth_config")
         if ac:
             out["auth_config"] = "<redacted>"

@@ -37,6 +37,9 @@ pydantic-settings>=2.0.0
 pyyaml>=6.0.0
 websockets>=12.0
 passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.1,<4.1   # passlib 1.7.4 quebra com bcrypt 4.1+ (sem __about__.__version__)
+cryptography>=42.0.0
+itsdangerous>=2.2.0
 
 # === Declarative API Bindings ===
 jsonpath-ng>=1.6.0

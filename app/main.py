@@ -22,6 +22,12 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, description="Plataforma Multi-Agente §SKILL.md sobre AI Mesh", version="2.0.0", lifespan=lifespan)
+
+# ── Middlewares de segurança (Onda 1) ──────────────────────────
+# Rate-limit (sliding window via Redis com fallback memory) — defesa LLM04.
+from app.core.ratelimit import RateLimitMiddleware
+app.add_middleware(RateLimitMiddleware)
+
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.state.templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 

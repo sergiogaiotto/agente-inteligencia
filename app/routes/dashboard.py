@@ -330,11 +330,15 @@ async def get_tool(tool_id: str):
 @router.post("/tools", status_code=201)
 async def create_tool(data: ToolCreate):
     """Cria tool. Loga payload recebido para diagnóstico."""
+    from app.core.secrets import write_secret
     tid = str(uuid.uuid4())
     payload = data.model_dump()
     logger.info(f"create_tool: name={payload.get('name')!r} mcp_server={payload.get('mcp_server')!r}")
     d = {"id": tid, **payload}
     d["requires_trusted_context"] = 1 if data.requires_trusted_context else 0
+    # Cifra credencial em repouso (Fernet) — texto plano nunca toca o banco
+    if d.get("auth_token"):
+        d["auth_token"] = write_secret(d["auth_token"])
     try:
         await tools_repo.create(d)
         await audit_repo.create({"entity_type":"tool","entity_id":tid,"action":"created","details":json.dumps({"name":data.name,"mcp_server":data.mcp_server})})
@@ -365,9 +369,14 @@ async def update_tool(tool_id: str, data: ToolUpdate):
 
     upd = {k: v for k, v in raw.items() if v is not None}
 
-    # Boolean → int para SQLite
+    # Boolean → int (compat com colunas INTEGER 0/1)
     if "requires_trusted_context" in upd:
         upd["requires_trusted_context"] = 1 if upd["requires_trusted_context"] else 0
+
+    # Cifra credencial em repouso quando o cliente enviou um novo token
+    if upd.get("auth_token"):
+        from app.core.secrets import write_secret
+        upd["auth_token"] = write_secret(upd["auth_token"])
 
     if not upd:
         logger.warning(f"update_tool {tool_id}: nenhum campo válido para atualizar")
