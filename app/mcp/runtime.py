@@ -440,7 +440,10 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
             # Credenciais precisam ser propagadas para execute_tool_call
             # poder montar o header Authorization. Antes só auth_requirements
             # era copiado — resultado: Tavily respondia {"error":"invalid_token"}.
-            pt['auth_token'] = matched.get('auth_token', '') or ''
+            # auth_token vem cifrado em repouso (Fernet) — decifra antes de usar.
+            # read_secret é idempotente em texto plano (compat com tokens legados).
+            from app.core.secrets import read_secret
+            pt['auth_token'] = read_secret(matched.get('auth_token', '')) or ''
             pt['auth_config'] = matched.get('auth_config', '{}') or '{}'
             if not pt.get('operations') and matched.get('operations'):
                 try: pt['operations'] = json.loads(matched['operations'])
@@ -693,8 +696,10 @@ async def execute_tool_call(tool_name: str, arguments: dict, mcp_tools: list[dic
     query = arguments.get('query', '')
 
     # ── Build auth (API Key / OAuth2 / mTLS) ──
+    # auth_token vem cifrado em repouso — decifra antes de injetar nos headers.
+    from app.core.secrets import read_secret
     auth_type = tool_config.get('auth_requirements', '')
-    auth_token = tool_config.get('auth_token', '')
+    auth_token = read_secret(tool_config.get('auth_token', ''))
     auth_config_raw = tool_config.get('auth_config', '{}')
     headers = {**MCP_HEADERS}
     client_kwargs = {}

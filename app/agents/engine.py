@@ -527,9 +527,40 @@ async def execute_interaction(
     fsm = InteractionStateMachine(ctx)
     await fsm.run_intake(user_input, agent_id, journey, channel)
 
-    policy_ok = await fsm.run_policy_check({"allowed": True, "tools": [], "budget": {}})
+    # ── Prompt-injection guard (LLM01) ─────────────────────────
+    # Aplicado ANTES do policy_check para bloquear payloads adversariais
+    # antes de qualquer side-effect (retrieve, LLM, tool call). Score
+    # médio (warn) só anota em metadata; score alto (block) força Refuse.
+    from app.core.config import get_settings as _gs_pg
+    _pg_settings = _gs_pg()
+    guard_blocked = False
+    guard_reason = ""
+    if _pg_settings.prompt_guard_enabled:
+        from app.core.prompt_guard import detect as _pg_detect
+        guard_result = _pg_detect(
+            user_input,
+            block_threshold=_pg_settings.prompt_guard_block_threshold,
+            warn_threshold=_pg_settings.prompt_guard_warn_threshold,
+        )
+        if guard_result.score > 0:
+            ctx.metadata["prompt_guard"] = guard_result.to_dict()
+        if guard_result.blocked:
+            guard_blocked = True
+            guard_reason = (
+                f"Tentativa de prompt injection bloqueada "
+                f"(score={guard_result.score:.2f}, padrões: {len(guard_result.matched_patterns)})."
+            )
+            await audit_repo.create({
+                "entity_type": "interaction",
+                "entity_id": ctx.interaction_id,
+                "action": "prompt_injection_blocked",
+                "details": json.dumps(guard_result.to_dict()),
+            })
+
+    policy_ok = await fsm.run_policy_check({"allowed": not guard_blocked, "tools": [], "budget": {}})
     if not policy_ok:
-        await fsm.run_refuse("Política de acesso negou a solicitação.", "Contate o administrador.")
+        motivo = guard_reason or "Política de acesso negou a solicitação."
+        await fsm.run_refuse(motivo, "Reformule a solicitação ou contate o administrador.")
         await fsm.run_log_and_close()
         return _build_result(ctx, start, mesh_chain=mesh_chain, attachments=attachment_meta, agent=agent, skill_data=skill_data)
 
@@ -642,6 +673,18 @@ async def execute_interaction(
                 "input_billed_sum": tin_billed_sum,
                 "total_billed": tin_billed_sum + tout_sum,
             }
+            # Cap de tokens — defesa LLM04 contra runaway loops e abuso de custo.
+            # Não é interrupção retroativa (já consumiu) — sinaliza no trace
+            # e em log para que ratelimit/quotas externas possam agir.
+            from app.core.config import get_settings as _gs
+            _cap = _gs().interaction_max_tokens
+            _billed = tin_billed_sum + tout_sum
+            if _cap and _billed > _cap:
+                logger.warning(
+                    f"Token cap ultrapassado: agent={agent_id} billed={_billed} cap={_cap} calls={len(per_call)}"
+                )
+                ctx.metadata["tokens"]["cap_exceeded"] = True
+                ctx.metadata["tokens"]["cap"] = _cap
         else:
             ctx.metadata["tokens"] = {"input": 0, "output": 0, "total": 0, "calls": 0, "input_billed_sum": 0, "total_billed": 0}
     except Exception as llm_err:
@@ -779,7 +822,18 @@ def _build_result(
         skill_detail["execution_mode"] = skill_data.get("_execution_mode", "standard")
 
     system_prompt_text = agent.get("system_prompt", "")
-    system_prompt_summary = system_prompt_text[:800] if system_prompt_text else ""
+    # LLM10 — Prompt Leak Guard: por padrão NÃO devolve o prompt cru no trace.
+    # Sanitiza para hash + preview. Operador admin obtém o original direto
+    # do agents_repo; traces de observabilidade não vazam o conteúdo.
+    from app.core.config import get_settings as _gs_pl
+    _pl = _gs_pl()
+    if _pl.prompt_leak_guard_enabled and system_prompt_text:
+        from app.core.prompt_guard import sanitize_for_trace
+        system_prompt_summary = sanitize_for_trace(
+            system_prompt_text, preview_chars=_pl.prompt_leak_preview_chars,
+        )
+    else:
+        system_prompt_summary = system_prompt_text[:800] if system_prompt_text else ""
 
     exec_log = _build_execution_log(
         agent=agent, skill_data=skill_data, skill_detail=skill_detail,
@@ -844,9 +898,19 @@ def _build_execution_log(
 
     sp = agent.get("system_prompt", "")
     if sp:
-        lines = sp.strip().split('\n')
-        preview = lines[0][:120] + ("..." if len(lines[0]) > 120 or len(lines) > 1 else "")
-        _add("prompt", "📝", "System Prompt", preview)
+        # Quando o leak guard está ativo, mostra hash + preview curto em vez
+        # do conteúdo bruto — consistente com trace.system_prompt sanitizado.
+        from app.core.config import get_settings as _gs_pl_log
+        _pl_cfg = _gs_pl_log()
+        if _pl_cfg.prompt_leak_guard_enabled:
+            from app.core.prompt_guard import sanitize_for_trace
+            s = sanitize_for_trace(sp, preview_chars=_pl_cfg.prompt_leak_preview_chars)
+            _add("prompt", "📝", "System Prompt",
+                 f"hash:{s['hash']} · {s['length']} chars · {s['preview']}")
+        else:
+            lines = sp.strip().split('\n')
+            preview = lines[0][:120] + ("..." if len(lines[0]) > 120 or len(lines) > 1 else "")
+            _add("prompt", "📝", "System Prompt", preview)
 
     if skill_detail.get("name"):
         _add("skill", "📋", f"SKILL.md: {skill_detail['name']}",
@@ -1074,11 +1138,16 @@ async def execute_pipeline(
                 continue
             if step.get("status") == "completed" and step.get("output"):
                 from app.core.database import turns_repo
+                from app.core.dlp import redact_for_persist
+                from app.core.config import get_settings as _gs_dlp
                 import uuid as _uuid
+                _step_out = step["output"]
+                if _gs_dlp().dlp_enabled:
+                    _step_out = redact_for_persist(_step_out)
                 await turns_repo.create({
                     "id": str(_uuid.uuid4()),
                     "turn_number": turn_number,
-                    "output_text_redacted": step["output"],
+                    "output_text_redacted": _step_out,
                     "interaction_id": master_interaction_id,
                 })
                 turn_number += 1

@@ -1,17 +1,25 @@
-"""Rotas de Usuários e Domínios — CRUD com controle de acesso."""
+"""Rotas de Usuários e Domínios — CRUD com controle de acesso.
+
+Auth hardening (Onda 1):
+- bcrypt via passlib (`app.core.auth`). SHA256 legado validado e migrado
+  no próximo login bem-sucedido (transparente para o usuário).
+- Cookies: HttpOnly + SameSite + Secure (em prod via setting).
+- CSRF token gerado em /me e /login; validação opt-in via setting.
+"""
 import uuid
-import hashlib
 import json
+import logging
 from fastapi import APIRouter, HTTPException, Request, Response
 from app.models.schemas import UserCreate, UserUpdate, UserLogin, DomainCreate
 from app.core.database import users_repo, domains_repo
+from app.core.auth import (
+    hash_password, verify_password, needs_rehash,
+    make_csrf_token, cookie_kwargs,
+)
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 domains_router = APIRouter(prefix="/api/v1/domains", tags=["domains"])
-
-
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
 
 
 # ═══ Auth ═══
@@ -19,31 +27,56 @@ def hash_password(password: str) -> str:
 async def login(data: UserLogin, response: Response):
     users = await users_repo.find_all(limit=1000)
     user = next((u for u in users if u["username"] == data.username), None)
-    if not user:
-        raise HTTPException(401, "Usuário não encontrado")
-    if user["password_hash"] != hash_password(data.password):
-        raise HTTPException(401, "Senha incorreta")
+    # Mensagem genérica e tempo aproximadamente constante para evitar
+    # enumeração de usuários por timing/erro.
+    if not user or not verify_password(data.password, user["password_hash"]):
+        # Custo do verify_password de qualquer forma para mitigar timing
+        if not user:
+            verify_password(data.password, "$2b$12$" + "x" * 53)
+        raise HTTPException(401, "Credenciais inválidas")
     if user.get("status") != "active":
         raise HTTPException(403, "Usuário inativo")
-    # Set cookie
-    response.set_cookie("user_id", user["id"], httponly=True, max_age=86400 * 7)
-    return {"user": {k: v for k, v in dict(user).items() if k != "password_hash"}}
+
+    # Migração transparente: se hash legado SHA256, regrava em bcrypt.
+    if needs_rehash(user["password_hash"]):
+        try:
+            await users_repo.update(user["id"], {"password_hash": hash_password(data.password)})
+            logger.info(f"login: hash migrado para bcrypt user={user['id']}")
+        except Exception as e:
+            logger.warning(f"login: falha ao migrar hash user={user['id']}: {e}")
+
+    # Cookies seguros + CSRF token (front pode ler csrf_token e mandar em header)
+    ck = cookie_kwargs()
+    response.set_cookie("user_id", user["id"], **ck)
+    csrf = make_csrf_token()
+    # csrf_token NÃO é HttpOnly — front precisa ler para mandar no header
+    response.set_cookie("csrf_token", csrf, **{**ck, "httponly": False})
+
+    return {
+        "user": {k: v for k, v in dict(user).items() if k != "password_hash"},
+        "csrf_token": csrf,
+    }
 
 
 @router.post("/logout")
 async def logout(response: Response):
     response.delete_cookie("user_id")
+    response.delete_cookie("csrf_token")
     return {"message": "Logout realizado"}
 
 
 @router.get("/me")
-async def get_current_user(request: Request):
+async def get_current_user(request: Request, response: Response):
     user_id = request.cookies.get("user_id")
     if not user_id:
         return {"user": None}
     user = await users_repo.find_by_id(user_id)
     if not user:
         return {"user": None}
+    # Renova CSRF token se ausente — útil quando o cookie expirou mas o user_id segue
+    if not request.cookies.get("csrf_token"):
+        csrf = make_csrf_token()
+        response.set_cookie("csrf_token", csrf, **{**cookie_kwargs(), "httponly": False})
     return {"user": {k: v for k, v in dict(user).items() if k != "password_hash"}}
 
 
