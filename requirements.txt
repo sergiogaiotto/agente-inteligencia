@@ -11,8 +11,11 @@ python-multipart>=0.0.9
 jinja2>=3.1.0
 aiofiles>=23.0.0
 
-# === Database ===
-aiosqlite>=0.20.0
+# === Database (PostgreSQL) ===
+asyncpg>=0.29.0
+
+# === Cache / Memória de Contexto ===
+redis[hiredis]>=5.0.0
 
 # === LangChain / LangGraph ===
 langgraph>=0.2.0
@@ -33,6 +36,11 @@ pydantic>=2.0.0
 pydantic-settings>=2.0.0
 pyyaml>=6.0.0
 websockets>=12.0
+passlib[bcrypt]>=1.7.4
 
 # === Declarative API Bindings ===
 jsonpath-ng>=1.6.0
+jinja2>=3.1.0
+
+# === Migration (one-shot SQLite → Postgres) ===
+aiosqlite>=0.20.0

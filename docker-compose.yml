@@ -1,11 +1,161 @@
+# ══════════════════════════════════════════════════════════════════
+# AgenteInteligência-AI — docker-compose (VPS Hostinger ready)
+#
+# Profiles:
+#   - minimal (default): app + postgres + redis + qdrant   (~1.5 GB RAM)
+#   - full              : adiciona opa + tempo + loki + grafana (Onda 2)
+#
+# Como subir:
+#   docker compose up -d                 # minimal (default)
+#   docker compose --profile full up -d  # full (após Onda 2)
+#
+# Persistência: volumes nomeados (sobrevivem a recreate). Backups em
+# infra/scripts/backup.sh. Logs com rotação (max 10MB x 3 arquivos).
+# Apenas a porta 7000 do app fica exposta na host — postgres/redis/qdrant
+# ficam na rede privada `aimesh`.
+# ══════════════════════════════════════════════════════════════════
+
 services:
+
+  # ─── App (FastAPI + LangGraph) ───────────────────────────────────
   app:
-    build: .
-    ports:
-      - "7000:7000"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agente-inteligencia:local
+    container_name: agente_app
+    restart: unless-stopped
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agente}:${POSTGRES_PASSWORD:-agente}@postgres:5432/${POSTGRES_DB:-agente_inteligencia}
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+    ports:
+      - "${APP_PORT_HOST:-7000}:7000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - aimesh
     volumes:
-      - ./data:/app/data
-      - ./app:/app/app
+      - app_data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ─── PostgreSQL ──────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: agente_postgres
     restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agente}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agente}
+      POSTGRES_DB: ${POSTGRES_DB:-agente_inteligencia}
+      # Tuning leve para VPS — ajustar conforme RAM disponível
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - aimesh
+    # Não expõe na host por default — desbloqueie só para debug local
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agente} -d ${POSTGRES_DB:-agente_inteligencia}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Redis (cache de contexto + rate-limit) ──────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: agente_redis
+    restart: unless-stopped
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "yes"
+      - "--save"
+      - "60"
+      - "1000"
+      - "--maxmemory"
+      - "256mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+    volumes:
+      - redis_data:/data
+    networks:
+      - aimesh
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ─── Qdrant (Vector DB) ──────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.11.0
+    container_name: agente_qdrant
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__LOG_LEVEL: WARN
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - aimesh
+    # Por padrão não expõe na host — desbloqueie para usar dashboard local
+    # ports:
+    #   - "127.0.0.1:6333:6333"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ══════════════════════════════════════════════════════════════════
+# Volumes nomeados — sobrevivem a `docker compose down` (sem -v)
+# ══════════════════════════════════════════════════════════════════
+volumes:
+  app_data:
+    name: agente_app_data
+  postgres_data:
+    name: agente_postgres_data
+  redis_data:
+    name: agente_redis_data
+  qdrant_data:
+    name: agente_qdrant_data
+
+# ══════════════════════════════════════════════════════════════════
+# Network privada interna do AI Mesh
+# ══════════════════════════════════════════════════════════════════
+networks:
+  aimesh:
+    name: agente_aimesh
+    driver: bridge

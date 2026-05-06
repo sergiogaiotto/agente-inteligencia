@@ -107,70 +107,18 @@ class ExtractCookieRequest(BaseModel):
 
 
 # ═══════════════════════════════════════════════════════
-# DB helpers — auto-bootstrap tabelas e repositórios
+# DB helpers — repositórios resolvidos via database.py central.
+# Schema das tabelas api_connectors / api_endpoints / api_call_logs
+# está em app/core/database.py e é criado pelo init_db() no startup.
 # ═══════════════════════════════════════════════════════
 
-_MIGRATION_SQL = """
-CREATE TABLE IF NOT EXISTS api_connectors (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    base_url TEXT NOT NULL,
-    description TEXT DEFAULT '',
-    icon TEXT DEFAULT 'AP',
-    color TEXT DEFAULT 'bg-brand-500',
-    api_key TEXT DEFAULT '',
-    auth_type TEXT DEFAULT 'none',
-    auth_header TEXT DEFAULT 'X-API-Key',
-    health_path TEXT DEFAULT '/api/health',
-    timeout_ms INTEGER DEFAULT 30000,
-    is_active INTEGER DEFAULT 1,
-    sort_order INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS api_endpoints (
-    id TEXT PRIMARY KEY,
-    connector_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    method TEXT NOT NULL,
-    path TEXT NOT NULL,
-    description TEXT DEFAULT '',
-    category TEXT DEFAULT 'geral',
-    sample_body TEXT DEFAULT '{}',
-    sample_headers TEXT DEFAULT '{}',
-    is_favorite INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (connector_id) REFERENCES api_connectors(id)
-);
-CREATE TABLE IF NOT EXISTS api_call_logs (
-    id TEXT PRIMARY KEY,
-    connector_id TEXT DEFAULT '',
-    endpoint_id TEXT DEFAULT '',
-    agent_id TEXT DEFAULT '',
-    method TEXT NOT NULL,
-    url TEXT NOT NULL,
-    request_headers TEXT DEFAULT '{}',
-    request_body TEXT DEFAULT '{}',
-    response_body TEXT DEFAULT '',
-    status_code INTEGER DEFAULT 0,
-    latency_ms REAL DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (connector_id) REFERENCES api_connectors(id)
-);
-"""
-
 _cached_repos = None
-_migrated = False
+_migrated = True  # tabelas vivem no schema central — sempre True
 
 
 async def _ensure_tables():
-    global _migrated
-    if _migrated:
-        return
-    from app.core.database import get_db
-    async with get_db() as db:
-        await db.executescript(_MIGRATION_SQL)
-        await db.commit()
-    _migrated = True
+    """No-op de retrocompat — schema vem do init_db() central."""
+    return
 
 
 def _repos():
