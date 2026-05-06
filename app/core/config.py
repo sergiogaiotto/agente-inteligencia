@@ -66,6 +66,45 @@ class Settings(BaseSettings):
     deepagent_max_iterations: int = 25
     deepagent_timeout: int = 120
 
+    # ── Rate-limit (Onda 1) ──
+    rate_limit_enabled: bool = True
+    rate_limit_window_seconds: int = 60
+    # Limites por janela. *_per_min é interpretado como "por janela".
+    rate_limit_default_per_min: int = 60       # rotas API genéricas
+    rate_limit_workspace_per_min: int = 20     # rotas que disparam LLM
+    rate_limit_auth_per_min: int = 10          # /login (anti-brute-force)
+    # Cap de tokens por interação — proteção LLM04 contra runaway loops
+    interaction_max_tokens: int = 80000
+
+    # ── Auth hardening (Onda 1) ──
+    # bcrypt sempre ativo; SHA256 legado validado e migrado no próximo login.
+    # CSRF default OFF para não quebrar frontend antes de adaptado — ligar
+    # quando o JS adicionar `X-CSRF-Token` em todos POST/PUT/DELETE.
+    csrf_required: bool = False
+    cookie_secure: bool = False                # True em produção HTTPS
+    cookie_samesite: str = "lax"               # "lax" | "strict" | "none"
+    session_max_age_seconds: int = 7 * 24 * 3600
+
+    # ── DLP / PII redaction (Onda 1) ──
+    dlp_enabled: bool = True
+    # Se True, aplica redaction também ANTES de enviar prompt ao LLM (perde
+    # contexto de identificadores reais). Default False — só redacta na
+    # persistência (cumpre LLM06 sem prejudicar a UX).
+    dlp_redact_before_llm: bool = False
+
+    # ── Prompt injection guard (Onda 1, LLM01) ──
+    prompt_guard_enabled: bool = True
+    # Score 0..1: bloqueia interação inteira se >= block_threshold
+    prompt_guard_block_threshold: float = 0.7
+    # Score 0..1: registra warning em audit_log mas deixa passar
+    prompt_guard_warn_threshold: float = 0.4
+
+    # ── Prompt leak guard (Onda 1, LLM10) ──
+    # Em traces de retorno, mostra apenas hash + preview do system_prompt em vez
+    # do texto cru. Admin pode obter o original via rota dedicada (futuro).
+    prompt_leak_guard_enabled: bool = True
+    prompt_leak_preview_chars: int = 60
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

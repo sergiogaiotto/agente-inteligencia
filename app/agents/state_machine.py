@@ -17,8 +17,19 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 from app.core.database import interactions_repo, turns_repo, audit_repo
+from app.core.config import get_settings
+from app.core.dlp import redact_for_persist, count_pii
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_redact(text: str) -> str:
+    """Redacta PII se DLP estiver habilitado nas settings."""
+    if not text:
+        return text
+    if get_settings().dlp_enabled:
+        return redact_for_persist(text)
+    return text
 
 
 class State(str, Enum):
@@ -119,9 +130,18 @@ class InteractionStateMachine:
         self.ctx.journey = journey
         self.ctx.channel = channel
 
+        # Conta PII para audit antes de redactar (sinaliza que existia)
+        pii = count_pii(user_input)
+        if pii.total:
+            self.ctx.metadata["pii_in_input"] = {
+                "cpf": pii.cpf, "cnpj": pii.cnpj, "email": pii.email,
+                "phone": pii.phone, "card": pii.card, "cep": pii.cep,
+            }
+            logger.info(f"PII detectada no input: total={pii.total} types={self.ctx.metadata['pii_in_input']}")
+
         await interactions_repo.create({
             "id": self.ctx.interaction_id,
-            "title": user_input[:80].strip(),
+            "title": _maybe_redact(user_input)[:80].strip(),
             "agent_id": agent_id,
             "channel": channel,
             "journey_id": journey,
@@ -130,7 +150,7 @@ class InteractionStateMachine:
         await turns_repo.create({
             "id": str(uuid.uuid4()),
             "turn_number": 1,
-            "user_text_redacted": user_input,
+            "user_text_redacted": _maybe_redact(user_input),
             "interaction_id": self.ctx.interaction_id,
         })
         await self.transition(State.POLICY_CHECK)
@@ -206,11 +226,12 @@ class InteractionStateMachine:
                 "state": State.LOG_AND_CLOSE.value,
                 "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
-            # Registra turno de saída
+            # Registra turno de saída — output também é redactado.
+            # Saída do LLM pode regurgitar PII vinda das evidências.
             await turns_repo.create({
                 "id": str(uuid.uuid4()),
                 "turn_number": 2,
-                "output_text_redacted": self.ctx.final_output,
+                "output_text_redacted": _maybe_redact(self.ctx.final_output),
                 "interaction_id": self.ctx.interaction_id,
             })
         return self.ctx
