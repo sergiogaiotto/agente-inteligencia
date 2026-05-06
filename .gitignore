@@ -1,0 +1,65 @@
+# ─── Segredos e configuração ────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.pfx
+secrets/
+.secrets/
+
+# ─── Dados / banco / uploads ────────────────────────────────
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+backups/
+
+# ─── Python ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+.hypothesis/
+.tox/
+.nox/
+build/
+dist/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ─── Ambientes virtuais ─────────────────────────────────────
+.venv/
+venv/
+ENV/
+env/
+
+# ─── IDEs / editores ────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ─── Logs ───────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Docker / volumes locais ────────────────────────────────
+docker-compose.override.yml
+.compose-cache/
+
+# ─── Claude Code (settings locais e worktrees) ──────────────
+.claude/
