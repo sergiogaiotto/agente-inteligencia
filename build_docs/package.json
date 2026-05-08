@@ -1,0 +1,6 @@
+{
+  "name": "build_docs",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "private": true
+}
