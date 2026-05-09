@@ -39,7 +39,11 @@ services:
       # LLM_GATEWAY_ENABLED=true (lido do .env). URL aqui é o nome interno do compose.
       LLM_GATEWAY_URL: http://litellm:4000
     ports:
-      - "${APP_PORT_HOST:-7000}:7000"
+      # Bind em 127.0.0.1: app fica acessível só do host (debug local), NÃO da
+      # internet pública. Em produção, Caddy é a única porta exposta (80/443).
+      # Docker bypassa UFW — sem o loopback explícito, "7000:7000" abre na WAN
+      # mesmo com firewall fechado. Acesso direto debug: `ssh -L 7000:127.0.0.1:7000`.
+      - "127.0.0.1:${APP_PORT_HOST:-7000}:7000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -388,7 +392,10 @@ services:
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     ports:
-      - "${GRAFANA_PORT_HOST:-3000}:3000"
+      # Loopback bind: Grafana é interface admin, não deve ficar público.
+      # Acesso em prod: ssh -L 3000:127.0.0.1:3000, OU expor via Caddy
+      # com auth na frente (futuro).
+      - "127.0.0.1:${GRAFANA_PORT_HOST:-3000}:3000"
     depends_on:
       tempo:
         condition: service_healthy
