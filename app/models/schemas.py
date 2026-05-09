@@ -31,6 +31,24 @@ class AgentUpdate(BaseModel):
     accepts_images: Optional[bool] = None
     accepts_documents: Optional[bool] = None
 
+
+class PreflightCheckResult(BaseModel):
+    """Resultado de um check individual do pre-flight de agente."""
+    id: str
+    severity: str = Field(..., pattern="^(error|warning|info)$")
+    title: str
+    detail: str
+    fix_hint: Optional[str] = None
+    field: Optional[str] = None  # campo do form que o operador pode editar
+
+
+class PreflightReport(BaseModel):
+    """Resultado agregado dos 9 checks. blocked=True quando há error."""
+    checks: list[PreflightCheckResult] = Field(default_factory=list)
+    has_errors: bool = False
+    has_warnings: bool = False
+    blocked: bool = False
+
 class SkillCreateRaw(BaseModel):
     raw_content: str = Field(..., min_length=10)
     tags: Optional[str] = "[]"

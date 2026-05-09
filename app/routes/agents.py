@@ -3,7 +3,10 @@ import re
 import time
 import uuid, json
 from fastapi import APIRouter, HTTPException
-from app.models.schemas import AgentCreate, AgentUpdate, AgentInvokeRequest, AgentInvokeResponse
+from app.models.schemas import (
+    AgentCreate, AgentUpdate, AgentInvokeRequest, AgentInvokeResponse,
+    PreflightReport,
+)
 from app.core.database import agents_repo, audit_repo, skills_repo
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
@@ -26,8 +29,26 @@ async def get_agent(agent_id: str):
 _BOOL_FIELDS = ("require_evidence", "accepts_images", "accepts_documents")
 
 
+@router.post("/preflight", response_model=PreflightReport)
+async def preflight_agent(data: AgentCreate) -> PreflightReport:
+    """Roda 9 checks semânticos contra o payload (sem persistir).
+    UI consome para mostrar lista de checks na step Revisão.
+    """
+    from app.agents.preflight import run_preflight
+    return await run_preflight(data.model_dump())
+
+
 @router.post("", status_code=201)
 async def create_agent(data: AgentCreate):
+    # Pre-flight bloqueia errors antes de persistir.
+    from app.agents.preflight import run_preflight
+    report = await run_preflight(data.model_dump())
+    if report.blocked:
+        raise HTTPException(422, detail={
+            "message": "Configuração com erros — corrija antes de salvar",
+            "preflight": report.model_dump(),
+        })
+
     aid = str(uuid.uuid4())
     d = {"id": aid, **data.model_dump()}
     # Schema legacy persiste flags booleanas como INTEGER 0/1 — converter aqui.
@@ -50,6 +71,24 @@ async def update_agent(agent_id: str, data: AgentUpdate):
     # para require_evidence por retrocompat.
     if data.require_evidence is not None and "require_evidence" not in upd:
         upd["require_evidence"] = data.require_evidence
+
+    # Pre-flight no payload mesclado (existing + upd) — cobre o estado
+    # final que o agente terá após o update. Bloqueia erros antes de
+    # persistir; warnings/info passam.
+    from app.agents.preflight import run_preflight
+    merged_payload = {**existing, **upd}
+    # Coerção bool→int legacy só acontece DEPOIS — preflight roda em bool.
+    for f in _BOOL_FIELDS:
+        v = merged_payload.get(f)
+        if isinstance(v, int) and not isinstance(v, bool):
+            merged_payload[f] = bool(v)
+    report = await run_preflight(merged_payload)
+    if report.blocked:
+        raise HTTPException(422, detail={
+            "message": "Configuração com erros — corrija antes de atualizar",
+            "preflight": report.model_dump(),
+        })
+
     # Schema legacy: flags booleanas como INTEGER 0/1.
     for f in _BOOL_FIELDS:
         if f in upd:
