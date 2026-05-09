@@ -157,7 +157,7 @@
             </template>
             <div class="divide-y divide-surface-50 max-h-[42vh] min-h-[200px] overflow-y-auto scrollbar-thin">
                 <template x-for="ev in moduleActivity" :key="ev.timestamp + ev.entity_id">
-                    <div @click="$root.openModuleGuide(ev.module_id)"
+                    <div @click="$dispatch('open-module-guide', {id: ev.module_id})"
                          class="group flex items-center gap-3 px-4 py-2 hover:bg-surface-50/50 cursor-pointer transition-colors">
                         <span class="rounded-full px-2 py-0.5 text-[9px] font-bold text-white shrink-0"
                               :class="moduleBadgeClass(ev.module_id)"
@@ -208,11 +208,11 @@
             <div class="rounded-xl border border-surface-200 bg-white p-5">
                 <div class="flex items-center justify-between mb-3">
                     <h2 class="text-[13px] font-semibold text-brand-900">Módulos Implementados</h2>
-                    <button @click="$root.openModuleGuide()" class="text-[10px] text-brand-500 font-medium hover:text-brand-700">📚 Guia</button>
+                    <button @click="$dispatch('open-module-guide', {})" class="text-[10px] text-brand-500 font-medium hover:text-brand-700">📚 Guia</button>
                 </div>
                 <div class="space-y-1 text-[11px]">
                     <template x-for="m in modules" :key="m.section">
-                        <div @click="$root.openModuleGuide(m.section)" class="relative group flex justify-between items-center rounded-md px-2 py-1.5 hover:bg-brand-50/50 transition-colors cursor-pointer">
+                        <div @click="$dispatch('open-module-guide', {id: m.section})" class="relative group flex justify-between items-center rounded-md px-2 py-1.5 hover:bg-brand-50/50 transition-colors cursor-pointer">
                             <span class="text-surface-500" x-text="m.section + ' ' + m.label"></span>
                             <span class="text-emerald-600 font-semibold">✓</span>
                             <!-- Tooltip -->

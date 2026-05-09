@@ -43,7 +43,11 @@
     <script src="/static/js/module-guide.js"></script>
     {% block head_extra %}{% endblock %}
 </head>
-<body class="h-full bg-surface-50 font-sans text-surface-500 antialiased" x-data="appShell()" x-init="initSearch()" x-cloak>
+<body class="h-full bg-surface-50 font-sans text-surface-500 antialiased"
+      x-data="appShell()"
+      x-init="initSearch()"
+      @open-module-guide.window="openModuleGuide($event.detail?.id)"
+      x-cloak>
 
     <!-- Mobile overlay -->
     <div x-show="sidebarOpen" x-transition.opacity class="fixed inset-0 z-40 bg-black/30 lg:hidden" @click="sidebarOpen = false"></div>
