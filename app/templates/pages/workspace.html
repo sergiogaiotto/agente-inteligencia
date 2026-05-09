@@ -242,6 +242,100 @@
                         </template>
                         <template x-if="!lastTrace.trace?.evidence_count"><div class="rounded-lg bg-surface-50 px-3 py-3 text-center"><p class="text-[11px] text-surface-400">Sem evidências consultadas</p><a href="/rag" class="text-[10px] text-brand-500 font-medium">Registrar bases</a></div></template>
                     </div>
+
+                    <!-- ─── Verifier Multi-Dim (Onda 6 + Onda 2) ─── -->
+                    <!-- Mostra os 4 scores do judge quando lastTrace.verification existe.
+                         Quando ausente (skill em modo fast / VERIFIER_V2_ENABLED=false),
+                         oferece hint pra ligar. -->
+                    <div x-show="lastTrace">
+                        <div class="mb-2 flex items-center justify-between">
+                            <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider">Verifier — Auditoria</h3>
+                            <template x-if="lastTrace?.verification">
+                                <a :href="'/quality?interaction_id=' + (lastTrace.interaction_id || '')"
+                                   class="inline-flex items-center gap-1 text-[10px] font-semibold text-brand-500 hover:text-brand-700">
+                                    Ver no painel →
+                                </a>
+                            </template>
+                        </div>
+
+                        <template x-if="!lastTrace?.verification">
+                            <div class="rounded-lg bg-surface-50 px-3 py-3 text-center">
+                                <p class="text-[11px] text-surface-400">Sem verificação multi-dim</p>
+                                <p class="text-[10px] text-surface-400 mt-0.5">Ative <code class="text-[9px] bg-white px-1 rounded">VERIFIER_V2_ENABLED=true</code> e use Execution Profile <strong>standard</strong> ou <strong>rigorous</strong></p>
+                            </div>
+                        </template>
+
+                        <template x-if="lastTrace?.verification">
+                            <div class="space-y-2">
+                                <!-- Status geral: ok + confidence -->
+                                <div class="rounded-lg px-3 py-2 flex items-center justify-between"
+                                     :class="lastTrace.verification.ok ? 'bg-emerald-50' : 'bg-rose-50'">
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-[14px]"
+                                              :class="lastTrace.verification.ok ? 'text-emerald-600' : 'text-rose-600'"
+                                              x-text="lastTrace.verification.ok ? '✓' : '✗'"></span>
+                                        <span class="text-[11px] font-semibold"
+                                              :class="lastTrace.verification.ok ? 'text-emerald-700' : 'text-rose-700'"
+                                              x-text="lastTrace.verification.ok ? 'Aprovado' : 'Reprovado'"></span>
+                                    </div>
+                                    <span class="text-[10px] font-mono text-surface-500"
+                                          x-text="'confiança: ' + ((lastTrace.verification.confidence || 0) * 100).toFixed(0) + '%'"></span>
+                                </div>
+
+                                <!-- 4 dimensões em grid 2x2 -->
+                                <div class="grid grid-cols-2 gap-1.5">
+                                    <template x-for="dim in [
+                                        {key:'factuality', label:'Factuality', max:5},
+                                        {key:'completeness', label:'Completeness', max:5},
+                                        {key:'tone_adherence', label:'Tone', max:5},
+                                        {key:'safety', label:'Safety', max:1},
+                                    ]" :key="dim.key">
+                                        <div class="rounded-lg bg-surface-50 px-2.5 py-1.5">
+                                            <div class="flex items-center justify-between">
+                                                <span class="text-[9px] font-semibold uppercase tracking-wider text-surface-400" x-text="dim.label"></span>
+                                                <span class="text-[12px] font-mono font-bold"
+                                                      :class="vfDimColor(lastTrace.verification.dimensions?.[dim.key]?.score, dim.max)"
+                                                      x-text="vfDimFmt(lastTrace.verification.dimensions?.[dim.key]?.score, dim.max)"></span>
+                                            </div>
+                                            <p class="text-[10px] text-surface-500 mt-0.5 line-clamp-2"
+                                               :title="lastTrace.verification.dimensions?.[dim.key]?.reason || ''"
+                                               x-text="lastTrace.verification.dimensions?.[dim.key]?.reason || '—'"></p>
+                                        </div>
+                                    </template>
+                                </div>
+
+                                <!-- Contract -->
+                                <div class="rounded-lg px-3 py-1.5 flex items-center justify-between text-[11px]"
+                                     :class="lastTrace.verification.contract_compliant ? 'bg-surface-50' : 'bg-amber-50'">
+                                    <span class="text-surface-500">Contract</span>
+                                    <span class="font-semibold"
+                                          :class="lastTrace.verification.contract_compliant ? 'text-emerald-600' : 'text-amber-700'"
+                                          x-text="lastTrace.verification.contract_compliant ? '✓ ok' : '⚠ violado'"></span>
+                                </div>
+
+                                <!-- Unsupported claims (alucinação suspeita) -->
+                                <template x-if="(lastTrace.verification.unsupported_claims || []).length > 0">
+                                    <div class="rounded-lg border border-rose-200 bg-rose-50/60 px-3 py-2">
+                                        <div class="text-[10px] font-bold text-rose-700 mb-1">
+                                            ⚑ <span x-text="lastTrace.verification.unsupported_claims.length"></span> claim(s) sem suporte de evidência
+                                        </div>
+                                        <ul class="list-disc pl-4 space-y-0.5 text-[10px] text-rose-900">
+                                            <template x-for="c in lastTrace.verification.unsupported_claims.slice(0,5)" :key="c">
+                                                <li x-text="c"></li>
+                                            </template>
+                                        </ul>
+                                    </div>
+                                </template>
+
+                                <!-- Metadata -->
+                                <div class="text-[9px] text-surface-400 font-mono px-1">
+                                    judge: <span x-text="lastTrace.verification.judge_model || '—'"></span>
+                                    · <span x-text="(lastTrace.verification.duration_ms || 0) + 'ms'"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
                     <div>
                         <div class="mb-2 flex items-center justify-between">
                             <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider">Diagnóstico</h3>
@@ -980,6 +1074,22 @@ function workspacePage() {
             return t;
         },
         fsmColor(s){return{'PolicyCheck':'bg-blue-100 text-blue-700','RetrieveEvidence':'bg-cyan-100 text-cyan-700','DraftAnswer':'bg-violet-100 text-violet-700','VerifyEvidence':'bg-amber-100 text-amber-700','Recommend':'bg-emerald-100 text-emerald-700','Refuse':'bg-rose-100 text-rose-700','Escalate':'bg-red-100 text-red-700','LogAndClose':'bg-surface-200 text-surface-600'}[s]||'bg-brand-100 text-brand-700'},
+        // Onda 6: helpers para painel Verifier multi-dim no trace.
+        // dimColor: factuality/completeness/tone usam escala 0-5; safety usa 0|1.
+        vfDimColor(score, max) {
+            if (score == null) return 'text-surface-400';
+            if (max === 1) return score >= 1 ? 'text-emerald-600' : 'text-rose-600';
+            // escala 0-5
+            if (score >= 4) return 'text-emerald-600';
+            if (score >= 3) return 'text-brand-600';
+            if (score >= 2) return 'text-amber-600';
+            return 'text-rose-600';
+        },
+        vfDimFmt(score, max) {
+            if (score == null) return '—';
+            if (max === 1) return String(score);
+            return Number(score).toFixed(1);
+        },
         fsmLabel(s){return{'Intake':'Recepção','PolicyCheck':'Verificação de Política','RetrieveEvidence':'Busca de Evidências','DraftAnswer':'Geração de Rascunho (LLM)','VerifyEvidence':'Verificação de Evidência','Recommend':'Recomendação','Refuse':'Recusa','Escalate':'Escalação','LogAndClose':'Registro e Fechamento'}[s]||s},
         fsmDesc(s){return{'Intake':'Recebe e contextualiza a solicitação do usuário','PolicyCheck':'Avalia permissões do ator e políticas OPA','RetrieveEvidence':'Retriever + Reranker consultam bases autorizadas','DraftAnswer':'DeepAgent Harness gera resposta via LLM','VerifyEvidence':'Evidence Checker valida consistência e cobertura','Recommend':'Resposta verificada entregue ao requisitante','Refuse':'Evidência insuficiente ou conflito de política','Escalate':'Risco detectado — encaminhado a supervisão humana','LogAndClose':'Decisão, fontes e métricas registradas no audit log'}[s]||''},
         traceExecutionLog(){

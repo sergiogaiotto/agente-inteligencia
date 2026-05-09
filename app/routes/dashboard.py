@@ -436,8 +436,14 @@ async def list_verifications(
     min_completeness: Optional[float] = None,
     profile: Optional[str] = None,
     judge_model: Optional[str] = None,
+    interaction_id: Optional[str] = None,
 ):
-    """Lista paginada de verificações com filtros."""
+    """Lista paginada de verificações com filtros.
+
+    Filtro `interaction_id` (Onda 6 deep-link): permite o /workspace abrir
+    /quality?interaction_id=X pra mostrar a auditoria completa daquela
+    interação específica (vs. lista geral).
+    """
     from app.core.database import _get_pool
     limit = max(1, min(int(limit), 1000))
     offset = max(0, int(offset))
@@ -457,6 +463,9 @@ async def list_verifications(
     if judge_model:
         args.append(judge_model)
         where.append(f"judge_model = ${len(args)}")
+    if interaction_id:
+        args.append(interaction_id)
+        where.append(f"interaction_id = ${len(args)}")
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
 
     pool = _get_pool()

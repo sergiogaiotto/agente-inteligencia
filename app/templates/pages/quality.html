@@ -5,6 +5,20 @@
         Verificação multi-dimensional (§14.2) — judge contra 4 dimensões + ContractValidator. Lê de <code class="text-[10px] bg-surface-100 px-1 rounded">verifications</code> table.
     </p>
 
+    <!-- Banner de deep-link (Onda 6): vindo de /workspace?interaction_id=X -->
+    <template x-if="filterInteractionId">
+        <div class="mb-4 rounded-xl border border-brand-200 bg-brand-50 px-4 py-2.5 flex items-center justify-between">
+            <div class="text-[12px] text-brand-800">
+                Filtrando por interação:
+                <code class="ml-1 text-[11px] font-mono bg-white px-1.5 py-0.5 rounded" x-text="filterInteractionId"></code>
+            </div>
+            <button @click="clearInteractionFilter()"
+                    class="text-[11px] font-semibold text-brand-600 hover:text-brand-800">
+                ✕ Ver todas as interações
+            </button>
+        </div>
+    </template>
+
     <!-- ─── Stats top cards ─── -->
     <div class="flex items-center gap-3 mb-3">
         <span class="text-[11px] text-surface-400">Janela:</span>
@@ -234,6 +248,9 @@ function qualityPage(){return{
     items: [], total: 0, page: 0, pageSize: 30, expanded: null,
     stats: {}, byModel: [], byProfile: [], window: '24h',
     filterOkOnly: false, filterMinFactuality: null, filterProfile: '',
+    // Onda 6: deep-link do /workspace — quando ?interaction_id=X estiver na URL,
+    // a lista carrega filtrada pra aquela interação específica.
+    filterInteractionId: (new URLSearchParams(window.location.search).get('interaction_id') || ''),
     // Production sample async (Onda 3)
     asyncStats: { stats: {}, config: {} },
     _pollHandle: null,
@@ -252,6 +269,15 @@ function qualityPage(){return{
         return 'text-rose-600';
     },
     toggle(v) { this.expanded = (this.expanded === v.id) ? null : v.id; },
+    clearInteractionFilter() {
+        this.filterInteractionId = '';
+        // Tira ?interaction_id= da URL sem reload
+        const url = new URL(window.location.href);
+        url.searchParams.delete('interaction_id');
+        window.history.replaceState({}, '', url.toString());
+        this.page = 0;
+        this.load();
+    },
     async load() {
         const params = new URLSearchParams();
         params.set('limit', this.pageSize);
@@ -259,6 +285,7 @@ function qualityPage(){return{
         if (this.filterOkOnly) params.set('ok_only', 'true');
         if (this.filterMinFactuality != null && this.filterMinFactuality !== '') params.set('min_factuality', this.filterMinFactuality);
         if (this.filterProfile) params.set('profile', this.filterProfile);
+        if (this.filterInteractionId) params.set('interaction_id', this.filterInteractionId);
         try {
             const r = await api.get('/api/v1/dashboard/verifications?' + params.toString());
             this.items = r.items || [];

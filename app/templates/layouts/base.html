@@ -146,7 +146,7 @@
                 <div class="relative" id="tour-nav-harness">
                     <a href="/harness" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'harness' %}active{% endif %}">
                         <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 00.659 1.591L19 14.5"/></svg>
-                        <span x-show="!sidebarCollapsed">Avaliação</span>
+                        <span x-show="!sidebarCollapsed" title="Golden Dataset + gate de release pré-deploy (offline)">Avaliação <span class="text-[9px] text-surface-400 font-normal">(Pré-deploy)</span></span>
                     </a>
                     <button @click="openHelp('harness')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
                 </div>
@@ -164,7 +164,7 @@
                 <div class="relative" id="tour-nav-quality">
                     <a href="/quality" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'quality' %}active{% endif %}">
                         <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"/></svg>
-                        <span x-show="!sidebarCollapsed">Qualidade</span>
+                        <span x-show="!sidebarCollapsed" title="Auditoria do tráfego real (Verifier multi-dim em produção)">Qualidade <span class="text-[9px] text-surface-400 font-normal">(Produção)</span></span>
                     </a>
                     <button @click="openHelp('quality')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
                 </div>
