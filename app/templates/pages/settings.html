@@ -4,10 +4,12 @@
 <div x-data="settingsPage()" x-init="load()">
 
     <!-- Tabs -->
-    <div class="flex items-center gap-1 mb-6">
+    <div class="flex items-center gap-1 mb-6 flex-wrap">
         {% if user_role == 'root' %}
         <button @click="tab='platform'" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='platform' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Plataforma</button>
+        <button @click="tab='routing'; loadRouting()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
+                :class="tab==='routing' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Roteamento LLM</button>
         <button @click="tab='prompts'; loadPrompts()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='prompts' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">System Prompts</button>
         {% endif %}
@@ -15,6 +17,76 @@
         <button @click="tab='users'; loadUsers()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='users' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Usuários</button>
         {% endif %}
+    </div>
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB: ROTEAMENTO LLM (Onda 7)         -->
+    <!-- ══════════════════════════════════════ -->
+    <div x-show="tab==='routing'" class="max-w-3xl">
+        <div class="rounded-xl border border-brand-100 bg-brand-50/30 p-4 mb-5">
+            <h3 class="text-[13px] font-semibold text-brand-900 mb-1">Roteamento LLM por tipo de tarefa</h3>
+            <p class="text-[11px] text-surface-500 leading-relaxed">
+                Em vez de cada agente escolher provedor+modelo, ele declara o <strong>tipo de tarefa</strong>.
+                Aqui você define qual provedor/modelo a plataforma usa pra cada tipo. Quando LiteLLM gateway está
+                ligado (<code class="text-[10px] bg-white px-1 rounded">LLM_GATEWAY_ENABLED=true</code>), a chamada
+                vai pelo gateway; senão, vai direto ao provedor.
+            </p>
+        </div>
+
+        <div class="flex items-center justify-between mb-4">
+            <span class="text-[11px] text-surface-400" x-text="routingDirty ? 'Alterações não salvas' : (routingLastSaved ? 'Salvo em ' + routingLastSaved : '')"></span>
+            <div class="flex items-center gap-2">
+                <button @click="resetRoutingDefaults()" type="button"
+                        class="inline-flex items-center gap-1 rounded-lg border border-surface-200 px-3 py-2 text-[12px] font-medium text-surface-500 hover:bg-surface-50">
+                    ↺ Aplicar padrões
+                </button>
+                <button @click="saveRouting()" :disabled="routingSaving || !routingDirty"
+                        class="inline-flex items-center gap-2 rounded-lg px-5 py-2 text-[13px] font-semibold text-white transition-all"
+                        :class="routingDirty ? 'bg-brand-500 hover:bg-brand-600 shadow-md' : 'bg-surface-300'">
+                    <span x-text="routingSaving ? 'Salvando...' : 'Salvar'"></span>
+                </button>
+            </div>
+        </div>
+
+        <div class="space-y-4">
+            <!-- 4 task types -->
+            <template x-for="task in ['tool_calling','reasoning','instruct','classification']" :key="task">
+                <div class="rounded-xl border border-surface-200 bg-white p-4">
+                    <div class="flex items-start justify-between gap-3 mb-2">
+                        <div class="flex-1 min-w-0">
+                            <h4 class="text-[13px] font-bold text-brand-900" x-text="taskLabel(task)"></h4>
+                            <p class="text-[11px] text-surface-500 leading-relaxed mt-0.5" x-text="routingDescriptions[task] || ''"></p>
+                        </div>
+                        <span class="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-mono font-bold text-brand-700 shrink-0"
+                              x-text="task"></span>
+                    </div>
+                    <select x-model="routingForm[task]" @change="routingDirty = true"
+                            class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-brand-400">
+                        <template x-for="opt in routingOptions" :key="opt.value">
+                            <option :value="opt.value" x-text="opt.label + (opt.multimodal ? ' 🖼' : '')"></option>
+                        </template>
+                    </select>
+                </div>
+            </template>
+
+            <!-- Multimodal fallback -->
+            <div class="rounded-xl border-2 border-violet-200 bg-violet-50/30 p-4">
+                <div class="flex items-start justify-between gap-3 mb-2">
+                    <div class="flex-1 min-w-0">
+                        <h4 class="text-[13px] font-bold text-violet-900">🖼 Multimodal Fallback</h4>
+                        <p class="text-[11px] text-violet-700 leading-relaxed mt-0.5" x-text="routingDescriptions.multimodal_fallback || ''"></p>
+                    </div>
+                    <span class="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-mono font-bold text-violet-700 shrink-0">multimodal_fallback</span>
+                </div>
+                <select x-model="routingForm.multimodal_fallback" @change="routingDirty = true"
+                        class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400">
+                    <template x-for="opt in routingOptions.filter(o => o.multimodal)" :key="opt.value">
+                        <option :value="opt.value" x-text="opt.label + ' 🖼'"></option>
+                    </template>
+                </select>
+                <p class="text-[10px] text-violet-700 mt-1.5">Apenas modelos com suporte a imagem aparecem aqui.</p>
+            </div>
+        </div>
     </div>
 
     <!-- ══════════════════════════════════════ -->
@@ -461,15 +533,104 @@ function settingsPage() {
         allDomains: [], newDomainName: '',
         currentUserRole: '{{ user_role }}',
 
+        /* ── Roteamento LLM (Onda 7) ── */
+        routingForm: {tool_calling:'', reasoning:'', instruct:'', classification:'', multimodal_fallback:''},
+        routingDefaults: {},
+        routingDescriptions: {},
+        routingDirty: false, routingSaving: false, routingLastSaved: '',
+        _routingSnapshot: '',
+
         async load() {
             const urlTab = new URLSearchParams(window.location.search).get('tab');
-            if (urlTab && ['platform','prompts','users'].includes(urlTab)) this.tab = urlTab;
-            try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship'}],maritaca:[{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship'}],ollama:[{id:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4Bi',context:'128K',tier:'efficient'}]};}
+            if (urlTab && ['platform','prompts','users','routing'].includes(urlTab)) this.tab = urlTab;
+            try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship',multimodal:true}],maritaca:[{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship',multimodal:false}],ollama:[{id:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4Bi',context:'128K',tier:'efficient',multimodal:false}]};}
             try{const d=await api.get('/api/v1/settings');const s=d.settings||{};for(const[k,v]of Object.entries(s)){if(k in this.config)this.config[k]=(k==='max_iterations'||k==='timeout')?parseInt(v)||this.config[k]:v;}}catch{}
             this._snapshot=JSON.stringify(this.config);
             this.$watch('config',()=>{this.dirty=JSON.stringify(this.config)!==this._snapshot},{deep:true});
             if (this.tab === 'users') await this.loadUsers();
             if (this.tab === 'prompts') await this.loadPrompts();
+            if (this.tab === 'routing') await this.loadRouting();
+        },
+
+        // ─── Roteamento LLM (Onda 7) ─────────────────────────────
+        get routingOptions() {
+            // Achata o catálogo (this.models) em [{value:"provider/id", label, multimodal}]
+            const out = [];
+            const providers = ['openai', 'maritaca', 'ollama'];
+            const providerLabel = {openai:'OpenAI/Azure', maritaca:'Maritaca', ollama:'Ollama'};
+            for (const prov of providers) {
+                for (const m of (this.models?.[prov] || [])) {
+                    // No paradigma novo, "openai" semantic = Azure OpenAI no engine.
+                    // Mantemos prefixo "azure/" para os modelos OpenAI no routing
+                    // (LiteLLM e engine sabem rotear isso pra Azure).
+                    const valuePrefix = prov === 'openai' ? 'azure' : prov;
+                    out.push({
+                        value: `${valuePrefix}/${m.id}`,
+                        label: `${providerLabel[prov]} · ${m.name}`,
+                        multimodal: !!m.multimodal,
+                    });
+                }
+            }
+            return out;
+        },
+
+        taskLabel(task) {
+            return {
+                tool_calling: '🔧 Tool Calling',
+                reasoning: '🧠 Reasoning',
+                instruct: '📝 Instruct',
+                classification: '🏷 Classification',
+            }[task] || task;
+        },
+
+        async loadRouting() {
+            try {
+                const r = await api.get('/api/v1/dashboard/llm-routing');
+                this.routingForm = {
+                    tool_calling: r.routing?.tool_calling || '',
+                    reasoning: r.routing?.reasoning || '',
+                    instruct: r.routing?.instruct || '',
+                    classification: r.routing?.classification || '',
+                    multimodal_fallback: r.routing?.multimodal_fallback || '',
+                };
+                this.routingDefaults = r.defaults || {};
+                this.routingDescriptions = r.task_descriptions || {};
+                this._routingSnapshot = JSON.stringify(this.routingForm);
+                this.routingDirty = false;
+                // Watch após snapshot para detectar mudanças
+                this.$watch('routingForm', () => {
+                    this.routingDirty = JSON.stringify(this.routingForm) !== this._routingSnapshot;
+                }, {deep: true});
+            } catch(e) {
+                showToast('Erro ao carregar routing: ' + (e?.message || ''), 'error');
+            }
+        },
+
+        resetRoutingDefaults() {
+            if (!confirm('Aplicar padrões recomendados (sobrescreve seleções atuais)?')) return;
+            this.routingForm = {
+                tool_calling: this.routingDefaults.tool_calling || 'azure/gpt-4o',
+                reasoning: this.routingDefaults.reasoning || 'maritaca/sabia-4',
+                instruct: this.routingDefaults.instruct || 'maritaca/sabia-4',
+                classification: this.routingDefaults.classification || 'maritaca/sabia-4',
+                multimodal_fallback: this.routingDefaults.multimodal_fallback || 'azure/gpt-4o',
+            };
+            this.routingDirty = true;
+        },
+
+        async saveRouting() {
+            if (!this.routingDirty) return;
+            this.routingSaving = true;
+            try {
+                await api.put('/api/v1/dashboard/llm-routing', this.routingForm);
+                this._routingSnapshot = JSON.stringify(this.routingForm);
+                this.routingDirty = false;
+                this.routingLastSaved = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+                showToast('Roteamento salvo');
+            } catch(e) {
+                showToast('Erro ao salvar: ' + (e?.message || ''), 'error');
+            }
+            this.routingSaving = false;
         },
 
         async testProvider(name) {
