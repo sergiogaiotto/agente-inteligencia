@@ -253,6 +253,11 @@ CREATE TABLE IF NOT EXISTS gold_cases (
     input_text TEXT NOT NULL,
     expected_output TEXT NOT NULL,
     expected_state TEXT,
+    -- Enriquecimento Golden Dataset (categoria semântica + ponderação + match flexível + sentinelas)
+    category TEXT,
+    weight REAL DEFAULT 1.0,
+    expected_pattern TEXT,
+    red_flags TEXT DEFAULT '[]',
     metadata TEXT DEFAULT '{}',
     created_at TIMESTAMP DEFAULT now()
 );
@@ -424,6 +429,41 @@ CREATE TABLE IF NOT EXISTS evidence_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_chunks_tsv ON evidence_chunks USING GIN (tsv);
 CREATE INDEX IF NOT EXISTS idx_evidence_chunks_source ON evidence_chunks (knowledge_source_id);
+
+-- ═══════════════════════════════════════════════════════════════
+-- Verifier v2 — resultado do judge multi-dimensional + ContractValidator.
+-- 1 linha por chamada de verify(). Permite query analítica posterior:
+-- "qual dimensão falha mais?", "qual modelo é mais confiável?", drift detection.
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS verifications (
+    id TEXT PRIMARY KEY,
+    turn_id TEXT,
+    interaction_id TEXT,
+    -- Dimensões (NULL se não avaliadas — ex: profile fast pula judge)
+    factuality_score REAL,
+    factuality_reason TEXT,
+    completeness_score REAL,
+    completeness_reason TEXT,
+    tone_score REAL,
+    tone_reason TEXT,
+    safety_score REAL,
+    safety_reason TEXT,
+    -- ContractValidator (determinístico, sem LLM)
+    contract_compliant BOOLEAN,
+    contract_errors TEXT DEFAULT '[]',
+    -- Agregados
+    ok BOOLEAN NOT NULL DEFAULT FALSE,
+    confidence REAL,
+    unsupported_claims TEXT DEFAULT '[]',
+    -- Metadata
+    judge_model TEXT,
+    profile TEXT,
+    duration_ms INTEGER,
+    created_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_verifications_turn ON verifications (turn_id);
+CREATE INDEX IF NOT EXISTS idx_verifications_interaction ON verifications (interaction_id);
+CREATE INDEX IF NOT EXISTS idx_verifications_created_at ON verifications (created_at DESC);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -442,6 +482,11 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS temperature REAL DEFAULT 0.7",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS accepts_images INTEGER DEFAULT 0",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS accepts_documents INTEGER DEFAULT 0",
+    # Golden Dataset enriquecido — taxonomia, peso ponderado, match flexível, sentinelas
+    "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS category TEXT",
+    "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS weight REAL DEFAULT 1.0",
+    "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS expected_pattern TEXT",
+    "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS red_flags TEXT DEFAULT '[]'",
 ]
 
 
@@ -692,6 +737,7 @@ turns_repo = Repository("turns")
 knowledge_repo = Repository("knowledge_sources")
 evidences_repo = Repository("evidences")
 evidence_chunks_repo = Repository("evidence_chunks")  # Onda 3 — chunks de docs ingeridos
+verifications_repo = Repository("verifications")  # §14.2 — resultado do Verifier multi-dim
 tools_repo = Repository("tools")
 tool_calls_repo = Repository("tool_calls")
 traces_repo = Repository("traces")

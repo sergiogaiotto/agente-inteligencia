@@ -397,8 +397,11 @@ async def list_gold_cases(dataset_version: str = None, case_type: str = None, li
 @router.post("/gold-cases", status_code=201)
 async def create_gold_case(data: GoldCaseCreate):
     gid = str(uuid.uuid4())
-    await gold_cases_repo.create({"id": gid, **data.model_dump()})
-    return {"id": gid, "message": "Caso gold criado"}
+    payload = data.model_dump()
+    # red_flags: lista Python → JSON string (coluna TEXT)
+    payload["red_flags"] = json.dumps(payload.get("red_flags") or [])
+    await gold_cases_repo.create({"id": gid, **payload})
+    return {"id": gid, "message": "Caso adicionado ao Golden Dataset"}
 
 @router.delete("/gold-cases/{case_id}")
 async def delete_gold_case(case_id: str):

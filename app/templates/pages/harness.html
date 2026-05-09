@@ -1,44 +1,89 @@
 {% extends "layouts/base.html" %}
 {% block content %}
 <div x-data="harnessPage()" x-init="load()">
-    <p class="text-[12px] text-surface-400 mb-6">Harness de Avaliação §9.5 — dataset gold adversarial e avaliação baseline/regressão</p>
+    <p class="text-[12px] text-surface-400 mb-6">Harness de Avaliação §9.5 — Golden Dataset adversarial e avaliação baseline/regressão</p>
 
     <div class="grid lg:grid-cols-2 gap-6">
-        <!-- Gold Cases -->
+        <!-- Golden Dataset -->
         <div class="rounded-xl border border-surface-200 bg-white">
             <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3.5">
-                <h2 class="text-[13px] font-semibold text-brand-900">Dataset Gold Adversarial</h2>
-                <button @click="showGoldForm=!showGoldForm" class="text-[12px] text-brand-500 font-medium hover:text-brand-700">+ Novo Caso</button>
+                <h2 class="text-[13px] font-semibold text-brand-900">Golden Dataset</h2>
+                <button @click="showGoldForm=!showGoldForm" class="text-[12px] text-brand-500 font-medium hover:text-brand-700">+ Novo caso</button>
             </div>
             <div x-show="showGoldForm" x-transition class="p-4 border-b border-surface-100 bg-surface-50 space-y-2">
-                <input x-model="goldForm.input_text" placeholder="Input do caso" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
-                <input x-model="goldForm.expected_output" placeholder="Output esperado" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                <input x-model="goldForm.input_text" placeholder="Input do caso (obrigatório)"
+                    class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                <input x-model="goldForm.expected_output" placeholder="Output esperado (similarity check)"
+                    class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                 <div class="flex gap-2">
                     <select x-model="goldForm.case_type" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                         <option value="normal">Normal</option><option value="adversarial">Adversarial</option>
                     </select>
-                    <select x-model="goldForm.expected_state" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                    <select x-model="goldForm.expected_state" title="Estado da FSM esperado"
+                        class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                         <option value="Recommend">Recommend</option><option value="Refuse">Refuse</option><option value="Escalate">Escalate</option>
                     </select>
-                    <input x-model="goldForm.dataset_version" placeholder="v1" class="w-20 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                    <input x-model="goldForm.dataset_version" placeholder="v1" title="Versão do dataset"
+                        class="w-20 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                 </div>
-                <button @click="createGoldCase()" class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600">Criar</button>
+                <!-- ─── Enriquecimento Golden Dataset ─── -->
+                <details class="rounded-lg border border-surface-200 bg-white">
+                    <summary class="cursor-pointer px-3 py-2 text-[11px] font-semibold text-brand-600 hover:bg-surface-50">
+                        ⚙ Enriquecimento (category, weight, expected_pattern, red_flags)
+                    </summary>
+                    <div class="p-3 space-y-2 border-t border-surface-100">
+                        <div class="flex gap-2">
+                            <input x-model="goldForm.category" placeholder="category — taxonomia (ex: atendimento, vendas, compliance)"
+                                class="flex-1 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[11px] outline-none">
+                            <input x-model.number="goldForm.weight" type="number" min="0.1" max="10" step="0.1"
+                                placeholder="weight" title="Peso na média ponderada (0.1–10, default 1.0)"
+                                class="w-24 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[11px] outline-none">
+                        </div>
+                        <textarea x-model="goldForm.expected_pattern" rows="2"
+                            placeholder="expected_pattern — regex Python opcional (sobrescreve expected_output quando presente)&#10;Ex: (?i)\b(aprovado|liberado|autorizado)\b"
+                            class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[11px] font-mono outline-none"></textarea>
+                        <textarea x-model="goldForm.red_flags_text" rows="3"
+                            placeholder="red_flags — uma por linha. Output que contiver QUALQUER uma falha o caso.&#10;Ex:&#10;senha&#10;cartão de crédito&#10;CPF do cliente"
+                            class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[11px] font-mono outline-none"></textarea>
+                    </div>
+                </details>
+                <div class="flex items-center gap-3">
+                    <button @click="createGoldCase()" class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600">
+                        Adicionar ao Golden Dataset
+                    </button>
+                    <button @click="resetGoldForm()" class="text-[11px] text-surface-400 hover:text-surface-600">Limpar</button>
+                </div>
             </div>
             <div class="divide-y divide-surface-50 max-h-80 overflow-y-auto scrollbar-thin">
                 <template x-for="c in goldCases" :key="c.id">
                     <div class="px-5 py-3">
-                        <div class="flex items-center gap-2 mb-1">
+                        <div class="flex items-center gap-2 mb-1 flex-wrap">
                             <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
                                   :class="c.case_type==='adversarial'?'bg-rose-50 text-rose-700':'bg-surface-100 text-surface-500'"
                                   x-text="c.case_type"></span>
                             <span class="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-600" x-text="c.expected_state"></span>
-                            <span class="text-[10px] text-surface-400 font-mono" x-text="c.dataset_version"></span>
+                            <template x-if="c.category">
+                                <span class="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700" x-text="c.category"></span>
+                            </template>
+                            <template x-if="c.weight && Number(c.weight) !== 1">
+                                <span class="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700"
+                                    x-text="'×' + Number(c.weight).toFixed(1)"></span>
+                            </template>
+                            <template x-if="c.expected_pattern">
+                                <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700" title="Match por regex">regex</span>
+                            </template>
+                            <template x-if="redFlagsCount(c) > 0">
+                                <span class="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700"
+                                    :title="parseRedFlags(c).join(', ')"
+                                    x-text="'⚑ ' + redFlagsCount(c)"></span>
+                            </template>
+                            <span class="text-[10px] text-surface-400 font-mono ml-auto" x-text="c.dataset_version"></span>
                         </div>
                         <p class="text-[12px] text-brand-900 truncate" x-text="c.input_text"></p>
                     </div>
                 </template>
             </div>
-            <template x-if="goldCases.length===0"><div class="px-5 py-8 text-center text-[12px] text-surface-400">Nenhum caso gold</div></template>
+            <template x-if="goldCases.length===0"><div class="px-5 py-8 text-center text-[12px] text-surface-400">Golden Dataset vazio — adicione casos para começar</div></template>
         </div>
 
         <!-- Eval Runs -->
@@ -91,16 +136,62 @@
 <script>
 function harnessPage(){return{
     goldCases:[],evalRuns:[],agents:[],releases:[],showGoldForm:false,showRunForm:false,running:false,
-    goldForm:{input_text:'',expected_output:'',case_type:'normal',expected_state:'Recommend',dataset_version:'v1'},
+    // Form estendido — Golden Dataset enriquecido
+    goldForm:{
+        input_text:'', expected_output:'',
+        case_type:'normal', expected_state:'Recommend', dataset_version:'v1',
+        category:'', weight:1.0,
+        expected_pattern:'',
+        red_flags_text:''   // textarea: split por linhas
+    },
     runForm:{agent_id:'',release_id:'',run_type:'baseline',gold_version:'latest'},
+    resetGoldForm(){
+        this.goldForm = {
+            input_text:'', expected_output:'',
+            case_type:'normal', expected_state:'Recommend', dataset_version:'v1',
+            category:'', weight:1.0, expected_pattern:'', red_flags_text:''
+        };
+    },
+    parseRedFlags(c){
+        // Banco devolve red_flags como string JSON (TEXT). Tolera lista crua.
+        if (!c) return [];
+        const v = c.red_flags;
+        if (!v) return [];
+        if (Array.isArray(v)) return v;
+        try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; }
+        catch { return []; }
+    },
+    redFlagsCount(c){ return this.parseRedFlags(c).length; },
     async load(){
         try{this.goldCases=(await api.get('/api/v1/gold-cases')).cases||[]}catch{}
         try{this.evalRuns=(await api.get('/api/v1/eval-runs')).runs||[]}catch{}
         try{this.agents=(await api.get('/api/v1/agents')).agents||[]}catch{}
         try{this.releases=(await api.get('/api/v1/releases')).releases||[]}catch{}
     },
-    async createGoldCase(){if(!this.goldForm.input_text.trim()){showToast('Input obrigatório','error');return}
-    try{await api.post('/api/v1/gold-cases',this.goldForm);showToast('Caso gold criado');this.showGoldForm=false;await this.load()}catch(e){showToast(e.message,'error')}},
+    async createGoldCase(){
+        if (!this.goldForm.input_text.trim()) { showToast('Input obrigatório','error'); return; }
+        // Constrói payload final: split de red_flags_text → array; remove vazios.
+        const red_flags = (this.goldForm.red_flags_text || '')
+            .split('\n').map(s => s.trim()).filter(Boolean);
+        const payload = {
+            input_text: this.goldForm.input_text,
+            expected_output: this.goldForm.expected_output,
+            case_type: this.goldForm.case_type,
+            expected_state: this.goldForm.expected_state,
+            dataset_version: this.goldForm.dataset_version,
+            category: this.goldForm.category || null,
+            weight: Number(this.goldForm.weight) || 1.0,
+            expected_pattern: this.goldForm.expected_pattern || null,
+            red_flags,
+        };
+        try {
+            await api.post('/api/v1/gold-cases', payload);
+            showToast('Adicionado ao Golden Dataset');
+            this.showGoldForm = false;
+            this.resetGoldForm();
+            await this.load();
+        } catch(e) { showToast(e.message,'error'); }
+    },
     async executeHarness(){if(!this.runForm.agent_id||!this.runForm.release_id){showToast('Selecione agente e release','error');return}
     this.running=true;try{const r=await api.post('/api/v1/eval-runs/execute',this.runForm);showToast(`Harness: ${r.gate_result} (${(r.accuracy*100).toFixed(1)}%)`);this.showRunForm=false;await this.load()}catch(e){showToast(e.message,'error')}this.running=false},
 }}

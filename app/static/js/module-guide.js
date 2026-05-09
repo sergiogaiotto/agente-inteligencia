@@ -110,15 +110,18 @@ window.MODULE_GUIDE = [
     id: 's95',
     section: '§9.5',
     label: 'Harness Avaliação',
-    fundamento: `<p>Motor que executa skills contra dataset gold adversarial e produz métricas + gate de release.</p>
-<p class="mt-2">Métricas: acurácia, taxa de recusa correta, falso positivo, latência, custo. Gate automático com thresholds configuráveis — regressão acima de N% bloqueia deploy.</p>`,
+    fundamento: `<p>Motor que executa skills contra o <b>Golden Dataset</b> adversarial e produz métricas + gate de release.</p>
+<p class="mt-2">Métricas: acurácia (média ponderada por <code>weight</code>), taxa de recusa correta, falso positivo, latência, custo. Gate automático com thresholds configuráveis — regressão acima de N% bloqueia deploy.</p>
+<p class="mt-2">Cada caso do Golden Dataset suporta: <code>category</code> (taxonomia), <code>weight</code> (peso 0.1–10), <code>expected_pattern</code> (regex), <code>red_flags</code> (sentinelas que NUNCA podem aparecer no output).</p>`,
     aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1">
 <li><b>Baseline</b> antes de promover release para canary</li>
 <li><b>Regressão</b> em mudanças (skill, modelo, prompt, índice)</li>
 <li><b>Comparação A/B</b> entre 2 releases</li>
+<li><b>Detecção de leak de dados</b> via red_flags (PII, segredos, conteúdo proibido)</li>
 </ul>`,
     ativar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
-<li>Crie casos gold em <a href="/harness" class="text-brand-500 underline">/harness</a> aba "Gold Cases".</li>
+<li>Acesse <a href="/harness" class="text-brand-500 underline">/harness</a> → painel "Golden Dataset".</li>
+<li>Adicione casos com input + expected_output (ou expected_pattern regex) + red_flags.</li>
 <li>Crie uma release em <a href="/releases" class="text-brand-500 underline">/releases</a>.</li>
 <li>Execute o harness selecionando agente + release + tipo (baseline/regressão).</li>
 </ol>`,
@@ -131,18 +134,18 @@ window.MODULE_GUIDE = [
   {
     id: 's14',
     section: '§14',
-    label: 'Evidence Runtime + RAG real',
-    fundamento: `<p>Toda recomendação ancorada em evidência. Pipeline:</p>
+    label: 'RAG real (Retriever + Reranker)',
+    fundamento: `<p>Camada de <b>recuperação</b> de evidências. Responde <i>"quais documentos relevantes trazer para o LLM responder?"</i>.</p>
 <ol class="list-decimal pl-4 mt-2 space-y-1">
 <li><b>Retriever</b> híbrido — BM25 (Postgres tsvector + GIN) + vetorial (Qdrant + Azure embeddings)</li>
 <li><b>RRF</b> (Reciprocal Rank Fusion, k=60) funde os dois rankings</li>
 <li><b>Reranker</b> opcional via LLM (GPT-4o reordena com justificativa)</li>
-<li><b>EvidenceChecker</b> verifica consistência, cobertura, conflitos antes da entrega</li>
-</ol>`,
+</ol>
+<p class="mt-2">⚠ <b>RAG ≠ Verificação</b>: o RAG entrega evidências; quem julga se a resposta está fiel a elas é o Verifier (§14.2 — promovido a módulo próprio).</p>`,
     aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1">
 <li><b>FAQs e bases regulatórias</b> — respostas com citação obrigatória</li>
 <li><b>Atendimento ao cliente</b> — buscar contratos, manuais, política</li>
-<li><b>Compliance</b> — recusa controlada se evidência insuficiente</li>
+<li><b>Pipelines com necessidade de grounding</b> — alimenta o LLM com contexto factual</li>
 </ul>`,
     ativar: `<p>Sempre ativo. Toggle: <code>RAG_V2_ENABLED=true</code> (default).</p>
 <p class="mt-2">Para ingerir um documento:</p>
@@ -157,6 +160,40 @@ curl -X POST /api/v1/knowledge-sources/$SRC/ingest \\
 <p class="mt-2">Diagnóstico:</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">GET /api/v1/rag/health
 GET /api/v1/knowledge-sources/$SRC/chunks</pre>`
+  },
+
+  {
+    id: 's142',
+    section: '§14.2',
+    label: 'Verifier (judge multi-dimensional)',
+    fundamento: `<p>Camada de <b>verificação independente</b> da resposta. Responde <i>"a resposta está fiel às evidências, cobre o pedido, segue o contract, é segura?"</i>.</p>
+<p class="mt-2">Decompõe em 4 dimensões:</p>
+<ul class="list-disc pl-4 mt-2 space-y-1">
+<li><b>factuality</b> (0-5): claims do draft suportados pelas evidências?</li>
+<li><b>completeness</b> (0-5): cobre os pontos da pergunta?</li>
+<li><b>tone_adherence</b> (0-5): tom adequado + respeita guardrails?</li>
+<li><b>safety</b> (0|1): sem PII vazada, sem dados internos, sem violações?</li>
+</ul>
+<p class="mt-2">Plus: <b>ContractValidator</b> determinístico (sem LLM) valida <code>output_contract</code> da SKILL.md antes do judge — falha precoce evita custo.</p>`,
+    aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1">
+<li><b>Detecção de alucinação granular</b> — judge identifica claims inventados (campo <code>unsupported_claims</code>)</li>
+<li><b>Compliance de formato</b> — output_contract validado deterministicamente</li>
+<li><b>Quality gate em produção</b> — score por dimensão alimenta drift detection (§18)</li>
+<li><b>Sinal estruturado para Harness</b> — gate de release usa scores multi-dimensionais, não só binário</li>
+</ul>`,
+    ativar: `<p>Toggle: <code>VERIFIER_V2_ENABLED=true</code> no <code>.env</code>.</p>
+<p class="mt-2">Configuração:</p>
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">VERIFIER_V2_ENABLED=true
+VERIFIER_JUDGE_MODEL=azure/gpt-4o
+VERIFIER_FACTUALITY_THRESHOLD=3.0
+VERIFIER_COMPLETENESS_THRESHOLD=3.0
+VERIFIER_TONE_THRESHOLD=3.0</pre>
+<p class="mt-2">Default OFF para back-compat; pipeline cai no <code>_LegacyVerifier</code> (Onda 0) quando desligado.</p>`,
+    usar: `<p>Cada interação no /workspace gera 1 linha em <code>verifications</code> com scores por dimensão. Para inspecionar:</p>
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">SELECT factuality_score, completeness_score, tone_score, safety_score,
+       contract_compliant, ok, confidence, judge_model
+FROM verifications ORDER BY created_at DESC LIMIT 10;</pre>
+<p class="mt-2">Conexão com Harness: o evaluator (§9.5) usa o mesmo Verifier — gate de release agrega scores do Golden Dataset por dimensão.</p>`
   },
 
   {

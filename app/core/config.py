@@ -105,6 +105,20 @@ class Settings(BaseSettings):
     prompt_leak_guard_enabled: bool = True
     prompt_leak_preview_chars: int = 60
 
+    # ── Verifier v2 (judge multi-dimensional + ContractValidator) ──
+    # Promove EvidenceChecker (Onda 0) a 1ª classe, separando RAG de Verification.
+    # OFF por default → comportamento legacy preservado (_LegacyVerifier roda no lugar).
+    verifier_v2_enabled: bool = False
+    # Modelo do juiz. Anti-self-preference: idealmente um provider ≠ do gerador.
+    # Formato "<provider>/<model>" ou apenas <model> (assume azure).
+    verifier_judge_model: str = "azure/gpt-4o"
+    # Thresholds de aprovação por dimensão (escala 0-5). 3.0 = 60% proficiência.
+    verifier_factuality_threshold: float = 3.0
+    verifier_completeness_threshold: float = 3.0
+    verifier_tone_threshold: float = 3.0
+    # Cap de tokens da resposta do juiz. ~600 cobre 4 dimensões + claims sem cortar.
+    verifier_max_tokens: int = 800
+
     # ── Policy Engine (Onda 4a — OPA Policy as Code) ──
     # Quando True, decisões sensíveis (PolicyCheck, tool invocation) consultam o
     # OPA em opa_url e seguem a decisão. Auditoria via audit_log.

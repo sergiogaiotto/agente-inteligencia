@@ -354,90 +354,17 @@ Inclua TODOS os candidatos, ordenados do mais relevante ao menos."""
 
 
 # ───────────────────────────────────────────────────────────────
-# Evidence Checker (inalterado da Onda 0/1)
+# Verifier — re-exportado de app/verifier para back-compat.
+# A classe foi promovida a módulo próprio na refatoração que separou
+# RAG (Retriever+Reranker) de Verification (judge layer).
 # ───────────────────────────────────────────────────────────────
 
-class EvidenceChecker:
-    """Verificador de Evidência independente (§14.2)."""
-
-    def __init__(self, provider_name: str = "openai"):
-        self.provider = get_provider(provider_name)
-
-    async def verify(self, draft: str, evidences: list[EvidenceResult], skill_guardrails: str = "") -> VerificationResult:
-        if not evidences:
-            return VerificationResult(
-                ok=False,
-                confidence=0.0,
-                issues=["Nenhuma evidência disponível para verificação"],
-            )
-
-        evidence_text = "\n".join(
-            f"[E{i+1}] (score={e.relevance_score:.2f}, fonte={e.source_name}): {e.snippet_text}"
-            for i, e in enumerate(evidences)
-        )
-
-        verification_prompt = f"""Você é um verificador de evidência independente. Analise o rascunho abaixo contra as evidências fornecidas.
-
-RASCUNHO:
-{draft}
-
-EVIDÊNCIAS:
-{evidence_text}
-
-GUARDRAILS:
-{skill_guardrails or 'Nenhum guardrail específico.'}
-
-Avalie:
-1. CONSISTÊNCIA: O rascunho é semanticamente consistente com as evidências? Há contradições?
-2. COBERTURA: Todas as afirmações do rascunho são cobertas por evidências?
-3. CONFLITO: Evidências são mutuamente contraditórias?
-4. RISCO: Há indicativo de risco alto ou fraude?
-
-Responda em JSON:
-{{"ok": true/false, "confidence": 0.0-1.0, "issues": ["lista de problemas"], "risk_high": false, "fraud_suspected": false}}
-"""
-
-        try:
-            response = await self.provider.generate([
-                {"role": "system", "content": "Verificador de evidência. Responda apenas em JSON válido."},
-                {"role": "user", "content": verification_prompt},
-            ])
-            content = response.get("content", "")
-            json_match = content
-            if "```" in content:
-                import re
-                m = re.search(r"```(?:json)?\s*(.*?)```", content, re.DOTALL)
-                if m:
-                    json_match = m.group(1)
-
-            data = json.loads(json_match.strip())
-            return VerificationResult(**data)
-        except Exception as e:
-            logger.warning(f"Evidence checker falhou, usando heurística: {e}")
-            avg_score = sum(e.relevance_score for e in evidences) / len(evidences)
-            return VerificationResult(
-                ok=avg_score >= 0.3,
-                confidence=avg_score,
-                issues=[] if avg_score >= 0.3 else ["Evidência com score de relevância insuficiente"],
-            )
-
-    async def persist_evidences(self, evidences: list[EvidenceResult], turn_id: str):
-        # PK da tabela `evidences` é o id desta linha (1 row por evidência×turno),
-        # NÃO o chunk_id. Se reutilizar chunk_id como PK, dois turns que retornam
-        # o mesmo chunk colidem. Geramos UUID por persistência; chunk_id vai em snippet_id.
-        for ev in evidences:
-            await evidences_repo.create({
-                "id": str(uuid.uuid4()),
-                "snippet_id": ev.evidence_id,  # ref ao chunk_id original
-                "snippet_text": ev.snippet_text,
-                "relevance_score": ev.relevance_score,
-                "confidentiality_label": ev.confidentiality,
-                "knowledge_source_id": ev.source_id,
-                "turn_id": turn_id,
-            })
+# `EvidenceChecker` é alias de `Verifier` (definido em app/verifier/runtime.py).
+# `evidence_checker` (singleton) ainda funciona — aponta para o novo Verifier.
+from app.verifier import EvidenceChecker, Verifier, evidence_checker  # noqa: F401
 
 
 # Instâncias singleton (engine.py importa diretamente)
 retriever = Retriever()
 reranker = Reranker()
-evidence_checker = EvidenceChecker()
+# `evidence_checker` vem re-exportado de app/verifier — não instanciamos aqui.

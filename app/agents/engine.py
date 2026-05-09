@@ -765,8 +765,34 @@ async def execute_interaction(
 
     if pipeline_context or skip_evidence:
         await fsm.run_verify_evidence({"ok": True, "confidence": 1.0})
+    elif _pg_settings.verifier_v2_enabled:
+        # ─── Verifier v2 (§14.2 — judge multi-dim + ContractValidator) ──
+        # Roda em todos os profiles exceto fast-com-pipeline. Com ou sem evidências.
+        # Persiste em `verifications` table.
+        from app.verifier import verifier as _verifier
+        try:
+            verification = await _verifier.verify(
+                draft=draft,
+                evidences=evidences,
+                output_contract=skill_data.get("output_contract"),
+                guardrails=skill_data.get("guardrails", ""),
+                user_question=user_input,
+                profile=exec_profile,
+                turn_id=None,  # turn é criado em LogAndClose; verifier persiste sem turn_id
+                interaction_id=ctx.interaction_id,
+            )
+            await fsm.run_verify_evidence({
+                "ok": verification.ok,
+                "confidence": verification.confidence,
+                "risk_high": verification.risk_high,
+                "fraud_suspected": verification.fraud_suspected,
+            })
+        except Exception as _e:
+            logger.warning(f"Verifier v2 falhou ({type(_e).__name__}: {_e}); fallback para heurística")
+            avg_score = (sum(e.relevance_score for e in evidences) / len(evidences)) if evidences else 0.5
+            await fsm.run_verify_evidence({"ok": avg_score >= 0.3, "confidence": avg_score})
     elif exec_profile == "rigorous" and evidences:
-        # Rigorous: verificação completa via LLM (Evidence Checker §14)
+        # Legacy: rigorous + evidences → EvidenceChecker monolítico (Onda 0)
         verification = await evidence_checker.verify(draft, evidences, skill_data.get("guardrails", ""))
         await fsm.run_verify_evidence({
             "ok": verification.ok,

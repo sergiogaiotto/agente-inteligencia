@@ -115,11 +115,37 @@ class ToolUpdate(BaseModel):
     sla: Optional[str] = None
 
 class GoldCaseCreate(BaseModel):
-    dataset_version: str = "v1"; case_type: str = "normal"
-    journey: Optional[str] = None; channel: str = "api"
+    """Caso do Golden Dataset.
+
+    Campos legados (mantidos para back-compat com casos pre-enriquecimento):
+        dataset_version, case_type, journey, channel, complexity,
+        input_text, expected_output, expected_state.
+
+    Enriquecimento:
+        - category: taxonomia semântica (ex: "atendimento", "compliance", "vendas").
+          Usado para breakdown de acurácia no relatório.
+        - weight: peso na média ponderada (default 1.0). Casos críticos podem
+          pesar mais (ex: 5.0). Range [0.1, 10.0].
+        - expected_pattern: regex Python opcional. Quando presente, o evaluator
+          usa re.search(pattern, output, IGNORECASE) em vez de similarity check
+          contra expected_output.
+        - red_flags: lista de strings que NUNCA devem aparecer no output.
+          Match case-insensitive substring; qualquer match → caso falha.
+          Persistido como JSON list em coluna TEXT.
+    """
+    dataset_version: str = "v1"
+    case_type: str = "normal"
+    journey: Optional[str] = None
+    channel: str = "api"
     complexity: Optional[str] = None
-    input_text: str; expected_output: str
+    input_text: str
+    expected_output: str
     expected_state: str = "Recommend"
+    # ── Enriquecimento Golden Dataset ──
+    category: Optional[str] = None
+    weight: float = Field(default=1.0, ge=0.1, le=10.0)
+    expected_pattern: Optional[str] = None
+    red_flags: list[str] = Field(default_factory=list)
 
 class ReleaseCreate(BaseModel):
     name: str; environment: str = "staging"

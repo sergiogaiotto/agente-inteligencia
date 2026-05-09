@@ -242,7 +242,8 @@ function dashboardPage(){return{
         {section:'§6', label:'CAR — Catálogo Roteadores', tip:'Catálogo de Agentes Roteadores indexado por intenção. Matching híbrido: filtro simbólico sobre keywords e entidades + ranking vetorial. Empates resolvidos por stability > custo > taxa de sucesso. Análogo ao service registry em microsserviços.'},
         {section:'§7', label:'Protocolo A2A / Envelope', tip:'Unidade de comunicação entre agentes: envelope_id (ULID), trace/span OpenTelemetry, IntentDescriptor preservado em toda a cadeia, skill_ref, contexto tipado, budget restante (tokens/ms/USD), deadline, assinatura. ContextDelta append-only para mutações.'},
         {section:'§9.5', label:'Harness Avaliação', tip:'Motor que executa skills contra dataset gold adversarial. Métricas: acurácia, taxa de recusa correta, falso positivo, latência, custo. Gate de release automático com thresholds configuráveis — regressão acima de N% bloqueia deploy.'},
-        {section:'§14', label:'Evidence Runtime + RAG real', tip:'Busca híbrida BM25 (Postgres tsvector + GIN) + vetorial (Qdrant + Azure embeddings text-embedding-3-small) fundidas via Reciprocal Rank Fusion (k=60). Reranker LLM opcional (GPT-4o). EvidenceChecker verifica consistência/cobertura. Endpoints REST de ingestão de documentos (chunca + embeda + persiste).'},
+        {section:'§14', label:'RAG real (Retriever + Reranker)', tip:'Camada de RECUPERAÇÃO. Busca híbrida BM25 (Postgres tsvector + GIN) + vetorial (Qdrant + Azure embeddings text-embedding-3-small) fundidas via Reciprocal Rank Fusion (k=60). Reranker LLM opcional (GPT-4o). Endpoints REST de ingestão de documentos. Não verifica fidelidade da resposta — isso é §14.2.'},
+        {section:'§14.2', label:'Verifier (judge multi-dimensional)', tip:'Camada de VERIFICAÇÃO independente. 4 dimensões via LLM-as-Judge: factuality (claims suportados por evidência), completeness (pontos cobertos), tone_adherence (tom+guardrails), safety (PII/dados internos). Plus ContractValidator determinístico (sem LLM) para output_contract da SKILL.md. Persiste em tabela verifications. Toggle VERIFIER_V2_ENABLED. Modelo configurável.'},
         {section:'§15', label:'FSM Interação (9 estados)', tip:'Máquina de estados determinística: Intake → PolicyCheck → RetrieveEvidence → DraftAnswer → VerifyEvidence → Recommend|Refuse|Escalate → LogAndClose. Invariantes: todo caminho termina em LogAndClose, VerifyEvidence é obrigatório, transições atômicas auditadas.'},
         {section:'§16', label:'Modelo de Dados (27 tabelas PostgreSQL)', tip:'PostgreSQL 16 + asyncpg como backend único. Schema com 27 tabelas: agents, skills, interactions, turns, knowledge_sources, evidence_chunks (BM25 via tsvector), evidences, envelopes, releases, gold_cases, eval_runs, audit_log, policy_decisions e mais. Migrações idempotentes via ALTER TABLE IF NOT EXISTS.'},
         {section:'§17', label:'Observabilidade self-hosted', tip:'Stack OpenTelemetry → Tempo (traces) + Loki (logs) + Grafana (UI) — Onda 2. Auto-instrumented: FastAPI, asyncpg, httpx, redis, logging (com trace_id injetado em todo log record). Spans manuais em fsm.transition, evidence.retrieve.{bm25,vector}, evidence.rerank, ingest.*, policy.evaluate. LangFuse coexiste para visão por LLM call.'},
@@ -265,7 +266,7 @@ function dashboardPage(){return{
             {label:'Releases',value:s.total_releases||0,sub:'Version Registry'},
             {label:'Evidências',value:s.total_knowledge_sources||0,sub:'Bases autorizadas'},
             {label:'Tools MCP',value:s.total_tools||0,sub:'Ferramentas'},
-            {label:'Gold Cases',value:s.total_gold_cases||0,sub:'Dataset adversarial'},
+            {label:'Golden Dataset',value:s.total_gold_cases||0,sub:'Casos adversariais'},
             {label:'Avaliações',value:s.total_eval_runs||0,sub:'Harness runs'},
         ];
         await this.loadInteractions();
@@ -295,7 +296,7 @@ function dashboardPage(){return{
         const map = {
             's4':'bg-violet-500', 's5':'bg-violet-500', 's6':'bg-violet-500', 's7':'bg-violet-500',
             's95':'bg-amber-500',
-            's14':'bg-emerald-500',
+            's14':'bg-emerald-500', 's142':'bg-emerald-600',
             's15':'bg-brand-500', 's16':'bg-brand-500', 's17':'bg-brand-500', 's18':'bg-brand-500',
             'onda1':'bg-rose-500',
             'onda4a':'bg-orange-500',
