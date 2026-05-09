@@ -148,6 +148,20 @@ class HelpAskRequest(BaseModel):
     history: list[dict] | None = Field(default=None, description="Turnos anteriores [{role, content}]")
 
 
+class HelpAskContextRequest(BaseModel):
+    """Versão alternativa: recebe o contexto direto do front em vez de buscar
+    pelo module_id no module-guide.js. Usado pela "Ajuda desta página"
+    (page-specific) que tem dados próprios em helpContent (base.html).
+    """
+    title: str = Field(..., max_length=200)
+    section: str = Field(..., max_length=200)
+    what: str = Field(default="", max_length=4000)
+    foundation: str = Field(default="", max_length=4000)
+    usage: str = Field(default="", max_length=4000)
+    question: str = Field(..., min_length=1, max_length=2000)
+    history: list[dict] | None = None
+
+
 class HelpAskResponse(BaseModel):
     answer: str
     model: str
@@ -218,4 +232,70 @@ async def ask_help(req: HelpAskRequest) -> HelpAskResponse:
             )
         except Exception as e:
             logger.warning(f"help.ask falhou: {type(e).__name__}: {e}")
+            raise HTTPException(503, f"Assistente IA indisponível: {type(e).__name__}: {str(e)[:160]}")
+
+
+# ─── Variante para "Ajuda desta página" ─────────────────────────
+# Recebe o contexto direto do front (helpContent já tem os dados estruturados
+# em base.html). Não depende de module-guide.js.
+
+_PAGE_SYSTEM_PROMPT = (
+    "Você é um assistente técnico do produto AgenteInteligência-AI. "
+    "O usuário está navegando em uma PÁGINA específica e quer ajuda contextual "
+    "para usá-la. Use o CONTEXTO DA PÁGINA abaixo como verdade canônica.\n\n"
+    "REGRAS:\n"
+    "- Foco no fluxo da página (criar/editar/executar). Nada genérico.\n"
+    "- Se a pergunta for sobre tela/elemento/botão da página, descreva em 1-2 passos diretos.\n"
+    "- Se sair do escopo da página, redirecione gentilmente.\n"
+    "- Use blocos ```bash``` para comandos curl quando relevante.\n"
+    "- Português do Brasil. Tom direto. Limite ~250 palavras."
+)
+
+
+@router.post("/ask-context", response_model=HelpAskResponse)
+async def ask_help_context(req: HelpAskContextRequest) -> HelpAskResponse:
+    """Variante context-driven do help — recebe os campos diretamente.
+
+    Usado pelo drawer "Ajuda desta página" que tem os dados em helpContent
+    no template (não em module-guide.js).
+    """
+    with _tracer.start_as_current_span("help.ask_context") as span:
+        span.set_attribute("page.title", req.title)
+        span.set_attribute("page.section", req.section)
+        span.set_attribute("question.length", len(req.question))
+
+        # Strip de qualquer HTML que tenha vindo (front usa textContent, mas defesa)
+        what_t = _strip_html(req.what)
+        foundation_t = _strip_html(req.foundation)
+        usage_t = _strip_html(req.usage)
+
+        ctx_text = (
+            f"=== PÁGINA: {req.title} — {req.section} ===\n\n"
+            f"O QUE É:\n{what_t}\n\n"
+            f"FUNDAMENTO (especificação):\n{foundation_t}\n\n"
+            f"COMO USAR:\n{usage_t}"
+        )
+
+        messages: list[dict] = [
+            {"role": "system", "content": _PAGE_SYSTEM_PROMPT},
+            {"role": "user", "content": ctx_text + "\n\n=== PERGUNTA DO USUÁRIO ===\n" + req.question},
+        ]
+        if req.history:
+            tail = req.history[-MAX_HISTORY:]
+            messages = [messages[0]] + tail + [messages[-1]]
+
+        try:
+            provider = get_provider("azure")
+            resp = await provider.generate(messages, max_tokens=MAX_TOKENS)
+            answer = (resp.get("content") or "").strip()
+            if not answer:
+                answer = "(O modelo não retornou resposta. Tente reformular a pergunta.)"
+            span.set_attribute("response.length", len(answer))
+            return HelpAskResponse(
+                answer=answer,
+                model=resp.get("model", "azure"),
+                usage=resp.get("usage", {}) or {},
+            )
+        except Exception as e:
+            logger.warning(f"help.ask_context falhou: {type(e).__name__}: {e}")
             raise HTTPException(503, f"Assistente IA indisponível: {type(e).__name__}: {str(e)[:160]}")

@@ -219,6 +219,10 @@
                                 <div class="text-[12px] font-semibold text-brand-900">📚 Guia dos Módulos</div>
                                 <div class="text-[10px] text-surface-400 mt-0.5">Fundamento, aplicação, ativar e usar — 14 módulos</div>
                             </button>
+                            <button @click="guideMenuOpen=false; openPageHelp()" class="block w-full text-left px-3 py-2.5 hover:bg-surface-50 border-t border-surface-100">
+                                <div class="text-[12px] font-semibold text-brand-900">💡 Ajuda desta página</div>
+                                <div class="text-[10px] text-surface-400 mt-0.5">O que é, fundamento e como usar — contexto da página atual</div>
+                            </button>
                         </div>
                     </div>
                     <button @click="searchOpen = true; $nextTick(() => $refs.searchInput?.focus())" class="hidden sm:flex items-center gap-1.5 rounded-full bg-surface-100 px-3 py-1.5 text-[12px] text-surface-400 hover:bg-surface-200 transition-colors cursor-pointer">
@@ -368,6 +372,49 @@
     </template>
 
     <!-- ══════════════════════════════════════════════════ -->
+    <!-- AJUDA DESTA PÁGINA (drawer contextual)            -->
+    <!-- ══════════════════════════════════════════════════ -->
+    <template x-if="pageHelpOpen">
+        <div class="fixed inset-0 z-[9985]">
+            <div class="fixed inset-0 bg-black/40" @click="pageHelpOpen=false"></div>
+            <aside class="fixed right-0 top-0 bottom-0 w-full sm:w-[560px] bg-white shadow-2xl flex flex-col">
+                <header class="flex items-center justify-between border-b border-surface-100 px-5 py-3 shrink-0 bg-gradient-to-r from-violet-50 to-brand-50">
+                    <div>
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-violet-600">💡 Ajuda desta página</div>
+                        <div class="text-[14px] font-bold text-brand-900" x-text="pageHelpData.title || 'Página'"></div>
+                        <div class="text-[10px] text-surface-500" x-text="pageHelpData.section || ''"></div>
+                    </div>
+                    <button @click="pageHelpOpen=false" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </header>
+                <!-- Tabs -->
+                <div class="flex border-b border-surface-100 px-3 shrink-0">
+                    <template x-for="tab in [['what','O que é'],['foundation','Fundamento'],['usage','Como usar']]" :key="tab[0]">
+                        <button @click="pageHelpTab=tab[0]"
+                            class="px-3 py-2 text-[11px] font-medium border-b-2 -mb-px transition-colors"
+                            :class="pageHelpTab===tab[0] ? 'border-brand-500 text-brand-600' : 'border-transparent text-surface-400 hover:text-surface-600'">
+                            <span x-text="tab[1]"></span>
+                        </button>
+                    </template>
+                </div>
+                <!-- Conteúdo -->
+                <div class="flex-1 overflow-y-auto px-5 py-4 text-[12px] text-surface-600 leading-relaxed">
+                    <p x-text="pageHelpData[pageHelpTab] || 'Sem informação disponível para esta seção.'"></p>
+                </div>
+                <!-- Footer com botão IA -->
+                <div class="border-t border-surface-100 px-5 py-3 shrink-0 bg-surface-50/50">
+                    <button @click="openHelpChatForPage()"
+                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-violet-500 to-brand-500 text-white px-4 py-2 text-[12px] font-semibold hover:shadow-md transition-all">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+                        🤖 IA, me ajude com esta página!
+                    </button>
+                </div>
+            </aside>
+        </div>
+    </template>
+
+    <!-- ══════════════════════════════════════════════════ -->
     <!-- IA, ME AJUDE! (drawer chat)                       -->
     <!-- ══════════════════════════════════════════════════ -->
     <template x-if="helpChatOpen">
@@ -377,7 +424,7 @@
                 <header class="flex items-center justify-between border-b border-surface-100 px-5 py-3 shrink-0 bg-gradient-to-r from-violet-50 to-brand-50">
                     <div>
                         <div class="text-[10px] font-semibold uppercase tracking-wider text-violet-600">🤖 IA, me ajude!</div>
-                        <div class="text-[13px] font-bold text-brand-900" x-text="helpChatModule?.section + ' — ' + helpChatModule?.label"></div>
+                        <div class="text-[13px] font-bold text-brand-900" x-text="helpChatTitle"></div>
                     </div>
                     <button @click="helpChatOpen=false" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
@@ -387,7 +434,7 @@
                 <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3" id="helpChatScroll">
                     <template x-if="helpMessages.length === 0">
                         <div class="text-[11px] text-surface-400 text-center py-8">
-                            Pergunte qualquer coisa sobre <b x-text="helpChatModule?.label"></b>.<br/>
+                            Pergunte qualquer coisa sobre <b x-text="helpChatModule?.label || helpChatPage?.title"></b>.<br/>
                             Sugestões abaixo ↓
                         </div>
                     </template>
@@ -616,31 +663,92 @@
                 this.selectedTab = 'fundamento';
             },
 
-            /* ══ "IA, me ajude!" chat (drawer) ══ */
+            /* ══ Ajuda desta Página (drawer contextual) ══ */
+            pageHelpOpen: false,
+            pageHelpTab: 'what',
+            // Mapa pathname → key do helpContent
+            _pagePathMap: {
+                '/': 'dashboard', '/dashboard': 'dashboard',
+                '/agents': 'agents',
+                '/skills': 'skills',
+                '/workspace': 'workspace',
+                '/mesh': 'mesh',
+                '/tools': 'tools',
+                '/evidence': 'evidence',
+                '/api-connectors': 'api_connectors', '/api_connectors': 'api_connectors',
+                '/harness': 'harness',
+                '/releases': 'releases',
+                '/observability': 'observability',
+                '/history': 'history',
+                '/settings': 'settings',
+            },
+            get currentPageKey() {
+                const path = window.location.pathname.replace(/\/$/, '') || '/';
+                if (this._pagePathMap[path]) return this._pagePathMap[path];
+                // fallback: tenta primeiro segmento (ex: /agents/new → agents)
+                const seg = '/' + (path.split('/').filter(Boolean)[0] || '');
+                return this._pagePathMap[seg] || 'dashboard';
+            },
+            get pageHelpData() {
+                return this.helpContent[this.currentPageKey] || { title: 'Página', section: '', what: '', foundation: '', usage: '' };
+            },
+            openPageHelp() {
+                this.pageHelpTab = 'what';
+                this.pageHelpOpen = true;
+            },
+
+            /* ══ "IA, me ajude!" chat (drawer) — usado por Módulo OU Página ══ */
             helpChatOpen: false,
-            helpChatModule: null,
+            helpChatModule: null,    // null quando page mode
+            helpChatPage: null,      // {title, section, what, foundation, usage} quando page mode
             helpMessages: [],
             helpInput: '',
             helpLoading: false,
+            get helpChatTitle() {
+                if (this.helpChatModule) return `${this.helpChatModule.section} — ${this.helpChatModule.label}`;
+                if (this.helpChatPage) return `Página: ${this.helpChatPage.title}`;
+                return '';
+            },
             get helpSuggestions() {
-                if (!this.helpChatModule) return [];
-                const lbl = this.helpChatModule.label;
-                return [
-                    `Como ativar ${lbl}?`,
-                    `Quais riscos de usar ${lbl}?`,
-                    `Como troubleshoot quando ${lbl} não funciona?`,
-                    `Mostre um exemplo prático de ${lbl}.`,
-                ];
+                if (this.helpChatModule) {
+                    const lbl = this.helpChatModule.label;
+                    return [
+                        `Como ativar ${lbl}?`,
+                        `Quais riscos de usar ${lbl}?`,
+                        `Como troubleshoot quando ${lbl} não funciona?`,
+                        `Mostre um exemplo prático de ${lbl}.`,
+                    ];
+                }
+                if (this.helpChatPage) {
+                    const t = this.helpChatPage.title;
+                    return [
+                        `Como criar meu primeiro item nesta página?`,
+                        `Quais erros comuns ao usar ${t}?`,
+                        `Mostre um fluxo passo-a-passo nesta tela.`,
+                        `Como testar o que acabei de criar?`,
+                    ];
+                }
+                return [];
             },
             openHelpChat(mod) {
                 this.helpChatModule = mod;
+                this.helpChatPage = null;
                 this.helpMessages = [];
                 this.helpInput = '';
                 this.helpChatOpen = true;
             },
+            openHelpChatForPage() {
+                this.helpChatPage = { ...this.pageHelpData };
+                this.helpChatModule = null;
+                this.helpMessages = [];
+                this.helpInput = '';
+                this.pageHelpOpen = false;
+                this.helpChatOpen = true;
+            },
             async sendHelpMessage() {
                 const q = (this.helpInput || '').trim();
-                if (!q || this.helpLoading || !this.helpChatModule) return;
+                if (!q || this.helpLoading) return;
+                if (!this.helpChatModule && !this.helpChatPage) return;
                 this.helpMessages.push({ role: 'user', content: q });
                 this.helpInput = '';
                 this.helpLoading = true;
@@ -649,16 +757,33 @@
                     if (el) el.scrollTop = el.scrollHeight;
                 });
                 try {
-                    const r = await fetch('/api/v1/help/ask', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
+                    let url, body;
+                    const history = this.helpMessages.slice(-6, -1).map(m => ({ role: m.role, content: m.content }));
+                    if (this.helpChatModule) {
+                        url = '/api/v1/help/ask';
+                        body = {
                             module_id: this.helpChatModule.id,
                             module_label: this.helpChatModule.label,
                             module_section: this.helpChatModule.section,
                             question: q,
-                            history: this.helpMessages.slice(-6, -1).map(m => ({ role: m.role, content: m.content })),
-                        }),
+                            history,
+                        };
+                    } else {
+                        url = '/api/v1/help/ask-context';
+                        body = {
+                            title: this.helpChatPage.title || '',
+                            section: this.helpChatPage.section || '',
+                            what: this.helpChatPage.what || '',
+                            foundation: this.helpChatPage.foundation || '',
+                            usage: this.helpChatPage.usage || '',
+                            question: q,
+                            history,
+                        };
+                    }
+                    const r = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
                     });
                     if (!r.ok) {
                         const txt = await r.text();
