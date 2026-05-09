@@ -627,8 +627,23 @@
             <div class="relative z-10 w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-surface-200 overflow-hidden">
                 <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4">
                     <h3 class="text-[15px] font-bold text-brand-900" x-text="editingEndpointId ? 'Editar Endpoint' : 'Novo Endpoint'"></h3>
-                    <button @click="endpointFormOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+                    <button @click="endpointFormOpen = false; epDiscoverError = ''" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
                 </div>
+                <!-- Banner contextual: mostra falha do "Descobrir" sem ser toast efêmero. -->
+                <template x-if="epDiscoverError">
+                    <div class="border-b border-amber-200 bg-amber-50 px-6 py-3">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="flex-1 min-w-0">
+                                <p class="text-[12px] font-semibold text-amber-900 mb-0.5">Descobrir não funcionou</p>
+                                <p class="text-[11px] text-amber-800 leading-relaxed" x-text="epDiscoverError"></p>
+                            </div>
+                            <button @click="epDiscoverError = ''" type="button"
+                                    class="shrink-0 text-[10px] font-semibold text-amber-700 hover:text-amber-900 underline">
+                                OK, vou preencher manual
+                            </button>
+                        </div>
+                    </div>
+                </template>
                 <div class="px-6 py-5 space-y-4">
                     <!-- ═ Combobox Nome (com descoberta via OpenAPI) ═ -->
                     <div class="grid grid-cols-3 gap-3">
@@ -756,6 +771,9 @@ function apiConnectorsPage() {
         epForm: { name:'', method:'GET', path:'', description:'', category:'geral', sample_body:'{}' },
         // Endpoint discovery via OpenAPI
         epDiscovering: false, epDiscoveredEndpoints: [], epDiscoveredFromConnId: null,
+        // Banner persistente dentro do modal "Novo Endpoint" quando Descobrir falha
+        // (toast efêmero não dá tempo de o operador ler). Limpa em close/dismiss.
+        epDiscoverError: '',
         // Testar endpoint antes de salvar (PR #17)
         epTesting: false, epTestResult: null,
 
@@ -1194,6 +1212,8 @@ function apiConnectorsPage() {
             // Reset do resultado de teste anterior
             this.epTestResult = null;
             this.epTesting = false;
+            // Limpa banner de erro de Descobrir (caso tenha sobrado de modal anterior)
+            this.epDiscoverError = '';
             this.endpointFormOpen = true;
         },
 
@@ -1243,8 +1263,12 @@ function apiConnectorsPage() {
             if (!connId) return;
             const node = this.tree.find(n => n.id === connId);
             const baseUrl = node?.base_url;
-            if (!baseUrl) { showToast('Connector sem base_url — não dá pra descobrir', 'error'); return; }
+            if (!baseUrl) {
+                this.epDiscoverError = 'Connector sem base_url — não dá pra descobrir.';
+                return;
+            }
             this.epDiscovering = true;
+            this.epDiscoverError = '';
             try {
                 // Passa connector_id → backend injeta auth do connector automaticamente
                 // (cookie, bearer, api_key, basic — tudo suportado).
@@ -1254,16 +1278,38 @@ function apiConnectorsPage() {
                 if (r.found) {
                     this.epDiscoveredEndpoints = r.endpoints || [];
                     this.epDiscoveredFromConnId = connId;
+                    this.epDiscoverError = '';
                     showToast(this.epDiscoveredEndpoints.length + ' endpoint(s) descoberto(s)');
                 } else {
                     this.epDiscoveredEndpoints = [];
-                    showToast(r.hint || 'OpenAPI não encontrado nessa URL', 'error');
+                    // Reescreve a hint do backend pra contexto certo: estamos JÁ
+                    // dentro do modal "+ Novo endpoint", então a sugestão original
+                    // ("cadastre os endpoints manualmente em '+ Novo endpoint'")
+                    // vira recursiva. Substitui pela ação real cabível aqui.
+                    this.epDiscoverError = this._adaptHintForEpModal(r.hint || 'OpenAPI não encontrado nessa URL.');
                 }
             } catch(e) {
                 this.epDiscoveredEndpoints = [];
-                showToast('Erro: ' + e.message, 'error');
+                this.epDiscoverError = 'Erro: ' + (e?.message || 'desconhecido');
             }
             this.epDiscovering = false;
+        },
+
+        // Adapta a hint do backend pra fazer sentido dentro do modal de endpoint.
+        // O backend devolve "cadastre manualmente em '+ Novo endpoint'", mas o
+        // operador JÁ está nesse modal — recursivo. Troca pra "preencha os
+        // campos abaixo manualmente". Mantém o resto da hint (auth/sessão).
+        _adaptHintForEpModal(hint) {
+            if (!hint) return '';
+            return hint
+                .replace(
+                    /cadastre os endpoints manualmente em ['"]\+\s*Novo endpoint['"]\.?/gi,
+                    'preencha os campos abaixo manualmente.'
+                )
+                .replace(
+                    /cadastre os endpoints manualmente em '\+ Novo endpoint'\.?/gi,
+                    'preencha os campos abaixo manualmente.'
+                );
         },
 
         applyEpSuggestion(ep) {
