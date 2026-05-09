@@ -27,14 +27,49 @@
                                       x-text="s.confidentiality_label"></span>
                                 <span class="rounded-full bg-surface-100 px-2 py-0.5 text-[10px] font-medium text-surface-500" x-text="s.source_type"></span>
                             </div>
-                            <p class="text-[12px] text-surface-400" x-text="s.description || 'Sem descrição'"></p>
+                            <p class="text-[12px] text-surface-400 mb-2" x-text="s.description || 'Sem descrição'"></p>
+                            <!-- Stats bar (Onda 6) -->
+                            <div class="flex items-center gap-3 text-[11px]">
+                                <template x-if="statsBy[s.id]">
+                                    <div class="flex items-center gap-3">
+                                        <span :class="statsBy[s.id].chunks_count > 0 ? 'text-emerald-600 font-medium' : 'text-amber-600 font-medium'">
+                                            <span x-show="statsBy[s.id].chunks_count > 0">●</span>
+                                            <span x-show="statsBy[s.id].chunks_count === 0">⚠</span>
+                                            <span x-text="statsBy[s.id].chunks_count + ' chunks'"></span>
+                                        </span>
+                                        <span class="text-surface-400" x-show="statsBy[s.id].chunks_count > 0"
+                                              x-text="(statsBy[s.id].tokens_total||0).toLocaleString() + ' tokens'"></span>
+                                        <span class="text-surface-400" x-show="statsBy[s.id].last_chunk_at"
+                                              :title="statsBy[s.id].last_chunk_at"
+                                              x-text="'ingerido ' + ago(statsBy[s.id].last_chunk_at)"></span>
+                                        <span class="text-amber-600" x-show="statsBy[s.id].chunks_count === 0">
+                                            sem conteúdo — clique em "Ingerir"
+                                        </span>
+                                    </div>
+                                </template>
+                                <template x-if="!statsBy[s.id]">
+                                    <span class="text-surface-300">carregando…</span>
+                                </template>
+                            </div>
                         </div>
                     </div>
-                    <div class="flex gap-1 ml-4 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                        <button @click="openEditor(s)" title="Editar" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600">
+                    <div class="flex gap-1 ml-4 shrink-0">
+                        <button @click="openIngest(s)" title="Ingerir conteúdo (texto/arquivo/URL)"
+                                class="inline-flex items-center gap-1 rounded-md bg-brand-50 px-2 py-1 text-[11px] font-semibold text-brand-700 hover:bg-brand-100">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+                            Ingerir
+                        </button>
+                        <button x-show="statsBy[s.id]?.chunks_count > 0"
+                                @click="clearChunks(s)" title="Limpar conteúdo (mantém a fonte registrada)"
+                                class="p-1.5 rounded-md hover:bg-amber-50 text-surface-400 hover:text-amber-700 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 00-3.7-3.7 48.678 48.678 0 00-7.324 0 4.006 4.006 0 00-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3l-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 003.7 3.7 48.656 48.656 0 007.324 0 4.006 4.006 0 003.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3l-3 3"/></svg>
+                        </button>
+                        <button @click="openEditor(s)" title="Editar metadados"
+                                class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600 opacity-0 group-hover:opacity-100 transition-opacity">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
                         </button>
-                        <button @click="deleteSource(s.id, s.name)" title="Excluir" class="p-1.5 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600">
+                        <button @click="deleteSource(s.id, s.name)" title="Excluir fonte"
+                                class="p-1.5 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
                         </button>
                     </div>
@@ -108,6 +143,127 @@
             </div>
         </div>
     </template>
+
+    <!-- ══ MODAL: Ingerir conteúdo (Onda 6 Wave 1b) ══ -->
+    <template x-if="ingestOpen">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
+            <div class="fixed inset-0 bg-black/40" @click="!ingestProgress.loading && (ingestOpen = false)"></div>
+            <div class="relative z-10 w-full max-w-2xl rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden">
+                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4">
+                    <div class="min-w-0">
+                        <h3 class="text-[15px] font-bold text-brand-900">Ingerir conteúdo</h3>
+                        <p class="text-[11px] text-surface-400 truncate" x-text="'na base: ' + (ingestSourceName || '—')"></p>
+                    </div>
+                    <button @click="!ingestProgress.loading && (ingestOpen = false)" :disabled="ingestProgress.loading"
+                            class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 disabled:opacity-30">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+
+                <!-- Tabs -->
+                <div class="flex border-b border-surface-100 bg-surface-50/50">
+                    <template x-for="tab in [{k:'text', label:'Texto'}, {k:'file', label:'Arquivo'}, {k:'url', label:'URL'}]" :key="tab.k">
+                        <button @click="ingestTab = tab.k; ingestProgress.error = null; ingestProgress.result = null"
+                                :disabled="ingestProgress.loading"
+                                :class="ingestTab === tab.k ? 'border-brand-500 text-brand-700 bg-white' : 'border-transparent text-surface-500 hover:text-brand-600'"
+                                class="flex-1 border-b-2 px-4 py-2.5 text-[12px] font-semibold transition-colors disabled:opacity-50"
+                                x-text="tab.label"></button>
+                    </template>
+                </div>
+
+                <div class="px-6 py-5 space-y-4">
+                    <!-- Tab: Texto -->
+                    <div x-show="ingestTab === 'text'">
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Conteúdo (texto / markdown)</label>
+                        <textarea x-model="ingestForm.text" rows="10"
+                                  placeholder="Cole o texto bruto ou markdown aqui — manuais, FAQs, políticas, contratos transcritos, etc.&#10;&#10;Será segmentado em chunks (~500 tokens cada) e indexado no Postgres BM25 + Qdrant vetorial."
+                                  class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[12px] text-brand-900 outline-none focus:border-brand-400 resize-y font-mono min-h-[12rem]"></textarea>
+                        <p class="text-[10px] text-surface-400 mt-1" x-show="ingestForm.text"
+                           x-text="ingestForm.text.length.toLocaleString() + ' caracteres · ~' + Math.ceil(ingestForm.text.length / 4).toLocaleString() + ' tokens estimados'"></p>
+                    </div>
+
+                    <!-- Tab: Arquivo -->
+                    <div x-show="ingestTab === 'file'">
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Arquivo</label>
+                        <div class="rounded-lg border-2 border-dashed border-surface-200 hover:border-brand-300 p-6 text-center transition-colors cursor-pointer"
+                             @click="$refs.fileInput.click()"
+                             @dragover.prevent="$event.currentTarget.classList.add('border-brand-400')"
+                             @dragleave.prevent="$event.currentTarget.classList.remove('border-brand-400')"
+                             @drop.prevent="$event.currentTarget.classList.remove('border-brand-400'); ingestForm.file = $event.dataTransfer.files[0]">
+                            <input type="file" x-ref="fileInput" @change="ingestForm.file = $event.target.files[0]" class="hidden">
+                            <svg class="mx-auto w-8 h-8 text-surface-300 mb-2" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                            <template x-if="!ingestForm.file">
+                                <div>
+                                    <p class="text-[12px] text-brand-900 font-medium">Clique para selecionar ou arraste aqui</p>
+                                    <p class="text-[10px] text-surface-400 mt-1">PDF, DOCX, PPTX, XLSX, HTML, MD, TXT, CSV, JSON, XML, EPUB, .msg, ZIP, áudio, imagens</p>
+                                </div>
+                            </template>
+                            <template x-if="ingestForm.file">
+                                <div>
+                                    <p class="text-[12px] font-semibold text-brand-900" x-text="ingestForm.file.name"></p>
+                                    <p class="text-[10px] text-surface-500 mt-1"
+                                       x-text="(ingestForm.file.size/1024).toFixed(1) + ' KB · ' + (ingestForm.file.type || 'tipo desconhecido')"></p>
+                                </div>
+                            </template>
+                        </div>
+                        <p class="text-[10px] text-surface-400 mt-2">Conversão via <a href="https://github.com/microsoft/markitdown" target="_blank" class="text-brand-500 hover:text-brand-700">markitdown</a> da Microsoft. Áudio é transcrito automaticamente; imagens passam por OCR.</p>
+                    </div>
+
+                    <!-- Tab: URL -->
+                    <div x-show="ingestTab === 'url'">
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">URL pública</label>
+                        <input type="url" x-model="ingestForm.url" placeholder="https://exemplo.com/manual.pdf"
+                               class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[12px] text-brand-900 outline-none focus:border-brand-400 font-mono">
+                        <p class="text-[10px] text-surface-400 mt-2">Aceita páginas web (extrai texto limpo), PDFs hospedados, transcripts de YouTube, feeds RSS. URLs com login não são suportadas — baixe e use a aba "Arquivo".</p>
+                    </div>
+
+                    <!-- Replace toggle (comum aos 3 tabs) -->
+                    <div class="flex items-center gap-2 pt-2 border-t border-surface-100">
+                        <input type="checkbox" id="ingestReplace" x-model="ingestForm.replace" class="rounded">
+                        <label for="ingestReplace" class="text-[11px] text-surface-600">
+                            <span class="font-semibold">Substituir conteúdo existente</span>
+                            <span class="text-surface-400">— apaga chunks anteriores antes de ingerir (idempotente)</span>
+                        </label>
+                    </div>
+
+                    <!-- Estado: loading / error / result -->
+                    <template x-if="ingestProgress.loading">
+                        <div class="rounded-lg border border-brand-200 bg-brand-50 px-3 py-3 flex items-center gap-2">
+                            <svg class="animate-spin w-4 h-4 text-brand-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" opacity="0.25"/><path d="M22 12c0-5.523-4.477-10-10-10"/></svg>
+                            <span class="text-[12px] text-brand-700">Processando — pode demorar para PDFs grandes / áudio / arquivos com muito texto. Não feche esta janela.</span>
+                        </div>
+                    </template>
+                    <template x-if="ingestProgress.error">
+                        <div class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
+                            <strong>Erro na ingestão:</strong>
+                            <span x-text="ingestProgress.error"></span>
+                        </div>
+                    </template>
+                    <template x-if="ingestProgress.result">
+                        <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800">
+                            <strong>✓ Ingestão concluída:</strong>
+                            <span x-text="ingestProgress.result.chunks_created + ' chunks · ' + (ingestProgress.result.tokens_total||0).toLocaleString() + ' tokens · ' + (ingestProgress.result.duration_ms||0) + 'ms'"></span>
+                            <template x-if="ingestProgress.result.partial">
+                                <span class="block mt-1 text-amber-800">⚠ Qdrant divergente — Postgres tem todos os chunks; vetores podem estar incompletos. Re-execute quando Qdrant estiver OK.</span>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+
+                <div class="border-t border-surface-100 px-6 py-4 flex items-center justify-end gap-3">
+                    <button @click="ingestOpen = false" :disabled="ingestProgress.loading"
+                            class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] font-medium text-surface-500 hover:bg-surface-50 disabled:opacity-50">
+                        Fechar
+                    </button>
+                    <button @click="runIngest()"
+                            :disabled="ingestProgress.loading || !ingestCanSubmit"
+                            class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                        <span x-text="ingestProgress.loading ? 'Processando...' : 'Ingerir'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -115,11 +271,58 @@
 function evidencePage() {
     return {
         sources: [],
+        statsBy: {},  // {source_id: {chunks_count, tokens_total, last_chunk_at, ...}}
         editorOpen: false, editingId: null, saving: false,
         form: { name: '', description: '', source_type: 'manual', confidentiality_label: 'internal' },
 
+        // ─── Onda 6 Wave 1b: ingestão (markitdown) ──────────────────
+        ingestOpen: false,
+        ingestSourceId: null,
+        ingestSourceName: '',
+        ingestTab: 'text',  // 'text' | 'file' | 'url'
+        ingestForm: { text: '', file: null, url: '', replace: true },
+        ingestProgress: { loading: false, error: null, result: null },
+
+        get ingestCanSubmit() {
+            if (this.ingestTab === 'text') return !!(this.ingestForm.text || '').trim();
+            if (this.ingestTab === 'file') return !!this.ingestForm.file;
+            if (this.ingestTab === 'url') return !!(this.ingestForm.url || '').trim();
+            return false;
+        },
+
         async load() {
-            try { const d = await api.get('/api/v1/knowledge-sources'); this.sources = d.sources || []; } catch {}
+            try {
+                const d = await api.get('/api/v1/knowledge-sources');
+                this.sources = d.sources || [];
+            } catch { this.sources = []; }
+            // Carrega stats em paralelo (uma req por source). Para volumes grandes
+            // (>50 sources) considerar endpoint batch — fora de escopo desta onda.
+            await this.loadAllStats();
+        },
+
+        async loadAllStats() {
+            const out = {};
+            await Promise.all(this.sources.map(async s => {
+                try {
+                    const r = await api.get('/api/v1/knowledge-sources/' + s.id + '/stats');
+                    out[s.id] = r;
+                } catch {
+                    out[s.id] = { chunks_count: 0, tokens_total: 0, last_chunk_at: null };
+                }
+            }));
+            this.statsBy = out;
+        },
+
+        ago(iso) {
+            // Tempo relativo curto: "2h", "5d", "agora". null/inválido → "—".
+            if (!iso) return '—';
+            const t = new Date(iso).getTime();
+            if (isNaN(t)) return '—';
+            const sec = Math.max(1, (Date.now() - t) / 1000);
+            if (sec < 60) return 'agora';
+            if (sec < 3600) return Math.floor(sec/60) + 'min atrás';
+            if (sec < 86400) return Math.floor(sec/3600) + 'h atrás';
+            return Math.floor(sec/86400) + 'd atrás';
         },
 
         openEditor(s) {
@@ -153,6 +356,73 @@ function evidencePage() {
         async deleteSource(id, name) {
             if (!confirm(`Remover base "${name}"? Evidências vinculadas perderão a referência.`)) return;
             try { await api.del('/api/v1/knowledge-sources/' + id); showToast('Base removida'); await this.load(); } catch { showToast('Erro', 'error'); }
+        },
+
+        // ─── Ingestão (Onda 6 Wave 1b) ──────────────────────────────
+        openIngest(s) {
+            this.ingestSourceId = s.id;
+            this.ingestSourceName = s.name;
+            this.ingestTab = 'text';
+            this.ingestForm = { text: '', file: null, url: '', replace: true };
+            this.ingestProgress = { loading: false, error: null, result: null };
+            this.ingestOpen = true;
+        },
+
+        async runIngest() {
+            if (!this.ingestCanSubmit || this.ingestProgress.loading) return;
+            this.ingestProgress = { loading: true, error: null, result: null };
+            const sid = this.ingestSourceId;
+            try {
+                let result;
+                if (this.ingestTab === 'text') {
+                    result = await api.post('/api/v1/knowledge-sources/' + sid + '/ingest', {
+                        text: this.ingestForm.text,
+                        replace: this.ingestForm.replace,
+                    });
+                } else if (this.ingestTab === 'url') {
+                    result = await api.post('/api/v1/knowledge-sources/' + sid + '/ingest-url', {
+                        url: this.ingestForm.url,
+                        replace: this.ingestForm.replace,
+                    });
+                } else if (this.ingestTab === 'file') {
+                    // Multipart upload (api.post pode não suportar FormData — usa fetch direto)
+                    const fd = new FormData();
+                    fd.append('file', this.ingestForm.file);
+                    fd.append('replace', String(this.ingestForm.replace));
+                    const resp = await fetch('/api/v1/knowledge-sources/' + sid + '/ingest-file', {
+                        method: 'POST',
+                        body: fd,
+                        credentials: 'include',
+                    });
+                    if (!resp.ok) {
+                        let msg = `HTTP ${resp.status}`;
+                        try { const j = await resp.json(); msg = j.detail || msg; } catch {}
+                        throw new Error(msg);
+                    }
+                    result = await resp.json();
+                }
+                this.ingestProgress = { loading: false, error: null, result };
+                showToast(`Ingestão concluída: ${result.chunks_created} chunks`);
+                // Recarrega stats da source pra atualizar o badge no card
+                await this.loadAllStats();
+            } catch(e) {
+                this.ingestProgress = {
+                    loading: false,
+                    error: (e?.message || 'erro desconhecido'),
+                    result: null,
+                };
+            }
+        },
+
+        async clearChunks(s) {
+            if (!confirm(`Apagar todo o conteúdo indexado de "${s.name}"? A fonte permanece registrada (você pode re-ingerir depois).`)) return;
+            try {
+                await api.del('/api/v1/knowledge-sources/' + s.id + '/chunks');
+                showToast('Conteúdo apagado');
+                await this.loadAllStats();
+            } catch(e) {
+                showToast('Erro: ' + (e?.message || ''), 'error');
+            }
         },
     }
 }
