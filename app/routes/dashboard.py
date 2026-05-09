@@ -814,6 +814,48 @@ async def verifier_async_stats():
     }
 
 
+# ─── LLM Routing por Task Type (Onda 7) ────────────────────────────
+
+class LLMRoutingUpdate(BaseModel):
+    """Payload do PUT /llm-routing. Subset — só keys mencionadas mudam."""
+    tool_calling: Optional[str] = None
+    reasoning: Optional[str] = None
+    instruct: Optional[str] = None
+    classification: Optional[str] = None
+    multimodal_fallback: Optional[str] = None
+
+
+@router.get("/llm-routing")
+async def get_llm_routing():
+    """Retorna o routing config atual + defaults + lista de task types."""
+    from app.llm_routing import load_routing, DEFAULT_ROUTING, TASK_TYPES
+    routing = await load_routing()
+    return {
+        "routing": routing,
+        "defaults": DEFAULT_ROUTING,
+        "task_types": list(TASK_TYPES),
+        "task_descriptions": {
+            "tool_calling": "Uso de ferramentas (function calls). Pra tarefas complexas que precisam invocar APIs/MCPs externas. Default: Azure OpenAI (estabilidade comprovada com tool_choice).",
+            "reasoning": "Texto com raciocínio. Pra tarefas que exigem análise/explicação em PT-BR. Default: Maritaca Sabiá-4.",
+            "instruct": "Apenas texto (instruction following). Inferência comum. **Aceita imagens** — quando input é multimodal, plataforma roteia automaticamente pro multimodal_fallback. Default: Maritaca Sabiá-4.",
+            "classification": "Classificação e categorização. Estruturação de informações em labels/buckets fixos. Default: Maritaca Sabiá-4.",
+            "multimodal_fallback": "Modelo usado quando o input contém imagem mas o modelo da task escolhida é text-only. Default: Azure GPT-4o (multimodal nativo).",
+        },
+    }
+
+
+@router.put("/llm-routing")
+async def put_llm_routing(data: LLMRoutingUpdate):
+    """Atualiza routing config. Aceita subset (só keys não-None mudam).
+    Cada valor é validado como `provider/model` antes de persistir."""
+    from app.llm_routing import save_routing
+    payload = {k: v for k, v in data.model_dump().items() if v is not None}
+    if not payload:
+        raise HTTPException(400, "Nenhum campo para atualizar")
+    final = await save_routing(payload)
+    return {"routing": final, "updated": list(payload.keys())}
+
+
 @router.post("/eval-runs/execute")
 async def run_harness(data: RunEvalRequest):
     """Executa harness de avaliação contra dataset gold §9.5."""
