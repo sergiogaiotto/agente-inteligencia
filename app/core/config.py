@@ -119,6 +119,16 @@ class Settings(BaseSettings):
     # Cap de tokens da resposta do juiz. ~600 cobre 4 dimensões + claims sem cortar.
     verifier_max_tokens: int = 800
 
+    # ── Verifier production mode (async sampling) ──
+    # Quando True E verifier_v2_enabled True, o branch verifier do engine não
+    # bloqueia mais a resposta: sample_rate% das interações são julgadas em
+    # background. Resposta segue com heurística rasa (evidence_score). Útil em
+    # produção — 100% sync é caro (1 LLM call extra) e lento (+2-4s).
+    # Defaults conservadores: OFF até ligar explicitamente.
+    verifier_production_async: bool = False
+    verifier_production_sample_rate: float = 0.10  # 10% das interações
+    verifier_max_concurrent_jobs: int = 20  # backpressure: drop acima disso
+
     # ── Harness multi-dim gate (§9.5 + §14.2) ──
     # Quando True, run_evaluation re-julga cada caso via Verifier (profile=rigorous)
     # e gate combina accuracy/refusal/FP com avg_factuality/safety/contract.
@@ -205,4 +215,14 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    # Defesa contra config errada: rate alto + async ligado sinaliza no log.
+    # @lru_cache garante que isso só roda uma vez por processo.
+    if s.verifier_production_async and s.verifier_production_sample_rate > 0.5:
+        import logging
+        logging.getLogger(__name__).warning(
+            f"VERIFIER_PRODUCTION_SAMPLE_RATE={s.verifier_production_sample_rate} "
+            "está alto (>50%). Custo de LLM extra pode ser proibitivo. "
+            "Considere reduzir se isso não for intencional."
+        )
+    return s

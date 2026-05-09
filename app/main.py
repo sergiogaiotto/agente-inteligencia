@@ -1,4 +1,5 @@
 """AgenteInteligência-AI — Aplicação principal FastAPI."""
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
@@ -13,6 +14,7 @@ from app.routes.mcp_diagnostics import router as mcp_diagnostics_router
 from app.routes.help import router as help_router
 
 BASE_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -20,6 +22,14 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Drena tasks async do verifier antes de fechar o pool — evita
+        # erros em INSERT contra pool já fechado quando shutdown pega
+        # uma task de production sample no meio.
+        try:
+            from app.verifier.async_dispatcher import drain
+            await drain(timeout=5.0)
+        except Exception as e:
+            logger.warning(f"verifier drain falhou no shutdown: {e}")
         await close_db()
 
 settings = get_settings()

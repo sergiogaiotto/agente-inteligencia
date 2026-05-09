@@ -769,6 +769,27 @@ async def execute_interaction(
 
     if pipeline_context or skip_evidence:
         await fsm.run_verify_evidence({"ok": True, "confidence": 1.0})
+    elif _pg_settings.verifier_v2_enabled and _pg_settings.verifier_production_async:
+        # ─── Production sample async (§14.2) ──
+        # Não bloqueia a resposta: amostra rate% das interações para judge
+        # em background. Tasks pendentes drenadas no shutdown (lifespan).
+        # FSM segue com heurística rasa (avg evidence score) — judge é
+        # observabilidade pós-fato, não decisão de runtime.
+        # verification permanece None: result do engine não vê o judge async.
+        from app.verifier.async_dispatcher import dispatch as _dispatch_async, should_sample
+        if should_sample(ctx.interaction_id, _pg_settings.verifier_production_sample_rate):
+            _dispatch_async(
+                draft=draft,
+                evidences=evidences,
+                output_contract=skill_data.get("output_contract") or "",
+                guardrails=skill_data.get("guardrails") or "",
+                user_question=user_input,
+                profile=exec_profile,
+                interaction_id=ctx.interaction_id,
+                max_concurrent=_pg_settings.verifier_max_concurrent_jobs,
+            )
+        avg_score = (sum(e.relevance_score for e in evidences) / len(evidences)) if evidences else 0.5
+        await fsm.run_verify_evidence({"ok": avg_score >= 0.3, "confidence": avg_score})
     elif _pg_settings.verifier_v2_enabled:
         # ─── Verifier v2 (§14.2 — judge multi-dim + ContractValidator) ──
         # Roda em todos os profiles exceto fast-com-pipeline. Com ou sem evidências.
