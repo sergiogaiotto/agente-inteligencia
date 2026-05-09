@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from app.core.config import get_settings
 from app.core.database import init_db, close_db
+from app.core.otel import init_otel
 from app.routes import agents, skills, workspace, mesh, dashboard, frontend, wizard, users
 from app.routes.api_connectors import router as api_connectors_router
 from app.routes.mcp_diagnostics import router as mcp_diagnostics_router
@@ -22,6 +23,11 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, description="Plataforma Multi-Agente §SKILL.md sobre AI Mesh", version="2.0.0", lifespan=lifespan)
+
+# ── Observabilidade (Onda 2) ───────────────────────────────────
+# Inicializa OpenTelemetry ANTES dos middlewares para que requests sejam
+# instrumentadas desde o primeiro byte. No-op se OTEL_ENABLED=false.
+init_otel(app)
 
 # ── Middlewares de segurança (Onda 1) ──────────────────────────
 # Rate-limit (sliding window via Redis com fallback memory) — defesa LLM04.

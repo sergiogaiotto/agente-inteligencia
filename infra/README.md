@@ -144,10 +144,94 @@ docker compose down                    # parar tudo (volumes preservados)
 docker compose down -v                 # parar e APAGAR volumes — cuidado!
 ```
 
-## 8. Próximas ondas
+## 8. Observabilidade self-hosted (Onda 2)
 
-- **Onda 1** — segurança (rate-limit, PII redaction, secrets cifrados)
-- **Onda 2** — observabilidade (OTel + Tempo + Loki + Grafana)
-  → será adicionada ao `docker-compose.yml` no profile `full`
-- **Onda 3** — Vector DB com embeddings reais (Qdrant já está no compose)
-- **Onda 4** — Policy as Code (OPA), AI Gateway, mTLS, Helm chart
+A Onda 2 adiciona **Tempo** (traces), **Loki** (logs) e **Grafana** (UI) ao
+mesmo `docker-compose.yml`, isolados no profile `full`. Sem o profile, nada
+muda — `docker compose up -d` continua subindo as 4 imagens da Onda 0.
+
+### 8.1. Habilitar a instrumentação no app
+
+Edite `.env`:
+
+```
+OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+LOKI_ENDPOINT=http://loki:3100
+```
+
+Se `OTEL_ENABLED=false` (default), o app não tenta conectar e o stack pode
+ficar parado sem afetar nada.
+
+### 8.2. Subir o stack completo
+
+```bash
+docker compose --profile full up -d
+docker compose --profile full ps
+```
+
+Recursos extras necessários: **+2.5 GB RAM, +1 GB disco**.
+
+| Serviço   | Imagem                  | Função                            | Mem |
+|-----------|-------------------------|-----------------------------------|-----|
+| `tempo`   | `grafana/tempo:2.6.0`   | Recebe spans OTLP, indexa traces  | 1G  |
+| `loki`    | `grafana/loki:3.2.0`    | Agrega logs                       | 1G  |
+| `promtail`| `grafana/promtail:3.2.0`| Coleta logs do Docker → Loki      | 256M|
+| `grafana` | `grafana/grafana:11.3.0`| UI de exploração e dashboards     | 512M|
+
+### 8.3. Acessar Grafana
+
+```
+http://<seu-host>:3000
+usuário: admin   senha: admin   (definido em GRAFANA_ADMIN_PASSWORD)
+```
+
+> ⚠️ Em produção, troque `GRAFANA_ADMIN_PASSWORD` no `.env` antes de subir.
+
+### 8.4. Inspecionar uma interação
+
+1. Mande uma mensagem no workspace (`/workspace`)
+2. Em Grafana → **Explore** → datasource **Tempo**
+3. **Search** → service: `agente-inteligencia` → escolha o trace mais recente
+4. A árvore mostra: `POST /api/v1/workspace/...` → `fsm.transition:Intake->PolicyCheck` → `evidence.retrieve` → ...
+5. Clique num span → **Logs for this span** pula direto pro Loki filtrado pelo `trace_id`
+
+O dashboard inicial **AgenteInteligência → FSM & Logs** já vem provisionado.
+
+### 8.5. Plano B: logs do Docker Desktop (Windows)
+
+Em Docker Desktop no Windows, o bind mount de `/var/lib/docker/containers`
+às vezes não funciona porque o socket é virtualizado. Sintoma: Promtail roda
+mas nenhum log chega ao Loki.
+
+**Workaround**: usar o logging driver `loki` direto no daemon Docker:
+
+1. Instalar plugin: `docker plugin install grafana/loki-docker-driver:latest --alias loki --grant-all-permissions`
+2. No `daemon.json` do Docker Desktop (Settings → Docker Engine):
+   ```json
+   {
+     "log-driver": "loki",
+     "log-opts": {
+       "loki-url": "http://localhost:3100/loki/api/v1/push",
+       "loki-batch-size": "400"
+     }
+   }
+   ```
+3. Restart Docker Desktop. Promtail pode ser desativado (`docker compose --profile full stop promtail`).
+
+### 8.6. Desligar / limpar
+
+```bash
+docker compose --profile full down                    # mantém traces/logs
+docker compose --profile full down -v                 # APAGA volumes (tempo_data, loki_data, grafana_data)
+docker compose --profile full stop grafana tempo loki promtail   # só pausa
+```
+
+---
+
+## 9. Próximas ondas
+
+- **Onda 1** ✅ segurança (rate-limit, PII redaction, secrets cifrados, prompt guard)
+- **Onda 2** ✅ observabilidade (OTel + Tempo + Loki + Grafana) — *este documento*
+- **Onda 3** ⏳ Vector DB com embeddings reais (Qdrant já está no compose)
+- **Onda 4** ⏳ Policy as Code (OPA), AI Gateway, mTLS, Helm chart

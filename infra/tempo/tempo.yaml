@@ -1,0 +1,54 @@
+# ════════════════════════════════════════════════════════════════
+# Grafana Tempo — backend de traces (Onda 2)
+# Single-binary mode, storage local em filesystem.
+# Receivers OTLP gRPC (4317) e HTTP (4318).
+# Retenção: 24h (suficiente para debug; ajustar em prod).
+# ════════════════════════════════════════════════════════════════
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  trace_idle_period: 10s
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 24h
+    compacted_block_retention: 1h
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+  storage:
+    path: /var/tempo/generator/wal
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+# Habilita o endpoint de métricas internas em /metrics (porta 3200)
+# para futura integração com Prometheus, se virmos a precisar.
+usage_report:
+  reporting_enabled: false
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics]

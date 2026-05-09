@@ -57,12 +57,12 @@ A topologia é composta por três camadas verticais de agentes (AOBD, AR, SA), a
 
 ## 3. Stack Tecnológico
 
-| Camada            | Tecnologia                                     | Função                                    |
+| Camada            | Tecnologia                                     | Função                                     |
 |-------------------|-------------------------------------------------|-------------------------------------------|
 | Linguagem         | Python 3.11+                                    | Backend completo                          |
 | Framework Web     | FastAPI + Uvicorn                               | API REST assíncrona, alta performance     |
 | Motor de Agentes  | LangGraph (StateGraph)                          | Grafos de execução com ciclos e condições |
-| LLM — OpenAI      | langchain-openai (ChatOpenAI)                   | GPT-4o, GPT-4.1, o3, o4-mini             |
+| LLM — OpenAI      | langchain-openai (ChatOpenAI)                   | GPT-4o, GPT-4.1, o3, o4-mini              |
 | LLM — Maritaca    | httpx + endpoint compatível OpenAI              | Sabiá-3, Sabiá-2                          |
 | Observabilidade   | LangFuse (v2/v3/v4 compatível)                  | Traces, spans, métricas de custo          |
 | Banco de Dados    | SQLite + aiosqlite                              | 21 tabelas, acesso assíncrono             |
@@ -107,7 +107,7 @@ cp .env.example .env
 # Edite .env com suas API keys (ver seção 4.3)
 
 # 6. Inicie a aplicação
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 7000
 
 # 7. Acesse no navegador
 # http://localhost:8000

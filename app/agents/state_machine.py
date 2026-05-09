@@ -14,13 +14,16 @@ import time
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Optional
 from app.core.database import interactions_repo, turns_repo, audit_repo
 from app.core.config import get_settings
 from app.core.dlp import redact_for_persist, count_pii
+from app.core.otel import get_tracer
 
 logger = logging.getLogger(__name__)
+_tracer = get_tracer(__name__)
 
 
 def _maybe_redact(text: str) -> str:
@@ -102,26 +105,34 @@ class InteractionStateMachine:
                 f"Permitidas: {[s.value for s in TRANSITIONS[self.ctx.current_state]]}"
             )
         from_state = self.ctx.current_state
-        self.ctx.current_state = target
-        entry = {
-            "from": from_state.value,
-            "to": target.value,
-            "condition": condition.name if condition else "",
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }
-        self.ctx.transition_log.append(entry)
+        # Span da transição. Quando OTEL_ENABLED=false, é no-op (zero overhead).
+        # Quando ligado, vira filho do span raiz da request HTTP (auto-instrumented),
+        # então cada interação aparece no Tempo como árvore: POST → fsm.transition × N.
+        with _tracer.start_as_current_span(f"fsm.transition:{from_state.value}->{target.value}") as span:
+            span.set_attribute("fsm.from", from_state.value)
+            span.set_attribute("fsm.to", target.value)
+            span.set_attribute("fsm.condition", condition.name if condition else "")
+            span.set_attribute("interaction.id", self.ctx.interaction_id or "")
+            self.ctx.current_state = target
+            entry = {
+                "from": from_state.value,
+                "to": target.value,
+                "condition": condition.name if condition else "",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            self.ctx.transition_log.append(entry)
 
-        # Persiste transição
-        if self.ctx.interaction_id:
-            await interactions_repo.update(self.ctx.interaction_id, {"state": target.value})
-            await audit_repo.create({
-                "entity_type": "interaction",
-                "entity_id": self.ctx.interaction_id,
-                "action": f"state_transition:{from_state.value}→{target.value}",
-                "details": json.dumps(entry),
-            })
+            # Persiste transição
+            if self.ctx.interaction_id:
+                await interactions_repo.update(self.ctx.interaction_id, {"state": target.value})
+                await audit_repo.create({
+                    "entity_type": "interaction",
+                    "entity_id": self.ctx.interaction_id,
+                    "action": f"state_transition:{from_state.value}→{target.value}",
+                    "details": json.dumps(entry),
+                })
 
-        logger.info(f"Interaction {self.ctx.interaction_id}: {from_state.value} → {target.value}")
+            logger.info(f"Interaction {self.ctx.interaction_id}: {from_state.value} → {target.value}")
 
     async def run_intake(self, user_input: str, agent_id: str, journey: str = "", channel: str = "api"):
         """Estado Intake: recebe solicitação, normaliza, constrói contexto."""
@@ -224,7 +235,7 @@ class InteractionStateMachine:
         if self.ctx.interaction_id:
             await interactions_repo.update(self.ctx.interaction_id, {
                 "state": State.LOG_AND_CLOSE.value,
-                "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "ended_at": datetime.now(),
             })
             # Registra turno de saída — output também é redactado.
             # Saída do LLM pode regurgitar PII vinda das evidências.

@@ -1,0 +1,48 @@
+# ════════════════════════════════════════════════════════════════
+# Grafana datasources — auto-provisionados no startup (Onda 2)
+# Tempo (traces) + Loki (logs) com correlação cruzada habilitada.
+# ════════════════════════════════════════════════════════════════
+apiVersion: 1
+
+datasources:
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false
+    jsonData:
+      # Quando clicar num span no Tempo, oferece pular para os logs daquele trace_id no Loki.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -1h
+        spanEndTimeShift: 1h
+        filterByTraceID: true
+        # Usa o label `trace_id` que Promtail extraiu via regex.
+        customQuery: true
+        query: '{container_name="agente_app"} |= `trace_id=$${__span.traceId}`'
+      tracesToMetrics:
+        datasourceUid: ''   # sem Prometheus por enquanto
+      serviceMap:
+        datasourceUid: ''
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      lokiSearch:
+        datasourceUid: loki
+
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      # Quando aparecer "trace_id=abc..." num log, vira link clicável que abre o trace no Tempo.
+      derivedFields:
+        - datasourceUid: tempo
+          matcherRegex: 'trace_id=([0-9a-f]+)'
+          name: TraceID
+          url: '$${__value.raw}'
+          urlDisplayLabel: 'Ver trace no Tempo'

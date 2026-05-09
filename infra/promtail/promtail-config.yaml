@@ -1,0 +1,59 @@
+# ════════════════════════════════════════════════════════════════
+# Promtail — coletor de logs do Docker → Loki (Onda 2)
+# Faz tail dos arquivos JSON em /var/lib/docker/containers/*/*-json.log
+# e envia para o Loki com labels úteis (container_name, compose_service).
+#
+# Plano B documentado: em hosts onde /var/lib/docker não está acessível
+# (Docker Desktop em alguns setups), trocar para o logging driver `loki`
+# do Docker (configurar daemon.json). README documenta isso.
+# ════════════════════════════════════════════════════════════════
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    backoff_config:
+      min_period: 500ms
+      max_period: 5s
+      max_retries: 10
+
+scrape_configs:
+  # ── Containers do projeto (filtro: nome começa com `agente_`) ──
+  - job_name: agente-containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: name
+            values: ["agente_"]
+    relabel_configs:
+      # container_name vem como "/agente_app" — strip da barra inicial
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container_name'
+      # compose_service do label oficial do docker-compose
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'compose_service'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: 'compose_project'
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: 'stream'
+    pipeline_stages:
+      # Docker daemon JSON wrap: {"log": "...", "stream": "stdout", "time": "..."}
+      - docker: {}
+      # Extrai trace_id que LoggingInstrumentor injeta (formato: "trace_id=abc123 span_id=def456 ...")
+      - regex:
+          expression: 'trace_id=(?P<trace_id>[0-9a-f]+)'
+      - labels:
+          trace_id:
+      # Tenta extrair severity do log Python ("INFO:logger.name:message")
+      - regex:
+          expression: '^(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL):'
+      - labels:
+          level:

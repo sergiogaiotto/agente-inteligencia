@@ -37,8 +37,10 @@ from app.agents.state_machine import (
 )
 from app.evidence.runtime import retriever, reranker, evidence_checker, EvidenceResult
 from app.skill_parser.parser import parse_skill_md
+from app.core.otel import get_tracer
 
 logger = logging.getLogger(__name__)
+_tracer = get_tracer(__name__)
 
 
 # ═══════════════════════════════════════════════════
@@ -574,8 +576,16 @@ async def execute_interaction(
         await fsm.run_retrieve_evidence([])
         enriched_input = user_input if not attachment_context else f"{user_input}{attachment_context}"
     else:
-        evidences = await retriever.search(user_input, top_n=5)
-        evidences = await reranker.rerank(user_input, evidences, top_n=5)
+        # Spans separados para retrieve e rerank — facilita identificar gargalo
+        # (no Onda 3, search vai virar busca vetorial e o rerank um cross-encoder real).
+        with _tracer.start_as_current_span("evidence.retrieve") as _span_r:
+            _span_r.set_attribute("evidence.top_n", 5)
+            evidences = await retriever.search(user_input, top_n=5)
+            _span_r.set_attribute("evidence.retrieved_count", len(evidences))
+        with _tracer.start_as_current_span("evidence.rerank") as _span_rr:
+            _span_rr.set_attribute("evidence.input_count", len(evidences))
+            evidences = await reranker.rerank(user_input, evidences, top_n=5)
+            _span_rr.set_attribute("evidence.output_count", len(evidences))
         await fsm.run_retrieve_evidence([asdict(e) if hasattr(e, '__dataclass_fields__') else e for e in evidences])
 
         evidence_context = "\n".join(

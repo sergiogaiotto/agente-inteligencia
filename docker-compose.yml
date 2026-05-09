@@ -31,6 +31,10 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-agente}:${POSTGRES_PASSWORD:-agente}@postgres:5432/${POSTGRES_DB:-agente_inteligencia}
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
+      # Onda 2: o usuário liga OTEL_ENABLED via .env. Se ligado E profile=full estiver
+      # ativo, o app exporta traces para tempo:4317. Sem profile=full, OTLP exporter
+      # falha em conectar mas app continua (graceful degradation em init_otel).
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
     ports:
       - "${APP_PORT_HOST:-7000}:7000"
     depends_on:
@@ -139,6 +143,122 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ════════════════════════════════════════════════════════════════
+  # Onda 2 — Observabilidade self-hosted (profile: full)
+  # Não sobem com `docker compose up -d` (default = perfil vazio).
+  # Subir tudo: `docker compose --profile full up -d`
+  # ════════════════════════════════════════════════════════════════
+
+  # ─── Tempo (backend de traces OTLP) ──────────────────────────────
+  tempo:
+    image: grafana/tempo:2.6.0
+    container_name: agente_tempo
+    profiles: ["full"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./infra/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    networks:
+      - aimesh
+    # Portas internas (não expostas na host):
+    #   3200  HTTP API (search, query)
+    #   4317  OTLP gRPC (recebe spans do app)
+    #   4318  OTLP HTTP
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3200/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Loki (agregador de logs) ────────────────────────────────────
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: agente_loki
+    profiles: ["full"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./infra/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - aimesh
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Promtail (tail dos logs do Docker → Loki) ────────────────────
+  promtail:
+    image: grafana/promtail:3.2.0
+    container_name: agente_promtail
+    profiles: ["full"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/config.yaml"]
+    volumes:
+      - ./infra/promtail/promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    networks:
+      - aimesh
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ─── Grafana (UI: dashboards + Explore) ──────────────────────────
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: agente_grafana
+    profiles: ["full"]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT_HOST:-3000}:3000"
+    depends_on:
+      tempo:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    networks:
+      - aimesh
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 # ══════════════════════════════════════════════════════════════════
 # Volumes nomeados — sobrevivem a `docker compose down` (sem -v)
 # ══════════════════════════════════════════════════════════════════
@@ -151,6 +271,13 @@ volumes:
     name: agente_redis_data
   qdrant_data:
     name: agente_qdrant_data
+  # Onda 2 — observabilidade (criados sob demanda quando profile=full)
+  tempo_data:
+    name: agente_tempo_data
+  loki_data:
+    name: agente_loki_data
+  grafana_data:
+    name: agente_grafana_data
 
 # ══════════════════════════════════════════════════════════════════
 # Network privada interna do AI Mesh

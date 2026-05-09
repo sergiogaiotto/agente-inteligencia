@@ -105,6 +105,22 @@ class Settings(BaseSettings):
     prompt_leak_guard_enabled: bool = True
     prompt_leak_preview_chars: int = 60
 
+    # ── Observabilidade self-hosted (Onda 2 — OTel + Tempo + Loki + Grafana) ──
+    # Default OFF: instrumentação só liga quando `OTEL_ENABLED=true` no .env e
+    # o profile `full` do docker-compose estiver ativo (`docker compose --profile full up`).
+    # Quando OFF, init_otel() é no-op e nenhuma dep OTel é exercitada em runtime.
+    otel_enabled: bool = False
+    otel_service_name: str = "agente-inteligencia"
+    otel_service_version: str = "2.0.0"
+    # Endpoint OTLP gRPC do Tempo (4317 é a porta padrão OTLP/gRPC).
+    # Em docker-compose: tempo:4317. Local fora do compose: localhost:4317.
+    otel_exporter_otlp_endpoint: str = "http://tempo:4317"
+    # parentbased_always_on (default em dev) | parentbased_traceidratio (prod com OTEL_TRACES_SAMPLER_ARG=0.1)
+    otel_traces_sampler: str = "parentbased_always_on"
+    # Endpoint Loki (não usado pelo app — Promtail tail dos logs do Docker; mantido para futura
+    # integração de log handler nativo, se quisermos emitir logs direto via push API).
+    loki_endpoint: str = "http://loki:3100"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

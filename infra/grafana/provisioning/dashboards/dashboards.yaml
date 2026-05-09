@@ -1,0 +1,17 @@
+# ════════════════════════════════════════════════════════════════
+# Grafana dashboard provider — carrega JSONs de /var/lib/grafana/dashboards
+# Os arquivos JSON ficam em infra/grafana/dashboards/ no repo, montados read-only.
+# ════════════════════════════════════════════════════════════════
+apiVersion: 1
+
+providers:
+  - name: 'agente-inteligencia'
+    orgId: 1
+    folder: 'AgenteInteligência'
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

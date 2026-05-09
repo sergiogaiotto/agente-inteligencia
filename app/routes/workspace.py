@@ -3,7 +3,7 @@ import json
 import os
 import re
 import ast
-import time
+from datetime import datetime
 import aiofiles
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -452,7 +452,7 @@ async def chat(data: ChatMessage):
                         "channel": data.channel,
                         "journey_id": data.journey or "",
                         "state": "LogAndClose",
-                        "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "ended_at": datetime.now(),
                     })
                     next_turn = 1
                 else:
@@ -460,7 +460,7 @@ async def chat(data: ChatMessage):
                     next_turn = max((int(t.get("turn_number") or 0) for t in old_turns), default=0) + 1
                     await interactions_repo.update(interaction_id, {
                         "state": "LogAndClose",
-                        "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "ended_at": datetime.now(),
                     })
 
                 await turns_repo.create({
