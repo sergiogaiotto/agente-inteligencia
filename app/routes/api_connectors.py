@@ -638,6 +638,33 @@ _OPENAPI_CANDIDATE_PATHS = (
 )
 
 
+def _format_auth_hint(auth_source: str) -> str:
+    """Pista contextual para 401/403 durante introspect, considerando o
+    `auth_type` que o connector usou.
+
+    Cobre todos os 4 tipos suportados por `_build_auth_headers` (api_key,
+    bearer, basic, cookie) + fallback para "none" / desconhecido. Sempre
+    inclui o sufixo universal sugerindo cadastro manual — porque é comum
+    APIs protegerem `/openapi.json` por sessão web mesmo quando a API
+    real é exposta por API Key (ex: fcsd-claro), caso em que nenhuma
+    correção de auth resolve a Descoberta automática.
+    """
+    raw_type = auth_source.split(":", 1)[1] if ":" in auth_source else (auth_source or "")
+    type_hints = {
+        "api_key": "Confira o header e a chave em Editar connector → Autenticação → API Key.",
+        "bearer": "Bearer token pode ter expirado — gere um novo no provedor da API.",
+        "basic": "Confira user:password em Editar connector → Autenticação → Basic.",
+        "cookie": "Cookie pode ter expirado — renove via 'Gerar cookie via login' no form do connector.",
+    }
+    specific = type_hints.get(raw_type, "Confira a configuração de autenticação do connector.")
+    return (
+        f"Tentei com auth do connector ({auth_source}) e o servidor retornou 401/403. "
+        f"{specific} "
+        "Algumas APIs protegem /openapi.json apenas via sessão web — nesse caso, "
+        "cadastre os endpoints manualmente em '+ Novo endpoint'."
+    )
+
+
 @router.post("/introspect")
 async def introspect(data: IntrospectRequest):
     """Descobre um conector a partir de uma URL com OpenAPI/Swagger.
@@ -750,11 +777,8 @@ async def introspect(data: IntrospectRequest):
             "cole-a inteira. Se a API não expõe OpenAPI, preencha manualmente."
         )
         if auth_hint and auth_source != "none":
-            # já tentou com auth mas ainda deu 401/403
-            auth_hint = (
-                f"Tentei com auth do connector ({auth_source}) mas o servidor ainda retornou 401/403. "
-                "Verifique se o token/cookie está válido (renove via 'Gerar cookie via login' no form do connector)."
-            )
+            # já tentou com auth do connector mas ainda deu 401/403 — pista contextual
+            auth_hint = _format_auth_hint(auth_source)
         return {
             "found": False,
             "tried": tried,
