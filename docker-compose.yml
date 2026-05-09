@@ -134,9 +134,11 @@ services:
       - qdrant_data:/qdrant/storage
     networks:
       - aimesh
-    # Por padrão não expõe na host — desbloqueie para usar dashboard local
-    # ports:
-    #   - "127.0.0.1:6333:6333"
+    # Onda 3: porta exposta em 127.0.0.1 para permitir ingestão e diagnóstico
+    # do host (curl, dashboard Qdrant em http://localhost:6333/dashboard).
+    # Em produção, fechar de novo (Qdrant é alcançado via rede `aimesh` pelo app).
+    ports:
+      - "127.0.0.1:6333:6333"
     logging:
       driver: json-file
       options:

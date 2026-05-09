@@ -409,6 +409,28 @@ CREATE TABLE IF NOT EXISTS api_call_logs (
     latency_ms REAL DEFAULT 0,
     created_at TIMESTAMP DEFAULT now()
 );
+
+-- ═══════════════════════════════════════════════════════════════
+-- Onda 3 — RAG real: chunks de documentos ingeridos.
+-- O vetor de embedding fica no Qdrant (collection `agente_evidence`),
+-- indexado pelo mesmo `id` desta tabela. Aqui guardamos o texto cru
+-- + tsvector gerado para BM25 nativo do Postgres.
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS evidence_chunks (
+    id TEXT PRIMARY KEY,
+    knowledge_source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    token_count INTEGER,
+    char_count INTEGER,
+    -- Coluna gerada: tsvector mantido em sync automaticamente pelo Postgres.
+    -- 'simple' não faz stemming agressivo — bom para mistura PT/EN sem dicionário.
+    tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(text, ''))) STORED,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_chunks_tsv ON evidence_chunks USING GIN (tsv);
+CREATE INDEX IF NOT EXISTS idx_evidence_chunks_source ON evidence_chunks (knowledge_source_id);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -777,6 +799,7 @@ interactions_repo = Repository("interactions")
 turns_repo = Repository("turns")
 knowledge_repo = Repository("knowledge_sources")
 evidences_repo = Repository("evidences")
+evidence_chunks_repo = Repository("evidence_chunks")  # Onda 3 — chunks de docs ingeridos
 tools_repo = Repository("tools")
 tool_calls_repo = Repository("tool_calls")
 traces_repo = Repository("traces")

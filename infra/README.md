@@ -229,9 +229,113 @@ docker compose --profile full stop grafana tempo loki promtail   # só pausa
 
 ---
 
-## 9. Próximas ondas
+## 9. RAG real com Qdrant (Onda 3)
+
+Substitui a busca textual ingênua original (match em metadados) por busca
+**híbrida BM25 + vetorial** com fusão por Reciprocal Rank Fusion (RRF) e
+reranker LLM opcional.
+
+### 9.1. Componentes
+
+| Camada | Implementação |
+|---|---|
+| Embeddings | Azure OpenAI `text-embedding-3-small` (1536 dims) |
+| Chunker | `tiktoken cl100k_base`, 500 tokens/50 overlap |
+| BM25 | Postgres `tsvector` + GIN index, `plainto_tsquery('simple', ...)` |
+| Vetorial | Qdrant collection `agente_evidence`, distância cosine |
+| Fusão | RRF com k=60 |
+| Reranker | LLM (Azure GPT-4o) com fallback heurístico |
+
+### 9.2. Toggles principais (`.env`)
+
+```bash
+RAG_V2_ENABLED=true               # false: cai no retriever legacy (metadados)
+RAG_CHUNK_SIZE_TOKENS=500
+RAG_CHUNK_OVERLAP_TOKENS=50
+RAG_TOP_N_VECTOR=20               # candidatos da perna vetorial
+RAG_TOP_N_BM25=20                 # candidatos da perna BM25
+RAG_RRF_K=60
+RAG_RERANK_WITH_LLM=true          # false: usa heurística (sem custo, menos preciso)
+```
+
+### 9.3. Fluxo de ingestão
+
+```bash
+# 1. Cria a knowledge_source (se ainda não existe)
+SRC=$(curl -s -X POST http://localhost:7000/api/v1/knowledge-sources \
+  -H "Content-Type: application/json" \
+  -d '{"name":"FAQ Produtos","description":"FAQ oficial","source_type":"text","authorized":1}' \
+  | jq -r .id)
+
+# 2. Ingere texto (chunca + embeda + grava)
+curl -X POST "http://localhost:7000/api/v1/knowledge-sources/$SRC/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Aqui vai o conteúdo cru do documento. Pode ter parágrafos. ..."}'
+# → {"chunks_created": N, "tokens_total": N, "qdrant_upserted": N, "duration_ms": N, "partial": false}
+
+# 3. Verifica
+curl "http://localhost:7000/api/v1/knowledge-sources/$SRC/chunks?limit=10"
+curl http://localhost:7000/api/v1/rag/health
+# → {"qdrant_collection":{"points_count":N,"status":"green"},"rag_available":true}
+
+# 4. Re-ingerir (apaga chunks/pontos anteriores e refaz)
+curl -X POST "http://localhost:7000/api/v1/knowledge-sources/$SRC/ingest" \
+  -d '{"text":"...novo conteúdo...","replace":true}'
+
+# 5. Limpar só os chunks (mantém a knowledge_source)
+curl -X DELETE "http://localhost:7000/api/v1/knowledge-sources/$SRC/chunks"
+```
+
+### 9.4. Custo aproximado de embedding
+
+Com `text-embedding-3-small` ($0.02/M tokens):
+- Documento de **10 páginas** (~5000 tokens, ~10 chunks): **$0.0001**
+- Documento de **100 páginas** (~50000 tokens, ~100 chunks): **$0.001**
+- Re-ingestão de 100 docs grandes: ~**$0.10**
+
+### 9.5. Graceful degradation
+
+| Cenário | Comportamento |
+|---|---|
+| `RAG_V2_ENABLED=false` | Retriever cai no legacy (busca em metadados de knowledge_sources) |
+| Nenhuma source com chunks ainda | Retriever cai no legacy automaticamente |
+| Qdrant offline durante ingestão | Postgres recebe chunks; resposta marca `partial=true`; usuário re-roda ingest quando Qdrant voltar |
+| Qdrant offline durante search | Cai em BM25-only no Postgres (vetorial vazio na fusão) |
+| Azure embeddings offline | Ingest falha com 503 explícito; search vetorial cai vazia, BM25 segue |
+| LLM-reranker falha | Fallback automático para heurística de overlap |
+
+### 9.6. Observabilidade
+
+Spans emitidos durante busca (visíveis em Grafana → Tempo):
+
+```
+evidence.retrieve  (parent)
+├── evidence.retrieve.bm25       (atributo bm25.hits)
+├── evidence.retrieve.vector     (atributo vector.hits)
+└── evidence.rerank              (atributo rerank.path: llm | heuristic | llm_failed_fallback)
+```
+
+Durante ingestão:
+
+```
+ingest.text  (atributos: source.id, chunks.count, chunks.tokens_total)
+├── ingest.embed
+├── ingest.delete_old            (só quando replace=true)
+└── ingest.qdrant_upsert         (atributo qdrant.upserted)
+```
+
+### 9.7. Escopo escudado nesta Onda (limites conhecidos)
+
+- **Só texto puro**: `application/json` com campo `text`. PDF, URL, docx ficam para Onda 3.5.
+- **1 collection global** (`agente_evidence`) com filtro por `knowledge_source_id`. Multi-tenant via collections separadas é evolução.
+- **Sem UI**: API only. Upload via `curl`/Postman/script.
+- **Re-ingestão é total**: `replace=true` apaga tudo da source e refaz. Sem diff incremental.
+
+---
+
+## 10. Próximas ondas
 
 - **Onda 1** ✅ segurança (rate-limit, PII redaction, secrets cifrados, prompt guard)
-- **Onda 2** ✅ observabilidade (OTel + Tempo + Loki + Grafana) — *este documento*
-- **Onda 3** ⏳ Vector DB com embeddings reais (Qdrant já está no compose)
+- **Onda 2** ✅ observabilidade (OTel + Tempo + Loki + Grafana) — seção 8
+- **Onda 3** ✅ RAG real (Qdrant + embeddings + híbrido BM25+vetorial) — seção 9
 - **Onda 4** ⏳ Policy as Code (OPA), AI Gateway, mTLS, Helm chart

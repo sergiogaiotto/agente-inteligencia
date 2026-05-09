@@ -314,6 +314,53 @@ async def delete_knowledge_source(ks_id: str):
     if not await knowledge_repo.delete(ks_id): raise HTTPException(404)
     return {"message": "Base removida"}
 
+# ─── Onda 3: ingestão de documentos em knowledge_sources ────────
+class IngestTextRequest(BaseModel):
+    text: str
+    replace: bool = True
+
+
+@router.post("/knowledge-sources/{ks_id}/ingest")
+async def ingest_into_source(ks_id: str, data: IngestTextRequest):
+    """Ingere texto cru: chunca → embeda (Azure) → grava chunks (Postgres) +
+    pontos vetoriais (Qdrant). Idempotente quando replace=True."""
+    from app.evidence.ingest import ingest_text, IngestError
+    try:
+        return await ingest_text(ks_id, data.text, replace=data.replace)
+    except IngestError as e:
+        raise HTTPException(e.status_code, str(e))
+
+
+@router.delete("/knowledge-sources/{ks_id}/chunks")
+async def clear_source_chunks(ks_id: str):
+    """Apaga todos os chunks de uma source (Postgres + Qdrant). Idempotente."""
+    from app.evidence.ingest import clear_source
+    if not await knowledge_repo.find_by_id(ks_id):
+        raise HTTPException(404, "knowledge_source não encontrada")
+    return await clear_source(ks_id)
+
+
+@router.get("/knowledge-sources/{ks_id}/chunks")
+async def list_source_chunks(ks_id: str, limit: int = 50, offset: int = 0):
+    """Lista chunks de uma source (debug/UI)."""
+    from app.evidence.ingest import list_chunks
+    if not await knowledge_repo.find_by_id(ks_id):
+        raise HTTPException(404, "knowledge_source não encontrada")
+    chunks = await list_chunks(ks_id, limit=limit, offset=offset)
+    return {"source_id": ks_id, "count": len(chunks), "chunks": chunks}
+
+
+@router.get("/rag/health")
+async def rag_health():
+    """Diagnóstico do stack RAG (Onda 3): Qdrant alive + collection info."""
+    from app.evidence.qdrant_store import collection_info
+    info = await collection_info()
+    return {
+        "qdrant_collection": info,
+        "rag_available": info is not None,
+    }
+
+
 # ═══ Tools / Tool Registry §10 ═══
 @router.get("/tools")
 async def list_tools(limit: int = 50, sensitivity: str = None):

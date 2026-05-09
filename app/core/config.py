@@ -105,6 +105,27 @@ class Settings(BaseSettings):
     prompt_leak_guard_enabled: bool = True
     prompt_leak_preview_chars: int = 60
 
+    # ── RAG v2 (Onda 3 — Qdrant + embeddings reais) ──
+    # Toggle global. Quando False, retriever cai no fallback antigo (busca textual
+    # em metadados de knowledge_sources). Quando True E há chunks ingeridos, usa
+    # busca híbrida BM25 (Postgres tsvector) + vetorial (Qdrant), fundidos via RRF.
+    rag_v2_enabled: bool = True
+    # Tokens por chunk e overlap entre chunks consecutivos. 500/50 é sweet spot
+    # para text-embedding-3-small. Aumentar exige mais contexto/custo no LLM final.
+    rag_chunk_size_tokens: int = 500
+    rag_chunk_overlap_tokens: int = 50
+    # Top-N de cada perna antes da fusão. RRF então reduz para top_n do retriever (default 5).
+    rag_top_n_vector: int = 20
+    rag_top_n_bm25: int = 20
+    # Constante k do Reciprocal Rank Fusion. 60 é o default da literatura.
+    rag_rrf_k: int = 60
+    # Quando True: pós-RRF, manda os top-N para o LLM reordenar com justificativa.
+    # Trade-off: +500ms latência, +$0.0005/query, mas qualidade superior.
+    # Quando False: usa heurística de overlap de termos (mais rápido, menos preciso).
+    rag_rerank_with_llm: bool = True
+    # Encoding do tiktoken — cl100k_base cobre GPT-4 / GPT-3.5 / text-embedding-3-*.
+    rag_tiktoken_encoding: str = "cl100k_base"
+
     # ── Observabilidade self-hosted (Onda 2 — OTel + Tempo + Loki + Grafana) ──
     # Default OFF: instrumentação só liga quando `OTEL_ENABLED=true` no .env e
     # o profile `full` do docker-compose estiver ativo (`docker compose --profile full up`).
