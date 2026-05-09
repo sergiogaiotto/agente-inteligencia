@@ -246,20 +246,28 @@ _AUDIT_MODULE_MAP = {
 
 
 @router.get("/dashboard/module-activity")
-async def module_activity(limit: int = 20):
-    """Retorna eventos recentes agregados por módulo.
+async def module_activity(limit: int = 20, offset: int = 0):
+    """Retorna eventos recentes agregados por módulo, paginados.
 
     Fontes:
     - audit_log: state_transitions, policy_decisions, prompt_injection, etc.
     - evidence_chunks: ingestão de documentos (Onda 3)
 
     Cada item: {timestamp, module_id, module_label, action, summary, entity_id}.
+    Paginação: limit + offset aplicados após a ordenação consolidada das duas fontes.
     """
     from app.core.database import _get_pool
+    # Cap defensivo — "ver tudo" no UI envia limit=10000
+    limit = max(1, min(int(limit), 10000))
+    offset = max(0, int(offset))
     pool = _get_pool()
     items: list[dict] = []
+    # Como filtramos `audit_log` por entity_type mapeado e mesclamos com evidence_chunks,
+    # buscamos um buffer maior que limit+offset antes de cortar.
+    fetch_window = (limit + offset) * 3 + 50
     async with pool.acquire() as con:
-        # 1. audit_log (últimos N entries com módulo mapeado)
+        # 1. audit_log (entradas com módulo mapeado — ainda não há WHERE pq mapping
+        # é Python-side; pegamos buffer e filtramos)
         rows = await con.fetch(
             """
             SELECT entity_type, entity_id, action, details, created_at
@@ -267,7 +275,7 @@ async def module_activity(limit: int = 20):
             ORDER BY created_at DESC
             LIMIT $1
             """,
-            limit * 3,  # buffer — alguns serão filtrados (entity_type fora do map)
+            fetch_window,
         )
         for r in rows:
             etype = r["entity_type"] or ""
@@ -334,7 +342,7 @@ async def module_activity(limit: int = 20):
             ORDER BY last_at DESC
             LIMIT $1
             """,
-            limit,
+            fetch_window,
         )
         for r in ingest_rows:
             items.append({
@@ -347,9 +355,11 @@ async def module_activity(limit: int = 20):
                 "entity_id": r["knowledge_source_id"],
             })
 
-    # Ordena por timestamp desc e corta no `limit`
+    # Ordena por timestamp desc, aplica offset+limit
     items.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
-    return {"items": items[:limit], "total": len(items)}
+    total = len(items)
+    page = items[offset:offset + limit]
+    return {"items": page, "total": total, "limit": limit, "offset": offset}
 
 # ═══ Releases §18 ═══
 @router.get("/releases")
