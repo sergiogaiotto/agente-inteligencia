@@ -431,11 +431,106 @@ App volta a chamar upstream direto sem perda de funcionalidade.
 
 ---
 
-## 11. Próximas ondas
+## 11. Policy as Code com OPA (Onda 4a)
+
+Versionar políticas de autorização em arquivos Rego. PolicyCheck do FSM e
+gate de invocação de tools consultam o **Open Policy Agent** antes de
+permitir. Cada decisão é auditada em `audit_log`.
+
+### 11.1. Componentes
+
+| | Imagem / Localização |
+|---|---|
+| Engine | `openpolicyagent/opa:1.0.0` em modo `--server` |
+| Políticas | `infra/opa/policies/*.rego` (versionadas) |
+| Endpoint | `http://opa:8181` interno; `http://localhost:8181` para curl direto |
+| Cliente Python | `app/core/opa_client.py` (httpx async + audit + spans OTel) |
+
+### 11.2. Políticas piloto
+
+| Pacote | O que decide | Schema input |
+|---|---|---|
+| `interaction` | Allow/deny do PolicyCheck do FSM. Bloqueia em prompt_injection ≥ 0.7, rate_limit, user inativo | `{prompt_injection, rate_limit, user}` |
+| `tool_invocation` | Allow/deny por tool baseado em sensitivity × user.role × trusted_context | `{tool, user, context}` |
+| `evidence` | Allow/deny acesso a evidência por confidentiality vs user.clearance | `{user, evidence}` (NÃO wirado nesta Onda — depende de `users.clearance`) |
+
+### 11.3. Ativar
+
+```bash
+# 1. OPA já sobe junto com a stack minimal
+docker compose up -d opa
+curl http://localhost:8181/v1/policies | jq '.result | length'   # deve ser 3
+
+# 2. Ligar no app via .env
+echo "OPA_ENABLED=true" >> .env
+docker compose up -d --force-recreate app
+
+# 3. Verificar que decisões estão saindo (após algumas interações):
+docker exec agente_postgres psql -U agente agente_inteligencia -c \
+  "SELECT entity_id, action, count(*) FROM audit_log WHERE entity_type='policy_decision' GROUP BY 1,2"
+```
+
+### 11.4. Smoke test direto no OPA
+
+```bash
+# Allow caminho-claro
+curl -X POST http://localhost:8181/v1/data/interaction/allow \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"prompt_injection":{"score":0.1},"rate_limit":{"exceeded":false},"user":{"status":"active"}}}'
+# → {"result":true}
+
+# Deny por prompt_injection alto
+curl -X POST http://localhost:8181/v1/data/interaction/allow \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"prompt_injection":{"score":0.9},"rate_limit":{"exceeded":false},"user":{"status":"active"}}}'
+# → {"result":false}
+
+# Listar reasons
+curl -X POST http://localhost:8181/v1/data/interaction/reasons \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"prompt_injection":{"score":0.9},"user":{"status":"inactive"}}}'
+# → {"result":["prompt_injection_blocked","user_inactive"]}
+```
+
+### 11.5. Adicionar nova política
+
+1. Criar `infra/opa/policies/nome.rego` (pacote `nome`, regra `allow`)
+2. Restart container: `docker compose restart opa`
+3. Verificar carga: `curl http://localhost:8181/v1/policies | jq '.result[].id'`
+4. PEP em Python: `await opa_client.evaluate("nome", "allow", {...})`
+
+App não precisa redeploy — políticas são dados, não código do app.
+
+### 11.6. Failsafe (decisão crítica de operação)
+
+| `OPA_FAILSAFE_OPEN` | OPA up | OPA down |
+|---|---|---|
+| `true` (default dev) | decisão real | **allow=true** + warning + audit |
+| `false` (prod c/ dados sensíveis) | decisão real | **allow=false** (negação por padrão) |
+
+Trade-off explícito: disponibilidade × segurança. Em dev = open. Em prod com
+PII/financeiro/saúde = closed (nega quando OPA não responder, evita bypass).
+
+### 11.7. Observabilidade
+
+- **Spans OTel**: `policy.evaluate` com `policy.package`, `policy.rule`, `policy.allow`, `policy.duration_ms`, `policy.source` (opa/disabled/failsafe_open/failsafe_closed). Visíveis no Grafana → Tempo.
+- **Audit trail**: cada decisão (toggle ON, audit=true) → linha em `audit_log` com `entity_type='policy_decision'`, `action='allow'|'deny'`, `details=json{package,rule,input,decision}`.
+
+### 11.8. Reverter
+
+```bash
+sed -i 's/^OPA_ENABLED=true/OPA_ENABLED=false/' .env
+docker compose up -d --force-recreate app
+# OPA continua rodando ocioso. `docker compose stop opa` para parar.
+```
+
+---
+
+## 12. Próximas ondas
 
 - **Onda 1** ✅ segurança (rate-limit, PII redaction, secrets cifrados, prompt guard)
 - **Onda 2** ✅ observabilidade (OTel + Tempo + Loki + Grafana) — seção 8
 - **Onda 3** ✅ RAG real (Qdrant + embeddings + híbrido BM25+vetorial) — seção 9
 - **Onda 4b** ✅ AI Gateway (LiteLLM) — seção 10
-- **Onda 4a** ⏳ Policy as Code (OPA + Rego policies + PEP em Python)
+- **Onda 4a** ✅ Policy as Code (OPA + 3 policies + PEP) — seção 11
 - **Onda 4c** ⏳ mTLS + Helm chart (deploy k8s production-grade)

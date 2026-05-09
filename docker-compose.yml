@@ -51,6 +51,9 @@ services:
       # subir antes do gateway ficar pronto e segue funcionando em modo direto.
       litellm:
         condition: service_started
+      # Onda 4a: igual ao litellm — started suficiente, app trata fallback.
+      opa:
+        condition: service_started
     networks:
       - aimesh
     volumes:
@@ -146,6 +149,42 @@ services:
     # Em produção, fechar de novo (Qdrant é alcançado via rede `aimesh` pelo app).
     ports:
       - "127.0.0.1:6333:6333"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── OPA (Policy Engine — Onda 4a) ───────────────────────────────
+  # Open Policy Agent em modo server. Carrega políticas Rego de
+  # infra/opa/policies/ no startup. Endpoint /v1/data/<package>/<rule>
+  # retorna decisão JSON. Latência típica ~1-3ms local.
+  opa:
+    image: openpolicyagent/opa:1.0.0
+    container_name: agente_opa
+    restart: unless-stopped
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=error"
+      - "--log-format=json"
+      - "/policies"
+    volumes:
+      - ./infra/opa/policies:/policies:ro
+    networks:
+      - aimesh
+    ports:
+      - "127.0.0.1:8181:8181"     # loopback para curl direto / dashboard
+    healthcheck:
+      # Imagem rootless não tem curl/wget. Usa o próprio binário OPA com
+      # --bundles para validar que o servidor responde — simples ping HTTP via Go.
+      test: ["CMD", "/opa", "version"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    mem_limit: 256m
     logging:
       driver: json-file
       options:

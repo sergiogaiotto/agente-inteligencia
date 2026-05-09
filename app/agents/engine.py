@@ -559,7 +559,29 @@ async def execute_interaction(
                 "details": json.dumps(guard_result.to_dict()),
             })
 
-    policy_ok = await fsm.run_policy_check({"allowed": not guard_blocked, "tools": [], "budget": {}})
+    # ── Onda 4a: PolicyCheck via OPA (substitui o stub de "passa se prompt_guard não bloqueou") ──
+    # Quando OPA_ENABLED=true, decisão vai para o motor de políticas Rego. Quando
+    # false, comportamento original (allow=true se prompt_guard não bloqueou).
+    if _pg_settings.opa_enabled:
+        from app.core import opa_client
+        opa_input = {
+            "prompt_injection": {
+                "score": float(ctx.metadata.get("prompt_guard", {}).get("score", 0.0)),
+            },
+            "rate_limit": {"exceeded": False},  # rate_limit middleware já barra antes; defesa em profundidade
+            "user": {"status": "active"},  # iteração futura: pegar user real da session
+        }
+        opa_decision = await opa_client.evaluate("interaction", "allow", opa_input)
+        opa_reasons = await opa_client.evaluate_value("interaction", "reasons", opa_input) or []
+        policy_ok_raw = opa_decision["allow"]
+        if not policy_ok_raw and opa_reasons:
+            guard_reason = guard_reason or f"Política de acesso negou a solicitação ({', '.join(opa_reasons)})."
+        elif not policy_ok_raw:
+            guard_reason = guard_reason or "Política de acesso negou a solicitação."
+    else:
+        policy_ok_raw = not guard_blocked
+
+    policy_ok = await fsm.run_policy_check({"allowed": policy_ok_raw, "tools": [], "budget": {}})
     if not policy_ok:
         motivo = guard_reason or "Política de acesso negou a solicitação."
         await fsm.run_refuse(motivo, "Reformule a solicitação ou contate o administrador.")
@@ -628,6 +650,34 @@ async def execute_interaction(
                 mcp_tools = await match_with_registry(parsed_bindings, tools_repo)
                 mcp_tools_detail = [{"name": t.get("name",""), "server": t.get("mcp_server",""), "ops": t.get("operations",[])} for t in mcp_tools]
                 logger.info(f"MCP tools resolved: {[t.get('name') for t in mcp_tools]}")
+
+                # ── Onda 4a: gate de invocação por sensitivity ──────────
+                # Quando OPA_ENABLED=true, filtra mcp_tools para apenas as que a
+                # política tool_invocation aprovou. Tool com sensitivity=null assume "low".
+                if _pg_settings.opa_enabled:
+                    from app.core import opa_client
+                    # role default = "operator" — em iteração futura virá de session real
+                    user_role = "operator"
+                    is_trusted = bool(ctx.metadata.get("trusted_context", False))
+                    allowed_tools = []
+                    for t in mcp_tools:
+                        d = await opa_client.evaluate("tool_invocation", "allow", {
+                            "tool": {
+                                "name": t.get("name", ""),
+                                "sensitivity": t.get("sensitivity") or "low",
+                                "requires_trusted_context": bool(t.get("requires_trusted_context", False)),
+                            },
+                            "user": {"role": user_role},
+                            "context": {"is_trusted": is_trusted},
+                        })
+                        if d["allow"]:
+                            allowed_tools.append(t)
+                        else:
+                            logger.warning(f"Tool '{t.get('name')}' bloqueada por OPA (sensitivity={t.get('sensitivity')})")
+                    if len(allowed_tools) != len(mcp_tools):
+                        logger.info(f"OPA filtro: {len(mcp_tools)} → {len(allowed_tools)} tools liberadas")
+                    mcp_tools = allowed_tools
+                    mcp_tools_detail = [{"name": t.get("name",""), "server": t.get("mcp_server",""), "ops": t.get("operations",[])} for t in mcp_tools]
 
         # Execution Profile + reflexão adaptativa:
         # fast=1, standard=2 (2ª rodada apenas se heurística sinalizar), rigorous=3 idem.

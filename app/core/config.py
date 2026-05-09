@@ -105,6 +105,18 @@ class Settings(BaseSettings):
     prompt_leak_guard_enabled: bool = True
     prompt_leak_preview_chars: int = 60
 
+    # ── Policy Engine (Onda 4a — OPA Policy as Code) ──
+    # Quando True, decisões sensíveis (PolicyCheck, tool invocation) consultam o
+    # OPA em opa_url e seguem a decisão. Auditoria via audit_log.
+    # Default OFF: comportamento idêntico ao de hoje, zero risco.
+    opa_enabled: bool = False
+    opa_url: str = "http://opa:8181"
+    # Failsafe-open: se OPA offline, allow=true com warning + audit. Default em dev.
+    # Trocar para False em produção com dados sensíveis (failsafe-closed = nega na falha).
+    opa_failsafe_open: bool = True
+    # Timeout curto: OPA local é ~1ms. Acima disso é problema, e app não pode esperar.
+    opa_timeout_seconds: float = 2.0
+
     # ── AI Gateway (Onda 4b — LiteLLM proxy) ──
     # Quando True, todos os providers (Azure/OpenAI/Maritaca/Ollama) e o embedder
     # passam a chamar o LiteLLM em llm_gateway_url em vez do upstream direto.
