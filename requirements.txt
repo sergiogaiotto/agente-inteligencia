@@ -67,3 +67,11 @@ tiktoken>=0.7.0
 # jsonschema: validação determinística de output_contract da SKILL.md.
 # Opcional em runtime — ContractValidator tem fallback manual se não instalado.
 jsonschema>=4.21.0
+
+
+# === RAG ingestão multi-formato (Onda 6) ===
+# markitdown: conversor universal (PDF/DOCX/PPTX/XLSX/HTML/MD/CSV/JSON/XML/EPUB/
+# Outlook .msg/ZIP/audio/imagens) → markdown limpo. Wrapper unificado de parsers,
+# evita 6+ libs separadas.  https://github.com/microsoft/markitdown
+# [all] inclui audio-transcription (precisa ffmpeg no sistema) + outras opcionais.
+markitdown[all]>=0.1.5

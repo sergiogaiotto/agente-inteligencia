@@ -201,3 +201,145 @@ async def list_chunks(source_id: str, limit: int = 50, offset: int = 0) -> list[
             source_id, limit, offset,
         )
         return [dict(r) for r in rows]
+
+
+# ─── Onda 6: ingest multi-formato via markitdown ─────────────────────────
+
+async def ingest_file(
+    source_id: str,
+    data: bytes,
+    filename: str,
+    replace: bool = True,
+    mime_type: Optional[str] = None,
+) -> dict:
+    """Ingere arquivo binário (PDF/DOCX/PPTX/XLSX/HTML/MD/CSV/audio/imagem/...)
+    convertendo via markitdown → markdown → pipeline padrão (chunk + embed + store).
+
+    Args:
+        source_id: knowledge_source destino.
+        data: bytes do arquivo.
+        filename: nome original (extensão guia o converter do markitdown).
+        replace: idempotência — apaga chunks anteriores antes.
+        mime_type: opcional, override da detecção por extensão.
+
+    Returns:
+        Mesmo shape de `ingest_text` + {"converter": "markitdown", "source_format": ext}.
+
+    Raises:
+        IngestError: source não existe (404), arquivo vazio (400), markitdown
+                     indisponível (503), conversão falhou (500).
+    """
+    from app.evidence.converters import convert_bytes, ConverterError
+
+    with _tracer.start_as_current_span("ingest.file") as span:
+        span.set_attribute("source.id", source_id)
+        span.set_attribute("file.name", filename or "(sem nome)")
+        span.set_attribute("file.size", len(data or b""))
+
+        if not data:
+            raise IngestError("Arquivo vazio.", status_code=400)
+        if not filename:
+            raise IngestError("filename é obrigatório (markitdown usa extensão).", status_code=400)
+
+        # Confirma source existe ANTES de gastar conversão (evita custo perdido).
+        if not await knowledge_repo.find_by_id(source_id):
+            raise IngestError(f"knowledge_source '{source_id}' não encontrada.", status_code=404)
+
+        try:
+            text = convert_bytes(data, filename, mime_type=mime_type)
+        except ConverterError as e:
+            raise IngestError(str(e), status_code=e.status_code)
+
+        if not text:
+            raise IngestError(
+                f"Conversão de '{filename}' produziu markdown vazio. "
+                "Arquivo pode estar vazio, criptografado ou em formato não suportado.",
+                status_code=400,
+            )
+        span.set_attribute("converter.markdown_chars", len(text))
+
+        # Pipeline padrão: chunk → embed → store
+        result = await ingest_text(source_id, text, replace=replace)
+        result["converter"] = "markitdown"
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+        result["source_format"] = ext
+        result["source_filename"] = filename
+        return result
+
+
+async def ingest_url(
+    source_id: str,
+    url: str,
+    replace: bool = True,
+) -> dict:
+    """Ingere URL (página web, PDF online, YouTube transcript, RSS, ...) via
+    markitdown → markdown → pipeline padrão.
+
+    Args:
+        source_id: knowledge_source destino.
+        url: URL absoluta http(s).
+        replace: idempotência.
+
+    Returns:
+        Mesmo shape de ingest_text + {"converter": "markitdown", "source_url": url}.
+    """
+    from app.evidence.converters import convert_url, ConverterError
+
+    with _tracer.start_as_current_span("ingest.url") as span:
+        span.set_attribute("source.id", source_id)
+        span.set_attribute("url", (url or "")[:200])
+
+        if not url or not url.strip():
+            raise IngestError("URL vazia.", status_code=400)
+
+        if not await knowledge_repo.find_by_id(source_id):
+            raise IngestError(f"knowledge_source '{source_id}' não encontrada.", status_code=404)
+
+        try:
+            text = convert_url(url)
+        except ConverterError as e:
+            raise IngestError(str(e), status_code=e.status_code)
+
+        if not text:
+            raise IngestError(
+                f"URL '{url}' retornou markdown vazio após conversão. "
+                "Página pode exigir login, ser SPA pura, ou ter conteúdo só em iframes.",
+                status_code=400,
+            )
+        span.set_attribute("converter.markdown_chars", len(text))
+
+        result = await ingest_text(source_id, text, replace=replace)
+        result["converter"] = "markitdown"
+        result["source_url"] = url.strip()
+        return result
+
+
+async def source_stats(source_id: str) -> dict:
+    """Estatísticas operacionais de uma source: contagem de chunks, total de tokens,
+    timestamp do último chunk criado, last_updated da source.
+
+    Útil pra UI mostrar "N chunks · ingerido há Xh" sem buscar todos os chunks."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        row = await con.fetchrow(
+            """
+            SELECT
+              COUNT(*) AS chunks_count,
+              COALESCE(SUM(token_count), 0) AS tokens_total,
+              COALESCE(SUM(char_count), 0) AS chars_total,
+              MAX(created_at) AS last_chunk_at
+            FROM evidence_chunks
+            WHERE knowledge_source_id = $1
+            """,
+            source_id,
+        )
+    source = await knowledge_repo.find_by_id(source_id)
+    return {
+        "source_id": source_id,
+        "chunks_count": int(row["chunks_count"] or 0) if row else 0,
+        "tokens_total": int(row["tokens_total"] or 0) if row else 0,
+        "chars_total": int(row["chars_total"] or 0) if row else 0,
+        "last_chunk_at": row["last_chunk_at"].isoformat() if row and row["last_chunk_at"] else None,
+        "last_updated": (source or {}).get("last_updated"),
+        "index_version": (source or {}).get("index_version"),
+    }

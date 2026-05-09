@@ -38,10 +38,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_PORT=7000
 
 # Apenas as libs nativas necessárias em runtime — sem toolchain
+# - libpq5: asyncpg
+# - ffmpeg: markitdown[all] audio-transcription (Onda 6 RAG)
+# - libmagic1: detecção MIME por conteúdo (markitdown usa)
+# - perl + libimage-exiftool-perl: exiftool, lido por markitdown pra metadados de imagem
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         curl \
         ca-certificates \
+        ffmpeg \
+        libmagic1 \
+        libimage-exiftool-perl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r app && useradd -r -g app -u 1000 -d ${APP_HOME} -s /bin/bash app
 

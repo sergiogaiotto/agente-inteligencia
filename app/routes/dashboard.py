@@ -10,7 +10,7 @@ CORREÇÕES (2026-04):
   MCP Streamable HTTP (spec 2025-03-26) retornam HTTP 406 Not Acceptable.
 """
 import uuid, json, logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional
 from app.models.schemas import ReleaseCreate, GoldCaseCreate, KnowledgeSourceCreate, ToolCreate, ToolUpdate, RunEvalRequest
@@ -858,6 +858,66 @@ async def ingest_into_source(ks_id: str, data: IngestTextRequest):
         return await ingest_text(ks_id, data.text, replace=data.replace)
     except IngestError as e:
         raise HTTPException(e.status_code, str(e))
+
+
+# ─── Onda 6 RAG Core: ingestão multi-formato (markitdown) ────────────
+
+class IngestUrlRequest(BaseModel):
+    url: str
+    replace: bool = True
+
+
+@router.post("/knowledge-sources/{ks_id}/ingest-file")
+async def ingest_file_into_source(
+    ks_id: str,
+    file: UploadFile = File(...),
+    replace: bool = Form(True),
+):
+    """Ingere arquivo (PDF/DOCX/PPTX/XLSX/HTML/MD/TXT/CSV/JSON/XML/EPUB/MSG/
+    ZIP/imagem/áudio) via markitdown → markdown → chunk → embed → store.
+
+    Limite de tamanho não imposto aqui (FastAPI upload size depende do
+    middleware/proxy). Para arquivos grandes use replace=true e ingestão em
+    lotes; markitdown processa em memória.
+    """
+    from app.evidence.ingest import ingest_file, IngestError
+    try:
+        data = await file.read()
+        return await ingest_file(
+            source_id=ks_id,
+            data=data,
+            filename=file.filename or "upload.bin",
+            mime_type=file.content_type,
+            replace=replace,
+        )
+    except IngestError as e:
+        raise HTTPException(e.status_code, str(e))
+
+
+@router.post("/knowledge-sources/{ks_id}/ingest-url")
+async def ingest_url_into_source(ks_id: str, data: IngestUrlRequest):
+    """Ingere URL (página web, PDF hospedado, YouTube transcript, RSS feed)
+    via markitdown.convert_url → markdown → pipeline padrão.
+
+    Aceita apenas http/https. Markitdown faz fetch internamente — sem
+    autenticação custom. Para URLs com auth, use ingest-file e baixe antes.
+    """
+    from app.evidence.ingest import ingest_url, IngestError
+    try:
+        return await ingest_url(ks_id, data.url, replace=data.replace)
+    except IngestError as e:
+        raise HTTPException(e.status_code, str(e))
+
+
+@router.get("/knowledge-sources/{ks_id}/stats")
+async def source_stats_endpoint(ks_id: str):
+    """Estatísticas operacionais da fonte: chunks_count, tokens_total,
+    last_chunk_at, last_updated, index_version. Pra UI mostrar status sem
+    listar todos os chunks."""
+    from app.evidence.ingest import source_stats
+    if not await knowledge_repo.find_by_id(ks_id):
+        raise HTTPException(404, "knowledge_source não encontrada")
+    return await source_stats(ks_id)
 
 
 @router.delete("/knowledge-sources/{ks_id}/chunks")
