@@ -404,7 +404,7 @@ function agentForm(editId) {
             try {
                 const a = await api.get(`/api/v1/agents/${editId}`);
                 this.form = {...this.form, ...a};
-                // SQLite devolve bool como 0/1 — normalizar
+                // Schema legacy: flags booleanas vêm como INTEGER 0/1 — normalizar
                 this.form.require_evidence = !!a.require_evidence;
                 this.form.accepts_images = !!a.accepts_images;
                 this.form.accepts_documents = !!a.accepts_documents;

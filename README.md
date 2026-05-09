@@ -38,7 +38,7 @@ A topologia é composta por três camadas verticais de agentes (AOBD, AR, SA), a
 │  │Protocol │  │ Runtime  │  │ Machine   │  │ Evaluator        │ │
 │  └─────────┘  └──────────┘  └───────────┘  └──────────────────┘ │
 │  ┌─────────┐  ┌──────────┐  ┌─────────────────────────────────┐ │
-│  │ LLM     │  │LangFuse  │  │ SQLite (21 tabelas)             │ │
+│  │ LLM     │  │LangFuse  │  │ PostgreSQL (27 tabelas)         │ │
 │  │Providers│  │Observab. │  │ Repositórios genéricos + KV     │ │
 │  └─────────┘  └──────────┘  └─────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
@@ -65,7 +65,7 @@ A topologia é composta por três camadas verticais de agentes (AOBD, AR, SA), a
 | LLM — OpenAI      | langchain-openai (ChatOpenAI)                   | GPT-4o, GPT-4.1, o3, o4-mini              |
 | LLM — Maritaca    | httpx + endpoint compatível OpenAI              | Sabiá-3, Sabiá-2                          |
 | Observabilidade   | LangFuse (v2/v3/v4 compatível)                  | Traces, spans, métricas de custo          |
-| Banco de Dados    | SQLite + aiosqlite                              | 21 tabelas, acesso assíncrono             |
+| Banco de Dados    | PostgreSQL 16 + asyncpg                         | 27 tabelas, pool async, migrações idempotentes |
 | Template Engine   | Jinja2                                          | Renderização server-side de HTML          |
 | CSS               | Tailwind CSS (CDN)                              | Utility-first, responsive, design system  |
 | Interatividade    | Alpine.js 3.x                                   | Reatividade no frontend sem build step    |
@@ -145,7 +145,7 @@ docker compose up --build
 ### 4.5 Inicialização Automática
 
 Ao iniciar, a aplicação executa automaticamente:
-1. **Criação do banco** — SQLite em `data/agente_inteligencia.db` com 21 tabelas
+1. **Conexão e schema** — Pool asyncpg para PostgreSQL (`DATABASE_URL`); aplica `CREATE TABLE IF NOT EXISTS` para as 27 tabelas
 2. **Migrações** — adiciona colunas faltantes (`created_at`, `title`) em tabelas existentes via `ALTER TABLE`
 3. **Registro de rotas** — 70+ endpoints REST montados no FastAPI
 
@@ -159,7 +159,7 @@ agente-inteligencia-ai/
 │   ├── main.py                    # Entry point FastAPI, lifespan, montagem de rotas
 │   ├── core/
 │   │   ├── config.py              # Pydantic Settings — carrega .env
-│   │   ├── database.py            # Schema SQLite (21 tabelas), Repository genérico, SettingsStore, migrações
+│   │   ├── database.py            # Schema PostgreSQL (27 tabelas), Repository genérico, SettingsStore, migrações idempotentes
 │   │   ├── llm_providers.py       # Factory de provedores LLM (OpenAI, Maritaca)
 │   │   └── observability.py       # LangFuse client + CallbackHandler (v2/v3/v4 compatível)
 │   ├── agents/
@@ -201,7 +201,7 @@ agente-inteligencia-ai/
 │   │       ├── history.html       # Consulta unificada (interações, turnos, envelopes, auditoria)
 │   │       └── settings.html      # Plataforma (API keys, modelos) + System Prompts (CRUD)
 │   └── static/                    # CSS, JS, imagens estáticas
-├── data/                          # Banco SQLite (auto-criado)
+├── data/                          # Uploads e cache local (Postgres roda em container)
 ├── requirements.txt               # Dependências Python
 ├── .env.example                   # Template de variáveis de ambiente
 ├── Dockerfile                     # Build containerizado
@@ -211,7 +211,7 @@ agente-inteligencia-ai/
 
 ---
 
-## 6. Modelo de Dados — 21 Tabelas SQLite (§16)
+## 6. Modelo de Dados — 27 Tabelas PostgreSQL (§16)
 
 ### 6.1 Plataforma
 
@@ -272,9 +272,9 @@ agente-inteligencia-ai/
 ### 6.8 Técnicas de Persistência
 
 - **Repository Pattern** — classe genérica `Repository(table)` com métodos `find_all`, `find_by_id`, `create`, `update`, `delete`, `count`, `search`. Reutilizada em 21 instâncias.
-- **Auto-detecção de coluna de ordenação** — `_order_col(db)` consulta `PRAGMA table_info` e seleciona `created_at > started_at > id > rowid` como fallback, eliminando erros de coluna inexistente.
-- **Migração automática** — `init_db()` executa `ALTER TABLE ADD COLUMN` para colunas faltantes em bancos existentes. Sem necessidade de deletar o banco ao atualizar.
-- **SettingsStore** — key-value com `INSERT ... ON CONFLICT DO UPDATE` (upsert nativo SQLite).
+- **Auto-detecção de coluna de ordenação** — `_order_col(con)` consulta `information_schema.columns` e seleciona `created_at > started_at > id` como fallback, eliminando erros de coluna inexistente.
+- **Migração automática** — `init_db()` executa `ALTER TABLE ADD COLUMN IF NOT EXISTS` para colunas faltantes em bancos existentes. Sem necessidade de recriar o schema ao atualizar.
+- **SettingsStore** — key-value com `INSERT ... ON CONFLICT DO UPDATE` (upsert ANSI suportado nativo pelo Postgres).
 
 ---
 
@@ -505,10 +505,11 @@ def apply_context_delta(current_context, delta):
 
 Busca híbrida em bases autorizadas de conhecimento:
 
-- **Busca textual** — matching por keywords do query contra nome e descrição das KNOWLEDGE_SOURCEs (implementação SQLite; em produção: BM25 + busca vetorial)
-- **Score de relevância** — proporção de termos encontrados, normalizada para [0, 1]
-- **Filtro** — apenas bases com `authorized=1`
-- **Top-N** — retorna as 5 evidências mais relevantes
+- **Busca híbrida BM25 + vetorial** (Onda 3) — BM25 nativo via Postgres `tsvector` + GIN index; vetorial via Qdrant + Azure embeddings; fusão por Reciprocal Rank Fusion (RRF, k=60).
+- **Reranker LLM** — pós-RRF, top candidatos passam por GPT-4o que reordena com justificativa (toggle `RAG_RERANK_WITH_LLM`).
+- **Filtro** — apenas bases com `authorized=1`.
+- **Top-N** — retorna as 5 evidências mais relevantes para o LLM final.
+- **Fallback graceful** — se nenhuma source tem chunks ingeridos, cai automaticamente em busca textual nos metadados (legacy retriever).
 
 ### 11.2 Reranker
 

@@ -67,21 +67,16 @@ docker compose ps            # confirme que tudo está healthy
 
 Acesse `http://<seu-ip-vps>:7000/api/health` — deve responder `{"status":"ok"}`.
 
-## 4. Migrar dados de SQLite (opcional — só se já tinha o app rodando)
+## 4. Backend de dados
 
-Se o app já rodou antes em SQLite, copie o arquivo `data/agente_inteligencia.db`
-para a VPS e execute o script de migração:
+PostgreSQL 16 é a única persistência relacional do projeto. O schema é
+aplicado idempotentemente em `init_db()` (lifespan FastAPI) e pode ser
+reaplicado N vezes sem efeitos colaterais.
 
-```bash
-# de dentro do container (recomendado — usa as mesmas envs)
-docker compose exec app python -m app.core.db_migrate
-
-# ou apontando para um caminho específico
-docker compose exec app python -m app.core.db_migrate /app/data/legacy.db
-```
-
-A saída lista, por tabela, quantas linhas foram lidas e inseridas. O script
-é idempotente — pode rodar várias vezes sem duplicar.
+Migrações de schema são feitas via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+no bloco `_IDEMPOTENT_MIGRATIONS` em `app/core/database.py`. Para mudanças
+estruturais (FK, constraint, rename), use `psql` direto ou ferramenta
+de migração formal (Alembic) numa próxima evolução.
 
 ## 5. TLS público (Caddy)
 
@@ -620,15 +615,23 @@ Para single-host produção (VPS), a combinação prática hoje é:
 - Rotação a cada 90 dias (calendário no time)
 - `check-secrets-leak.sh --staged` no pre-commit
 
-### 13.5. ⚠️ Achado de leak histórico
+### 13.5. ⚠️ Achado de leak histórico (resolvido nesta release)
 
-O script detecta `pk-lf-...` e `sk-lf-...` em `data/agente_inteligencia.db`
-(banco SQLite legacy commitado no início do projeto). Ações requeridas:
+Um arquivo de banco legado (`data/agente_inteligencia.db`) que estava
+versionado continha `pk-lf-...` e `sk-lf-...` (chaves LangFuse). O arquivo
+foi **untracked e removido do disco** nesta release. Status:
 
-1. **Rotacionar chaves LangFuse** já — assumir que vazaram para qualquer um que clonou o repo
-2. Remover o `.db` do tracking: `git rm --cached data/agente_inteligencia.db`
-3. **Limpar histórico** com `git filter-repo` se quiser apagar do passado (operação destrutiva — coordene com co-autores)
-4. Garantir que `data/*.db` continua no `.gitignore` (já está, só pegar arquivos novos)
+| Item | Estado |
+|---|---|
+| Arquivo no disco | Removido |
+| Arquivo trackado pelo git | Untracked (`git rm --cached`) |
+| Histórico do git (`git log`) | **Ainda contém o arquivo** — quem clonou tem acesso |
+
+**Ações que ainda requerem decisão sua:**
+
+1. **Rotacionar chaves LangFuse imediatamente** — assuma que vazaram. `cloud.langfuse.com → Settings → API Keys`. Atualizar `.env` real e `docker compose up -d --force-recreate app litellm`.
+2. **(Opcional, destrutivo) limpar do histórico** com `git filter-repo --path data/agente_inteligencia.db --invert-paths`. Reescreve commits — coordene com co-autores antes. Sem essa limpeza, o blob continua acessível via `git log -- data/agente_inteligencia.db`.
+3. Garantir que `data/*.db` continua no `.gitignore` — sim, já está.
 
 ---
 

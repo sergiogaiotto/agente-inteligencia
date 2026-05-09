@@ -1,19 +1,13 @@
 """Camada de dados — PostgreSQL via asyncpg.
 
-Mantém a API pública (`Repository`, `get_db`, `*_repo`, `settings_store`)
-idêntica à anterior (que usava aiosqlite) — todo o código existente em
-routes/, agents/, evidence/, harness/ continua funcionando sem alteração.
+API pública: `Repository`, `*_repo`, `settings_store`, `init_db`, `close_db`.
 
 Decisões:
 - Pool global (asyncpg.create_pool) inicializado em init_db().
 - Repository delega no pool diretamente (sem context-manager por chamada).
-- get_db() é mantido como wrapper compat para o código que usa SQL bruto
-  com placeholders '?' (estilo SQLite). _ConnCompat converte '?' → '$N'
-  no momento da execução.
-- Schema convertido de SQLite para Postgres preservando nomes/colunas.
 - Migrações idempotentes via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
-- Booleanos permanecem como INTEGER 0/1 para compatibilidade com o código
-  existente que escreve/lê inteiros (signed=0, status=1, etc).
+- Booleanos persistidos como INTEGER 0/1 (legado de schema; trocar para
+  BOOLEAN é refator de schema separado — quebraria checks `WHERE x = 1`).
 """
 
 from __future__ import annotations
@@ -21,7 +15,6 @@ from __future__ import annotations
 import re
 import asyncio
 import logging
-from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 import asyncpg
@@ -543,42 +536,6 @@ def _split_sql(script: str) -> list[str]:
     return out
 
 
-def _qmark_to_dollar(sql: str) -> str:
-    """Converte placeholders '?' (SQLite-style) para '$1, $2, ...' (Postgres)."""
-    out: list[str] = []
-    n = 0
-    in_str = False
-    sc: Optional[str] = None
-    i = 0
-    while i < len(sql):
-        c = sql[i]
-        if in_str:
-            out.append(c)
-            if c == sc:
-                if i + 1 < len(sql) and sql[i + 1] == sc:
-                    out.append(sc)
-                    i += 2
-                    continue
-                in_str = False
-                sc = None
-            i += 1
-            continue
-        if c in ("'", '"'):
-            in_str = True
-            sc = c
-            out.append(c)
-            i += 1
-            continue
-        if c == "?":
-            n += 1
-            out.append(f"${n}")
-            i += 1
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
 # ═══════════════════════════════════════════════════════════════
 # Init / shutdown
 # ═══════════════════════════════════════════════════════════════
@@ -618,77 +575,12 @@ async def close_db():
 
 
 # ═══════════════════════════════════════════════════════════════
-# get_db() — wrapper compat para código que usa SQL bruto com '?'
-# ═══════════════════════════════════════════════════════════════
-
-
-class _CursorCompat:
-    """Cursor-like wrapper para retornar resultados ao estilo aiosqlite."""
-
-    def __init__(self, rows: list):
-        self._rows = rows
-
-    async def fetchall(self) -> list:
-        return self._rows
-
-    async def fetchone(self):
-        return self._rows[0] if self._rows else None
-
-
-class _ConnCompat:
-    """Conexão wrapper que aceita SQL com '?' (estilo aiosqlite).
-
-    Usada por código legado que ainda chama `db.execute("...?...", params)` /
-    `db.executescript(...)` / `db.commit()`. Toda nova rota deve usar o pool
-    asyncpg diretamente via Repository — este wrapper existe apenas para
-    compatibilidade durante a transição.
-    """
-
-    def __init__(self, con: asyncpg.Connection):
-        self._con = con
-
-    async def execute(self, sql: str, params=None) -> _CursorCompat:
-        sql_pg = _qmark_to_dollar(sql)
-        if params is None:
-            args: tuple = ()
-        elif isinstance(params, (list, tuple)):
-            args = tuple(params)
-        else:
-            args = (params,)
-        s = sql_pg.lstrip().lower()
-        if s.startswith(("select", "with", "show", "values")):
-            rows = await self._con.fetch(sql_pg, *args)
-            return _CursorCompat([dict(r) for r in rows])
-        await self._con.execute(sql_pg, *args)
-        return _CursorCompat([])
-
-    async def commit(self):
-        # asyncpg usa autocommit fora de transações — no-op para compat
-        pass
-
-    async def executescript(self, script: str):
-        for stmt in _split_sql(script):
-            try:
-                await self._con.execute(stmt)
-            except Exception as e:
-                logger.warning(f"executescript: statement falhou — {e} — sql={stmt[:100]}")
-
-
-@asynccontextmanager
-async def get_db():
-    """Compat: cede um wrapper que aceita SQL com placeholders '?'."""
-    pool = _get_pool()
-    async with pool.acquire() as con:
-        yield _ConnCompat(con)
-
-
-# ═══════════════════════════════════════════════════════════════
-# Repository — API compatível
+# Repository — CRUD genérico tabela-a-tabela
 # ═══════════════════════════════════════════════════════════════
 
 
 class Repository:
-    """CRUD genérico para uma tabela. API idêntica à versão SQLite."""
+    """CRUD genérico para uma tabela em PostgreSQL via asyncpg."""
 
     def __init__(self, table: str):
         self.table = table

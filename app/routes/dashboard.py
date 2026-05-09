@@ -17,7 +17,7 @@ from app.models.schemas import ReleaseCreate, GoldCaseCreate, KnowledgeSourceCre
 from app.core.database import (
     releases_repo, gold_cases_repo, eval_runs_repo, knowledge_repo,
     tools_repo, agents_repo, skills_repo, interactions_repo,
-    turns_repo, envelopes_repo, drift_repo, audit_repo, get_db,
+    turns_repo, envelopes_repo, drift_repo, audit_repo,
     settings_store, prompts_repo,
 )
 
@@ -846,7 +846,7 @@ def _extract_json_from_sse(sse_text: str) -> dict | None:
     return None
 
 
-# ═══ Settings (persistidas em SQLite) ═══
+# ═══ Settings (persistidas em PostgreSQL) ═══
 
 class SettingsSave(BaseModel):
     openai_key: Optional[str] = ""

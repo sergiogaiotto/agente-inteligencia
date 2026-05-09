@@ -30,7 +30,8 @@ _BOOL_FIELDS = ("require_evidence", "accepts_images", "accepts_documents")
 async def create_agent(data: AgentCreate):
     aid = str(uuid.uuid4())
     d = {"id": aid, **data.model_dump()}
-    # SQLite não tem bool — converter os flags para int
+    # Schema legacy persiste flags booleanas como INTEGER 0/1 — converter aqui.
+    # (Refator para BOOLEAN é projeto separado; muitos checks dependem de `= 1`.)
     for f in _BOOL_FIELDS:
         if f in d and d[f] is not None:
             d[f] = 1 if d[f] else 0
@@ -49,7 +50,7 @@ async def update_agent(agent_id: str, data: AgentUpdate):
     # para require_evidence por retrocompat.
     if data.require_evidence is not None and "require_evidence" not in upd:
         upd["require_evidence"] = data.require_evidence
-    # Convert bool to int for SQLite
+    # Schema legacy: flags booleanas como INTEGER 0/1.
     for f in _BOOL_FIELDS:
         if f in upd:
             upd[f] = 1 if upd[f] else 0
