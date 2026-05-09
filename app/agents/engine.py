@@ -763,6 +763,10 @@ async def execute_interaction(
 
     await fsm.run_draft_answer(draft)
 
+    # Verificação multi-dim (Verifier v2) — capturada para retornar no result.
+    # None quando nenhum verifier roda (pipeline, fast skip, fallback heurístico).
+    verification = None
+
     if pipeline_context or skip_evidence:
         await fsm.run_verify_evidence({"ok": True, "confidence": 1.0})
     elif _pg_settings.verifier_v2_enabled:
@@ -789,6 +793,7 @@ async def execute_interaction(
             })
         except Exception as _e:
             logger.warning(f"Verifier v2 falhou ({type(_e).__name__}: {_e}); fallback para heurística")
+            verification = None
             avg_score = (sum(e.relevance_score for e in evidences) / len(evidences)) if evidences else 0.5
             await fsm.run_verify_evidence({"ok": avg_score >= 0.3, "confidence": avg_score})
     elif exec_profile == "rigorous" and evidences:
@@ -833,7 +838,29 @@ async def execute_interaction(
     return _build_result(
         ctx, start, mesh_chain=mesh_chain, attachments=attachment_meta,
         agent=agent, skill_data=skill_data, mcp_tools_detail=mcp_tools_detail,
+        verification=verification,
     )
+
+
+def _serialize_verification(v) -> dict | None:
+    """Converte VerificationResult (verifier.runtime ou evidence.runtime) em dict
+    serializável. Duck-typing sobre os atributos para tolerar ambas as formas:
+    a legacy só tem ok/confidence/issues/risk_high; a nova tem dimensions etc.
+    Campos ausentes viram default sensato (lista vazia / dict vazio / None).
+    """
+    if v is None:
+        return None
+    return {
+        "ok": bool(getattr(v, "ok", False)),
+        "confidence": float(getattr(v, "confidence", 0.0) or 0.0),
+        "dimensions": getattr(v, "dimensions", {}) or {},
+        "unsupported_claims": list(getattr(v, "unsupported_claims", []) or []),
+        "contract_compliant": bool(getattr(v, "contract_compliant", True)),
+        "contract_errors": list(getattr(v, "contract_errors", []) or []),
+        "judge_model": str(getattr(v, "judge_model", "") or ""),
+        "duration_ms": int(getattr(v, "duration_ms", 0) or 0),
+        "risk_high": bool(getattr(v, "risk_high", False)),
+    }
 
 
 def _build_result(
@@ -841,6 +868,7 @@ def _build_result(
     mesh_chain: list = None, attachments: list = None,
     agent: dict = None, skill_data: dict = None,
     mcp_tools_detail: list = None,
+    verification=None,
 ) -> dict:
     """Constrói resultado enriquecido com detalhes de execução."""
     agent = agent or {}
@@ -882,6 +910,27 @@ def _build_result(
         diagnostics.append({"level": "warning", "text": f"Latência alta ({duration:.0f}ms). Considere modelo mais rápido ou reduzir max_iterations."})
     elif duration < 3000:
         diagnostics.append({"level": "success", "text": f"Resposta rápida ({duration:.0f}ms)."})
+
+    verification_dict = _serialize_verification(verification)
+    if verification_dict:
+        dims = verification_dict.get("dimensions") or {}
+        fact = (dims.get("factuality") or {}).get("score")
+        if verification_dict.get("ok") and isinstance(fact, (int, float)) and fact >= 4:
+            diagnostics.append({"level": "success", "text": f"Verifier: factuality {fact:.1f}, ok"})
+        elif not verification_dict.get("ok"):
+            failed = []
+            for dim_name in ("factuality", "completeness", "tone_adherence"):
+                d = dims.get(dim_name) or {}
+                s = d.get("score")
+                if isinstance(s, (int, float)) and s < 3:
+                    failed.append(f"{dim_name}={s:.1f}")
+            if not verification_dict.get("contract_compliant"):
+                failed.append("contract_violation")
+            if failed:
+                diagnostics.append({"level": "warning", "text": f"Verifier: {', '.join(failed)}"})
+        if verification_dict.get("unsupported_claims"):
+            n = len(verification_dict["unsupported_claims"])
+            diagnostics.append({"level": "warning", "text": f"{n} claim(s) sem suporte de evidência"})
 
     skill_detail = {}
     if skill_data:
@@ -938,6 +987,7 @@ def _build_result(
         "transitions": ctx.transition_log,
         "duration_ms": duration,
         "status": "completed",
+        "verification": verification_dict,
         "trace": {
             "total_steps": total_steps,
             "evidence_count": evidence_count,
