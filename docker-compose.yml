@@ -158,22 +158,26 @@ services:
   # ─── Caddy (Reverse proxy + TLS público — Onda 4c) ───────────────
   # Em paralelo com a porta :7000 do app (mantida para back-compat).
   # Caddy reverse proxy (HTTP[S] público).
-  # Portas configuráveis via TLS_HTTP_PORT_HOST / TLS_HTTPS_PORT_HOST no .env.
-  # Defaults no compose são 80/443 (produção). Para dev local, .env.example já
-  # usa 8080/8443 — recomendado em Windows/Mac onde a 80 costuma estar reservada
-  # (Hyper-V/IIS/WinNAT). Sintoma típico em Windows:
-  #   "Ports are not available: ... bind: An attempt was made to access a socket
-  #    in a way forbidden by its access permissions."
+  # Portas HOST configuráveis via TLS_HTTP_PORT_HOST / TLS_HTTPS_PORT_HOST.
+  # Defaults: 8080/8443 (compatível com Windows/Mac sem privilégio + Linux
+  # rootless). Para deploy em produção setar explicitamente no .env real:
+  #   TLS_HTTP_PORT_HOST=80
+  #   TLS_HTTPS_PORT_HOST=443
+  # Sintoma se a 80 estiver reservada no host (Windows + Hyper-V/IIS):
+  #   "Ports are not available: ... bind: An attempt was made to access a
+  #    socket in a way forbidden by its access permissions."
   # Diagnóstico: `netsh int ipv4 show excludedportrange protocol=tcp`.
-  # Modo prod: TLS_SITE=meudominio.com + CADDY_GLOBAL='email admin@meudominio.com'
-  # (sem 'auto_https off') → Caddy obtém cert Let's Encrypt automaticamente.
+  # As portas DENTRO do container (80/443) são fixas — Caddy escuta nelas;
+  # `TLS_SITE` no Caddyfile usa `:80` independente do mapping host.
+  # Modo prod com TLS automático: TLS_SITE=meudominio.com +
+  # CADDY_GLOBAL='email admin@meudominio.com' (sem 'auto_https off').
   caddy:
     image: caddy:2-alpine
     container_name: agente_caddy
     restart: unless-stopped
     ports:
-      - "${TLS_HTTP_PORT_HOST:-80}:80"
-      - "${TLS_HTTPS_PORT_HOST:-443}:443"
+      - "${TLS_HTTP_PORT_HOST:-8080}:80"
+      - "${TLS_HTTPS_PORT_HOST:-8443}:443"
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
