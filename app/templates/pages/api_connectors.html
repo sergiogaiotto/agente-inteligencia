@@ -891,10 +891,33 @@ function apiConnectorsPage() {
         },
 
         // ── Connector CRUD ──
-        openConnectorForm(conn) {
-            if (conn) {
-                this.editingConnectorId = conn.id;
-                this.connForm = { name: conn.name, base_url: conn.base_url, description: conn.description||'', icon: conn.icon||'AP', color: conn.color||'bg-brand-500', api_key: conn.api_key||'', auth_type: conn.auth_type||'none', auth_header: conn.auth_header||'X-API-Key', health_path: conn.health_path||'/api/health', timeout_ms: conn.timeout_ms||30000 };
+        async openConnectorForm(conn) {
+            if (conn && conn.id) {
+                // O tree (/catalog/tree) só expõe metadata leve (name/icon/color/
+                // base_url/is_active) — sem api_key/auth_type/etc. Buscar o
+                // registro completo via GET /{id} pra popular o form. Sem isso
+                // os campos de auth/descrição/health/timeout caem pros defaults
+                // e o operador perde a configuração ao salvar.
+                let full = null;
+                try {
+                    full = await api.get('/api/v1/api-connectors/' + conn.id);
+                } catch (e) {
+                    showToast('Erro ao carregar connector: ' + (e?.message || 'desconhecido'), 'error');
+                    return;
+                }
+                this.editingConnectorId = full.id;
+                this.connForm = {
+                    name: full.name || '',
+                    base_url: full.base_url || '',
+                    description: full.description || '',
+                    icon: full.icon || 'AP',
+                    color: full.color || 'bg-brand-500',
+                    api_key: full.api_key || '',
+                    auth_type: full.auth_type || 'none',
+                    auth_header: full.auth_header || 'X-API-Key',
+                    health_path: full.health_path || '/api/health',
+                    timeout_ms: full.timeout_ms || 30000,
+                };
             } else {
                 this.editingConnectorId = null;
                 this.connForm = { name:'', base_url:'', description:'', icon:'AP', color:'bg-brand-500', api_key:'', auth_type:'none', auth_header:'X-API-Key', health_path:'/api/health', timeout_ms:30000 };
