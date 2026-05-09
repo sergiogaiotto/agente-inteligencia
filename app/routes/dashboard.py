@@ -225,6 +225,132 @@ async def dashboard_stats():
         "recent_eval_runs": await eval_runs_repo.find_all(limit=5),
     }
 
+
+# ─── Atividade por módulo (Guia dos Módulos) ───────────────────
+# Mapeia eventos do audit_log + outras tabelas para o módulo correspondente.
+# Usado pela seção "Atividade por Módulo" no dashboard, abaixo de "Interações Recentes".
+
+# Mapeamento entity_type/action → (module_id, label do evento).
+# Se o entity_type começa com state_transition: cai em §15.
+# Caso default (não mapeado), o evento é ignorado.
+_AUDIT_MODULE_MAP = {
+    # entity_type → (module_id, default_label, default_section_emoji)
+    "policy_decision": ("onda4a", "Decisão OPA", "Onda 4a"),
+    "prompt_injection_blocked": ("onda1", "Prompt injection bloqueada", "Onda 1"),
+    "agent": ("s4", "Agente alterado", "§4"),
+    "skill": ("s5", "Skill alterada", "§5"),
+    "release": ("s18", "Release alterada", "§18"),
+    "eval_run": ("s95", "Avaliação executada", "§9.5"),
+    # state_transition é tratado separadamente (prefix check)
+}
+
+
+@router.get("/dashboard/module-activity")
+async def module_activity(limit: int = 20):
+    """Retorna eventos recentes agregados por módulo.
+
+    Fontes:
+    - audit_log: state_transitions, policy_decisions, prompt_injection, etc.
+    - evidence_chunks: ingestão de documentos (Onda 3)
+
+    Cada item: {timestamp, module_id, module_label, action, summary, entity_id}.
+    """
+    from app.core.database import _get_pool
+    pool = _get_pool()
+    items: list[dict] = []
+    async with pool.acquire() as con:
+        # 1. audit_log (últimos N entries com módulo mapeado)
+        rows = await con.fetch(
+            """
+            SELECT entity_type, entity_id, action, details, created_at
+            FROM audit_log
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            limit * 3,  # buffer — alguns serão filtrados (entity_type fora do map)
+        )
+        for r in rows:
+            etype = r["entity_type"] or ""
+            action = r["action"] or ""
+            # state_transition special case
+            if etype == "interaction" and action.startswith("state_transition:"):
+                # action ex: "state_transition:Intake→PolicyCheck"
+                arrow = action[len("state_transition:"):]
+                items.append({
+                    "timestamp": r["created_at"].isoformat() if r["created_at"] else None,
+                    "module_id": "s15",
+                    "module_label": "FSM",
+                    "module_section": "§15",
+                    "action": "state_transition",
+                    "summary": f"Transição: {arrow}",
+                    "entity_id": r["entity_id"],
+                })
+                continue
+            # action prompt_injection_blocked é em entity_type=interaction
+            if etype == "interaction" and action == "prompt_injection_blocked":
+                items.append({
+                    "timestamp": r["created_at"].isoformat() if r["created_at"] else None,
+                    "module_id": "onda1",
+                    "module_label": "Segurança",
+                    "module_section": "Onda 1",
+                    "action": "prompt_injection_blocked",
+                    "summary": "Prompt injection bloqueada (LLM01)",
+                    "entity_id": r["entity_id"],
+                })
+                continue
+            # policy_decision (Onda 4a)
+            if etype == "policy_decision":
+                items.append({
+                    "timestamp": r["created_at"].isoformat() if r["created_at"] else None,
+                    "module_id": "onda4a",
+                    "module_label": "Policy as Code",
+                    "module_section": "Onda 4a",
+                    "action": action,  # "allow" | "deny"
+                    "summary": f"OPA {action.upper()}: {r['entity_id']}",
+                    "entity_id": r["entity_id"],
+                })
+                continue
+            # outros entity_types mapeados
+            mp = _AUDIT_MODULE_MAP.get(etype)
+            if mp:
+                mid, default_label, section = mp
+                items.append({
+                    "timestamp": r["created_at"].isoformat() if r["created_at"] else None,
+                    "module_id": mid,
+                    "module_label": default_label,
+                    "module_section": section,
+                    "action": action,
+                    "summary": f"{default_label}: {action} ({r['entity_id'][:12]}…)" if r["entity_id"] else default_label,
+                    "entity_id": r["entity_id"],
+                })
+
+        # 2. evidence_chunks (ingestão — Onda 3). Agrupa por source_id + minuto.
+        ingest_rows = await con.fetch(
+            """
+            SELECT knowledge_source_id, count(*) AS chunks_count, max(created_at) AS last_at
+            FROM evidence_chunks
+            WHERE created_at > now() - interval '7 days'
+            GROUP BY knowledge_source_id, date_trunc('minute', created_at)
+            ORDER BY last_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+        for r in ingest_rows:
+            items.append({
+                "timestamp": r["last_at"].isoformat() if r["last_at"] else None,
+                "module_id": "s14",
+                "module_label": "RAG / Evidence",
+                "module_section": "§14",
+                "action": "ingest",
+                "summary": f"Ingestão: {r['chunks_count']} chunks em source {r['knowledge_source_id'][:12]}…",
+                "entity_id": r["knowledge_source_id"],
+            })
+
+    # Ordena por timestamp desc e corta no `limit`
+    items.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
+    return {"items": items[:limit], "total": len(items)}
+
 # ═══ Releases §18 ═══
 @router.get("/releases")
 async def list_releases(environment: str = None, limit: int = 20):

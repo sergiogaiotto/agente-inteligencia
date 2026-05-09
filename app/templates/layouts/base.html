@@ -39,6 +39,8 @@
         .help-btn{opacity:0;transition:opacity .15s}
         *:hover>.help-btn{opacity:1}
     </style>
+    <!-- Conteúdo do Guia dos Módulos (window.MODULE_GUIDE) -->
+    <script src="/static/js/module-guide.js"></script>
     {% block head_extra %}{% endblock %}
 </head>
 <body class="h-full bg-surface-50 font-sans text-surface-500 antialiased" x-data="appShell()" x-init="initSearch()" x-cloak>
@@ -195,12 +197,26 @@
                     <h1 class="text-[15px] font-semibold text-brand-900">{{ title }}</h1>
                 </div>
                 <div class="flex items-center gap-2">
-                    <!-- Tour button -->
-                    <button @click="startTour()" id="tour-start-btn"
-                            class="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-violet-500 to-brand-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:shadow-md hover:scale-[1.02] transition-all">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4.26 10.147a60.438 60.438 0 00-.491 6.347A48.62 48.62 0 0112 20.904a48.62 48.62 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.636 50.636 0 00-2.658-.813A59.906 59.906 0 0112 3.493a59.903 59.903 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg>
-                        Guia Interativo
-                    </button>
+                    <!-- Guia Interativo dropdown -->
+                    <div class="relative" x-data="{guideMenuOpen:false}">
+                        <button @click="guideMenuOpen = !guideMenuOpen" id="tour-start-btn"
+                                class="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-violet-500 to-brand-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:shadow-md hover:scale-[1.02] transition-all">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4.26 10.147a60.438 60.438 0 00-.491 6.347A48.62 48.62 0 0112 20.904a48.62 48.62 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.636 50.636 0 00-2.658-.813A59.906 59.906 0 0112 3.493a59.903 59.903 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg>
+                            Guia Interativo
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        </button>
+                        <div x-show="guideMenuOpen" @click.away="guideMenuOpen=false" x-transition
+                             class="absolute right-0 top-full mt-1 w-64 rounded-xl bg-white border border-surface-200 shadow-lg z-50 py-1">
+                            <button @click="guideMenuOpen=false; startTour()" class="block w-full text-left px-3 py-2.5 hover:bg-surface-50">
+                                <div class="text-[12px] font-semibold text-brand-900">🎯 Tour das páginas</div>
+                                <div class="text-[10px] text-surface-400 mt-0.5">Highlight do menu lateral, página por página</div>
+                            </button>
+                            <button @click="guideMenuOpen=false; openModuleGuide()" class="block w-full text-left px-3 py-2.5 hover:bg-surface-50 border-t border-surface-100">
+                                <div class="text-[12px] font-semibold text-brand-900">📚 Guia dos Módulos</div>
+                                <div class="text-[10px] text-surface-400 mt-0.5">Fundamento, aplicação, ativar e usar — 14 módulos</div>
+                            </button>
+                        </div>
+                    </div>
                     <button @click="searchOpen = true; $nextTick(() => $refs.searchInput?.focus())" class="hidden sm:flex items-center gap-1.5 rounded-full bg-surface-100 px-3 py-1.5 text-[12px] text-surface-400 hover:bg-surface-200 transition-colors cursor-pointer">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
                         Buscar... <kbd class="ml-3 rounded border border-surface-200 bg-white px-1.5 py-0.5 text-[10px] font-mono">⌘K</kbd>
@@ -272,6 +288,140 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </template>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <!-- GUIA DOS MÓDULOS (drawer)                         -->
+    <!-- ══════════════════════════════════════════════════ -->
+    <template x-if="moduleGuideOpen">
+        <div class="fixed inset-0 z-[9985]">
+            <div class="fixed inset-0 bg-black/40" @click="moduleGuideOpen=false"></div>
+            <aside class="fixed right-0 top-0 bottom-0 w-full sm:w-[680px] bg-white shadow-2xl flex flex-col">
+                <header class="flex items-center justify-between border-b border-surface-100 px-5 py-3 shrink-0">
+                    <div>
+                        <h2 class="text-[14px] font-semibold text-brand-900">📚 Guia dos Módulos</h2>
+                        <p class="text-[10px] text-surface-400">Fundamento · Aplicação · Como ativar · Como usar — 14 módulos</p>
+                    </div>
+                    <button @click="moduleGuideOpen=false" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </header>
+                <div class="flex flex-1 overflow-hidden">
+                    <!-- Lista de módulos -->
+                    <nav class="w-48 border-r border-surface-100 overflow-y-auto shrink-0">
+                        <template x-for="m in moduleGuideEntries" :key="m.id">
+                            <button @click="selectedModuleId=m.id; selectedTab='fundamento'"
+                                class="block w-full text-left px-3 py-2 border-b border-surface-50 hover:bg-surface-50 transition-colors"
+                                :class="selectedModuleId===m.id ? 'bg-brand-50 border-l-2 border-l-brand-500' : ''">
+                                <div class="text-[10px] font-semibold text-surface-400" x-text="m.section"></div>
+                                <div class="text-[11px] font-medium text-brand-900 leading-tight mt-0.5" x-text="m.label"></div>
+                            </button>
+                        </template>
+                    </nav>
+                    <!-- Detalhe -->
+                    <div class="flex-1 flex flex-col overflow-hidden">
+                        <template x-if="selectedModule">
+                            <div class="flex flex-col flex-1 overflow-hidden">
+                                <!-- Header -->
+                                <div class="px-5 py-3 border-b border-surface-100 shrink-0">
+                                    <div class="text-[10px] font-semibold uppercase tracking-wider text-surface-400" x-text="selectedModule.section"></div>
+                                    <div class="text-[15px] font-bold text-brand-900" x-text="selectedModule.label"></div>
+                                </div>
+                                <!-- Tabs -->
+                                <div class="flex border-b border-surface-100 px-3 shrink-0">
+                                    <template x-for="tab in [['fundamento','Fundamento'],['aplicacao','Aplicação'],['ativar','Como ativar'],['usar','Como usar']]" :key="tab[0]">
+                                        <button @click="selectedTab=tab[0]"
+                                            class="px-3 py-2 text-[11px] font-medium border-b-2 -mb-px transition-colors"
+                                            :class="selectedTab===tab[0] ? 'border-brand-500 text-brand-600' : 'border-transparent text-surface-400 hover:text-surface-600'">
+                                            <span x-text="tab[1]"></span>
+                                        </button>
+                                    </template>
+                                </div>
+                                <!-- Conteúdo da aba -->
+                                <div class="flex-1 overflow-y-auto px-5 py-4 text-[12px] text-surface-600 leading-relaxed prose prose-sm max-w-none">
+                                    <div x-html="selectedModule[selectedTab]"></div>
+                                </div>
+                                <!-- Footer com botão IA -->
+                                <div class="border-t border-surface-100 px-5 py-3 shrink-0 bg-surface-50/50">
+                                    <button @click="openHelpChat(selectedModule)"
+                                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-violet-500 to-brand-500 text-white px-4 py-2 text-[12px] font-semibold hover:shadow-md transition-all">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/></svg>
+                                        🤖 IA, me ajude!
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+                        <template x-if="!selectedModule">
+                            <div class="flex-1 flex items-center justify-center text-surface-400 text-[12px]">
+                                Selecione um módulo à esquerda
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </aside>
+        </div>
+    </template>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <!-- IA, ME AJUDE! (drawer chat)                       -->
+    <!-- ══════════════════════════════════════════════════ -->
+    <template x-if="helpChatOpen">
+        <div class="fixed inset-0 z-[9986]">
+            <div class="fixed inset-0 bg-black/40" @click="helpChatOpen=false"></div>
+            <aside class="fixed right-0 top-0 bottom-0 w-full sm:w-[480px] bg-white shadow-2xl flex flex-col">
+                <header class="flex items-center justify-between border-b border-surface-100 px-5 py-3 shrink-0 bg-gradient-to-r from-violet-50 to-brand-50">
+                    <div>
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-violet-600">🤖 IA, me ajude!</div>
+                        <div class="text-[13px] font-bold text-brand-900" x-text="helpChatModule?.section + ' — ' + helpChatModule?.label"></div>
+                    </div>
+                    <button @click="helpChatOpen=false" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </header>
+                <!-- Histórico -->
+                <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3" id="helpChatScroll">
+                    <template x-if="helpMessages.length === 0">
+                        <div class="text-[11px] text-surface-400 text-center py-8">
+                            Pergunte qualquer coisa sobre <b x-text="helpChatModule?.label"></b>.<br/>
+                            Sugestões abaixo ↓
+                        </div>
+                    </template>
+                    <template x-for="(msg, i) in helpMessages" :key="i">
+                        <div :class="msg.role==='user' ? 'flex justify-end' : 'flex justify-start'">
+                            <div class="max-w-[85%] rounded-xl px-3 py-2 text-[12px] leading-relaxed whitespace-pre-wrap"
+                                :class="msg.role==='user' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-brand-900'"
+                                x-text="msg.content"></div>
+                        </div>
+                    </template>
+                    <div x-show="helpLoading" class="flex justify-start">
+                        <div class="bg-surface-100 rounded-xl px-3 py-2 text-[12px] text-surface-400">
+                            <span class="inline-block animate-pulse">⏳ pensando...</span>
+                        </div>
+                    </div>
+                </div>
+                <!-- Sugestões rápidas -->
+                <div x-show="helpMessages.length === 0" class="px-3 pb-2 space-y-1.5 shrink-0">
+                    <template x-for="(sugg, i) in helpSuggestions" :key="i">
+                        <button @click="helpInput = sugg; sendHelpMessage()"
+                            class="block w-full text-left rounded-lg border border-surface-200 px-3 py-1.5 text-[11px] text-surface-600 hover:bg-surface-50 transition-colors"
+                            x-text="sugg"></button>
+                    </template>
+                </div>
+                <!-- Input -->
+                <div class="border-t border-surface-100 px-3 py-3 shrink-0">
+                    <div class="flex gap-2">
+                        <input type="text" x-model="helpInput" @keydown.enter="sendHelpMessage()"
+                            placeholder="Faça uma pergunta..." :disabled="helpLoading"
+                            class="flex-1 rounded-lg border border-surface-200 px-3 py-1.5 text-[12px] outline-none focus:border-brand-300 disabled:opacity-50">
+                        <button @click="sendHelpMessage()" :disabled="helpLoading || !helpInput.trim()"
+                            class="rounded-lg bg-brand-500 text-white px-4 py-1.5 text-[12px] font-semibold hover:bg-brand-600 disabled:opacity-50 transition-colors">
+                            Enviar
+                        </button>
+                    </div>
+                    <div class="text-[9px] text-surface-400 mt-1.5">Powered by Azure OpenAI · Histórico desta sessão (não persistido)</div>
+                </div>
+            </aside>
         </div>
     </template>
 
@@ -440,6 +590,89 @@
             endTour() { this.tourActive = false; },
             nextTourStep() { if (this.tourStep < this.tourSteps.length - 1) this.tourStep++; else this.endTour(); },
             prevTourStep() { if (this.tourStep > 0) this.tourStep--; },
+
+            /* ══ Guia dos Módulos (drawer) ══ */
+            moduleGuideOpen: false,
+            selectedModuleId: null,
+            selectedTab: 'fundamento',
+            get moduleGuideEntries() { return window.MODULE_GUIDE || []; },
+            get selectedModule() {
+                return (window.MODULE_GUIDE || []).find(m => m.id === this.selectedModuleId) || null;
+            },
+            openModuleGuide(idOrSection) {
+                this.moduleGuideOpen = true;
+                const list = window.MODULE_GUIDE || [];
+                if (idOrSection) {
+                    // Aceita id ('s14') ou section ('§14', 'Onda 4a')
+                    const found = list.find(m => m.id === idOrSection || m.section === idOrSection);
+                    if (found) this.selectedModuleId = found.id;
+                } else if (!this.selectedModuleId && list.length) {
+                    this.selectedModuleId = list[0].id;
+                }
+                this.selectedTab = 'fundamento';
+            },
+
+            /* ══ "IA, me ajude!" chat (drawer) ══ */
+            helpChatOpen: false,
+            helpChatModule: null,
+            helpMessages: [],
+            helpInput: '',
+            helpLoading: false,
+            get helpSuggestions() {
+                if (!this.helpChatModule) return [];
+                const lbl = this.helpChatModule.label;
+                return [
+                    `Como ativar ${lbl}?`,
+                    `Quais riscos de usar ${lbl}?`,
+                    `Como troubleshoot quando ${lbl} não funciona?`,
+                    `Mostre um exemplo prático de ${lbl}.`,
+                ];
+            },
+            openHelpChat(mod) {
+                this.helpChatModule = mod;
+                this.helpMessages = [];
+                this.helpInput = '';
+                this.helpChatOpen = true;
+            },
+            async sendHelpMessage() {
+                const q = (this.helpInput || '').trim();
+                if (!q || this.helpLoading || !this.helpChatModule) return;
+                this.helpMessages.push({ role: 'user', content: q });
+                this.helpInput = '';
+                this.helpLoading = true;
+                this.$nextTick(() => {
+                    const el = document.getElementById('helpChatScroll');
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
+                try {
+                    const r = await fetch('/api/v1/help/ask', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            module_id: this.helpChatModule.id,
+                            module_label: this.helpChatModule.label,
+                            module_section: this.helpChatModule.section,
+                            question: q,
+                            history: this.helpMessages.slice(-6, -1).map(m => ({ role: m.role, content: m.content })),
+                        }),
+                    });
+                    if (!r.ok) {
+                        const txt = await r.text();
+                        this.helpMessages.push({ role: 'assistant', content: `⚠ Erro ${r.status}: ${txt.slice(0, 200)}` });
+                    } else {
+                        const data = await r.json();
+                        this.helpMessages.push({ role: 'assistant', content: data.answer || '(resposta vazia)' });
+                    }
+                } catch (e) {
+                    this.helpMessages.push({ role: 'assistant', content: `⚠ Falha de rede: ${e.message}` });
+                } finally {
+                    this.helpLoading = false;
+                    this.$nextTick(() => {
+                        const el = document.getElementById('helpChatScroll');
+                        if (el) el.scrollTop = el.scrollHeight;
+                    });
+                }
+            },
 
             /* ══ Help ══ */
             helpOpen: false, helpKey: '',
