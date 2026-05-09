@@ -11,10 +11,10 @@
                 <button @click="showGoldForm=!showGoldForm" class="text-[12px] text-brand-500 font-medium hover:text-brand-700">+ Novo caso</button>
             </div>
             <div x-show="showGoldForm" x-transition class="p-4 border-b border-surface-100 bg-surface-50 space-y-2">
-                <input x-model="goldForm.input_text" placeholder="Input do caso (obrigatório)"
-                    class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
-                <input x-model="goldForm.expected_output" placeholder="Output esperado (similarity check)"
-                    class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                <textarea x-model="goldForm.input_text" rows="3" placeholder="Input do caso (obrigatório) — pode ter múltiplas linhas; arraste o canto inferior direito para redimensionar"
+                    class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none resize-y min-h-[3rem]"></textarea>
+                <textarea x-model="goldForm.expected_output" rows="3" placeholder="Output esperado (similarity check) — pode ter múltiplas linhas; arraste o canto inferior direito para redimensionar"
+                    class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none resize-y min-h-[3rem]"></textarea>
                 <div class="flex gap-2">
                     <select x-model="goldForm.case_type" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                         <option value="normal">Normal</option><option value="adversarial">Adversarial</option>
