@@ -510,6 +510,8 @@ async def execute_interaction(
                 "_urn": parsed.frontmatter.id,
                 "_execution_mode": parsed.execution_mode,
                 "_api_bindings_count": len(getattr(parsed, "api_bindings_parsed", []) or []),
+                # Onda 6 Wave 2: evidence_policy estruturado (sources/limits/cite_sources)
+                "_evidence_policy_parsed": getattr(parsed, "evidence_policy_parsed", {}) or {},
             }
 
     agent["_parsed_skill"] = skill_data
@@ -600,9 +602,20 @@ async def execute_interaction(
     else:
         # Spans separados para retrieve e rerank — facilita identificar gargalo
         # (no Onda 3, search vai virar busca vetorial e o rerank um cross-encoder real).
+        # Onda 6 Wave 2: skill pode declarar evidence_policy.sources pra restringir
+        # quais fontes essa skill consulta. None = legacy (todas autorizadas);
+        # [] = bloqueia tudo; populada = filtro estrito.
+        _ev_policy = (skill_data.get("_evidence_policy_parsed") or {})
+        _allowed_sources = _ev_policy.get("sources")  # None | list
         with _tracer.start_as_current_span("evidence.retrieve") as _span_r:
             _span_r.set_attribute("evidence.top_n", 5)
-            evidences = await retriever.search(user_input, top_n=5)
+            if _allowed_sources is not None:
+                _span_r.set_attribute("evidence.allowed_sources_count", len(_allowed_sources))
+            evidences = await retriever.search(
+                user_input,
+                top_n=5,
+                allowed_source_ids=_allowed_sources,
+            )
             _span_r.set_attribute("evidence.retrieved_count", len(evidences))
         with _tracer.start_as_current_span("evidence.rerank") as _span_rr:
             _span_rr.set_attribute("evidence.input_count", len(evidences))

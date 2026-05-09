@@ -58,6 +58,11 @@ class ParsedSkill:
     execution_mode: str = ""       # fast | standard | rigorous | declarative
     api_bindings: str = ""         # raw text (markdown or YAML)
     api_bindings_parsed: list = field(default_factory=list)  # list of dicts
+    # Onda 6 Wave 2: evidence_policy parseado (governance skill ↔ source).
+    # Quando há bloco fenced YAML em ## Evidence Policy: dict com keys
+    # opcionais {sources, min_relevance, max_age_days, cite_sources, raw}.
+    # Sem fence ou parse-fail: {raw: <texto cru>} — comportamento legacy.
+    evidence_policy_parsed: dict = field(default_factory=dict)
     raw_content: str = ""
     content_hash: str = ""
     validation_errors: list = field(default_factory=list)
@@ -150,6 +155,11 @@ def parse_skill_md(content: str) -> ParsedSkill:
             "execution_mode=declarative exige ## API Bindings com pelo menos 1 binding válido"
         )
 
+    # ── Evidence Policy — parse YAML estruturado (Onda 6 Wave 2) ──
+    # Quando há bloco fenced YAML em ## Evidence Policy, extrai sources/limits/
+    # flags. Sem fence: continua como texto cru (sem governance ativa = legacy).
+    result.evidence_policy_parsed = _parse_evidence_policy(result.evidence_policy)
+
     result.is_valid = len(result.validation_errors) == 0
     return result
 
@@ -183,6 +193,79 @@ def _parse_api_bindings(section_text: str) -> list[dict]:
     if isinstance(data, list):
         return [_normalize_yaml11_bool_keys(b) for b in data if isinstance(b, dict) and b.get("id")]
     return []
+
+
+def _parse_evidence_policy(section_text: str) -> dict:
+    """Parse a seção ## Evidence Policy (Onda 6 Wave 2 — governance skill↔source).
+
+    Aceita bloco fenced YAML com schema opcional:
+        ```yaml
+        sources:
+          - <knowledge_source_id>   # opcional comentário humano
+        min_relevance: 0.3          # threshold rejeita chunks com score < N
+        max_age_days: 90            # source com last_updated > N → ignora
+        cite_sources: true          # Wave 3 — força LLM a citar [E1] na resposta
+        ```
+
+    Sem bloco fence: devolve {raw: <texto cru>} — legacy mode (sem filtro
+    aplicado pelo retriever, mantém comportamento histórico).
+
+    Distinção crítica:
+    - chave `sources` ausente → `result["sources"]` ausente → retriever não filtra.
+    - chave `sources: []` → `result["sources"] = []` → retriever bloqueia tudo.
+
+    Retorno: dict sempre. Em qualquer caminho de erro devolve `{raw: ...}` —
+    nunca levanta exceção.
+    """
+    if not section_text or not section_text.strip():
+        return {}
+
+    # Procura bloco fenced (yaml/yml). Sem fence → legacy mode.
+    fence_open = re.search(r"```(?:yaml|yml)?\s*\n", section_text)
+    if not fence_open:
+        return {"raw": section_text}
+
+    body = section_text[fence_open.end():]
+    body = re.sub(r"\n```\s*$", "", body)
+
+    try:
+        data = yaml.safe_load(body)
+    except yaml.YAMLError:
+        return {"raw": section_text}
+
+    if not isinstance(data, dict):
+        return {"raw": section_text}
+
+    result: dict = {"raw": section_text}
+
+    # sources: lista explícita (vazia ok = blocked, ausente = sem filtro).
+    sources = data.get("sources")
+    if isinstance(sources, list):
+        result["sources"] = [str(s).strip() for s in sources if s and str(s).strip()]
+
+    # min_relevance: float [0..1]. Inválido → ignora.
+    if "min_relevance" in data:
+        try:
+            mr = float(data["min_relevance"])
+            if 0.0 <= mr <= 1.0:
+                result["min_relevance"] = mr
+        except (TypeError, ValueError):
+            pass
+
+    # max_age_days: int positivo. Inválido → ignora.
+    if "max_age_days" in data:
+        try:
+            md = int(data["max_age_days"])
+            if md > 0:
+                result["max_age_days"] = md
+        except (TypeError, ValueError):
+            pass
+
+    # cite_sources: bool. Wave 3 (citações opcionais).
+    if "cite_sources" in data:
+        result["cite_sources"] = bool(data["cite_sources"])
+
+    return result
 
 
 def _normalize_yaml11_bool_keys(obj):

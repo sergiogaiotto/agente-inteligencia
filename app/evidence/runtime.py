@@ -76,10 +76,26 @@ class Retriever:
         query: str,
         skill_evidence_policy: dict | None = None,
         top_n: int = 5,
+        allowed_source_ids: list[str] | None = None,
     ) -> list[EvidenceResult]:
+        """Busca top_n evidências.
+
+        allowed_source_ids (Onda 6 Wave 2):
+          - None → sem filtro (todas as sources autorizadas; comportamento legacy).
+          - lista vazia → bloqueado (skill declarou zero sources permitidas).
+          - lista populada → BM25 + Qdrant filtram para esses IDs.
+        """
         with _tracer.start_as_current_span("evidence.retrieve") as span:
             span.set_attribute("query.length", len(query or ""))
             span.set_attribute("retriever.top_n", top_n)
+
+            # Wave 2: bloqueio explícito quando skill declarou sources=[]
+            if allowed_source_ids is not None and len(allowed_source_ids) == 0:
+                span.set_attribute("retriever.path", "blocked_no_sources")
+                return []
+
+            if allowed_source_ids:
+                span.set_attribute("retriever.allowed_sources_count", len(allowed_source_ids))
 
             settings = get_settings()
             if not settings.rag_v2_enabled:
@@ -94,12 +110,12 @@ class Retriever:
 
             span.set_attribute("retriever.path", "hybrid_v2")
 
-            # BM25 e vetorial em paralelo
+            # BM25 e vetorial em paralelo, ambos respeitando o filtro de sources
             bm25_task = asyncio.create_task(
-                self._bm25_search(query, settings.rag_top_n_bm25)
+                self._bm25_search(query, settings.rag_top_n_bm25, allowed_source_ids)
             )
             vec_task = asyncio.create_task(
-                self._vector_search(query, settings.rag_top_n_vector)
+                self._vector_search(query, settings.rag_top_n_vector, allowed_source_ids)
             )
             bm25_hits, vec_hits = await asyncio.gather(bm25_task, vec_task)
 
@@ -123,28 +139,50 @@ class Retriever:
             )
             return r is not None
 
-    async def _bm25_search(self, query: str, top_n: int) -> list[dict]:
+    async def _bm25_search(self, query: str, top_n: int,
+                           allowed_source_ids: list[str] | None = None) -> list[dict]:
         """BM25 nativo via tsvector + ts_rank_cd. plainto_tsquery converte
         a query em formato tsquery seguro (não exige sintaxe especial).
+
+        Wave 2: filtro opcional por knowledge_source_id quando skill restringe.
         """
         with _tracer.start_as_current_span("evidence.retrieve.bm25") as span:
             span.set_attribute("bm25.top_n", top_n)
+            if allowed_source_ids:
+                span.set_attribute("bm25.allowed_sources", len(allowed_source_ids))
             pool = _get_pool()
             async with pool.acquire() as con:
-                rows = await con.fetch(
-                    """
-                    SELECT ec.id AS chunk_id, ec.knowledge_source_id AS source_id,
-                           ec.ordinal, ec.text,
-                           ts_rank_cd(ec.tsv, plainto_tsquery('simple', $1)) AS rank
-                    FROM evidence_chunks ec
-                    JOIN knowledge_sources ks ON ks.id = ec.knowledge_source_id
-                    WHERE ec.tsv @@ plainto_tsquery('simple', $1)
-                      AND ks.authorized = 1
-                    ORDER BY rank DESC
-                    LIMIT $2
-                    """,
-                    query, top_n,
-                )
+                if allowed_source_ids:
+                    rows = await con.fetch(
+                        """
+                        SELECT ec.id AS chunk_id, ec.knowledge_source_id AS source_id,
+                               ec.ordinal, ec.text,
+                               ts_rank_cd(ec.tsv, plainto_tsquery('simple', $1)) AS rank
+                        FROM evidence_chunks ec
+                        JOIN knowledge_sources ks ON ks.id = ec.knowledge_source_id
+                        WHERE ec.tsv @@ plainto_tsquery('simple', $1)
+                          AND ks.authorized = 1
+                          AND ec.knowledge_source_id = ANY($3::text[])
+                        ORDER BY rank DESC
+                        LIMIT $2
+                        """,
+                        query, top_n, allowed_source_ids,
+                    )
+                else:
+                    rows = await con.fetch(
+                        """
+                        SELECT ec.id AS chunk_id, ec.knowledge_source_id AS source_id,
+                               ec.ordinal, ec.text,
+                               ts_rank_cd(ec.tsv, plainto_tsquery('simple', $1)) AS rank
+                        FROM evidence_chunks ec
+                        JOIN knowledge_sources ks ON ks.id = ec.knowledge_source_id
+                        WHERE ec.tsv @@ plainto_tsquery('simple', $1)
+                          AND ks.authorized = 1
+                        ORDER BY rank DESC
+                        LIMIT $2
+                        """,
+                        query, top_n,
+                    )
                 hits = [
                     {
                         "chunk_id": r["chunk_id"],
@@ -158,15 +196,19 @@ class Retriever:
                 span.set_attribute("bm25.hits", len(hits))
                 return hits
 
-    async def _vector_search(self, query: str, top_n: int) -> list[dict]:
-        """Embeda a query e busca top_n vizinhos em Qdrant."""
+    async def _vector_search(self, query: str, top_n: int,
+                             allowed_source_ids: list[str] | None = None) -> list[dict]:
+        """Embeda a query e busca top_n vizinhos em Qdrant.
+        Wave 2: passa source_ids pra filtro nativo do Qdrant (FieldCondition+MatchAny)."""
         with _tracer.start_as_current_span("evidence.retrieve.vector") as span:
             span.set_attribute("vector.top_n", top_n)
+            if allowed_source_ids:
+                span.set_attribute("vector.allowed_sources", len(allowed_source_ids))
             qvec = await embed_query(query)
             if qvec is None:
                 span.set_attribute("vector.path", "embedder_unavailable")
                 return []
-            hits = await qdrant_search(qvec, top_n=top_n)
+            hits = await qdrant_search(qvec, top_n=top_n, source_ids=allowed_source_ids)
             span.set_attribute("vector.hits", len(hits))
             return hits
 
