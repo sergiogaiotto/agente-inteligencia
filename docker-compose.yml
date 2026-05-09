@@ -157,9 +157,16 @@ services:
 
   # ─── Caddy (Reverse proxy + TLS público — Onda 4c) ───────────────
   # Em paralelo com a porta :7000 do app (mantida para back-compat).
-  # Modo dev (default): HTTP only em :80.
-  # Modo prod: defina TLS_SITE=meudominio.com + TLS_EMAIL + CADDY_GLOBAL='email ${TLS_EMAIL}'
-  # → Caddy obtém cert Let's Encrypt automaticamente.
+  # Caddy reverse proxy (HTTP[S] público).
+  # Portas configuráveis via TLS_HTTP_PORT_HOST / TLS_HTTPS_PORT_HOST no .env.
+  # Defaults no compose são 80/443 (produção). Para dev local, .env.example já
+  # usa 8080/8443 — recomendado em Windows/Mac onde a 80 costuma estar reservada
+  # (Hyper-V/IIS/WinNAT). Sintoma típico em Windows:
+  #   "Ports are not available: ... bind: An attempt was made to access a socket
+  #    in a way forbidden by its access permissions."
+  # Diagnóstico: `netsh int ipv4 show excludedportrange protocol=tcp`.
+  # Modo prod: TLS_SITE=meudominio.com + CADDY_GLOBAL='email admin@meudominio.com'
+  # (sem 'auto_https off') → Caddy obtém cert Let's Encrypt automaticamente.
   caddy:
     image: caddy:2-alpine
     container_name: agente_caddy
