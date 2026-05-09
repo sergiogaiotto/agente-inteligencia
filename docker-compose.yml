@@ -155,6 +155,48 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ─── Caddy (Reverse proxy + TLS público — Onda 4c) ───────────────
+  # Em paralelo com a porta :7000 do app (mantida para back-compat).
+  # Modo dev (default): HTTP only em :80.
+  # Modo prod: defina TLS_SITE=meudominio.com + TLS_EMAIL + CADDY_GLOBAL='email ${TLS_EMAIL}'
+  # → Caddy obtém cert Let's Encrypt automaticamente.
+  caddy:
+    image: caddy:2-alpine
+    container_name: agente_caddy
+    restart: unless-stopped
+    ports:
+      - "${TLS_HTTP_PORT_HOST:-80}:80"
+      - "${TLS_HTTPS_PORT_HOST:-443}:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      # Compose usa ${VAR:-default}. Caddyfile interno usa {$VAR::default} (nativo Caddy).
+      # Os defaults aqui são repassados intactos para o container; Caddy aplica seus
+      # próprios defaults se a env vier vazia.
+      TLS_SITE: ${TLS_SITE:-:80}
+      # Em prod, CADDY_GLOBAL deve incluir 'email admin@dominio.com' (sem 'auto_https off')
+      # para Caddy obter cert Let's Encrypt. Em dev, deixe 'auto_https off'.
+      CADDY_GLOBAL: ${CADDY_GLOBAL:-auto_https off}
+    networks:
+      - aimesh
+    depends_on:
+      app:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # ─── OPA (Policy Engine — Onda 4a) ───────────────────────────────
   # Open Policy Agent em modo server. Carrega políticas Rego de
   # infra/opa/policies/ no startup. Endpoint /v1/data/<package>/<rule>
@@ -362,6 +404,12 @@ volumes:
     name: agente_redis_data
   qdrant_data:
     name: agente_qdrant_data
+  # Onda 4c — TLS público (Caddy persiste certs Let's Encrypt aqui).
+  # Volume sobrevive a `down` (sem -v) — evita re-emitir cert e bater rate-limit do LE.
+  caddy_data:
+    name: agente_caddy_data
+  caddy_config:
+    name: agente_caddy_config
   # Onda 2 — observabilidade (criados sob demanda quando profile=full)
   tempo_data:
     name: agente_tempo_data

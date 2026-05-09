@@ -83,42 +83,11 @@ docker compose exec app python -m app.core.db_migrate /app/data/legacy.db
 A saída lista, por tabela, quantas linhas foram lidas e inseridas. O script
 é idempotente — pode rodar várias vezes sem duplicar.
 
-## 5. TLS público (Caddy reverse-proxy — recomendado)
+## 5. TLS público (Caddy)
 
-Para HTTPS automático com Let's Encrypt, suba um Caddy ao lado:
-
-```yaml
-# salvar como infra/caddy/docker-compose.yml e rodar `docker compose up -d`
-services:
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports: ["80:80", "443:443"]
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    networks: [agente_aimesh]
-networks:
-  agente_aimesh:
-    external: true
-volumes:
-  caddy_data:
-  caddy_config:
-```
-
-`Caddyfile`:
-
-```
-seu-dominio.com {
-    reverse_proxy app:7000
-    encode zstd gzip
-    log {
-        output stdout
-        format json
-    }
-}
-```
+Caddy agora é parte do `docker-compose.yml` (Onda 4c.1) — basta `docker compose
+up -d caddy` e configurar `.env`. Documentação completa de uso (modos dev/prod,
+Let's Encrypt, parametrização de portas) está em **§12** abaixo.
 
 ## 6. Backup do PostgreSQL
 
@@ -526,11 +495,151 @@ docker compose up -d --force-recreate app
 
 ---
 
-## 12. Próximas ondas
+## 12. TLS público com Caddy (Onda 4c.1)
+
+Reverse proxy entre o app e o mundo externo. Em paralelo à porta `:7000`
+do app (que continua aberta para back-compat). Caddy adiciona:
+- HTTPS automático em produção (Let's Encrypt nativo, sem cert-manager separado)
+- Headers de segurança baseline (X-Content-Type-Options, X-Frame-Options, etc.)
+- Compressão gzip/zstd
+- Logs JSON estruturados
+
+### 12.1. Modo dev (default)
+
+```bash
+# Porta 80 frequentemente reservada no Windows (IIS/Skype). Use 8080/8443:
+TLS_HTTP_PORT_HOST=8080 TLS_HTTPS_PORT_HOST=8443 docker compose up -d caddy
+
+# Ou no .env:
+echo "TLS_HTTP_PORT_HOST=8080" >> .env
+echo "TLS_HTTPS_PORT_HOST=8443" >> .env
+docker compose up -d caddy
+
+# Smoke test:
+curl http://localhost:8080/api/health
+```
+
+Modo dev usa `CADDY_GLOBAL=auto_https off` — HTTP only, sem cert.
+
+### 12.2. Modo produção (HTTPS automático)
+
+Pré-requisitos:
+1. Domain real (ex: `agente.minhaempresa.com`) com DNS A/AAAA apontando para o IP do host
+2. Portas 80 e 443 acessíveis da internet (firewall, NAT)
+3. Email válido para Let's Encrypt (ele envia avisos de expiração)
+
+`.env`:
+```
+TLS_HTTP_PORT_HOST=80
+TLS_HTTPS_PORT_HOST=443
+TLS_SITE=agente.minhaempresa.com
+CADDY_GLOBAL=email admin@minhaempresa.com
+```
+
+```bash
+docker compose up -d caddy
+docker compose logs -f caddy   # acompanhar Let's Encrypt obtendo cert
+```
+
+Renovação automática: Caddy renova ~30 dias antes da expiração. Volume nomeado
+`caddy_data` persiste o cert entre `docker compose down` (sem `-v`).
+
+### 12.3. Reverter / parar
+
+```bash
+docker compose stop caddy   # mantém volumes
+docker compose rm -f caddy  # remove container, mantém volumes
+docker compose down -v      # apaga volumes (inclui certs! cuidado em prod)
+```
+
+App continua funcionando direto em `:7000` mesmo com Caddy parado.
+
+---
+
+## 13. Secrets management (Onda 4c.4)
+
+### 13.1. Estado atual
+
+Secrets ficam em `.env` na raiz, em texto puro. `.gitignore` impede commit
+do `.env` real (mas não de `.env.example`, que é template sem chaves).
+
+**Riscos reais (em ordem de probabilidade):**
+1. Vazamento via `docker logs` ou `docker inspect` (env vars aparecem)
+2. Backup do host inclui `.env` em cleartext
+3. Screenshot/screen-share durante demo
+4. Histórico do shell (`history | grep KEY`)
+5. **Já-leakado**: chaves anteriormente commitadas em arquivos rastreados (script `check-secrets-leak.sh` detecta)
+
+### 13.2. Scan de leak (script pronto)
+
+```bash
+# Escaneia arquivos rastreados pelo git
+./infra/scripts/check-secrets-leak.sh
+
+# Apenas arquivos staged (use no pre-commit):
+./infra/scripts/check-secrets-leak.sh --staged
+```
+
+Detecta padrões com prefixo distintivo: OpenAI (`sk-proj-`, `sk-ant-`),
+LiteLLM (`sk-litellm-`), LangFuse (`pk-lf-`, `sk-lf-`), GitHub, Slack, AWS.
+
+**Não detecta** (intencionalmente — falsos positivos demais): senhas Postgres
+genéricas, chaves Azure (string aleatória sem prefixo). Para essas, faça
+`grep -i "azure_openai_api_key" $(git ls-files)` manualmente.
+
+### 13.3. Rotação de chaves (quando vazar)
+
+Procedimento padrão por provedor:
+
+| Provedor | Onde rotacionar |
+|---|---|
+| Azure OpenAI | Portal Azure → recurso OpenAI → Keys and Endpoint → "Regenerate Key 1/2" |
+| OpenAI público | platform.openai.com → API Keys → revogar antiga + criar nova |
+| Maritaca | console Maritaca → Settings → API Keys |
+| LangFuse | cloud.langfuse.com → Settings → API Keys → revoke |
+| LiteLLM master | gerar nova: `openssl rand -hex 24`, atualizar `.env`, restart `litellm` |
+| Postgres | `ALTER USER agente PASSWORD '...'` + atualizar `DATABASE_URL` + recreate |
+
+Após rotacionar, atualize `.env` e:
+```bash
+docker compose up -d --force-recreate app litellm
+```
+
+### 13.4. Caminhos de evolução
+
+Ranqueados por esforço × ganho:
+
+1. **Pre-commit hook** com `check-secrets-leak.sh --staged` (~5min, instalar com `pre-commit` ou husky)
+2. **Docker Secrets** — secrets viram arquivos read-only em `/run/secrets/`, não env vars. Sobrevivem a `docker inspect`. Esforço: ~1h, requer reescrever lugares que leem env.
+3. **Sealed Secrets** (k8s, Bitnami) — encripta secret antes de commitar; cluster decrypta. Versionável no git. Requer k8s.
+4. **External Secrets Operator** (k8s) — sincroniza secrets do Vault/AWS Secrets Manager/Azure Key Vault. Padrão de produção em empresas. Requer k8s + vault.
+
+Para single-host produção (VPS), a combinação prática hoje é:
+- `.env` fora do repo, montado read-only no container
+- Backup do `.env` em password manager corporativo (1Password, Bitwarden)
+- Rotação a cada 90 dias (calendário no time)
+- `check-secrets-leak.sh --staged` no pre-commit
+
+### 13.5. ⚠️ Achado de leak histórico
+
+O script detecta `pk-lf-...` e `sk-lf-...` em `data/agente_inteligencia.db`
+(banco SQLite legacy commitado no início do projeto). Ações requeridas:
+
+1. **Rotacionar chaves LangFuse** já — assumir que vazaram para qualquer um que clonou o repo
+2. Remover o `.db` do tracking: `git rm --cached data/agente_inteligencia.db`
+3. **Limpar histórico** com `git filter-repo` se quiser apagar do passado (operação destrutiva — coordene com co-autores)
+4. Garantir que `data/*.db` continua no `.gitignore` (já está, só pegar arquivos novos)
+
+---
+
+## 14. Próximas ondas
 
 - **Onda 1** ✅ segurança (rate-limit, PII redaction, secrets cifrados, prompt guard)
 - **Onda 2** ✅ observabilidade (OTel + Tempo + Loki + Grafana) — seção 8
 - **Onda 3** ✅ RAG real (Qdrant + embeddings + híbrido BM25+vetorial) — seção 9
 - **Onda 4b** ✅ AI Gateway (LiteLLM) — seção 10
 - **Onda 4a** ✅ Policy as Code (OPA + 3 policies + PEP) — seção 11
-- **Onda 4c** ⏳ mTLS + Helm chart (deploy k8s production-grade)
+- **Onda 4c.1** ✅ TLS público com Caddy — seção 12
+- **Onda 4c.4** ✅ Secrets management (script + doc) — seção 13
+- **Onda 4c.2** ⏳ Postgres TLS (futuro — quando cloud-managed)
+- **Onda 4c.3** ⏳ Helm chart (futuro — quando migrar para k8s)
