@@ -545,11 +545,31 @@ async def delete_gold_case(case_id: str):
     return {"message": "Caso removido"}
 
 # ═══ Harness §9.5 ═══
+def _parse_json_field(row: dict, field: str, default):
+    """Parsing tolerante: TEXT JSON do banco vira objeto/lista para a UI.
+    Mantém valor original em caso de string vazia ou JSON malformado."""
+    raw = row.get(field)
+    if raw is None or raw == "":
+        row[field] = default
+        return
+    if isinstance(raw, (dict, list)):
+        return
+    try:
+        row[field] = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        row[field] = default
+
+
 @router.get("/eval-runs")
 async def list_eval_runs(release_id: str = None, limit: int = 20):
     f = {}
     if release_id: f["release_id"] = release_id
-    return {"runs": await eval_runs_repo.find_all(limit=limit, **f)}
+    runs = await eval_runs_repo.find_all(limit=limit, **f)
+    # dimension_breakdown e details vêm como TEXT JSON; UI precisa de objeto.
+    for r in runs:
+        _parse_json_field(r, "dimension_breakdown", {})
+        _parse_json_field(r, "details", [])
+    return {"runs": runs}
 
 @router.post("/eval-runs/execute")
 async def run_harness(data: RunEvalRequest):

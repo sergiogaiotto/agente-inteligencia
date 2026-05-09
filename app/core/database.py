@@ -487,6 +487,17 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS weight REAL DEFAULT 1.0",
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS expected_pattern TEXT",
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS red_flags TEXT DEFAULT '[]'",
+    # Harness multi-dim gate — agregados do Verifier por execução (§9.5 + §14.2)
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS avg_factuality REAL",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS avg_completeness REAL",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS avg_tone REAL",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS safety_violation_rate REAL",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS contract_compliance_rate REAL",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS hallucination_rate REAL",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS judge_used BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS judge_model TEXT",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS gate_reason TEXT",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS dimension_breakdown TEXT DEFAULT '{}'",
 ]
 
 

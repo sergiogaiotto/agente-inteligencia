@@ -110,19 +110,80 @@
                     </button>
                 </div>
             </div>
-            <div class="divide-y divide-surface-50 max-h-80 overflow-y-auto scrollbar-thin">
+            <div class="divide-y divide-surface-50 max-h-[55vh] overflow-y-auto scrollbar-thin">
                 <template x-for="r in evalRuns" :key="r.id">
-                    <div class="px-5 py-3">
-                        <div class="flex items-center justify-between mb-1">
-                            <span class="text-[12px] font-medium text-brand-900" x-text="r.run_type + ' — ' + (r.gate_result||r.status)"></span>
-                            <span class="rounded-full px-2 py-0.5 text-[10px] font-bold"
-                                  :class="r.gate_result==='approved'?'bg-emerald-50 text-emerald-700':r.gate_result==='rejected'?'bg-rose-50 text-rose-700':'bg-amber-50 text-amber-700'"
-                                  x-text="r.gate_result||r.status"></span>
+                    <div>
+                        <div @click="toggleEval(r)" class="px-5 py-3 cursor-pointer hover:bg-surface-50/50">
+                            <div class="flex items-center justify-between mb-1">
+                                <span class="text-[12px] font-medium text-brand-900" x-text="r.run_type + ' — ' + (r.gate_result||r.status)"></span>
+                                <div class="flex items-center gap-2">
+                                    <template x-if="!r.judge_used">
+                                        <span class="rounded bg-surface-100 px-1.5 py-0.5 text-[9px] text-surface-500" title="rodado sem multi-dim verifier">no-judge</span>
+                                    </template>
+                                    <span class="rounded-full px-2 py-0.5 text-[10px] font-bold"
+                                          :class="r.gate_result==='approved'?'bg-emerald-50 text-emerald-700':r.gate_result==='rejected'?'bg-rose-50 text-rose-700':'bg-amber-50 text-amber-700'"
+                                          x-text="r.gate_result||r.status"></span>
+                                    <svg class="w-3 h-3 text-surface-300 shrink-0 transition-transform" :class="expandedEval === r.id ? 'rotate-180':''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                                </div>
+                            </div>
+                            <div class="flex flex-wrap gap-3 text-[11px] text-surface-400 items-center">
+                                <span x-text="'Acurácia: '+((r.accuracy||0)*100).toFixed(1)+'%'"></span>
+                                <span x-text="(r.passed||0)+'/'+(r.total_cases||0)+' passed'"></span>
+                                <span x-text="(r.avg_latency_ms||0).toFixed(0)+'ms avg'"></span>
+                                <template x-if="r.judge_used">
+                                    <span class="flex items-center gap-1">
+                                        <span :class="dimColor(r.avg_factuality)" x-text="'F'+fmtDim(r.avg_factuality)" title="factuality média"></span>
+                                        <span :class="dimColor(r.avg_completeness)" x-text="'C'+fmtDim(r.avg_completeness)" title="completeness média"></span>
+                                        <span :class="dimColor(r.avg_tone)" x-text="'T'+fmtDim(r.avg_tone)" title="tone média"></span>
+                                        <span :class="(r.safety_violation_rate||0) <= 0.05 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'"
+                                              x-text="'S'+((1-(r.safety_violation_rate||0))*100).toFixed(0)+'%'" title="safety pass rate"></span>
+                                        <template x-if="(r.hallucination_rate||0) > 0">
+                                            <span class="rounded bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold text-rose-700"
+                                                  :title="'casos com unsupported_claims'"
+                                                  x-text="'⚑'+((r.hallucination_rate||0)*100).toFixed(0)+'%'"></span>
+                                        </template>
+                                    </span>
+                                </template>
+                            </div>
+                            <template x-if="r.gate_result==='rejected' && r.gate_reason">
+                                <div class="mt-1 text-[10px] text-rose-700 font-mono break-all" x-text="'⚠ '+r.gate_reason"></div>
+                            </template>
                         </div>
-                        <div class="flex gap-4 text-[11px] text-surface-400">
-                            <span x-text="'Acurácia: '+(r.accuracy*100).toFixed(1)+'%'"></span>
-                            <span x-text="r.passed+'/'+r.total_cases+' passed'"></span>
-                            <span x-text="r.avg_latency_ms?.toFixed(0)+'ms avg'"></span>
+                        <div x-show="expandedEval === r.id" x-transition.duration.150ms class="border-t border-surface-100 bg-surface-50/50 px-5 py-3 text-[11px]">
+                            <template x-if="r.dimension_breakdown && Object.keys(r.dimension_breakdown.by_category||{}).length > 0">
+                                <div class="space-y-1.5 mb-3">
+                                    <div class="text-[10px] font-semibold uppercase tracking-wider text-surface-400">Por categoria</div>
+                                    <div class="grid grid-cols-6 gap-2 text-[9px] uppercase tracking-wider text-surface-400">
+                                        <span class="col-span-2">categoria</span><span>passed</span><span>F</span><span>C</span><span>T</span>
+                                    </div>
+                                    <template x-for="[cat, b] in Object.entries(r.dimension_breakdown.by_category||{})" :key="cat">
+                                        <div class="grid grid-cols-6 gap-2 items-center">
+                                            <span class="col-span-2 text-brand-900 truncate" x-text="cat"></span>
+                                            <span class="text-surface-500" x-text="b.passed+'/'+b.total"></span>
+                                            <span :class="dimColor(b.avg_factuality)" x-text="fmtDim(b.avg_factuality)"></span>
+                                            <span :class="dimColor(b.avg_completeness)" x-text="fmtDim(b.avg_completeness)"></span>
+                                            <span :class="dimColor(b.avg_tone)" x-text="fmtDim(b.avg_tone)"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                            <template x-if="(r.dimension_breakdown?.top_unsupported_claims || []).length > 0">
+                                <div class="rounded border border-rose-200 bg-rose-50/50 p-2 mb-2">
+                                    <div class="text-[10px] font-bold text-rose-700 mb-1">⚑ Top unsupported_claims (alucinação suspeita)</div>
+                                    <ul class="list-disc pl-4 space-y-0.5 text-rose-900">
+                                        <template x-for="c in r.dimension_breakdown.top_unsupported_claims" :key="c">
+                                            <li x-text="c"></li>
+                                        </template>
+                                    </ul>
+                                </div>
+                            </template>
+                            <div class="text-[9px] text-surface-400 font-mono">
+                                judge_model=<span x-text="r.judge_model || '—'"></span>
+                                · skipped=<span x-text="r.dimension_breakdown?.skipped_cases ?? 0"></span>
+                                · refusal_rate=<span x-text="((r.correct_refusal_rate||0)*100).toFixed(0)+'%'"></span>
+                                · fp_rate=<span x-text="((r.false_positive_rate||0)*100).toFixed(0)+'%'"></span>
+                                · created=<span x-text="r.created_at?.replace('T',' ').substring(0,16) || '—'"></span>
+                            </div>
                         </div>
                     </div>
                 </template>
@@ -136,6 +197,16 @@
 <script>
 function harnessPage(){return{
     goldCases:[],evalRuns:[],agents:[],releases:[],showGoldForm:false,showRunForm:false,running:false,
+    expandedEval: null,
+    toggleEval(r){ this.expandedEval = (this.expandedEval === r.id) ? null : r.id; },
+    fmtDim(v){ return (v == null) ? '·' : Number(v).toFixed(1); },
+    dimColor(v){
+        if (v == null) return 'text-surface-400';
+        if (v >= 4) return 'text-emerald-600 font-bold';
+        if (v >= 3) return 'text-brand-600';
+        if (v >= 2) return 'text-amber-600';
+        return 'text-rose-600 font-bold';
+    },
     // Form estendido — Golden Dataset enriquecido
     goldForm:{
         input_text:'', expected_output:'',
@@ -164,7 +235,21 @@ function harnessPage(){return{
     redFlagsCount(c){ return this.parseRedFlags(c).length; },
     async load(){
         try{this.goldCases=(await api.get('/api/v1/gold-cases')).cases||[]}catch{}
-        try{this.evalRuns=(await api.get('/api/v1/eval-runs')).runs||[]}catch{}
+        try{
+            const runs = (await api.get('/api/v1/eval-runs')).runs||[];
+            // Defensivo: backend ja parseia, mas tolera caso receba string crua.
+            for (const r of runs) {
+                if (typeof r.dimension_breakdown === 'string') {
+                    try { r.dimension_breakdown = JSON.parse(r.dimension_breakdown); }
+                    catch { r.dimension_breakdown = {}; }
+                }
+                if (typeof r.details === 'string') {
+                    try { r.details = JSON.parse(r.details); }
+                    catch { r.details = []; }
+                }
+            }
+            this.evalRuns = runs;
+        }catch{}
         try{this.agents=(await api.get('/api/v1/agents')).agents||[]}catch{}
         try{this.releases=(await api.get('/api/v1/releases')).releases||[]}catch{}
     },
