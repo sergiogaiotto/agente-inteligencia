@@ -15,8 +15,9 @@ PAGES = {
     "/mesh": {"template":"pages/mesh.html","title":"AI Mesh","section":"mesh"},
     "/mcp": {"template":"pages/tools.html","title":"MCP","section":"tools"},
     "/rag": {"template":"pages/evidence.html","title":"RAG — Base de Conhecimento","section":"evidence"},
-    "/harness": {"template":"pages/harness.html","title":"Harness","section":"harness"},
+    "/harness": {"template":"pages/harness.html","title":"Avaliação","section":"harness"},
     "/releases": {"template":"pages/releases.html","title":"Releases","section":"releases"},
+    "/quality": {"template":"pages/quality.html","title":"Qualidade","section":"quality"},
     "/observability": {"template":"pages/observability.html","title":"Observabilidade","section":"observability"},
     "/history": {"template":"pages/history.html","title":"Histórico","section":"history"},
     "/settings": {"template":"pages/settings.html","title":"Configurações","section":"settings"},
@@ -95,6 +96,8 @@ async def pg_rag(r: Request): return await _render(r, "/rag")
 async def pg_harness(r: Request): return await _render(r, "/harness")
 @router.get("/releases", response_class=HTMLResponse)
 async def pg_releases(r: Request): return await _render(r, "/releases")
+@router.get("/quality", response_class=HTMLResponse)
+async def pg_quality(r: Request): return await _render(r, "/quality")
 @router.get("/observability", response_class=HTMLResponse)
 async def pg_observability(r: Request): return await _render(r, "/observability")
 @router.get("/history", response_class=HTMLResponse)

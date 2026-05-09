@@ -1,0 +1,222 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<div x-data="qualityPage()" x-init="load()">
+    <p class="text-[12px] text-surface-400 mb-4">
+        Verificação multi-dimensional (§14.2) — judge contra 4 dimensões + ContractValidator. Lê de <code class="text-[10px] bg-surface-100 px-1 rounded">verifications</code> table.
+    </p>
+
+    <!-- ─── Stats top cards ─── -->
+    <div class="flex items-center gap-3 mb-3">
+        <span class="text-[11px] text-surface-400">Janela:</span>
+        <template x-for="w in ['24h','7d','30d','all']" :key="w">
+            <button @click="window=w; loadStats()"
+                class="rounded-full px-3 py-1 text-[11px] font-medium transition-colors"
+                :class="window===w ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'"
+                x-text="w"></button>
+        </template>
+    </div>
+
+    <div class="grid grid-cols-2 lg:grid-cols-6 gap-2 mb-4">
+        <div class="rounded-lg border border-surface-200 bg-white px-3 py-2">
+            <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Total</div>
+            <div class="text-[18px] font-bold text-brand-900" x-text="stats.total ?? '—'"></div>
+        </div>
+        <div class="rounded-lg border border-surface-200 bg-white px-3 py-2">
+            <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Aprovação (ok)</div>
+            <div class="text-[18px] font-bold" :class="okRate >= 0.8 ? 'text-emerald-600' : okRate >= 0.5 ? 'text-amber-600' : 'text-rose-600'"
+                x-text="(okRate*100).toFixed(1) + '%'"></div>
+        </div>
+        <div class="rounded-lg border border-surface-200 bg-white px-3 py-2" title="Média de factuality 0-5">
+            <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Factuality</div>
+            <div class="text-[18px] font-bold text-brand-900" x-text="fmt1(stats.avg_factuality)"></div>
+        </div>
+        <div class="rounded-lg border border-surface-200 bg-white px-3 py-2">
+            <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Completeness</div>
+            <div class="text-[18px] font-bold text-brand-900" x-text="fmt1(stats.avg_completeness)"></div>
+        </div>
+        <div class="rounded-lg border border-surface-200 bg-white px-3 py-2">
+            <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Tone</div>
+            <div class="text-[18px] font-bold text-brand-900" x-text="fmt1(stats.avg_tone)"></div>
+        </div>
+        <div class="rounded-lg border border-surface-200 bg-white px-3 py-2" title="Verificações com ao menos 1 unsupported_claim">
+            <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">⚠ c/ alucinação</div>
+            <div class="text-[18px] font-bold text-rose-600" x-text="stats.with_unsupported ?? '—'"></div>
+        </div>
+    </div>
+
+    <!-- ─── Distribuição por modelo + profile ─── -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+        <div class="rounded-lg border border-surface-200 bg-white p-3">
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-2">Por judge_model</div>
+            <template x-if="byModel.length === 0"><div class="text-[11px] text-surface-400">—</div></template>
+            <template x-for="m in byModel" :key="m.judge_model||'?'">
+                <div class="flex items-center justify-between text-[11px] py-0.5">
+                    <span class="text-brand-900 font-mono" x-text="m.judge_model || '(null)'"></span>
+                    <span class="text-surface-400" x-text="m.n + ' calls'"></span>
+                </div>
+            </template>
+        </div>
+        <div class="rounded-lg border border-surface-200 bg-white p-3">
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-2">Por profile</div>
+            <template x-if="byProfile.length === 0"><div class="text-[11px] text-surface-400">—</div></template>
+            <template x-for="p in byProfile" :key="p.profile||'?'">
+                <div class="flex items-center justify-between text-[11px] py-0.5">
+                    <span class="text-brand-900 font-mono" x-text="p.profile || '(null)'"></span>
+                    <span class="text-surface-400" x-text="p.n"></span>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ─── Lista paginada com filtros ─── -->
+    <div class="rounded-xl border border-surface-200 bg-white">
+        <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3 flex-wrap gap-2">
+            <h2 class="text-[13px] font-semibold text-brand-900">Verificações recentes</h2>
+            <div class="flex items-center gap-2 flex-wrap">
+                <label class="flex items-center gap-1 text-[10px] text-surface-500">
+                    <input type="checkbox" x-model="filterOkOnly" @change="page=0; load()" class="w-3 h-3">
+                    apenas ok=true
+                </label>
+                <input type="number" x-model.number="filterMinFactuality" @change="page=0; load()" min="0" max="5" step="0.5"
+                    placeholder="min factuality"
+                    class="w-28 rounded border border-surface-200 px-1.5 py-0.5 text-[10px] outline-none">
+                <select x-model="filterProfile" @change="page=0; load()"
+                    class="rounded border border-surface-200 px-1.5 py-0.5 text-[10px] outline-none">
+                    <option value="">profile: todos</option>
+                    <option value="fast">fast</option>
+                    <option value="standard">standard</option>
+                    <option value="rigorous">rigorous</option>
+                </select>
+                <select x-model.number="pageSize" @change="page=0; load()"
+                    class="rounded border border-surface-200 px-1.5 py-0.5 text-[10px] outline-none">
+                    <option value="10">10</option><option value="30">30</option>
+                    <option value="50">50</option><option value="1000">tudo</option>
+                </select>
+            </div>
+        </div>
+        <template x-if="items.length === 0">
+            <div class="px-5 py-8 text-center text-[12px] text-surface-400">
+                Nenhuma verificação encontrada. Habilite <code>VERIFIER_V2_ENABLED=true</code> e gere interações no
+                <a href="/workspace" class="text-brand-500 font-medium">Workspace</a>.
+            </div>
+        </template>
+        <div class="divide-y divide-surface-50 max-h-[55vh] overflow-y-auto scrollbar-thin">
+            <template x-for="v in items" :key="v.id">
+                <div>
+                    <div @click="toggle(v)" class="group flex items-center gap-3 px-4 py-2 hover:bg-surface-50/50 cursor-pointer">
+                        <span class="rounded-full px-2 py-0.5 text-[9px] font-bold text-white shrink-0"
+                            :class="v.ok ? 'bg-emerald-500' : 'bg-rose-500'"
+                            x-text="v.ok ? 'OK' : 'FAIL'"></span>
+                        <span class="text-[10px] text-surface-400 font-mono shrink-0" x-text="(v.confidence*100).toFixed(0)+'%'"></span>
+                        <div class="flex items-center gap-1 text-[10px]">
+                            <span :class="dimColor(v.factuality_score)" x-text="'F'+fmtDim(v.factuality_score)" title="factuality"></span>
+                            <span :class="dimColor(v.completeness_score)" x-text="'C'+fmtDim(v.completeness_score)" title="completeness"></span>
+                            <span :class="dimColor(v.tone_score)" x-text="'T'+fmtDim(v.tone_score)" title="tone"></span>
+                            <span :class="v.safety_score === 1 ? 'text-emerald-600' : v.safety_score === 0 ? 'text-rose-600' : 'text-surface-400'"
+                                x-text="'S'+(v.safety_score ?? '·')" title="safety"></span>
+                        </div>
+                        <template x-if="!v.contract_compliant">
+                            <span class="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700" title="contract_compliant=false">contract</span>
+                        </template>
+                        <template x-if="(v.unsupported_claims || []).length > 0">
+                            <span class="rounded bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold text-rose-700"
+                                :title="(v.unsupported_claims||[]).join(' | ')"
+                                x-text="'⚑'+v.unsupported_claims.length"></span>
+                        </template>
+                        <span class="text-[10px] text-surface-400 font-mono ml-auto shrink-0" x-text="v.judge_model || '—'"></span>
+                        <span class="text-[10px] text-surface-400 shrink-0" x-text="v.profile || '—'"></span>
+                        <span class="text-[10px] text-surface-400 shrink-0" x-text="(v.duration_ms||0)+'ms'"></span>
+                        <svg class="w-3 h-3 text-surface-300 shrink-0 transition-transform" :class="expanded === v.id ? 'rotate-180':''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                    </div>
+                    <div x-show="expanded === v.id" x-transition.duration.150ms class="border-t border-surface-100 bg-surface-50/50 px-4 py-3">
+                        <div class="ml-2 space-y-2 text-[11px]">
+                            <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                                <div><div class="text-[9px] text-surface-400">factuality</div><div class="font-bold" :class="dimColor(v.factuality_score)" x-text="fmtDim(v.factuality_score)"></div><div class="text-[10px] text-surface-500" x-text="v.factuality_reason || '—'"></div></div>
+                                <div><div class="text-[9px] text-surface-400">completeness</div><div class="font-bold" :class="dimColor(v.completeness_score)" x-text="fmtDim(v.completeness_score)"></div><div class="text-[10px] text-surface-500" x-text="v.completeness_reason || '—'"></div></div>
+                                <div><div class="text-[9px] text-surface-400">tone_adherence</div><div class="font-bold" :class="dimColor(v.tone_score)" x-text="fmtDim(v.tone_score)"></div><div class="text-[10px] text-surface-500" x-text="v.tone_reason || '—'"></div></div>
+                                <div><div class="text-[9px] text-surface-400">safety</div><div class="font-bold" :class="v.safety_score===1?'text-emerald-600':'text-rose-600'" x-text="v.safety_score ?? '—'"></div><div class="text-[10px] text-surface-500" x-text="v.safety_reason || '—'"></div></div>
+                            </div>
+                            <template x-if="(v.unsupported_claims||[]).length > 0">
+                                <div class="rounded border border-rose-200 bg-rose-50/50 p-2">
+                                    <div class="text-[10px] font-bold text-rose-700 mb-1">⚑ unsupported_claims (alucinação suspeita):</div>
+                                    <ul class="list-disc pl-4 space-y-0.5 text-[11px] text-rose-900">
+                                        <template x-for="c in v.unsupported_claims" :key="c"><li x-text="c"></li></template>
+                                    </ul>
+                                </div>
+                            </template>
+                            <template x-if="(v.contract_errors||[]).length > 0">
+                                <div class="rounded border border-amber-200 bg-amber-50/50 p-2">
+                                    <div class="text-[10px] font-bold text-amber-700 mb-1">contract_errors:</div>
+                                    <ul class="list-disc pl-4 space-y-0.5 text-[11px] text-amber-900">
+                                        <template x-for="e in v.contract_errors" :key="e"><li x-text="e"></li></template>
+                                    </ul>
+                                </div>
+                            </template>
+                            <div class="text-[9px] text-surface-400 font-mono pt-1">
+                                interaction_id=<span x-text="v.interaction_id || '—'"></span>
+                                · turn_id=<span x-text="v.turn_id || '—'"></span>
+                                · created=<span x-text="v.created_at?.replace('T',' ').substring(0,16) || '—'"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <div x-show="items.length > 0 || page > 0" class="flex items-center justify-between border-t border-surface-100 px-4 py-2">
+            <button @click="if(page>0){page--; load()}" :disabled="page===0"
+                class="rounded border border-surface-200 px-2.5 py-1 text-[10px] text-surface-500 hover:bg-surface-50 disabled:opacity-30">Anterior</button>
+            <span class="text-[9px] text-surface-400">
+                Página <span x-text="page+1"></span> · <span x-text="total + ' total'"></span>
+            </span>
+            <button @click="if(items.length>=pageSize){page++; load()}" :disabled="items.length<pageSize"
+                class="rounded border border-surface-200 px-2.5 py-1 text-[10px] text-surface-500 hover:bg-surface-50 disabled:opacity-30">Próxima</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function qualityPage(){return{
+    items: [], total: 0, page: 0, pageSize: 30, expanded: null,
+    stats: {}, byModel: [], byProfile: [], window: '24h',
+    filterOkOnly: false, filterMinFactuality: null, filterProfile: '',
+    get okRate() {
+        const t = this.stats.total || 0;
+        const ok = this.stats.ok_count || 0;
+        return t > 0 ? ok/t : 0;
+    },
+    fmt1(v) { return (v == null) ? '—' : Number(v).toFixed(1); },
+    fmtDim(v) { return (v == null) ? '·' : Number(v).toFixed(1); },
+    dimColor(v) {
+        if (v == null) return 'text-surface-400';
+        if (v >= 4) return 'text-emerald-600 font-bold';
+        if (v >= 3) return 'text-brand-600';
+        if (v >= 2) return 'text-amber-600';
+        return 'text-rose-600';
+    },
+    toggle(v) { this.expanded = (this.expanded === v.id) ? null : v.id; },
+    async load() {
+        const params = new URLSearchParams();
+        params.set('limit', this.pageSize);
+        params.set('offset', this.page * this.pageSize);
+        if (this.filterOkOnly) params.set('ok_only', 'true');
+        if (this.filterMinFactuality != null && this.filterMinFactuality !== '') params.set('min_factuality', this.filterMinFactuality);
+        if (this.filterProfile) params.set('profile', this.filterProfile);
+        try {
+            const r = await api.get('/api/v1/dashboard/verifications?' + params.toString());
+            this.items = r.items || [];
+            this.total = r.total || 0;
+        } catch { this.items = []; this.total = 0; }
+        await this.loadStats();
+    },
+    async loadStats() {
+        try {
+            const r = await api.get('/api/v1/dashboard/verifications/stats?window=' + this.window);
+            this.stats = r.stats || {};
+            this.byModel = r.by_judge_model || [];
+            this.byProfile = r.by_profile || [];
+        } catch { this.stats = {}; this.byModel = []; this.byProfile = []; }
+    },
+}}
+</script>
+{% endblock %}

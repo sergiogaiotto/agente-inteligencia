@@ -361,6 +361,142 @@ async def module_activity(limit: int = 20, offset: int = 0):
     page = items[offset:offset + limit]
     return {"items": page, "total": total, "limit": limit, "offset": offset}
 
+
+# ─── Verifier — visualização da tabela `verifications` (§14.2) ──────
+@router.get("/dashboard/verifications/stats")
+async def verifications_stats(window: str = "24h"):
+    """Agregados para os cards do topo da página /quality.
+
+    `window`: "24h" | "7d" | "30d" | "all"
+    """
+    from app.core.database import _get_pool
+    pool = _get_pool()
+    where = ""
+    if window == "24h":
+        where = "WHERE created_at > now() - interval '24 hours'"
+    elif window == "7d":
+        where = "WHERE created_at > now() - interval '7 days'"
+    elif window == "30d":
+        where = "WHERE created_at > now() - interval '30 days'"
+    async with pool.acquire() as con:
+        row = await con.fetchrow(
+            f"""
+            SELECT
+              count(*)::int                            AS total,
+              count(*) FILTER (WHERE ok)::int          AS ok_count,
+              avg(factuality_score)::float             AS avg_factuality,
+              avg(completeness_score)::float           AS avg_completeness,
+              avg(tone_score)::float                   AS avg_tone,
+              avg(safety_score)::float                 AS avg_safety,
+              avg(confidence)::float                   AS avg_confidence,
+              count(*) FILTER (WHERE NOT contract_compliant)::int AS contract_failures,
+              count(*) FILTER (WHERE unsupported_claims != '[]' AND unsupported_claims IS NOT NULL)::int AS with_unsupported,
+              avg(duration_ms)::float                  AS avg_duration_ms
+            FROM verifications
+            {where}
+            """
+        )
+        # Distribuição por judge_model
+        models = await con.fetch(
+            f"""
+            SELECT judge_model, count(*)::int AS n
+            FROM verifications
+            {where}
+            GROUP BY judge_model
+            ORDER BY n DESC
+            LIMIT 10
+            """
+        )
+        # Distribuição por profile
+        profiles = await con.fetch(
+            f"""
+            SELECT profile, count(*)::int AS n
+            FROM verifications
+            {where}
+            GROUP BY profile
+            ORDER BY n DESC
+            """
+        )
+
+    stats = dict(row) if row else {}
+    return {
+        "window": window,
+        "stats": {k: (round(v, 3) if isinstance(v, float) else v) for k, v in stats.items()},
+        "by_judge_model": [dict(r) for r in models],
+        "by_profile": [dict(r) for r in profiles],
+    }
+
+
+@router.get("/dashboard/verifications")
+async def list_verifications(
+    limit: int = 30,
+    offset: int = 0,
+    ok_only: bool = False,
+    min_factuality: Optional[float] = None,
+    min_completeness: Optional[float] = None,
+    profile: Optional[str] = None,
+    judge_model: Optional[str] = None,
+):
+    """Lista paginada de verificações com filtros."""
+    from app.core.database import _get_pool
+    limit = max(1, min(int(limit), 1000))
+    offset = max(0, int(offset))
+    where = []
+    args: list = []
+    if ok_only:
+        where.append("ok = TRUE")
+    if min_factuality is not None:
+        args.append(min_factuality)
+        where.append(f"factuality_score >= ${len(args)}")
+    if min_completeness is not None:
+        args.append(min_completeness)
+        where.append(f"completeness_score >= ${len(args)}")
+    if profile:
+        args.append(profile)
+        where.append(f"profile = ${len(args)}")
+    if judge_model:
+        args.append(judge_model)
+        where.append(f"judge_model = ${len(args)}")
+    where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        total = await con.fetchval(f"SELECT count(*) FROM verifications {where_clause}", *args) or 0
+        args_with_paging = list(args) + [limit, offset]
+        rows = await con.fetch(
+            f"""
+            SELECT id, turn_id, interaction_id,
+                   factuality_score, factuality_reason,
+                   completeness_score, completeness_reason,
+                   tone_score, tone_reason,
+                   safety_score, safety_reason,
+                   contract_compliant, contract_errors,
+                   ok, confidence, unsupported_claims,
+                   judge_model, profile, duration_ms, created_at
+            FROM verifications
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ${len(args)+1} OFFSET ${len(args)+2}
+            """,
+            *args_with_paging,
+        )
+        items = []
+        for r in rows:
+            d = dict(r)
+            # Decodifica JSONs em strings
+            try:
+                d["contract_errors"] = json.loads(d.get("contract_errors") or "[]")
+            except Exception:
+                d["contract_errors"] = []
+            try:
+                d["unsupported_claims"] = json.loads(d.get("unsupported_claims") or "[]")
+            except Exception:
+                d["unsupported_claims"] = []
+            if d.get("created_at"):
+                d["created_at"] = d["created_at"].isoformat()
+            items.append(d)
+        return {"items": items, "total": total, "limit": limit, "offset": offset}
+
 # ═══ Releases §18 ═══
 @router.get("/releases")
 async def list_releases(environment: str = None, limit: int = 20):
