@@ -1,6 +1,6 @@
 {% extends "layouts/base.html" %}
 {% block content %}
-<div x-data="qualityPage()" x-init="load()">
+<div x-data="qualityPage()" x-init="load(); startPolling()">
     <p class="text-[12px] text-surface-400 mb-4">
         Verificação multi-dimensional (§14.2) — judge contra 4 dimensões + ContractValidator. Lê de <code class="text-[10px] bg-surface-100 px-1 rounded">verifications</code> table.
     </p>
@@ -43,6 +43,60 @@
             <div class="text-[18px] font-bold text-rose-600" x-text="stats.with_unsupported ?? '—'"></div>
         </div>
     </div>
+
+    <!-- ─── Production Sample (async dispatcher) ─── -->
+    <div x-show="asyncStats.config?.enabled" x-cloak class="rounded-xl border border-surface-200 bg-white p-3 mb-4">
+        <div class="flex items-center justify-between mb-2">
+            <h3 class="text-[12px] font-semibold text-brand-900">Production Sample</h3>
+            <div class="flex items-center gap-3 text-[10px] text-surface-500">
+                <span>rate:
+                    <span class="font-mono font-bold"
+                        :class="(asyncStats.config?.sample_rate||0) > 0.5 ? 'text-amber-600' : 'text-brand-700'"
+                        x-text="((asyncStats.config?.sample_rate||0)*100).toFixed(1)+'%'"></span></span>
+                <span>cap: <span class="font-mono" x-text="asyncStats.config?.max_concurrent_jobs ?? '—'"></span></span>
+                <button @click="loadAsyncStats()" class="text-brand-500 hover:text-brand-700">⟳ refresh</button>
+            </div>
+        </div>
+        <div class="grid grid-cols-2 lg:grid-cols-5 gap-2">
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="Tasks rodando agora — judge em andamento">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Pending</div>
+                <div class="text-[16px] font-bold"
+                    :class="(asyncStats.stats?.pending||0) > 0 ? 'text-amber-600' : 'text-surface-400'"
+                    x-text="asyncStats.stats?.pending ?? 0"></div>
+            </div>
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="Total de samples disparados (não inclui drops)">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Sampled</div>
+                <div class="text-[16px] font-bold text-brand-700" x-text="asyncStats.stats?.sampled ?? 0"></div>
+            </div>
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="Tasks concluídas com sucesso (judge respondeu)">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Completed</div>
+                <div class="text-[16px] font-bold text-emerald-600" x-text="asyncStats.stats?.completed ?? 0"></div>
+            </div>
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="Tasks que terminaram com exceção (LLM provider, parse, etc)">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Failed</div>
+                <div class="text-[16px] font-bold"
+                    :class="(asyncStats.stats?.failed||0) > 0 ? 'text-rose-600' : 'text-surface-400'"
+                    x-text="asyncStats.stats?.failed ?? 0"></div>
+            </div>
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="Samples descartados — set de tasks atingiu max_concurrent_jobs">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Dropped</div>
+                <div class="text-[16px] font-bold"
+                    :class="(asyncStats.stats?.dropped||0) > 0 ? 'text-amber-600' : 'text-surface-400'"
+                    x-text="asyncStats.stats?.dropped ?? 0"></div>
+            </div>
+        </div>
+        <div class="mt-2 text-[9px] text-surface-400 font-mono">
+            Contadores in-process — cada worker tem os seus. Cross-worker requer Prometheus/Redis (futuro).
+        </div>
+    </div>
+    <template x-if="asyncStats.config && asyncStats.config.enabled === false">
+        <div class="rounded-xl border border-surface-100 bg-surface-50/50 p-3 mb-4 text-[11px] text-surface-500">
+            <strong class="text-brand-900">Production sample async</strong> está desabilitado.
+            Habilite com <code class="text-[10px] bg-surface-100 px-1 rounded">VERIFIER_PRODUCTION_ASYNC=true</code>
+            (e <code class="text-[10px] bg-surface-100 px-1 rounded">VERIFIER_V2_ENABLED=true</code>)
+            para amostrar interações reais sem bloquear a resposta.
+        </div>
+    </template>
 
     <!-- ─── Distribuição por modelo + profile ─── -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
@@ -180,6 +234,9 @@ function qualityPage(){return{
     items: [], total: 0, page: 0, pageSize: 30, expanded: null,
     stats: {}, byModel: [], byProfile: [], window: '24h',
     filterOkOnly: false, filterMinFactuality: null, filterProfile: '',
+    // Production sample async (Onda 3)
+    asyncStats: { stats: {}, config: {} },
+    _pollHandle: null,
     get okRate() {
         const t = this.stats.total || 0;
         const ok = this.stats.ok_count || 0;
@@ -216,6 +273,21 @@ function qualityPage(){return{
             this.byModel = r.by_judge_model || [];
             this.byProfile = r.by_profile || [];
         } catch { this.stats = {}; this.byModel = []; this.byProfile = []; }
+        // Async stats vai junto: mesma cadência do main load.
+        await this.loadAsyncStats();
+    },
+    async loadAsyncStats() {
+        try {
+            const r = await api.get('/api/v1/dashboard/verifier/async-stats');
+            this.asyncStats = (r && typeof r === 'object') ? r : { stats: {}, config: {} };
+        } catch {
+            this.asyncStats = { stats: {}, config: {} };
+        }
+    },
+    startPolling() {
+        // Refresh leve do card a cada 10s (não recarrega a lista paginada).
+        if (this._pollHandle) return;
+        this._pollHandle = setInterval(() => this.loadAsyncStats(), 10000);
     },
 }}
 </script>

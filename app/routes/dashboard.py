@@ -571,6 +571,29 @@ async def list_eval_runs(release_id: str = None, limit: int = 20):
         _parse_json_field(r, "details", [])
     return {"runs": runs}
 
+@router.get("/verifier/async-stats")
+async def verifier_async_stats():
+    """Snapshot dos counters do dispatcher async + config corrente.
+
+    Cross-worker: cada worker tem contadores próprios (in-process).
+    Dashboard mostra os do worker que respondeu o GET — operador deve
+    ler como amostra, não verdade absoluta em deploys multi-worker.
+    """
+    # Imports lazy: o módulo do dispatcher tem state asyncio que não deve
+    # ser tocado no import do router (que carrega antes do lifespan).
+    from app.verifier.async_dispatcher import stats_snapshot
+    from app.core.config import get_settings as _gs
+    s = _gs()
+    return {
+        "stats": stats_snapshot(),
+        "config": {
+            "enabled": bool(s.verifier_v2_enabled and s.verifier_production_async),
+            "sample_rate": s.verifier_production_sample_rate,
+            "max_concurrent_jobs": s.verifier_max_concurrent_jobs,
+        },
+    }
+
+
 @router.post("/eval-runs/execute")
 async def run_harness(data: RunEvalRequest):
     """Executa harness de avaliação contra dataset gold §9.5."""
