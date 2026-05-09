@@ -105,6 +105,21 @@ class Settings(BaseSettings):
     prompt_leak_guard_enabled: bool = True
     prompt_leak_preview_chars: int = 60
 
+    # ── AI Gateway (Onda 4b — LiteLLM proxy) ──
+    # Quando True, todos os providers (Azure/OpenAI/Maritaca/Ollama) e o embedder
+    # passam a chamar o LiteLLM em llm_gateway_url em vez do upstream direto.
+    # O gateway centraliza: rate-limit, fallback automático, logging, custos.
+    # Default OFF para zero risco em quem não optar.
+    llm_gateway_enabled: bool = False
+    llm_gateway_url: str = "http://litellm:4000"
+    # Master key do gateway (LiteLLM exige). Gerada com `openssl rand -hex 24` e
+    # guardada no .env (NUNCA commitada). Sem ela, providers caem em modo direto.
+    llm_gateway_master_key: str = ""
+    # Defesa em profundidade: se gateway 5xx ou unreachable e gateway_enabled=true,
+    # provider tenta upstream direto antes de propagar erro. Custo: +1 retry de
+    # latência. Desligar em prod se quiser falha rápida.
+    llm_gateway_fallback_to_direct: bool = True
+
     # ── RAG v2 (Onda 3 — Qdrant + embeddings reais) ──
     # Toggle global. Quando False, retriever cai no fallback antigo (busca textual
     # em metadados de knowledge_sources). Quando True E há chunks ingeridos, usa

@@ -21,7 +21,29 @@ _embedder = None  # singleton
 
 
 def _build_embedder():
+    """Constroi o embedder. Onda 4b: prefere o gateway LiteLLM quando ativo.
+
+    - Gateway mode: usa OpenAIEmbeddings apontando para LiteLLM com model
+      'azure/text-embedding-3-small' (definido no config.yaml). Gateway
+      cuida de chave/endpoint/api_version reais.
+    - Direct mode (default): AzureOpenAIEmbeddings direto, comportamento original.
+    """
     settings = get_settings()
+
+    if settings.llm_gateway_enabled and settings.llm_gateway_master_key:
+        try:
+            from langchain_openai import OpenAIEmbeddings
+            return OpenAIEmbeddings(
+                model=f"azure/{settings.azure_openai_embeddings_deployment}",
+                api_key=settings.llm_gateway_master_key,
+                base_url=f"{settings.llm_gateway_url.rstrip('/')}/v1",
+                # check_embedding_ctx_length=False: gateway cuida do truncate.
+                check_embedding_ctx_length=False,
+            )
+        except Exception as e:
+            logger.warning(f"Falha ao instanciar embedder via gateway: {e}; tentando direto")
+            # Cai no path direto abaixo
+
     if not (settings.azure_openai_api_key and settings.azure_openai_endpoint):
         logger.warning("Azure OpenAI não configurado; embedder retornará None.")
         return None

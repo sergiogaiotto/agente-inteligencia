@@ -333,9 +333,109 @@ ingest.text  (atributos: source.id, chunks.count, chunks.tokens_total)
 
 ---
 
-## 10. Próximas ondas
+## 10. AI Gateway com LiteLLM (Onda 4b)
+
+Centraliza **todas** as chamadas LLM da aplicação num proxy único:
+- Rate-limit nativo por modelo
+- Fallback automático Azure→OpenAI
+- Logging+custo unificado (LangFuse callback)
+- Adicionar novo provider sem redeploy do app (só edita yaml + restart container)
+
+### 10.1. Componentes
+
+| | Imagem / Localização |
+|---|---|
+| Gateway | `ghcr.io/berriai/litellm:main-stable` |
+| Configuração | `infra/litellm/config.yaml` (versionado) |
+| Master key | env var `LLM_GATEWAY_MASTER_KEY` no `.env` (NUNCA commitada) |
+| Porta | `127.0.0.1:4000` (loopback, debug local) |
+| Provider routing | prefixo no model_name: `azure/gpt-4o`, `openai/gpt-4o`, `maritaca/sabia-3`, `ollama/llama3.1` |
+
+### 10.2. Ativar
+
+```bash
+# 1. Gerar master key (uma vez)
+echo "LLM_GATEWAY_MASTER_KEY=sk-litellm-$(openssl rand -hex 24)" >> .env
+
+# 2. Subir o gateway (sempre, mesmo desligado)
+docker compose up -d litellm
+
+# 3. Ligar no app via .env
+echo "LLM_GATEWAY_ENABLED=true" >> .env
+
+# 4. Restart do app para pegar a flag
+docker compose up -d --force-recreate app
+
+# 5. Verificar
+curl -H "Authorization: Bearer $LLM_GATEWAY_MASTER_KEY" http://localhost:4000/v1/models | jq
+```
+
+### 10.3. Smoke test direto no gateway
+
+```bash
+MK=$(grep ^LLM_GATEWAY_MASTER_KEY .env | cut -d= -f2)
+curl -X POST http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $MK" -H "Content-Type: application/json" \
+  -d '{"model":"azure/gpt-4o","messages":[{"role":"user","content":"diga ok"}],"max_tokens":5}'
+```
+
+### 10.4. Adicionar novo provider/modelo
+
+Edite `infra/litellm/config.yaml`, adicione um item em `model_list`:
+
+```yaml
+- model_name: anthropic/claude-3-5-sonnet
+  litellm_params:
+    model: anthropic/claude-3-5-sonnet-20241022
+    api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+Adicione a env var no compose (passthrough), restart do container:
+
+```bash
+docker compose restart litellm
+```
+
+App não precisa redeploy — basta o agent ter `llm_provider="anthropic"` no banco
+(e existir uma classe `AnthropicProvider` que monta `model="anthropic/<name>"`).
+
+### 10.5. Defesa em profundidade
+
+- `LLM_GATEWAY_FALLBACK_TO_DIRECT=true` (default): se gateway 5xx ou unreachable,
+  o provider tenta upstream direto antes de propagar erro. Mais resilência, +1
+  retry de latência no failure path.
+- `LLM_GATEWAY_FALLBACK_TO_DIRECT=false`: falha rápida, mais determinístico.
+  Útil em produção depois que o gateway está provado estável.
+
+### 10.6. Observabilidade
+
+Quando ligado, cada chamada LLM aparece em **dois** lugares:
+- **LangFuse**: callback nativo do gateway (basta `LANGFUSE_PUBLIC_KEY` no .env)
+- **LangChain wraps** continuam emitindo trace pro nível superior (chain inteira)
+
+São níveis complementares: LangFuse via gateway = visão por LLM call; LangChain
+wrap = visão por chain/agent. Ambos úteis.
+
+### 10.7. Reverter
+
+```bash
+# Desligar uso pelo app (mantém gateway rodando)
+sed -i 's/^LLM_GATEWAY_ENABLED=true/LLM_GATEWAY_ENABLED=false/' .env
+docker compose up -d --force-recreate app
+
+# Ou desligar gateway por completo
+docker compose stop litellm
+```
+
+App volta a chamar upstream direto sem perda de funcionalidade.
+
+---
+
+## 11. Próximas ondas
 
 - **Onda 1** ✅ segurança (rate-limit, PII redaction, secrets cifrados, prompt guard)
 - **Onda 2** ✅ observabilidade (OTel + Tempo + Loki + Grafana) — seção 8
 - **Onda 3** ✅ RAG real (Qdrant + embeddings + híbrido BM25+vetorial) — seção 9
-- **Onda 4** ⏳ Policy as Code (OPA), AI Gateway, mTLS, Helm chart
+- **Onda 4b** ✅ AI Gateway (LiteLLM) — seção 10
+- **Onda 4a** ⏳ Policy as Code (OPA + Rego policies + PEP em Python)
+- **Onda 4c** ⏳ mTLS + Helm chart (deploy k8s production-grade)

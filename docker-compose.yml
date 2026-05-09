@@ -35,6 +35,9 @@ services:
       # ativo, o app exporta traces para tempo:4317. Sem profile=full, OTLP exporter
       # falha em conectar mas app continua (graceful degradation em init_otel).
       OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      # Onda 4b: AI Gateway. App fala com LiteLLM em vez do upstream direto quando
+      # LLM_GATEWAY_ENABLED=true (lido do .env). URL aqui é o nome interno do compose.
+      LLM_GATEWAY_URL: http://litellm:4000
     ports:
       - "${APP_PORT_HOST:-7000}:7000"
     depends_on:
@@ -43,6 +46,10 @@ services:
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_started
+      # Onda 4b: app depende de litellm started (não healthy), pois o app pode
+      # subir antes do gateway ficar pronto e segue funcionando em modo direto.
+      litellm:
         condition: service_started
     networks:
       - aimesh
@@ -139,6 +146,49 @@ services:
     # Em produção, fechar de novo (Qdrant é alcançado via rede `aimesh` pelo app).
     ports:
       - "127.0.0.1:6333:6333"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── LiteLLM (AI Gateway — Onda 4b) ──────────────────────────────
+  # Proxy OpenAI-compatible que roteia para Azure / OpenAI / Maritaca / Ollama.
+  # Sobe sempre, mas só é usado pelo app se LLM_GATEWAY_ENABLED=true.
+  # Configuração em infra/litellm/config.yaml (montado read-only).
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: agente_litellm
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
+    environment:
+      LITELLM_MASTER_KEY: ${LLM_GATEWAY_MASTER_KEY:-sk-disabled}
+      LITELLM_LOG: WARN
+      # Repassa keys upstream — o config.yaml referencia ${VAR} via os.environ/.
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-02-15-preview}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MARITACA_API_KEY: ${MARITACA_API_KEY:-}
+      OLLAMA_API_BASE: ${OLLAMA_API_URL:-http://ollama:11434}
+      # LangFuse: se as keys estiverem populadas, gateway envia trace de cada call.
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+    volumes:
+      - ./infra/litellm/config.yaml:/app/config.yaml:ro
+    networks:
+      - aimesh
+    ports:
+      # Exposta em loopback para debug/admin local. Em produção: fechar.
+      - "127.0.0.1:4000:4000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/health/liveliness"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    mem_limit: 512m
     logging:
       driver: json-file
       options:

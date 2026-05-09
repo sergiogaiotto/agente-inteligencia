@@ -1,0 +1,86 @@
+# ════════════════════════════════════════════════════════════════
+# LiteLLM Proxy — AI Gateway (Onda 4b)
+#
+# Centraliza roteamento, fallback, rate-limit e tracing de TODAS as
+# chamadas LLM da aplicação.
+#
+# Convenção de model_name (o que o app envia):
+#   azure/<deployment>      → roteia para Azure OpenAI
+#   openai/<model>          → roteia para OpenAI público
+#   maritaca/<model>        → roteia para Maritaca (OpenAI-compatible API)
+#   ollama/<model>          → roteia para Ollama local (OpenAI-compatible API)
+#
+# Para adicionar/trocar um modelo, basta editar este arquivo e fazer:
+#   docker compose restart litellm
+# ════════════════════════════════════════════════════════════════
+
+model_list:
+  # ─── Azure OpenAI ──────────────────────────────────────────────
+  # `base_model` é informativo: permite cost-tracking correto no LangFuse
+  # (preço de gpt-4o é diferente de gpt-4o-mini, etc).
+  - model_name: azure/gpt-4o
+    litellm_params:
+      model: azure/gpt-4o
+      api_base: os.environ/AZURE_OPENAI_ENDPOINT
+      api_key: os.environ/AZURE_OPENAI_API_KEY
+      api_version: os.environ/AZURE_OPENAI_API_VERSION
+    model_info:
+      base_model: azure/gpt-4o
+  - model_name: azure/text-embedding-3-small
+    litellm_params:
+      model: azure/text-embedding-3-small
+      api_base: os.environ/AZURE_OPENAI_ENDPOINT
+      api_key: os.environ/AZURE_OPENAI_API_KEY
+      api_version: os.environ/AZURE_OPENAI_API_VERSION
+    model_info:
+      base_model: azure/text-embedding-3-small
+
+  # ─── OpenAI público ────────────────────────────────────────────
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: openai/gpt-4.1
+    litellm_params:
+      model: gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
+
+  # ─── Maritaca AI (Sabiá) — endpoint OpenAI-compatible ──────────
+  - model_name: maritaca/sabia-3
+    litellm_params:
+      model: openai/sabia-3
+      api_base: https://chat.maritaca.ai/api/v1
+      api_key: os.environ/MARITACA_API_KEY
+  - model_name: maritaca/sabia-4
+    litellm_params:
+      model: openai/sabia-4
+      api_base: https://chat.maritaca.ai/api/v1
+      api_key: os.environ/MARITACA_API_KEY
+
+  # ─── Ollama local — endpoint OpenAI-compatible ─────────────────
+  - model_name: ollama/llama3.1
+    litellm_params:
+      model: ollama/llama3.1
+      api_base: os.environ/OLLAMA_API_BASE
+
+litellm_settings:
+  # Ignora params desconhecidos por modelo (ex: temperature em modelo que não aceita).
+  drop_params: true
+  set_verbose: false
+
+  # Observabilidade: cada call vira span no LangFuse (se as keys estiverem no env).
+  # success_callback: roteado em sucesso. failure_callback: rota em erro/timeout.
+  # Sem as env vars LANGFUSE_*, esses callbacks viram no-op.
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+
+  # Fallback automático: se Azure cair (5xx, timeout), tenta OpenAI público com
+  # mesmo modelo lógico. Aplicado por azure/gpt-4o → openai/gpt-4o.
+  fallbacks:
+    - azure/gpt-4o: ["openai/gpt-4o"]
+
+general_settings:
+  # Master key obrigatório. Configurada via env var no compose.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Nota: `max_request_size_mb` é feature LiteLLM Enterprise. Rate-limit/payload-size
+  # já é coberto pelo middleware do app (Onda 1) e pelo nginx em prod.
