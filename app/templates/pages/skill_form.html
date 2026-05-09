@@ -210,6 +210,61 @@
                             </div>
                         </div>
                     </div>
+                    <!-- ═════ Vincular fontes RAG (Onda 6 Wave 2b) ═════ -->
+                    <!-- Multi-select de knowledge_sources. Mudanças mutam o
+                         bloco fenced YAML em ## Evidence Policy do raw_content. -->
+                    <div class="relative" x-data="{ragDropdown:false}">
+                        <button @click="ragDropdown = !ragDropdown; if (ragDropdown && availableSources.length === 0) loadAvailableSources()"
+                                type="button"
+                                class="inline-flex items-center gap-1 rounded-lg bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
+                                :title="boundSourceIds.length ? 'Skill restrita a ' + boundSourceIds.length + ' fonte(s)' : 'Sem restrição (skill consulta TODAS as fontes autorizadas)'">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
+                            Fontes RAG
+                            <span x-show="boundSourceIds.length > 0"
+                                  class="rounded-full bg-emerald-200 px-1.5 text-[9px] font-bold"
+                                  x-text="boundSourceIds.length"></span>
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        </button>
+                        <div x-show="ragDropdown" @click.away="ragDropdown=false" x-transition
+                             class="absolute right-0 top-full mt-1 w-80 rounded-xl bg-white border border-surface-200 shadow-lg z-50 py-1 max-h-80 overflow-y-auto">
+                            <div class="px-3 py-1.5 text-[9px] font-bold text-surface-400 uppercase tracking-wider border-b border-surface-100 flex items-center justify-between">
+                                <span>Fontes Permitidas (Evidence Policy)</span>
+                                <button @click="syncBoundSourcesFromContent()" type="button" class="text-emerald-600 hover:text-emerald-700 normal-case font-normal text-[10px]" title="Re-ler ## Evidence Policy do markdown">↻ sync</button>
+                            </div>
+                            <template x-if="availableSources.length === 0">
+                                <div class="px-3 py-4 text-center text-[11px] text-surface-400">
+                                    <p>Sem fontes registradas.</p>
+                                    <a href="/rag" target="_blank" class="text-emerald-600 hover:text-emerald-700 font-medium">+ Cadastrar em /rag →</a>
+                                </div>
+                            </template>
+                            <template x-for="src in availableSources" :key="src.id">
+                                <label class="flex items-start gap-2 px-3 py-2 hover:bg-surface-50 cursor-pointer">
+                                    <input type="checkbox"
+                                           :checked="boundSourceIds.includes(src.id)"
+                                           @change="toggleBoundSource(src.id)"
+                                           class="mt-0.5 rounded">
+                                    <div class="min-w-0 flex-1">
+                                        <div class="text-[11px] font-semibold text-brand-900 truncate" x-text="src.name"></div>
+                                        <div class="flex items-center gap-1.5 mt-0.5">
+                                            <span class="rounded-full px-1.5 py-0.5 text-[8px] font-semibold"
+                                                  :class="{'bg-emerald-50 text-emerald-700':src.confidentiality_label==='public','bg-brand-50 text-brand-700':src.confidentiality_label==='internal','bg-amber-50 text-amber-700':src.confidentiality_label==='confidential','bg-rose-50 text-rose-700':src.confidentiality_label==='restricted'}"
+                                                  x-text="src.confidentiality_label"></span>
+                                            <span class="text-[9px] text-surface-400" x-text="src.source_type"></span>
+                                        </div>
+                                    </div>
+                                </label>
+                            </template>
+                            <div x-show="availableSources.length > 0" class="border-t border-surface-100 px-3 py-2 flex items-center justify-between text-[10px]">
+                                <button @click="boundSourceIds = []; applyEvidencePolicy()" type="button" class="text-rose-600 hover:text-rose-700 font-medium">Limpar</button>
+                                <button @click="boundSourceIds = availableSources.map(s => s.id); applyEvidencePolicy()" type="button" class="text-emerald-600 hover:text-emerald-700 font-medium">Selecionar todas</button>
+                            </div>
+                            <div class="border-t border-surface-100 px-3 py-2 text-[9px] text-surface-400">
+                                Sem nenhuma marcada = SEM filtro (skill consulta todas as fontes autorizadas).
+                                Marcar pelo menos 1 = restrito a essas fontes.
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- ═════ Inserir MCP (tools clássicos) ═════ -->
                     <div class="relative" x-data="{mcpDropdown:false}">
                         <button @click="mcpDropdown = !mcpDropdown" x-show="mcpTools.length > 0" type="button"
@@ -307,6 +362,9 @@ function skillForm(editId) {
         parseResult: null,
         mcpTools: [],
         apiConnectors: [],  // lista de connectors registrados
+        // Onda 6 Wave 2b: governance skill ↔ source (RAG)
+        availableSources: [],     // [{id, name, source_type, confidentiality_label, ...}]
+        boundSourceIds: [],       // ids atualmente vinculados (parsed de raw_content)
         form: { raw_content: '', tags: '[]' },
 
         // Achata connectors + endpoints para a lista do dropdown "Inserir API"
@@ -413,12 +471,18 @@ function skillForm(editId) {
         async load() {
             try { this.mcpTools = (await api.get('/api/v1/tools')).tools || []; } catch {}
             await this._reloadApiConnectors();
+            // Onda 6 Wave 2b: carrega knowledge_sources p/ multi-select RAG.
+            // Eager load (não esperar usuário abrir o dropdown) — payload é leve.
+            await this.loadAvailableSources();
 
             if (editId) {
                 try {
                     const skill = await api.get(`/api/v1/skills/${editId}`);
                     this.form.raw_content = skill.raw_content || '';
                     this.form.tags = skill.tags || '[]';
+                    // Após carregar markdown da skill, popula os checkboxes do
+                    // dropdown de Fontes RAG lendo o ## Evidence Policy.
+                    this.syncBoundSourcesFromContent();
                 } catch(e) { showToast('Erro ao carregar skill', 'error'); }
             }
 
@@ -475,6 +539,96 @@ function skillForm(editId) {
                 }
             }
             showToast('Tool Binding de "' + tool.name + '" inserido');
+        },
+
+        // ══════════════════════════════════════════════════
+        // Onda 6 Wave 2b — Governance RAG (skill ↔ source)
+        // Multi-select de knowledge_sources mantém o bloco fenced YAML
+        // em ## Evidence Policy sincronizado com boundSourceIds.
+        // ══════════════════════════════════════════════════
+
+        async loadAvailableSources() {
+            try {
+                const r = await api.get('/api/v1/knowledge-sources');
+                this.availableSources = r.sources || [];
+            } catch {
+                this.availableSources = [];
+            }
+        },
+
+        // Lê ## Evidence Policy do raw_content e popula boundSourceIds.
+        // Chamado: (1) ao abrir skill existente; (2) botão "↻ sync" do dropdown.
+        syncBoundSourcesFromContent() {
+            const content = this.form.raw_content || '';
+            // Captura bloco fenced yaml dentro de ## Evidence Policy
+            const sec = content.match(/## Evidence Policy[\s\S]*?```ya?ml\s*\n([\s\S]*?)\n```/);
+            if (!sec) { this.boundSourceIds = []; return; }
+            const yaml = sec[1];
+            // Procura linha "sources:" seguida de itens "- <id>"
+            const srcMatch = yaml.match(/sources:\s*\n((?:\s*-[^\n]*\n?)+)/);
+            if (!srcMatch) { this.boundSourceIds = []; return; }
+            const ids = [];
+            for (const line of srcMatch[1].split('\n')) {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('-')) continue;
+                // "- <id>   # comentário" → pega antes do "#"
+                const after = trimmed.substring(1).split('#')[0].trim();
+                if (after) ids.push(after);
+            }
+            this.boundSourceIds = ids;
+        },
+
+        toggleBoundSource(srcId) {
+            const i = this.boundSourceIds.indexOf(srcId);
+            if (i >= 0) this.boundSourceIds.splice(i, 1);
+            else this.boundSourceIds.push(srcId);
+            this.applyEvidencePolicy();
+        },
+
+        // Reescreve ## Evidence Policy no raw_content baseado em
+        // boundSourceIds. boundSourceIds vazio remove a seção inteira
+        // (skill volta ao modo legacy = todas as fontes autorizadas).
+        applyEvidencePolicy() {
+            const content = this.form.raw_content || '';
+            const sectionRegex = /\n*## Evidence Policy[\s\S]*?(?=\n## |\s*$)/;
+            const hasSection = sectionRegex.test(content);
+
+            if (this.boundSourceIds.length === 0) {
+                if (hasSection) {
+                    this.form.raw_content = content.replace(sectionRegex, '').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+                }
+                return;
+            }
+
+            // Mapa id → name pra comentário humano-legível na linha YAML
+            const nameById = {};
+            for (const s of this.availableSources) nameById[s.id] = s.name;
+
+            const lines = this.boundSourceIds.map(id => {
+                const nm = nameById[id] || '';
+                return nm ? `  - ${id}   # ${nm}` : `  - ${id}`;
+            }).join('\n');
+
+            const block = `## Evidence Policy\n\`\`\`yaml\nsources:\n${lines}\n\`\`\``;
+
+            if (hasSection) {
+                this.form.raw_content = content.replace(sectionRegex, '\n\n' + block);
+            } else {
+                // Insere ANTES de ## Failure Modes ou ## Output Contract; senão no fim.
+                const anchors = ['## Failure Modes', '## Output Contract'];
+                let inserted = false;
+                for (const a of anchors) {
+                    const idx = content.indexOf(a);
+                    if (idx > 0) {
+                        this.form.raw_content = content.substring(0, idx) + block + '\n\n' + content.substring(idx);
+                        inserted = true;
+                        break;
+                    }
+                }
+                if (!inserted) {
+                    this.form.raw_content = content.trimEnd() + '\n\n' + block + '\n';
+                }
+            }
         },
 
         // ══════════════════════════════════════════════════
