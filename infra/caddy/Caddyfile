@@ -17,32 +17,31 @@
 # Headers de segurança baseline. HSTS deixado comentado — ative apenas
 # em prod quando estiver 100% certo do domain (HSTS é sticky no browser).
 # ════════════════════════════════════════════════════════════════
-
 {
-    {$CADDY_GLOBAL}
+	{$CADDY_GLOBAL}
 }
 
 {$TLS_SITE::80} {
-    reverse_proxy app:7000
+	reverse_proxy app:7000
 
-    encode gzip zstd
+	encode gzip zstd
 
-    # Headers de segurança (não sobrepõe se app já enviar).
-    header {
-        X-Content-Type-Options nosniff
-        X-Frame-Options DENY
-        Referrer-Policy strict-origin-when-cross-origin
-        Permissions-Policy "geolocation=(), microphone=(), camera=()"
-        # HSTS: comentado por segurança. Em prod, descomente DEPOIS de
-        # confirmar que o site funciona em HTTPS — HSTS é sticky no browser
-        # e errar derruba acesso por meses.
-        # Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
-    }
+	# Headers de segurança (não sobrepõe se app já enviar).
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		# HSTS: comentado por segurança. Em prod, descomente DEPOIS de
+		# confirmar que o site funciona em HTTPS — HSTS é sticky no browser
+		# e errar derruba acesso por meses.
+		# Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+	}
 
-    log {
-        output stdout
-        format json
-        # Não logar /api/health (ruído)
-        level INFO
-    }
+	log {
+		output stdout
+		format json
+		# Não logar /api/health (ruído)
+		level INFO
+	}
 }
