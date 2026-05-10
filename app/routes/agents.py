@@ -38,6 +38,31 @@ async def preflight_agent(data: AgentCreate) -> PreflightReport:
     return await run_preflight(data.model_dump())
 
 
+async def _resolve_task_type_to_provider_model(payload: dict) -> dict:
+    """Onda 7: quando agente declara task_type, resolve provider/model
+    via routing settings e snapshota no payload. Mutação in-place.
+
+    NULL/ausente = legacy mode (mantém llm_provider/model do payload).
+    Setado = sobrescreve llm_provider/model com a resolução atual.
+    """
+    task_type = payload.get("task_type")
+    if not task_type:
+        return payload
+    from app.llm_routing import resolve_llm_for_task
+    try:
+        provider, model = await resolve_llm_for_task(task_type, has_image=False)
+        payload["llm_provider"] = provider
+        payload["model"] = model
+    except Exception as e:
+        # Falha de routing: mantém o que veio do payload (back-compat) e loga.
+        import logging
+        logging.getLogger(__name__).warning(
+            f"resolve_task_type_to_provider_model falhou: {e}; "
+            f"mantendo provider={payload.get('llm_provider')}, model={payload.get('model')}"
+        )
+    return payload
+
+
 @router.post("", status_code=201)
 async def create_agent(data: AgentCreate):
     # Pre-flight bloqueia errors antes de persistir.
@@ -51,6 +76,8 @@ async def create_agent(data: AgentCreate):
 
     aid = str(uuid.uuid4())
     d = {"id": aid, **data.model_dump()}
+    # Onda 7: se task_type setado, resolve provider/model via routing.
+    d = await _resolve_task_type_to_provider_model(d)
     # Schema legacy persiste flags booleanas como INTEGER 0/1 — converter aqui.
     # (Refator para BOOLEAN é projeto separado; muitos checks dependem de `= 1`.)
     for f in _BOOL_FIELDS:
@@ -89,13 +116,27 @@ async def update_agent(agent_id: str, data: AgentUpdate):
             "preflight": report.model_dump(),
         })
 
+    # Onda 7: task_type setado (ou modificado) → re-resolve provider/model
+    # via routing. Snapshot novo sobrescreve eventual llm_provider/model
+    # vindos no payload.
+    if "task_type" in upd or merged_payload.get("task_type"):
+        # Usa task_type final (do upd se mudou, senão do existing)
+        merged_for_resolve = {
+            "task_type": upd.get("task_type") or merged_payload.get("task_type"),
+        }
+        await _resolve_task_type_to_provider_model(merged_for_resolve)
+        if merged_for_resolve.get("llm_provider"):
+            upd["llm_provider"] = merged_for_resolve["llm_provider"]
+        if merged_for_resolve.get("model"):
+            upd["model"] = merged_for_resolve["model"]
+
     # Schema legacy: flags booleanas como INTEGER 0/1.
     for f in _BOOL_FIELDS:
         if f in upd:
             upd[f] = 1 if upd[f] else 0
     if not upd: raise HTTPException(400, "Nenhum campo")
     # Auto-bump version se campos significativos mudaram
-    significant = {"system_prompt","model","llm_provider","skill_id","kind","temperature"}
+    significant = {"system_prompt","model","llm_provider","skill_id","kind","temperature","task_type"}
     if any(k in upd for k in significant) and "version" not in upd:
         upd["version"] = _bump_version(existing.get("version","1.0.0"))
     return await agents_repo.update(agent_id, upd)

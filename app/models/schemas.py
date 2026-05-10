@@ -8,8 +8,15 @@ class AgentCreate(BaseModel):
     kind: str = Field(default="subagent", pattern="^(aobd|router|subagent)$")
     domain: Optional[str] = None
     skill_id: Optional[str] = None
-    llm_provider: str = "openai"
-    model: str = "gpt-4.1"
+    # Onda 7: task_type substitui o paradigma direto de provider+model.
+    # Quando setado, save resolve via routing. Aceita NULL p/ back-compat
+    # (legacy direto via llm_provider/model).
+    task_type: Optional[str] = Field(
+        default=None,
+        pattern="^(tool_calling|reasoning|instruct|classification)$",
+    )
+    llm_provider: str = "azure"
+    model: str = "gpt-4o"
     system_prompt: Optional[str] = "Você é um agente inteligente."
     version: Optional[str] = "1.0.0"
     status: Optional[str] = "active"
@@ -26,6 +33,10 @@ class AgentUpdate(BaseModel):
     model: Optional[str] = None; system_prompt: Optional[str] = None
     config: Optional[str] = None; status: Optional[str] = None
     version: Optional[str] = None
+    task_type: Optional[str] = Field(
+        default=None,
+        pattern="^(tool_calling|reasoning|instruct|classification)$",
+    )
     require_evidence: Optional[bool] = None
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     accepts_images: Optional[bool] = None

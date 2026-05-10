@@ -482,6 +482,10 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS temperature REAL DEFAULT 0.7",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS accepts_images INTEGER DEFAULT 0",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS accepts_documents INTEGER DEFAULT 0",
+    # Onda 7: paradigma de seleção LLM por task type. NULL = legacy (usa
+    # llm_provider/model direto). Setado = resolve via app/llm_routing.py
+    # consultando platform_settings.
+    "ALTER TABLE agents ADD COLUMN IF NOT EXISTS task_type TEXT",
     # Golden Dataset enriquecido — taxonomia, peso ponderado, match flexível, sentinelas
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS category TEXT",
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS weight REAL DEFAULT 1.0",
