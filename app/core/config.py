@@ -201,6 +201,85 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 
+# ═══════════════════════════════════════════════════════════════
+# UI override → env vars
+# ═══════════════════════════════════════════════════════════════
+# Settings persistidas em platform_settings (settings_store) sobrescrevem
+# os valores do .env em runtime. Estratégia: lê banco → popula os.environ
+# → invalida lru_cache de get_settings() → invalida singleton de embedder.
+# Próximas chamadas de get_settings() leem os env vars atualizados.
+#
+# Chamado em 2 momentos:
+#  - lifespan startup do FastAPI (após init_db)
+#  - PUT /settings (após set_many)
+#
+# Ausência de valor (string vazia ou chave faltando) NÃO sobrescreve env —
+# preserva o .env como fallback de boot.
+# ═══════════════════════════════════════════════════════════════
+
+# Mapa chave-do-banco → nome-da-env-var. Pydantic é case-insensitive,
+# então AZURE_OPENAI_API_KEY lê do mesmo lugar que azure_openai_api_key.
+_UI_TO_ENV_MAP = {
+    # Azure OpenAI (provedor primário)
+    "azure_key":                  "AZURE_OPENAI_API_KEY",
+    "azure_endpoint":             "AZURE_OPENAI_ENDPOINT",
+    "azure_api_version":          "AZURE_OPENAI_API_VERSION",
+    "azure_chat_deployment":      "AZURE_OPENAI_CHAT_DEPLOYMENT",
+    "azure_embeddings_deployment":"AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT",
+    # Maritaca AI
+    "maritaca_key":  "MARITACA_API_KEY",
+    "maritaca_url":  "MARITACA_API_URL",
+    "maritaca_model":"MARITACA_MODEL",
+    # Ollama
+    "ollama_url":    "OLLAMA_API_URL",
+    "ollama_model":  "OLLAMA_MODEL",
+    # LangFuse (observabilidade SaaS opcional)
+    "langfuse_public":"LANGFUSE_PUBLIC_KEY",
+    "langfuse_secret":"LANGFUSE_SECRET_KEY",
+    "langfuse_host":  "LANGFUSE_HOST",
+    # NOTA: openai_key/openai_model não mapeiam — provider 'openai' virou
+    # alias de Azure na Onda 7 Wave 5. Mantidos no settings_store apenas
+    # pra retrocompat de UI (card OpenAI continua mostrando os campos).
+}
+
+
+async def apply_settings_to_env() -> int:
+    """Lê settings_store (Postgres) e popula os.environ com valores não-vazios.
+
+    Invalida caches downstream (get_settings.lru_cache, _embedder singleton)
+    pra que próxima leitura pegue os valores novos sem restart.
+
+    Retorna o número de chaves aplicadas. 0 se banco indisponível ou tudo vazio.
+    """
+    import os
+    try:
+        # Import tardio pra evitar ciclo (database importa get_settings).
+        from app.core.database import settings_store
+        data = await settings_store.get_all()
+    except Exception:
+        # Banco offline ou tabela ainda não criada (init_db não rodou).
+        return 0
+
+    applied = 0
+    for ui_key, env_name in _UI_TO_ENV_MAP.items():
+        val = data.get(ui_key)
+        if val and str(val).strip():
+            os.environ[env_name] = str(val).strip()
+            applied += 1
+
+    # Invalida cache pra próxima chamada de get_settings() rebuild com novas envs
+    get_settings.cache_clear()
+
+    # Invalida singleton do embedder (instância já existente está com creds antigas)
+    try:
+        from app.evidence import embedder as _emb
+        _emb._embedder = None
+    except Exception:
+        pass
+
+    return applied
+
+
 @lru_cache()
 def get_settings() -> Settings:
     s = Settings()

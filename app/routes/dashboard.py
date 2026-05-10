@@ -1549,15 +1549,27 @@ async def get_settings():
 
 @router.put("/settings")
 async def save_settings(data: SettingsSave):
-    """Salva configurações na plataforma."""
+    """Salva configurações na plataforma + aplica em runtime.
+
+    Após persistir em settings_store (Postgres), chama apply_settings_to_env()
+    pra popular os.environ com os valores novos e invalidar o cache do
+    get_settings() + singleton do _embedder. Próximas chamadas de LLM/embedder
+    leem credenciais novas SEM precisar restart do container.
+    """
     settings_dict = {k: str(v) for k, v in data.model_dump().items() if v is not None}
     await settings_store.set_many(settings_dict)
+    # Aplicar em runtime — inclui clear de lru_cache e reset do embedder.
+    try:
+        from app.core.config import apply_settings_to_env
+        applied = await apply_settings_to_env()
+    except Exception as e:
+        applied = 0
     await audit_repo.create({
         "entity_type": "settings", "entity_id": "platform",
         "action": "settings_saved",
-        "details": json.dumps({"keys": list(settings_dict.keys())}),
+        "details": json.dumps({"keys": list(settings_dict.keys()), "env_applied": applied}),
     })
-    return {"message": "Configurações salvas", "keys_saved": len(settings_dict)}
+    return {"message": "Configurações salvas", "keys_saved": len(settings_dict), "env_applied": applied}
 
 
 class ProviderTestRequest(BaseModel):

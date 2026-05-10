@@ -20,6 +20,17 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Após pool aberto, popula os.environ com overrides do settings_store
+    # (UI gravou via PUT /settings em sessões anteriores). Sem isso, providers
+    # e embedder leem só do .env e ignoram o que o operador editou na página
+    # de Configurações. cache_clear de get_settings() já está dentro.
+    try:
+        from app.core.config import apply_settings_to_env
+        applied = await apply_settings_to_env()
+        if applied:
+            logger.info(f"Settings UI override aplicados: {applied} env vars do banco")
+    except Exception as e:
+        logger.warning(f"apply_settings_to_env falhou no startup: {e}")
     try:
         yield
     finally:
