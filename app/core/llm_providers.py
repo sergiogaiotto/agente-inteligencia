@@ -351,10 +351,16 @@ def _parse_openai_compatible_response(response, provider: str, model: str) -> di
 
 
 def get_provider(provider_name: str = "azure", **kwargs) -> LLMProvider:
-    """Factory de provedores. Default: azure (Azure OpenAI Service)."""
+    """Factory de provedores. Default: azure (Azure OpenAI Service).
+
+    Onda 7 Wave 4: 'openai' vira ALIAS de 'azure'. OpenAIProvider público
+    é deprecated — toda chamada que vinha "openai" agora resolve pra
+    Azure usando azure_openai_api_key. Compatível com agentes legacy
+    sem necessidade de migração.
+    """
     providers = {
         "azure": AzureOpenAIProvider,
-        "openai": OpenAIProvider,
+        "openai": AzureOpenAIProvider,  # alias — Onda 7 Wave 4
         "maritaca": MaritacaProvider,
         "ollama": OllamaProvider,
     }

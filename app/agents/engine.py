@@ -480,6 +480,33 @@ async def execute_interaction(
     if not agent:
         raise ValueError(f"Agente '{agent_id}' não encontrado.")
 
+    # Onda 7 Wave 4: live resolve do LLM via task_type. Snapshot do save é
+    # apenas valor inicial; execução real consulta routing settings AGORA
+    # (mudanças em /settings → Roteamento LLM refletem imediato em todos
+    # os agentes que usam o task_type alterado, sem necessidade de re-save).
+    # Detecta imagem em attachments e roteia pro multimodal_fallback se
+    # o modelo da task for text-only.
+    if agent.get("task_type"):
+        try:
+            from app.llm_routing import resolve_llm_for_task, detect_image_in_attachments
+            has_image = detect_image_in_attachments(attachments)
+            r_provider, r_model = await resolve_llm_for_task(
+                agent["task_type"], has_image=has_image
+            )
+            # Cópia defensiva — não mutar o dict do repositório.
+            agent = dict(agent)
+            agent["llm_provider"] = r_provider
+            agent["model"] = r_model
+            logger.info(
+                f"Onda 7 routing: agent={agent_id[:8]} task={agent['task_type']} "
+                f"has_image={has_image} → {r_provider}/{r_model}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"resolve_llm_for_task falhou ({type(e).__name__}: {e}); "
+                f"usando snapshot do agent ({agent.get('llm_provider')}/{agent.get('model')})"
+            )
+
     from app.core.database import mesh_repo
     mesh_chain = await _resolve_mesh_chain(agent_id, agent)
 
@@ -631,9 +658,13 @@ async def execute_interaction(
 
     from app.core.config import get_settings
     settings = get_settings()
-    provider = agent.get("llm_provider", "openai")
-    if provider == "openai":
-        api_key = settings.openai_api_key
+    provider = agent.get("llm_provider", "azure")
+    # Onda 7 Wave 4: "openai" semantic vira Azure (cleanup do OpenAI público).
+    # llm_providers.py mantém alias OpenAIProvider → AzureOpenAIProvider, então
+    # tanto agentes legacy (provider="openai") quanto novos (provider="azure")
+    # usam a mesma chave do Azure.
+    if provider in ("openai", "azure"):
+        api_key = settings.azure_openai_api_key
     elif provider == "maritaca":
         api_key = settings.maritaca_api_key
     elif provider == "ollama":
