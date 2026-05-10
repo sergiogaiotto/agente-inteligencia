@@ -1489,6 +1489,13 @@ def _extract_json_from_sse(sse_text: str) -> dict | None:
 # ═══ Settings (persistidas em PostgreSQL) ═══
 
 class SettingsSave(BaseModel):
+    # Azure OpenAI — provedor primário (Onda 7 Wave 4: 'openai' virou alias).
+    # Estes campos sobrepõem AZURE_OPENAI_* do .env quando preenchidos via UI.
+    azure_key: Optional[str] = ""
+    azure_endpoint: Optional[str] = ""
+    azure_api_version: Optional[str] = "2024-02-15-preview"
+    azure_chat_deployment: Optional[str] = "gpt-4o"
+    azure_embeddings_deployment: Optional[str] = "text-embedding-3-small"
     openai_key: Optional[str] = ""
     openai_model: Optional[str] = "gpt-4o"
     maritaca_key: Optional[str] = ""
@@ -1524,10 +1531,11 @@ async def save_settings(data: SettingsSave):
 
 
 class ProviderTestRequest(BaseModel):
-    provider: str  # openai | maritaca | ollama
+    provider: str  # azure | openai | maritaca | ollama
     model: str
     api_key: Optional[str] = ""
     base_url: Optional[str] = ""
+    api_version: Optional[str] = ""  # Azure-only — ex: "2024-02-15-preview"
 
 
 @router.post("/settings/test-provider")
@@ -1540,13 +1548,29 @@ async def test_provider(data: ProviderTestRequest):
     import time as _time
     import httpx
     provider = (data.provider or "").lower().strip()
-    if provider not in {"openai", "maritaca", "ollama"}:
+    if provider not in {"azure", "openai", "maritaca", "ollama"}:
         raise HTTPException(400, f"Provedor inválido: {data.provider}")
     if not data.model:
-        raise HTTPException(400, "Modelo obrigatório")
+        raise HTTPException(400, "Modelo obrigatório (deployment name no caso de Azure)")
+
+    # Auth method por provedor:
+    # - Azure: header `api-key: <key>`, URL com query `?api-version=...`, deployment no path
+    # - OpenAI/Maritaca/Ollama: `Authorization: Bearer <key>`
+    use_bearer = True
 
     # Resolve base_url e api_key conforme provedor
-    if provider == "openai":
+    if provider == "azure":
+        endpoint = (data.base_url or "").rstrip("/")
+        api_version = data.api_version or "2024-02-15-preview"
+        api_key = data.api_key or ""
+        if not endpoint:
+            return {"ok": False, "error": "Endpoint obrigatório (ex: https://xxx.openai.azure.com)"}
+        if not api_key:
+            return {"ok": False, "error": "API Key obrigatória para Azure"}
+        # Azure: deployment vai no PATH, não no body
+        chat_url = f"{endpoint}/openai/deployments/{data.model}/chat/completions?api-version={api_version}"
+        use_bearer = False
+    elif provider == "openai":
         base_url = (data.base_url or "https://api.openai.com").rstrip("/")
         chat_url = f"{base_url}/v1/chat/completions" if not base_url.endswith("/v1") else f"{base_url}/chat/completions"
         api_key = data.api_key or ""
@@ -1564,7 +1588,6 @@ async def test_provider(data: ProviderTestRequest):
         api_key = data.api_key or "ollama"
 
     payload = {
-        "model": data.model,
         "messages": [
             {"role": "system", "content": "Você é um agente de teste. Responda em uma única palavra."},
             {"role": "user", "content": "Diga: pong"},
@@ -1572,10 +1595,16 @@ async def test_provider(data: ProviderTestRequest):
         "temperature": 0.0,
         "max_tokens": 16,
     }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    # Azure não aceita "model" no body (deployment já vai no path).
+    if provider != "azure":
+        payload["model"] = data.model
+
+    headers = {"Content-Type": "application/json"}
+    if use_bearer:
+        headers["Authorization"] = f"Bearer {api_key}"
+    else:
+        # Azure usa header dedicado `api-key`.
+        headers["api-key"] = api_key
     start = _time.time()
     try:
         async with httpx.AsyncClient(timeout=30) as client:

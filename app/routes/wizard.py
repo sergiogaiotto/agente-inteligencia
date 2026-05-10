@@ -157,20 +157,26 @@ async def list_available_models():
     pra decidir se input com imagem precisa cair no multimodal_fallback
     (modelos text-only não recebem images, falhariam silenciosamente).
     """
+    # Azure OpenAI usa os MESMOS modelos do OpenAI público (Azure é apenas
+    # uma forma diferente de hospedar/cobrar). O `id` é o nome do DEPLOYMENT
+    # no Azure, que normalmente coincide com o nome do modelo, mas pode ser
+    # customizado por quem provisionou o recurso.
+    openai_models = [
+        {"id": "gpt-4o", "name": "GPT-4o", "context": "128K", "tier": "flagship", "multimodal": True},
+        {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "context": "128K", "tier": "efficient", "multimodal": True},
+        {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "context": "128K", "tier": "legacy", "multimodal": True},
+        {"id": "gpt-4.1", "name": "GPT-4.1", "context": "1M", "tier": "flagship", "multimodal": True},
+        {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "context": "1M", "tier": "efficient", "multimodal": True},
+        {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano", "context": "1M", "tier": "nano", "multimodal": False},
+        {"id": "o4-mini", "name": "o4 Mini (reasoning)", "context": "200K", "tier": "reasoning", "multimodal": False},
+        {"id": "o3", "name": "o3 (reasoning)", "context": "200K", "tier": "reasoning", "multimodal": False},
+        {"id": "o3-mini", "name": "o3 Mini (reasoning)", "context": "200K", "tier": "reasoning", "multimodal": False},
+        {"id": "o1", "name": "o1 (reasoning)", "context": "200K", "tier": "reasoning", "multimodal": True},
+        {"id": "o1-mini", "name": "o1 Mini (reasoning)", "context": "128K", "tier": "reasoning", "multimodal": False},
+    ]
     return {
-        "openai": [
-            {"id": "gpt-4o", "name": "GPT-4o", "context": "128K", "tier": "flagship", "multimodal": True},
-            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "context": "128K", "tier": "efficient", "multimodal": True},
-            {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "context": "128K", "tier": "legacy", "multimodal": True},
-            {"id": "gpt-4.1", "name": "GPT-4.1", "context": "1M", "tier": "flagship", "multimodal": True},
-            {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "context": "1M", "tier": "efficient", "multimodal": True},
-            {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano", "context": "1M", "tier": "nano", "multimodal": False},
-            {"id": "o4-mini", "name": "o4 Mini (reasoning)", "context": "200K", "tier": "reasoning", "multimodal": False},
-            {"id": "o3", "name": "o3 (reasoning)", "context": "200K", "tier": "reasoning", "multimodal": False},
-            {"id": "o3-mini", "name": "o3 Mini (reasoning)", "context": "200K", "tier": "reasoning", "multimodal": False},
-            {"id": "o1", "name": "o1 (reasoning)", "context": "200K", "tier": "reasoning", "multimodal": True},
-            {"id": "o1-mini", "name": "o1 Mini (reasoning)", "context": "128K", "tier": "reasoning", "multimodal": False},
-        ],
+        "azure": openai_models,
+        "openai": openai_models,
         "maritaca": [
             {"id": "sabia-4", "name": "Sabiá-4", "context": "128K", "tier": "flagship", "multimodal": False},
             {"id": "sabia-3", "name": "Sabiá-3", "context": "32K", "tier": "flagship", "multimodal": False},

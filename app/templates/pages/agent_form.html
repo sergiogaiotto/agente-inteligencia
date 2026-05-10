@@ -410,8 +410,8 @@ function agentForm(editId) {
     return {
         isEdit: !!editId, step: 0, saving: false, refining: false,
         steps: ['Básico', 'LLM', 'Prompt', 'Revisão'],
-        showWizard: false, wizardPrompt: '', wizardLoading: false, wizardResult: null, wizardProvider: 'openai',
-        allModels: {openai: [], maritaca: [], ollama: []},
+        showWizard: false, wizardPrompt: '', wizardLoading: false, wizardResult: null, wizardProvider: 'azure',
+        allModels: {azure: [], openai: [], maritaca: [], ollama: []},
         savedPrompts: [],
         availableSkills: [],
         availableDomains: [],
@@ -519,7 +519,10 @@ function agentForm(editId) {
             try {
                 const d = await api.get('/api/v1/wizard/models');
                 this.allModels = d;
-            } catch { this.allModels = {openai: [{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship'}], maritaca: [{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship'}], ollama: [{id:'Gemma-3-Gaia-PT-BR-4b-it',name:'Gaia 4b',context:'128K',tier:'efficient'}]}; }
+            } catch {
+                const flagship = [{id:'gpt-4o',name:'GPT-4o',context:'128K',tier:'flagship',multimodal:true}, {id:'gpt-4.1',name:'GPT-4.1',context:'1M',tier:'flagship',multimodal:true}];
+                this.allModels = {azure: flagship, openai: flagship, maritaca: [{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship'}], ollama: [{id:'Gemma-3-Gaia-PT-BR-4b-it',name:'Gaia 4b',context:'128K',tier:'efficient'}]};
+            }
         },
         setDefaultModel() {
             const models = this.allModels[this.form.llm_provider] || [];
