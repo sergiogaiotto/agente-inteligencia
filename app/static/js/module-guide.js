@@ -341,40 +341,6 @@ docker compose up -d --force-recreate app</pre>`,
   },
 
   {
-    id: 'onda4b',
-    section: 'Onda 4b',
-    label: 'AI Gateway (LiteLLM)',
-    fundamento: `<p>Proxy <b>OpenAI-compatible</b> único entre app e providers. Centraliza:</p>
-<ul class="list-disc pl-4 mt-2 space-y-1">
-<li><b>Routing</b> — 7 modelos (Azure, OpenAI, Maritaca, Ollama)</li>
-<li><b>Fallback automático</b> — Azure GPT-4o cai → tenta OpenAI GPT-4o</li>
-<li><b>LangFuse callback</b> nativo — cada call vira span observável</li>
-<li><b>Cost tracking</b> unificado por modelo/chave</li>
-<li><b>Defesa em profundidade</b> Python — gateway 5xx → upstream direto</li>
-</ul>`,
-    aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1">
-<li><b>Trocar provider sem redeploy</b> — edita <code>infra/litellm/config.yaml</code> + restart container</li>
-<li><b>Adicionar Anthropic/Gemini</b> — só editar yaml + env</li>
-<li><b>Rate-limit por modelo</b> — config nativa do LiteLLM</li>
-</ul>`,
-    ativar: `<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]"># 1. Master key (uma vez)
-echo "LLM_GATEWAY_MASTER_KEY=sk-litellm-$(openssl rand -hex 24)" >> .env
-
-# 2. Subir gateway
-docker compose up -d litellm
-
-# 3. Ligar no app
-echo "LLM_GATEWAY_ENABLED=true" >> .env
-docker compose up -d --force-recreate app</pre>`,
-    usar: `<p>Smoke test:</p>
-<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">MK=$(grep ^LLM_GATEWAY_MASTER_KEY .env | cut -d= -f2)
-curl http://localhost:4000/v1/chat/completions \\
-  -H "Authorization: Bearer $MK" \\
-  -d '{"model":"azure/gpt-4o","messages":[{"role":"user","content":"ok"}]}'</pre>
-<p class="mt-2">Logs em <code>docker logs -f agente_litellm</code> mostram cada call. Métricas no LangFuse externo.</p>`
-  },
-
-  {
     id: 'onda4c',
     section: 'Onda 4c',
     label: 'TLS + Secrets management',

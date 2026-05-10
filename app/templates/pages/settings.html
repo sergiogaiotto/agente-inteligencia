@@ -27,9 +27,8 @@
             <h3 class="text-[13px] font-semibold text-brand-900 mb-1">Roteamento LLM por tipo de tarefa</h3>
             <p class="text-[11px] text-surface-500 leading-relaxed">
                 Em vez de cada agente escolher provedor+modelo, ele declara o <strong>tipo de tarefa</strong>.
-                Aqui você define qual provedor/modelo a plataforma usa pra cada tipo. Quando LiteLLM gateway está
-                ligado (<code class="text-[10px] bg-white px-1 rounded">LLM_GATEWAY_ENABLED=true</code>), a chamada
-                vai pelo gateway; senão, vai direto ao provedor.
+                Aqui você define qual provedor/modelo a plataforma usa pra cada tipo. A chamada vai
+                direto ao provedor (Azure OpenAI, Maritaca ou Ollama).
             </p>
         </div>
 
