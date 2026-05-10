@@ -54,7 +54,8 @@ services:
     networks:
       - aimesh
     volumes:
-      - app_data:/app/data
+      # APP_DATA_DIR=/var/lib/agente-persist/app pra persistir uploads/evidências em VPS.
+      - ${APP_DATA_DIR:-app_data}:/app/data
     logging:
       driver: json-file
       options:
@@ -79,7 +80,11 @@ services:
       # Tuning leve para VPS — ajustar conforme RAM disponível
       POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Aceita tanto nome de volume Docker (default — dev local) quanto path
+      # absoluto/relativo (produção). VPS Hostinger apaga volumes Docker entre
+      # deploys — setar PG_DATA_DIR=/var/lib/agente-persist/postgres no .env real
+      # pra dados sobreviverem a redeploy. Veja DEPLOY.md.
+      - ${PG_DATA_DIR:-postgres_data}:/var/lib/postgresql/data
     networks:
       - aimesh
     # Não expõe na host por default — desbloqueie só para debug local
@@ -114,7 +119,8 @@ services:
       - "--maxmemory-policy"
       - "allkeys-lru"
     volumes:
-      - redis_data:/data
+      # REDIS_DATA_DIR=/var/lib/agente-persist/redis pra persistir em VPS.
+      - ${REDIS_DATA_DIR:-redis_data}:/data
     networks:
       - aimesh
     healthcheck:
@@ -138,7 +144,8 @@ services:
       QDRANT__SERVICE__GRPC_PORT: 6334
       QDRANT__LOG_LEVEL: WARN
     volumes:
-      - qdrant_data:/qdrant/storage
+      # QDRANT_DATA_DIR=/var/lib/agente-persist/qdrant pra persistir em VPS.
+      - ${QDRANT_DATA_DIR:-qdrant_data}:/qdrant/storage
     networks:
       - aimesh
     # Onda 3: porta exposta em 127.0.0.1 para permitir ingestão e diagnóstico

@@ -47,6 +47,26 @@ ufw enable
 fallocate -l 2G /swapfile && chmod 600 /swapfile
 mkswap /swapfile && swapon /swapfile
 echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+# ⚠ CRÍTICO: paths persistentes pra dados sobreviverem a redeploy.
+# Hostinger Deploy apaga volumes Docker no Redeploy automático — sem
+# isso, você perde TUDO (banco, evidências, contas) toda vez.
+mkdir -p /var/lib/agente-persist/{postgres,redis,qdrant,app}
+chown -R 999:999 /var/lib/agente-persist/postgres   # uid postgres
+chown -R 999:999 /var/lib/agente-persist/redis      # uid redis
+chown -R 1000:1000 /var/lib/agente-persist/qdrant   # uid qdrant
+chown -R 1000:1000 /var/lib/agente-persist/app      # uid app
+```
+
+Depois, no Hostinger Panel → Environment Variables (ou no `.env` montado),
+adicione **as 4 linhas críticas** abaixo. Sem elas, o compose usa volumes
+Docker nomeados (que serão apagados no próximo Deploy):
+
+```
+PG_DATA_DIR=/var/lib/agente-persist/postgres
+REDIS_DATA_DIR=/var/lib/agente-persist/redis
+QDRANT_DATA_DIR=/var/lib/agente-persist/qdrant
+APP_DATA_DIR=/var/lib/agente-persist/app
 ```
 
 ## 3. Clone + .env de produção
