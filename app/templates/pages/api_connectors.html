@@ -493,6 +493,45 @@
                                 </ul>
                             </div>
                         </div>
+
+                        <!-- ── Alternativa: importar de um cURL ── -->
+                        <div class="border-t border-violet-200/60 pt-3 mt-1 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <label class="block text-[11px] font-semibold text-violet-900">
+                                    …ou cole um comando <span class="font-mono">cURL</span>
+                                </label>
+                                <span class="text-[10px] text-violet-600">extrai base_url, auth e 1 endpoint</span>
+                            </div>
+                            <textarea x-model="curlInput" rows="4"
+                                      placeholder="curl 'https://api.exemplo.com/v1/users' -H 'Authorization: Bearer eyJ...' -H 'Content-Type: application/json' -d '{&quot;name&quot;:&quot;jose&quot;}'"
+                                      class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[11px] font-mono outline-none focus:border-violet-400 resize-y"></textarea>
+                            <div class="flex items-center gap-2">
+                                <button @click="applyCurl()" :disabled="!curlInput.trim()" type="button"
+                                        class="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2 text-[12px] font-semibold text-white hover:bg-violet-700 disabled:opacity-50">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 7.5L7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5"/></svg>
+                                    Importar do cURL
+                                </button>
+                                <span x-show="curlStatus" x-text="curlStatus" class="text-[11px]"
+                                      :class="curlPreview ? 'text-violet-700' : 'text-rose-700'"></span>
+                            </div>
+                            <div x-show="curlPreview" x-transition class="rounded-lg bg-white border border-violet-200 p-3 text-[11px] space-y-1">
+                                <div class="text-violet-700 font-semibold">✓ cURL parseado</div>
+                                <div class="text-surface-600">
+                                    base_url: <span class="font-mono text-brand-900" x-text="curlPreview?.baseUrl"></span>
+                                </div>
+                                <div class="text-surface-600">
+                                    endpoint:
+                                    <span class="font-mono rounded px-1.5 py-0.5 text-[9px] font-bold ml-1" :class="methodColor(curlPreview?.method)" x-text="curlPreview?.method"></span>
+                                    <span class="font-mono text-brand-900 ml-1" x-text="curlPreview?.path"></span>
+                                </div>
+                                <div class="text-surface-600" x-show="curlPreview?.authLabel">
+                                    auth: <span class="font-mono text-brand-900" x-text="curlPreview?.authLabel"></span>
+                                </div>
+                                <p class="text-[10px] text-surface-500 pt-1">
+                                    Campos vazios do formulário foram preenchidos. O endpoint detectado será criado ao salvar.
+                                </p>
+                            </div>
+                        </div>
                     </div>
                     <div>
                         <label class="block text-[11px] font-semibold text-brand-900 mb-1">Nome *</label>
@@ -763,6 +802,8 @@ function apiConnectorsPage() {
         // IA wizard (OpenAPI introspection)
         introspectOpen: false, introspecting: false, introspectUrl: '', introspectToken: '',
         introspectStatus: '', introspectResult: null, introspectPicks: {}, introspectImportAll: false,
+        // cURL importer (alternativa ao OpenAPI quando a API não expõe spec)
+        curlInput: '', curlStatus: '', curlPreview: null,
         // Login helper (para auth_type=cookie)
         loginHelperOpen: false,
         loginHelper: { url: '', body: '{"login":"","password":""}', running: false, status: '', ok: false },
@@ -944,6 +985,7 @@ function apiConnectorsPage() {
             this.testResult = null; this.testingInline = false;
             this.introspectOpen = false; this.introspectUrl = ''; this.introspectToken = '';
             this.introspectResult = null; this.introspectPicks = {}; this.introspectStatus = '';
+            this.curlInput = ''; this.curlStatus = ''; this.curlPreview = null;
             this.connectorFormOpen = true;
         },
 
@@ -1026,6 +1068,146 @@ function apiConnectorsPage() {
             this.loginHelper.running = false;
         },
 
+        // ── cURL importer — parser puro JS, não precisa de backend ──
+        // Lida com: -X/--request, -H/--header, -d/--data[-raw|-binary|-ascii],
+        // -u/--user, -b/--cookie, --compressed/-i/-k/-L (ignorados), continuações
+        // com `\` e aspas simples/duplas.
+        parseCurl(text) {
+            if (!text) return null;
+            // 1. junta linhas continuadas com `\`
+            let s = text.replace(/\\\r?\n/g, ' ').replace(/\r?\n/g, ' ').trim();
+            // remove prefixo "curl"
+            s = s.replace(/^\s*\$?\s*curl\s+/i, '');
+            // 2. tokenização respeitando aspas simples e duplas
+            const tokens = [];
+            let cur = '', single = false, double = false;
+            for (let i = 0; i < s.length; i++) {
+                const c = s[i];
+                if (c === "'" && !double) { single = !single; continue; }
+                if (c === '"' && !single) { double = !double; continue; }
+                if (c === '\\' && double && s[i+1] === '"') { cur += '"'; i++; continue; }
+                if (/\s/.test(c) && !single && !double) {
+                    if (cur) { tokens.push(cur); cur = ''; }
+                    continue;
+                }
+                cur += c;
+            }
+            if (cur) tokens.push(cur);
+            // 3. percorre tokens
+            const out = { url: '', method: '', headers: {}, body: '', basic: '' };
+            for (let i = 0; i < tokens.length; i++) {
+                const t = tokens[i], n = tokens[i+1];
+                if (t === '-X' || t === '--request') { out.method = (n||'').toUpperCase(); i++; }
+                else if (t === '-H' || t === '--header') {
+                    if (n) {
+                        const idx = n.indexOf(':');
+                        if (idx > 0) {
+                            const k = n.slice(0, idx).trim();
+                            const v = n.slice(idx+1).trim();
+                            if (k) out.headers[k] = v;
+                        }
+                    }
+                    i++;
+                }
+                else if (['-d','--data','--data-raw','--data-binary','--data-ascii','--data-urlencode'].includes(t)) {
+                    out.body = (out.body ? out.body + '&' : '') + (n || '');
+                    if (!out.method) out.method = 'POST';
+                    i++;
+                }
+                else if (t === '-u' || t === '--user') { out.basic = n || ''; i++; }
+                else if (t === '-b' || t === '--cookie') {
+                    if (n && !out.headers['Cookie']) out.headers['Cookie'] = n;
+                    i++;
+                }
+                else if (t === '--url') { out.url = n || ''; i++; }
+                else if (/^https?:\/\//i.test(t) && !out.url) { out.url = t; }
+                // flags sem argumento — ignora silenciosamente
+            }
+            if (!out.method) out.method = 'GET';
+            return out;
+        },
+
+        applyCurl() {
+            const parsed = this.parseCurl(this.curlInput);
+            if (!parsed || !parsed.url) {
+                this.curlPreview = null;
+                this.curlStatus = '✗ não encontrei URL no cURL';
+                showToast('cURL inválido — não achei URL', 'error');
+                return;
+            }
+            let u;
+            try { u = new URL(parsed.url); }
+            catch { this.curlStatus = '✗ URL inválida'; showToast('URL do cURL inválida', 'error'); return; }
+
+            const baseUrl = u.origin;
+            const path = u.pathname + (u.search || '');
+
+            // Detectar auth — ordem de prioridade: -u, Authorization, Cookie, X-API-Key/token
+            let authType = 'none', authHeader = '', apiKey = '', authLabel = 'nenhuma';
+            const lower = {};
+            for (const [k, v] of Object.entries(parsed.headers)) {
+                lower[k.toLowerCase()] = { name: k, value: v };
+            }
+            if (parsed.basic) {
+                authType = 'basic'; apiKey = parsed.basic; authLabel = 'basic';
+            } else if (lower['authorization']) {
+                const v = lower['authorization'].value;
+                if (/^bearer\s+/i.test(v)) {
+                    authType = 'bearer'; apiKey = v.replace(/^bearer\s+/i, '').trim(); authLabel = 'bearer';
+                } else if (/^basic\s+/i.test(v)) {
+                    authType = 'basic';
+                    try { apiKey = atob(v.replace(/^basic\s+/i, '').trim()); } catch { apiKey = v; }
+                    authLabel = 'basic';
+                } else {
+                    authType = 'bearer'; apiKey = v; authLabel = 'bearer (Authorization custom)';
+                }
+            } else if (lower['cookie']) {
+                authType = 'cookie';
+                const cv = lower['cookie'].value;
+                const m = cv.match(/^\s*([^=;\s]+)=([^;]+)/);
+                if (m) { authHeader = m[1].trim(); apiKey = m[2].trim(); }
+                else { authHeader = 'session'; apiKey = cv; }
+                authLabel = 'cookie (' + authHeader + ')';
+            } else {
+                for (const k of Object.keys(parsed.headers)) {
+                    if (/^x-(api[-_]?key|auth|token)/i.test(k) || /(api[-_]?key|token)$/i.test(k)) {
+                        authType = 'api_key'; authHeader = k; apiKey = parsed.headers[k];
+                        authLabel = 'api_key (' + k + ')';
+                        break;
+                    }
+                }
+            }
+
+            // Preenche só campos vazios — não sobrescreve o que o operador já editou
+            if (!this.connForm.base_url) this.connForm.base_url = baseUrl;
+            if (!this.connForm.name) {
+                const host = u.hostname.replace(/^(api|www)\./, '').split('.')[0] || u.hostname;
+                this.connForm.name = host.charAt(0).toUpperCase() + host.slice(1);
+                if (this.connForm.icon === 'AP') this.connForm.icon = host.slice(0, 2).toUpperCase();
+            }
+            if (authType !== 'none' && this.connForm.auth_type === 'none') {
+                this.connForm.auth_type = authType;
+                if (authHeader) this.connForm.auth_header = authHeader;
+                if (apiKey) this.connForm.api_key = apiKey;
+            }
+
+            // Guarda endpoint detectado pra criar junto no save
+            let sample = '{}';
+            if (parsed.body) {
+                try { sample = JSON.stringify(JSON.parse(parsed.body), null, 2); }
+                catch { sample = parsed.body; }
+            }
+            this.curlPreview = {
+                method: parsed.method,
+                path: path,
+                baseUrl: baseUrl,
+                body: sample,
+                authLabel: authLabel,
+            };
+            this.curlStatus = '✓ pronto: ' + parsed.method + ' ' + path;
+            showToast('cURL importado — revise e salve');
+        },
+
         applyIntrospect() {
             const r = this.introspectResult;
             if (!r || !r.found) return;
@@ -1046,8 +1228,22 @@ function apiConnectorsPage() {
 
         // Selected endpoints queued for import after save
         get _pendingEndpointsToImport() {
-            if (!this.introspectResult?.endpoints) return [];
-            return this.introspectResult.endpoints.filter((_, i) => this.introspectImportAll || this.introspectPicks[i]);
+            const out = [];
+            if (this.introspectResult?.endpoints) {
+                out.push(...this.introspectResult.endpoints.filter((_, i) => this.introspectImportAll || this.introspectPicks[i]));
+            }
+            // Endpoint extraído de cURL — vira um item importável também
+            if (this.curlPreview && this.curlPreview.path) {
+                out.push({
+                    name: (this.curlPreview.method + ' ' + this.curlPreview.path).slice(0, 60),
+                    method: this.curlPreview.method,
+                    path: this.curlPreview.path,
+                    description: 'Importado de cURL',
+                    category: 'geral',
+                    sample_body: this.curlPreview.body || '{}',
+                });
+            }
+            return out;
         },
 
         async saveConnector() {
