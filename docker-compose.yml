@@ -169,14 +169,17 @@ services:
   # Modo prod com TLS automático: TLS_SITE=meudominio.com +
   # CADDY_GLOBAL='email admin@meudominio.com' (sem 'auto_https off').
   caddy:
-    image: caddy:2-alpine
+    # Build local com Caddyfile embutido — evita bind mount frágil em deploys
+    # tipo Hostinger que não copiam arquivos avulsos do repo pro project dir.
+    build:
+      context: ./infra/caddy
+    image: agente-caddy:local
     container_name: agente_caddy
     restart: unless-stopped
     ports:
       - "${TLS_HTTP_PORT_HOST:-8080}:80"
       - "${TLS_HTTPS_PORT_HOST:-8443}:443"
     volumes:
-      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     environment:
@@ -210,7 +213,9 @@ services:
   # infra/opa/policies/ no startup. Endpoint /v1/data/<package>/<rule>
   # retorna decisão JSON. Latência típica ~1-3ms local.
   opa:
-    image: openpolicyagent/opa:1.0.0
+    build:
+      context: ./infra/opa
+    image: agente-opa:local
     container_name: agente_opa
     restart: unless-stopped
     command:
@@ -220,8 +225,6 @@ services:
       - "--log-level=error"
       - "--log-format=json"
       - "/policies"
-    volumes:
-      - ./infra/opa/policies:/policies:ro
     networks:
       - aimesh
     ports:
@@ -249,13 +252,14 @@ services:
 
   # ─── Tempo (backend de traces OTLP) ──────────────────────────────
   tempo:
-    image: grafana/tempo:2.6.0
+    build:
+      context: ./infra/tempo
+    image: agente-tempo:local
     container_name: agente_tempo
     profiles: ["full"]
     restart: unless-stopped
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
-      - ./infra/tempo/tempo.yaml:/etc/tempo.yaml:ro
       - tempo_data:/var/tempo
     networks:
       - aimesh
@@ -278,13 +282,14 @@ services:
 
   # ─── Loki (agregador de logs) ────────────────────────────────────
   loki:
-    image: grafana/loki:3.2.0
+    build:
+      context: ./infra/loki
+    image: agente-loki:local
     container_name: agente_loki
     profiles: ["full"]
     restart: unless-stopped
     command: ["-config.file=/etc/loki/local-config.yaml"]
     volumes:
-      - ./infra/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
       - loki_data:/loki
     networks:
       - aimesh
@@ -303,13 +308,16 @@ services:
 
   # ─── Promtail (tail dos logs do Docker → Loki) ────────────────────
   promtail:
-    image: grafana/promtail:3.2.0
+    build:
+      context: ./infra/promtail
+    image: agente-promtail:local
     container_name: agente_promtail
     profiles: ["full"]
     restart: unless-stopped
     command: ["-config.file=/etc/promtail/config.yaml"]
     volumes:
-      - ./infra/promtail/promtail-config.yaml:/etc/promtail/config.yaml:ro
+      # Bind mounts de SISTEMA (paths absolutos do host) — sempre existem,
+      # não sofrem com o bug de "diretório vazio criado pelo daemon".
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
@@ -326,7 +334,9 @@ services:
 
   # ─── Grafana (UI: dashboards + Explore) ──────────────────────────
   grafana:
-    image: grafana/grafana:11.3.0
+    build:
+      context: ./infra/grafana
+    image: agente-grafana:local
     container_name: agente_grafana
     profiles: ["full"]
     restart: unless-stopped
@@ -338,8 +348,6 @@ services:
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
     volumes:
-      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     ports:
       # Loopback bind: Grafana é interface admin, não deve ficar público.
