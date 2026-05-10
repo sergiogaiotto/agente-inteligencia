@@ -19,6 +19,7 @@ PAGES = {
     "/releases": {"template":"pages/releases.html","title":"Releases","section":"releases"},
     "/quality": {"template":"pages/quality.html","title":"Qualidade","section":"quality"},
     "/observability": {"template":"pages/observability.html","title":"Observabilidade","section":"observability"},
+    "/infra": {"template":"pages/infra.html","title":"Infraestrutura","section":"infra"},
     "/history": {"template":"pages/history.html","title":"Histórico","section":"history"},
     "/settings": {"template":"pages/settings.html","title":"Configurações","section":"settings"},
     "/api-connectors": {"template":"pages/api_connectors.html","title":"API Connectors","section":"api_connectors"},
@@ -100,6 +101,8 @@ async def pg_releases(r: Request): return await _render(r, "/releases")
 async def pg_quality(r: Request): return await _render(r, "/quality")
 @router.get("/observability", response_class=HTMLResponse)
 async def pg_observability(r: Request): return await _render(r, "/observability")
+@router.get("/infra", response_class=HTMLResponse)
+async def pg_infra(r: Request): return await _render(r, "/infra")
 @router.get("/history", response_class=HTMLResponse)
 async def pg_history(r: Request): return await _render(r, "/history")
 @router.get("/settings", response_class=HTMLResponse)

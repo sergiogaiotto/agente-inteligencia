@@ -177,6 +177,12 @@
                     <button @click="openHelp('observability')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
                 </div>
                 <div class="relative">
+                    <a href="/infra" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'infra' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z"/></svg>
+                        <span x-show="!sidebarCollapsed">Infraestrutura</span>
+                    </a>
+                </div>
+                <div class="relative">
                     <a href="/history" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'history' %}active{% endif %}">
                         <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         <span x-show="!sidebarCollapsed">Histórico</span>
