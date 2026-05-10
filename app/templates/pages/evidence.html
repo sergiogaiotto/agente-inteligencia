@@ -217,6 +217,32 @@
                         <p class="text-[10px] text-surface-400 mt-2">Aceita páginas web (extrai texto limpo), PDFs hospedados, transcripts de YouTube, feeds RSS. URLs com login não são suportadas — baixe e use a aba "Arquivo".</p>
                     </div>
 
+                    <!-- Chunk overrides (avançado) -->
+                    <div class="pt-2 border-t border-surface-100">
+                        <button @click="ingestAdvancedOpen = !ingestAdvancedOpen" type="button"
+                                class="text-[11px] text-brand-600 hover:text-brand-700 font-medium">
+                            <span x-text="ingestAdvancedOpen ? '▼ Esconder ajustes de chunking' : '▶ Ajustes de chunking (avançado)'"></span>
+                        </button>
+                        <div x-show="ingestAdvancedOpen" x-transition class="grid grid-cols-2 gap-3 mt-2">
+                            <div>
+                                <label class="block text-[10px] font-semibold text-surface-500 mb-1">Chunk size (tokens)</label>
+                                <input type="number" min="50" max="4000" step="50" x-model.number="ingestForm.chunk_size"
+                                       :placeholder="'default: ' + (defaultChunkSize || 500)"
+                                       class="w-full rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[12px] font-mono outline-none focus:border-brand-400">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-semibold text-surface-500 mb-1">Chunk overlap (tokens)</label>
+                                <input type="number" min="0" max="500" step="10" x-model.number="ingestForm.chunk_overlap"
+                                       :placeholder="'default: ' + (defaultChunkOverlap || 50)"
+                                       class="w-full rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[12px] font-mono outline-none focus:border-brand-400">
+                            </div>
+                            <p class="col-span-2 text-[10px] text-surface-500 leading-relaxed">
+                                Vazio = usa default do sistema. <strong>Códigos / FAQs</strong> beneficiam de chunks pequenos (200-300).
+                                <strong>Narrativas longas</strong> de chunks grandes (800-1500). Overlap costuma ser 10% do size.
+                            </p>
+                        </div>
+                    </div>
+
                     <!-- Replace toggle (comum aos 3 tabs) -->
                     <div class="flex items-center gap-2 pt-2 border-t border-surface-100">
                         <input type="checkbox" id="ingestReplace" x-model="ingestForm.replace" class="rounded">
@@ -280,8 +306,12 @@ function evidencePage() {
         ingestSourceId: null,
         ingestSourceName: '',
         ingestTab: 'text',  // 'text' | 'file' | 'url'
-        ingestForm: { text: '', file: null, url: '', replace: true },
+        ingestForm: { text: '', file: null, url: '', replace: true, chunk_size: '', chunk_overlap: '' },
         ingestProgress: { loading: false, error: null, result: null },
+        ingestAdvancedOpen: false,
+        // Defaults exibidos como placeholder (lidos do .env via /api/v1/dashboard/rag-config)
+        defaultChunkSize: 500,
+        defaultChunkOverlap: 50,
 
         get ingestCanSubmit() {
             if (this.ingestTab === 'text') return !!(this.ingestForm.text || '').trim();
@@ -295,6 +325,12 @@ function evidencePage() {
                 const d = await api.get('/api/v1/knowledge-sources');
                 this.sources = d.sources || [];
             } catch { this.sources = []; }
+            // Defaults de chunking pro placeholder dos inputs avançados
+            try {
+                const cfg = await api.get('/api/v1/rag-config');
+                this.defaultChunkSize = cfg.chunk_size || 500;
+                this.defaultChunkOverlap = cfg.chunk_overlap || 50;
+            } catch {}
             // Carrega stats em paralelo (uma req por source). Para volumes grandes
             // (>50 sources) considerar endpoint batch — fora de escopo desta onda.
             await this.loadAllStats();
@@ -363,8 +399,9 @@ function evidencePage() {
             this.ingestSourceId = s.id;
             this.ingestSourceName = s.name;
             this.ingestTab = 'text';
-            this.ingestForm = { text: '', file: null, url: '', replace: true };
+            this.ingestForm = { text: '', file: null, url: '', replace: true, chunk_size: '', chunk_overlap: '' };
             this.ingestProgress = { loading: false, error: null, result: null };
+            this.ingestAdvancedOpen = false;
             this.ingestOpen = true;
         },
 
@@ -372,23 +409,32 @@ function evidencePage() {
             if (!this.ingestCanSubmit || this.ingestProgress.loading) return;
             this.ingestProgress = { loading: true, error: null, result: null };
             const sid = this.ingestSourceId;
+            // Helper: campos vazios ('') viram null no JSON pra manter default no backend
+            const cs = this.ingestForm.chunk_size === '' || this.ingestForm.chunk_size == null ? null : Number(this.ingestForm.chunk_size);
+            const co = this.ingestForm.chunk_overlap === '' || this.ingestForm.chunk_overlap == null ? null : Number(this.ingestForm.chunk_overlap);
             try {
                 let result;
                 if (this.ingestTab === 'text') {
                     result = await api.post('/api/v1/knowledge-sources/' + sid + '/ingest', {
                         text: this.ingestForm.text,
                         replace: this.ingestForm.replace,
+                        chunk_size: cs,
+                        chunk_overlap: co,
                     });
                 } else if (this.ingestTab === 'url') {
                     result = await api.post('/api/v1/knowledge-sources/' + sid + '/ingest-url', {
                         url: this.ingestForm.url,
                         replace: this.ingestForm.replace,
+                        chunk_size: cs,
+                        chunk_overlap: co,
                     });
                 } else if (this.ingestTab === 'file') {
                     // Multipart upload (api.post pode não suportar FormData — usa fetch direto)
                     const fd = new FormData();
                     fd.append('file', this.ingestForm.file);
                     fd.append('replace', String(this.ingestForm.replace));
+                    if (cs !== null) fd.append('chunk_size', String(cs));
+                    if (co !== null) fd.append('chunk_overlap', String(co));
                     const resp = await fetch('/api/v1/knowledge-sources/' + sid + '/ingest-file', {
                         method: 'POST',
                         body: fd,

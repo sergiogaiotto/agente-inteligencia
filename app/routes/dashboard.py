@@ -898,6 +898,24 @@ async def delete_knowledge_source(ks_id: str):
 class IngestTextRequest(BaseModel):
     text: str
     replace: bool = True
+    # Override por ingestão dos defaults do .env (RAG_CHUNK_SIZE_TOKENS=500,
+    # RAG_CHUNK_OVERLAP_TOKENS=50). None mantém default. Útil pra documentos
+    # com características diferentes — ex: código curto pede chunks pequenos,
+    # narrativa longa beneficia de chunks grandes.
+    chunk_size: Optional[int] = None
+    chunk_overlap: Optional[int] = None
+
+
+@router.get("/rag-config")
+async def rag_config():
+    """Defaults de chunking lidos do .env. UI usa pra mostrar placeholder
+    nos inputs avançados de ingestão."""
+    from app.core.config import get_settings as _get_settings
+    s = _get_settings()
+    return {
+        "chunk_size": s.rag_chunk_size_tokens,
+        "chunk_overlap": s.rag_chunk_overlap_tokens,
+    }
 
 
 @router.post("/knowledge-sources/{ks_id}/ingest")
@@ -906,7 +924,10 @@ async def ingest_into_source(ks_id: str, data: IngestTextRequest):
     pontos vetoriais (Qdrant). Idempotente quando replace=True."""
     from app.evidence.ingest import ingest_text, IngestError
     try:
-        return await ingest_text(ks_id, data.text, replace=data.replace)
+        return await ingest_text(
+            ks_id, data.text, replace=data.replace,
+            chunk_size=data.chunk_size, chunk_overlap=data.chunk_overlap,
+        )
     except IngestError as e:
         raise HTTPException(e.status_code, str(e))
 
@@ -916,6 +937,8 @@ async def ingest_into_source(ks_id: str, data: IngestTextRequest):
 class IngestUrlRequest(BaseModel):
     url: str
     replace: bool = True
+    chunk_size: Optional[int] = None
+    chunk_overlap: Optional[int] = None
 
 
 @router.post("/knowledge-sources/{ks_id}/ingest-file")
@@ -923,6 +946,8 @@ async def ingest_file_into_source(
     ks_id: str,
     file: UploadFile = File(...),
     replace: bool = Form(True),
+    chunk_size: Optional[int] = Form(None),
+    chunk_overlap: Optional[int] = Form(None),
 ):
     """Ingere arquivo (PDF/DOCX/PPTX/XLSX/HTML/MD/TXT/CSV/JSON/XML/EPUB/MSG/
     ZIP/imagem/áudio) via markitdown → markdown → chunk → embed → store.
@@ -940,6 +965,8 @@ async def ingest_file_into_source(
             filename=file.filename or "upload.bin",
             mime_type=file.content_type,
             replace=replace,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
         )
     except IngestError as e:
         raise HTTPException(e.status_code, str(e))
@@ -955,7 +982,10 @@ async def ingest_url_into_source(ks_id: str, data: IngestUrlRequest):
     """
     from app.evidence.ingest import ingest_url, IngestError
     try:
-        return await ingest_url(ks_id, data.url, replace=data.replace)
+        return await ingest_url(
+            ks_id, data.url, replace=data.replace,
+            chunk_size=data.chunk_size, chunk_overlap=data.chunk_overlap,
+        )
     except IngestError as e:
         raise HTTPException(e.status_code, str(e))
 

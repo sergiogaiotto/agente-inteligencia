@@ -36,13 +36,21 @@ class IngestError(Exception):
         self.status_code = status_code
 
 
-async def ingest_text(source_id: str, text: str, replace: bool = True) -> dict:
+async def ingest_text(
+    source_id: str,
+    text: str,
+    replace: bool = True,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+) -> dict:
     """Ingere `text` na knowledge_source `source_id`.
 
     Args:
         source_id: id da knowledge_source destino. Deve existir.
         text: conteúdo a indexar. Não vazio.
         replace: True (default) apaga chunks/pontos anteriores antes de inserir.
+        chunk_size: tokens por chunk. None (default) usa RAG_CHUNK_SIZE_TOKENS do .env.
+        chunk_overlap: tokens de overlap entre chunks adjacentes. None usa default.
 
     Returns:
         {
@@ -72,8 +80,11 @@ async def ingest_text(source_id: str, text: str, replace: bool = True) -> dict:
 
         start = time.time()
 
-        # 1. Chunca
-        chunks = chunk_text(text)
+        # 1. Chunca (size/overlap opcionais — None usa defaults do .env)
+        chunks = chunk_text(text, size=chunk_size, overlap=chunk_overlap)
+        if chunk_size or chunk_overlap:
+            span.set_attribute("chunk.size_override", chunk_size or 0)
+            span.set_attribute("chunk.overlap_override", chunk_overlap or 0)
         if not chunks:
             raise IngestError("Texto não gerou chunks após normalização.", status_code=400)
         span.set_attribute("chunks.count", len(chunks))
@@ -211,6 +222,8 @@ async def ingest_file(
     filename: str,
     replace: bool = True,
     mime_type: Optional[str] = None,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
 ) -> dict:
     """Ingere arquivo binário (PDF/DOCX/PPTX/XLSX/HTML/MD/CSV/audio/imagem/...)
     convertendo via markitdown → markdown → pipeline padrão (chunk + embed + store).
@@ -259,7 +272,10 @@ async def ingest_file(
         span.set_attribute("converter.markdown_chars", len(text))
 
         # Pipeline padrão: chunk → embed → store
-        result = await ingest_text(source_id, text, replace=replace)
+        result = await ingest_text(
+            source_id, text, replace=replace,
+            chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+        )
         result["converter"] = "markitdown"
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
         result["source_format"] = ext
@@ -271,6 +287,8 @@ async def ingest_url(
     source_id: str,
     url: str,
     replace: bool = True,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
 ) -> dict:
     """Ingere URL (página web, PDF online, YouTube transcript, RSS, ...) via
     markitdown → markdown → pipeline padrão.
@@ -308,7 +326,10 @@ async def ingest_url(
             )
         span.set_attribute("converter.markdown_chars", len(text))
 
-        result = await ingest_text(source_id, text, replace=replace)
+        result = await ingest_text(
+            source_id, text, replace=replace,
+            chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+        )
         result["converter"] = "markitdown"
         result["source_url"] = url.strip()
         return result
