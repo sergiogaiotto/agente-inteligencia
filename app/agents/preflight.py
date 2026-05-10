@@ -61,11 +61,14 @@ def _check(id_: str, severity: str, title: str, detail: str,
 def check_api_key(payload: dict, settings) -> Optional[PreflightCheckResult]:
     """C1 — provider declarado tem API key real configurada."""
     provider = (payload.get("llm_provider") or "").lower()
+    # Onda 7 Wave 5: "openai" semantic vira alias de Azure (cleanup OPENAI_API_KEY).
+    # Ambos consultam azure_openai_api_key. Mapping também corrige "azure" pra
+    # azure_openai_api_key (era "azure_api_key" — bug latent que nunca casava).
     key_attr_map = {
-        "openai": "openai_api_key",
+        "openai": "azure_openai_api_key",
+        "azure": "azure_openai_api_key",
         "maritaca": "maritaca_api_key",
         "ollama": "ollama_api_key",
-        "azure": "azure_api_key",
     }
     key_attr = key_attr_map.get(provider)
     if not key_attr:

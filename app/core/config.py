@@ -43,8 +43,11 @@ class Settings(BaseSettings):
     azure_openai_embeddings_deployment: str = "text-embedding-3-small"
 
     # ── OpenAI (fallback) ──
-    openai_api_key: str = ""
-    openai_model: str = "gpt-4.1"
+    # Onda 7 Wave 5: OPENAI_API_KEY pública removida. Provider "openai" foi
+    # transformado em alias de Azure OpenAI em llm_providers.get_provider —
+    # toda chamada usa AZURE_OPENAI_API_KEY. Para acesso direto ao OpenAI
+    # público (sem Azure), reabilitar reinstanciando OpenAIProvider e
+    # esta config; mas é raro o caso em produção empresarial.
 
     # ── Maritaca AI ──
     maritaca_api_key: str = ""

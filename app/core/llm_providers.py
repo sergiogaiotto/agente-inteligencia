@@ -128,41 +128,12 @@ class AzureOpenAIProvider(LLMProvider):
 
 
 # ───────────────────────────────────────────────────────────────
-# OpenAI público
+# OpenAI público — REMOVIDO (Onda 7 Wave 5).
+# Provider "openai" agora é alias de AzureOpenAIProvider em get_provider().
+# Toda chamada usa AZURE_OPENAI_API_KEY. Pra reabilitar OpenAI público
+# direto, restaurar OpenAIProvider class + reinstanciar openai_api_key
+# em config.Settings.
 # ───────────────────────────────────────────────────────────────
-class OpenAIProvider(LLMProvider):
-    """Provedor OpenAI público (fallback)."""
-
-    def __init__(self, model: str | None = None, temperature: float = 0.7):
-        settings = get_settings()
-        self.model = model or settings.openai_model
-        self.api_key = settings.openai_api_key
-        self.temperature = temperature
-        self._gateway_mode = _gateway_active()
-
-        if self._gateway_mode:
-            self._llm = _build_gateway_llm(f"openai/{self.model}", temperature)
-        else:
-            self._llm = ChatOpenAI(
-                model=self.model,
-                api_key=self.api_key,
-                temperature=self.temperature,
-            )
-
-    def _build_direct_llm(self):
-        if not get_settings().openai_api_key:
-            return None
-        return ChatOpenAI(
-            model=self.model,
-            api_key=get_settings().openai_api_key,
-            temperature=self.temperature,
-        )
-
-    def get_langchain_llm(self):
-        return self._llm
-
-    async def generate(self, messages: list[dict], **kwargs) -> dict:
-        return await _generate_via_langchain(self, messages, **kwargs)
 
 
 # ───────────────────────────────────────────────────────────────
