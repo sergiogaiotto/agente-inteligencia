@@ -142,6 +142,129 @@ async def _check_redis() -> dict:
         }
 
 
+async def _qdrant_details() -> dict:
+    """Lista coleções Qdrant com points_count + dimensão dos vetores."""
+    qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(f"{qdrant_url}/collections")
+            if r.status_code != 200:
+                return {"ok": False, "error": f"HTTP {r.status_code}", "collections": []}
+            cols = (r.json().get("result") or {}).get("collections") or []
+            # Para cada coleção, busca detalhes em paralelo
+            async def _one(name: str) -> dict:
+                try:
+                    rr = await client.get(f"{qdrant_url}/collections/{name}")
+                    if rr.status_code != 200:
+                        return {"name": name, "error": f"HTTP {rr.status_code}"}
+                    res = (rr.json().get("result") or {})
+                    vec = ((res.get("config") or {}).get("params") or {}).get("vectors") or {}
+                    # Qdrant pode retornar `vectors` como dict simples OU como dict de named vectors.
+                    # Para named vectors, pega o primeiro size disponível.
+                    size = vec.get("size")
+                    if size is None and isinstance(vec, dict):
+                        for v in vec.values():
+                            if isinstance(v, dict) and "size" in v:
+                                size = v["size"]
+                                break
+                    return {
+                        "name": name,
+                        "points_count": res.get("points_count", 0),
+                        "indexed_vectors_count": res.get("indexed_vectors_count", 0),
+                        "segments_count": res.get("segments_count", 0),
+                        "vector_size": size,
+                        "status": res.get("status", "unknown"),
+                    }
+                except Exception as e:
+                    return {"name": name, "error": f"{type(e).__name__}: {str(e)[:60]}"}
+
+            details = await asyncio.gather(*[_one(c["name"]) for c in cols])
+            return {"ok": True, "collections": details}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:80]}", "collections": []}
+
+
+async def _redis_details() -> dict:
+    """Estatísticas do Redis via INFO."""
+    try:
+        import redis.asyncio as aioredis
+        url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+        client = aioredis.from_url(url, socket_timeout=_TIMEOUT, decode_responses=True)
+        try:
+            info = await client.info()
+            # Hit rate: hits / (hits + misses). Útil pra avaliar eficiência do cache.
+            hits = int(info.get("keyspace_hits", 0))
+            misses = int(info.get("keyspace_misses", 0))
+            total = hits + misses
+            hit_rate = round(hits / total * 100, 1) if total > 0 else None
+            # Keys count: o INFO retorna db0 como string "keys=N,expires=N,avg_ttl=N"
+            db0 = info.get("db0", {})
+            if isinstance(db0, dict):
+                keys = int(db0.get("keys", 0))
+            else:
+                # Fallback: parsing string
+                keys = 0
+                for part in str(db0).split(","):
+                    if part.startswith("keys="):
+                        keys = int(part.split("=")[1])
+                        break
+        finally:
+            await client.close()
+        return {
+            "ok": True,
+            "used_memory_human": info.get("used_memory_human", "?"),
+            "connected_clients": info.get("connected_clients", 0),
+            "total_commands_processed": info.get("total_commands_processed", 0),
+            "keyspace_hits": hits,
+            "keyspace_misses": misses,
+            "hit_rate_pct": hit_rate,
+            "keys_db0": keys,
+            "redis_version": info.get("redis_version", "?"),
+            "uptime_in_days": info.get("uptime_in_days", 0),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:80]}"}
+
+
+async def _postgres_details() -> dict:
+    """Contagens das tabelas principais (agentes, interações, evidências, etc.).
+
+    Reusa o pool asyncpg do app — query única com UNION ALL pra performance.
+    """
+    from app.core.database import _get_pool
+    try:
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            rows = await con.fetch("""
+                SELECT 'agents' AS table_name, COUNT(*)::bigint AS count FROM agents
+                UNION ALL SELECT 'skills', COUNT(*)::bigint FROM skills
+                UNION ALL SELECT 'interactions', COUNT(*)::bigint FROM interactions
+                UNION ALL SELECT 'turns', COUNT(*)::bigint FROM turns
+                UNION ALL SELECT 'knowledge_sources', COUNT(*)::bigint FROM knowledge_sources
+                UNION ALL SELECT 'api_connectors', COUNT(*)::bigint FROM api_connectors
+                UNION ALL SELECT 'audit_log', COUNT(*)::bigint FROM audit_log
+            """)
+            return {"ok": True, "counts": {r["table_name"]: r["count"] for r in rows}}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:80]}"}
+
+
+@router.get("/details")
+async def infra_details():
+    """Métricas detalhadas dos serviços de dados — Qdrant collections,
+    Redis INFO e contagens das tabelas Postgres principais.
+
+    Diferente de /status (binário ok/error), /details traz contadores e
+    configuração que mudam ao longo do uso.
+    """
+    qdrant, redis, pg = await asyncio.gather(
+        _qdrant_details(),
+        _redis_details(),
+        _postgres_details(),
+    )
+    return {"qdrant": qdrant, "redis": redis, "postgres": pg}
+
+
 @router.get("/status")
 async def infra_status():
     """Status agregado de todos os serviços do compose.
