@@ -151,11 +151,10 @@ loopback — `ssh -L 3000:127.0.0.1:3000 deploy@<VPS>` pra acessar).
 | Redis não exposto na host | ✓ |
 | Qdrant em loopback (debug only) | ✓ |
 | OPA em loopback | ✓ |
-| LiteLLM em loopback | ✓ |
 | Grafana em loopback (profile full) | ✓ |
 | Healthchecks em todos serviços | ✓ |
 | Logs com rotação (10MB×3) | ✓ |
-| Memory limits (caddy 128m, opa 256m, litellm 512m) | ✓ |
+| Memory limits (caddy 128m, opa 256m) | ✓ |
 | Volumes nomeados (sobrevivem `down` sem `-v`) | ✓ |
 | Caddy auto-HTTPS (Let's Encrypt) | ✓ quando `TLS_SITE` for domínio |
 | HSTS sticky | ⚠ comentado — descomente em `infra/caddy/Caddyfile` após validar 1-2 semanas |

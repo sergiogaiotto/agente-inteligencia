@@ -10,7 +10,6 @@
 # Patterns detectados (high-confidence — prefixos distintivos):
 #   sk-proj-...           OpenAI project keys
 #   sk-ant-...            Anthropic
-#   sk-litellm-...        LiteLLM master keys (Onda 4b)
 #   pk-lf-... / sk-lf-... LangFuse public/secret
 #   xoxb-...              Slack bot tokens
 #   ghp_/gho_/ghu_...     GitHub tokens
@@ -54,7 +53,6 @@ FILES=$(echo "$FILES" | grep -vE '\.(png|jpg|jpeg|gif|pdf|zip|gz|tar|whl|so|dll|
 PATTERNS=(
   'sk-proj-[A-Za-z0-9_-]{30,}'
   'sk-ant-[A-Za-z0-9_-]{40,}'
-  'sk-litellm-[a-f0-9]{40,}'
   'pk-lf-[a-f0-9-]{30,}'
   'sk-lf-[a-f0-9-]{30,}'
   'xoxb-[A-Za-z0-9-]{20,}'
