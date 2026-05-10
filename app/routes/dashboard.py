@@ -791,7 +791,7 @@ async def compare_eval_runs(a: str, b: str):
         response["divergent_cases"] = _divergent_cases(run_a, run_b, limit=20)
     return response
 
-@router.get("/verifier/async-stats")
+@router.get("/dashboard/verifier/async-stats")
 async def verifier_async_stats():
     """Snapshot dos counters do dispatcher async + config corrente.
 
@@ -825,7 +825,7 @@ class LLMRoutingUpdate(BaseModel):
     multimodal_fallback: Optional[str] = None
 
 
-@router.get("/llm-routing")
+@router.get("/dashboard/llm-routing")
 async def get_llm_routing():
     """Retorna o routing config atual + defaults + lista de task types."""
     from app.llm_routing import load_routing, DEFAULT_ROUTING, TASK_TYPES
@@ -844,7 +844,7 @@ async def get_llm_routing():
     }
 
 
-@router.put("/llm-routing")
+@router.put("/dashboard/llm-routing")
 async def put_llm_routing(data: LLMRoutingUpdate):
     """Atualiza routing config. Aceita subset (só keys não-None mudam).
     Cada valor é validado como `provider/model` antes de persistir."""
