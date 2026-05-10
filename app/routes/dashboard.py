@@ -1020,6 +1020,48 @@ async def list_source_chunks(ks_id: str, limit: int = 50, offset: int = 0):
     return {"source_id": ks_id, "count": len(chunks), "chunks": chunks}
 
 
+class KBQueryRequest(BaseModel):
+    query: str
+    top_n: int = 5
+
+
+@router.post("/knowledge-sources/{ks_id}/query")
+async def query_knowledge_source(ks_id: str, data: KBQueryRequest):
+    """Executa retrieval híbrido (BM25 + vetorial + RRF) restrito a UMA KB.
+
+    Usado pela UI de inspeção pra que o operador teste se a KB está
+    respondendo bem antes de cabear num agente real. Retorna chunks
+    com scores ordenados por relevância.
+    """
+    from app.evidence.runtime import Retriever
+    if not await knowledge_repo.find_by_id(ks_id):
+        raise HTTPException(404, "knowledge_source não encontrada")
+    if not data.query or not data.query.strip():
+        raise HTTPException(400, "Query vazia")
+
+    retriever = Retriever()
+    results = await retriever.retrieve(
+        query=data.query.strip(),
+        top_n=max(1, min(data.top_n, 20)),
+        allowed_source_ids=[ks_id],  # filtra só nesta KB
+    )
+    return {
+        "source_id": ks_id,
+        "query": data.query.strip(),
+        "results": [
+            {
+                "evidence_id": r.evidence_id,
+                "snippet_text": r.snippet_text,
+                "relevance_score": round(r.relevance_score, 4) if r.relevance_score is not None else None,
+                "source_name": r.source_name,
+                "confidentiality": r.confidentiality,
+            }
+            for r in results
+        ],
+        "count": len(results),
+    }
+
+
 @router.get("/rag/health")
 async def rag_health():
     """Diagnóstico do stack RAG (Onda 3): Qdrant alive + collection info."""

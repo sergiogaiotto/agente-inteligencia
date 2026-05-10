@@ -60,6 +60,12 @@
                             Ingerir
                         </button>
                         <button x-show="statsBy[s.id]?.chunks_count > 0"
+                                @click="openInspect(s)" title="Inspecionar — chunks indexados + busca de teste"
+                                class="inline-flex items-center gap-1 rounded-md bg-violet-50 px-2 py-1 text-[11px] font-semibold text-violet-700 hover:bg-violet-100">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                            Inspecionar
+                        </button>
+                        <button x-show="statsBy[s.id]?.chunks_count > 0"
                                 @click="clearChunks(s)" title="Limpar conteúdo (mantém a fonte registrada)"
                                 class="p-1.5 rounded-md hover:bg-amber-50 text-surface-400 hover:text-amber-700 opacity-0 group-hover:opacity-100 transition-opacity">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 00-3.7-3.7 48.678 48.678 0 00-7.324 0 4.006 4.006 0 00-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3l-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 003.7 3.7 48.656 48.656 0 007.324 0 4.006 4.006 0 003.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3l-3 3"/></svg>
@@ -290,6 +296,177 @@
             </div>
         </div>
     </template>
+
+    <!-- ══ MODAL: Inspecionar KB (overview + chunks + test query) ══ -->
+    <template x-if="inspectOpen">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
+            <div class="fixed inset-0 bg-black/40" @click="inspectOpen = false"></div>
+            <div class="relative z-10 w-full max-w-4xl rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden flex flex-col" style="max-height: 90vh">
+                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4 shrink-0">
+                    <div>
+                        <h3 class="text-[15px] font-bold text-brand-900">Inspecionar Base</h3>
+                        <p class="text-[11px] text-surface-400 truncate" x-text="'KB: ' + (inspectSource?.name || '—')"></p>
+                    </div>
+                    <button @click="inspectOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+
+                <!-- Tabs -->
+                <div class="flex border-b border-surface-100 px-6 shrink-0">
+                    <template x-for="t in [{k:'overview',label:'Visão Geral'},{k:'chunks',label:'Chunks'},{k:'query',label:'Test Query'}]" :key="t.k">
+                        <button @click="inspectTab = t.k"
+                                :class="inspectTab === t.k ? 'border-brand-500 text-brand-700' : 'border-transparent text-surface-500 hover:text-brand-600'"
+                                class="px-4 py-3 border-b-2 text-[12px] font-semibold transition-colors">
+                            <span x-text="t.label"></span>
+                        </button>
+                    </template>
+                </div>
+
+                <!-- Content -->
+                <div class="flex-1 overflow-y-auto px-6 py-5">
+
+                    <!-- TAB: Visão Geral -->
+                    <div x-show="inspectTab === 'overview'" class="space-y-4">
+                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                            <div class="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2.5">
+                                <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Chunks</div>
+                                <div class="text-[18px] font-bold text-brand-900 font-mono" x-text="(statsBy[inspectSource?.id]?.chunks_count || 0).toLocaleString()"></div>
+                            </div>
+                            <div class="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2.5">
+                                <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Tokens</div>
+                                <div class="text-[18px] font-bold text-brand-900 font-mono" x-text="(statsBy[inspectSource?.id]?.tokens_total || 0).toLocaleString()"></div>
+                            </div>
+                            <div class="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2.5">
+                                <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Avg tokens/chunk</div>
+                                <div class="text-[18px] font-bold text-brand-900 font-mono" x-text="inspectAvgTokens"></div>
+                            </div>
+                            <div class="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2.5">
+                                <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Última ingestão</div>
+                                <div class="text-[12px] font-semibold text-brand-900" x-text="ago(statsBy[inspectSource?.id]?.last_chunk_at)"></div>
+                            </div>
+                        </div>
+                        <div class="rounded-lg border border-surface-200 bg-white px-4 py-3 space-y-2">
+                            <div class="text-[12px] font-semibold text-brand-900">Metadados</div>
+                            <div class="text-[11px] text-surface-600 grid grid-cols-2 gap-2">
+                                <div><span class="text-surface-400">ID:</span> <span class="font-mono text-brand-900" x-text="inspectSource?.id || '—'"></span></div>
+                                <div><span class="text-surface-400">Tipo:</span> <span x-text="inspectSource?.source_type || '—'"></span></div>
+                                <div><span class="text-surface-400">Classificação:</span> <span x-text="inspectSource?.confidentiality_label || '—'"></span></div>
+                                <div><span class="text-surface-400">Coleção Qdrant:</span> <span class="font-mono">agente_evidence</span></div>
+                            </div>
+                            <div x-show="inspectSource?.description" class="text-[11px] text-surface-500 pt-2 border-t border-surface-100" x-text="inspectSource?.description"></div>
+                        </div>
+                        <div class="rounded-lg border border-violet-100 bg-violet-50/40 px-4 py-3 text-[11px] text-violet-700 leading-relaxed">
+                            <strong>Como funciona o RAG aqui:</strong> texto vai pra <code class="bg-white px-1 rounded">evidence_chunks</code> (Postgres + tsvector pra BM25)
+                            e <code class="bg-white px-1 rounded">agente_evidence</code> (Qdrant pra similaridade vetorial). Busca híbrida com RRF
+                            funde os dois rankings. Use a aba <strong>Test Query</strong> pra ver o que cada query traria de volta antes de cabear num agente.
+                        </div>
+                    </div>
+
+                    <!-- TAB: Chunks -->
+                    <div x-show="inspectTab === 'chunks'" class="space-y-3">
+                        <div class="flex items-center justify-between gap-2">
+                            <input type="text" x-model="inspectChunkFilter" placeholder="Filtrar por texto..."
+                                   class="flex-1 rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[12px] outline-none focus:border-brand-400">
+                            <span class="text-[10px] text-surface-400">
+                                <span x-text="filteredChunks.length"></span> de <span x-text="inspectChunks.length"></span>
+                            </span>
+                            <button @click="loadInspectChunks(true)" class="rounded-lg border border-surface-200 px-3 py-1.5 text-[11px] text-surface-600 hover:bg-surface-50">
+                                ↻ Recarregar
+                            </button>
+                        </div>
+                        <div x-show="inspectChunksLoading" class="text-center py-8 text-[12px] text-surface-400">Carregando chunks...</div>
+                        <div x-show="!inspectChunksLoading && filteredChunks.length === 0" class="text-center py-8 text-[12px] text-surface-400">
+                            <span x-show="inspectChunks.length === 0">Nenhum chunk indexado ainda — ingira conteúdo primeiro.</span>
+                            <span x-show="inspectChunks.length > 0">Nenhum chunk casa com o filtro.</span>
+                        </div>
+                        <div class="space-y-2">
+                            <template x-for="c in filteredChunks" :key="c.id">
+                                <div class="rounded-lg border border-surface-200 bg-white hover:shadow-sm transition-shadow">
+                                    <div class="flex items-center justify-between px-3 py-2 border-b border-surface-100 bg-surface-50/50">
+                                        <div class="flex items-center gap-2 text-[10px] font-mono text-surface-500">
+                                            <span class="rounded bg-brand-100 text-brand-700 px-1.5 py-0.5 font-semibold">#<span x-text="c.ordinal"></span></span>
+                                            <span x-text="c.token_count + ' tokens'"></span>
+                                            <span x-text="c.char_count + ' chars'"></span>
+                                            <span class="text-surface-300" x-text="ago(c.created_at)"></span>
+                                        </div>
+                                        <button @click="c._expanded = !c._expanded" class="text-[10px] text-brand-600 hover:text-brand-700">
+                                            <span x-text="c._expanded ? 'Colapsar' : 'Expandir'"></span>
+                                        </button>
+                                    </div>
+                                    <div class="px-3 py-2 text-[11px] text-surface-700 leading-relaxed font-mono"
+                                         :class="c._expanded ? '' : 'truncate-3-lines'"
+                                         x-text="c.text"></div>
+                                </div>
+                            </template>
+                        </div>
+                        <div x-show="inspectChunks.length >= inspectChunkLimit" class="text-center pt-2">
+                            <button @click="loadInspectChunks(false, inspectChunks.length)"
+                                    class="rounded-lg border border-surface-200 px-4 py-1.5 text-[11px] font-medium text-surface-600 hover:bg-surface-50">
+                                Carregar mais
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- TAB: Test Query -->
+                    <div x-show="inspectTab === 'query'" class="space-y-3">
+                        <div class="flex gap-2">
+                            <input type="text" x-model="inspectQueryText" placeholder="Pergunta de teste — ex: 'qual é a política de cobrança?'"
+                                   @keydown.enter="runInspectQuery()"
+                                   class="flex-1 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none focus:border-brand-400">
+                            <select x-model.number="inspectQueryTopN" class="rounded-lg border border-surface-200 bg-white px-2 py-2 text-[12px]">
+                                <option value="3">top 3</option>
+                                <option value="5">top 5</option>
+                                <option value="10">top 10</option>
+                                <option value="20">top 20</option>
+                            </select>
+                            <button @click="runInspectQuery()" :disabled="inspectQueryLoading || !inspectQueryText.trim()"
+                                    class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+                                <span x-text="inspectQueryLoading ? 'Buscando...' : 'Buscar'"></span>
+                            </button>
+                        </div>
+                        <p class="text-[10px] text-surface-500">
+                            Executa BM25 (Postgres tsvector) + similaridade vetorial (Qdrant) <strong>restritos a esta KB</strong>, fundidos via RRF.
+                            Replica o que um agente real faria — useful para validar antes de promover pro produção.
+                        </p>
+                        <div x-show="inspectQueryError" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700"
+                             x-text="inspectQueryError"></div>
+                        <div x-show="!inspectQueryLoading && inspectQueryResults.length === 0 && inspectQueryRan && !inspectQueryError"
+                             class="text-center py-8 text-[11px] text-surface-400">
+                            Nenhum resultado pra <code class="bg-surface-100 px-1 rounded" x-text="inspectQueryText"></code> nesta KB.
+                        </div>
+                        <div class="space-y-2">
+                            <template x-for="(r, i) in inspectQueryResults" :key="i">
+                                <div class="rounded-lg border border-surface-200 bg-white">
+                                    <div class="flex items-center justify-between px-3 py-2 border-b border-surface-100 bg-emerald-50/30">
+                                        <div class="flex items-center gap-2 text-[10px]">
+                                            <span class="rounded bg-emerald-100 text-emerald-700 px-1.5 py-0.5 font-bold font-mono">#<span x-text="i+1"></span></span>
+                                            <span class="font-semibold text-emerald-700">score:</span>
+                                            <span class="font-mono text-emerald-700" x-text="r.relevance_score"></span>
+                                            <span x-show="r.source_name" class="text-surface-400">·</span>
+                                            <span x-show="r.source_name" class="text-surface-500" x-text="r.source_name"></span>
+                                        </div>
+                                        <span class="text-[9px] font-mono text-surface-300" x-text="r.evidence_id?.slice(0, 8) || ''"></span>
+                                    </div>
+                                    <div class="px-3 py-2 text-[11px] text-surface-700 leading-relaxed" x-text="r.snippet_text"></div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <style>
+        .truncate-3-lines {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+    </style>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -312,6 +489,34 @@ function evidencePage() {
         // Defaults exibidos como placeholder (lidos do .env via /api/v1/dashboard/rag-config)
         defaultChunkSize: 500,
         defaultChunkOverlap: 50,
+
+        // ─── Inspeção de KB (overview/chunks/test query) ───────────
+        inspectOpen: false,
+        inspectSource: null,         // KB completa (id, name, source_type, etc.)
+        inspectTab: 'overview',       // 'overview' | 'chunks' | 'query'
+        inspectChunks: [],            // chunks já carregados
+        inspectChunkLimit: 50,        // página a cada loadInspectChunks
+        inspectChunksLoading: false,
+        inspectChunkFilter: '',       // filtro textual local (sem hit no servidor)
+        inspectQueryText: '',
+        inspectQueryTopN: 5,
+        inspectQueryResults: [],
+        inspectQueryLoading: false,
+        inspectQueryError: '',
+        inspectQueryRan: false,       // 1ª busca foi feita? — controla "nenhum resultado"
+
+        get inspectAvgTokens() {
+            const stats = this.statsBy[this.inspectSource?.id];
+            const c = stats?.chunks_count || 0;
+            const t = stats?.tokens_total || 0;
+            return c > 0 ? Math.round(t / c).toLocaleString() : '—';
+        },
+
+        get filteredChunks() {
+            const q = (this.inspectChunkFilter || '').toLowerCase().trim();
+            if (!q) return this.inspectChunks;
+            return this.inspectChunks.filter(c => (c.text || '').toLowerCase().includes(q));
+        },
 
         get ingestCanSubmit() {
             if (this.ingestTab === 'text') return !!(this.ingestForm.text || '').trim();
@@ -458,6 +663,56 @@ function evidencePage() {
                     result: null,
                 };
             }
+        },
+
+        // ─── Inspeção (overview / chunks / test query) ──────────────
+        openInspect(s) {
+            this.inspectSource = s;
+            this.inspectTab = 'overview';
+            this.inspectChunks = [];
+            this.inspectChunkFilter = '';
+            this.inspectQueryText = '';
+            this.inspectQueryResults = [];
+            this.inspectQueryError = '';
+            this.inspectQueryRan = false;
+            this.inspectOpen = true;
+            // Pré-carrega chunks pra a aba "Chunks" não ter delay quando trocar
+            this.loadInspectChunks(true);
+        },
+
+        async loadInspectChunks(replace = true, offset = 0) {
+            if (!this.inspectSource) return;
+            this.inspectChunksLoading = true;
+            try {
+                const r = await api.get(
+                    '/api/v1/knowledge-sources/' + this.inspectSource.id +
+                    '/chunks?limit=' + this.inspectChunkLimit + '&offset=' + offset
+                );
+                const incoming = (r.chunks || []).map(c => ({...c, _expanded: false}));
+                this.inspectChunks = replace ? incoming : [...this.inspectChunks, ...incoming];
+            } catch(e) {
+                showToast('Erro ao carregar chunks: ' + (e?.message || ''), 'error');
+            }
+            this.inspectChunksLoading = false;
+        },
+
+        async runInspectQuery() {
+            const q = (this.inspectQueryText || '').trim();
+            if (!q || !this.inspectSource) return;
+            this.inspectQueryLoading = true;
+            this.inspectQueryError = '';
+            this.inspectQueryResults = [];
+            try {
+                const r = await api.post(
+                    '/api/v1/knowledge-sources/' + this.inspectSource.id + '/query',
+                    { query: q, top_n: this.inspectQueryTopN }
+                );
+                this.inspectQueryResults = r.results || [];
+            } catch(e) {
+                this.inspectQueryError = e?.message || 'erro desconhecido';
+            }
+            this.inspectQueryLoading = false;
+            this.inspectQueryRan = true;
         },
 
         async clearChunks(s) {
