@@ -26,6 +26,37 @@ router = APIRouter(prefix="/api/v1/infra", tags=["infra"])
 _TIMEOUT = 1.5
 
 
+def _is_container_absent(exc: Exception) -> bool:
+    """Heurística: container do serviço não existe na network.
+
+    Em serviços opcionais (profile_full), isso é estado esperado, não erro.
+    Cobre 2 cenários:
+    1. DNS lookup falha (Linux puro, Errno -3/-2): "name not known", "getaddrinfo"
+    2. Connect timeout (Docker Desktop): DNS embedded espera resposta que nunca chega
+       — `ConnectTimeout`, `ConnectError`, `ReadTimeout` em hostname desconhecido.
+
+    Falsos positivos teóricos: serviço existente mas unresponsive. Aceito o
+    tradeoff — em VPS Linux a heurística de DNS é precisa; em Docker Desktop
+    o pior caso é mostrar "não iniciado" pra um serviço que travou (UX OK).
+    """
+    msg = str(exc).lower()
+    type_name = type(exc).__name__.lower()
+    dns_indicators = (
+        "name or service not known",
+        "temporary failure in name resolution",
+        "errno -3",
+        "errno -2",
+        "nodename nor servname provided",
+        "getaddrinfo failed",
+    )
+    if any(ind in msg for ind in dns_indicators):
+        return True
+    # httpx em Docker Desktop com container ausente: ConnectTimeout
+    if "connecttimeout" in type_name or "connecterror" in type_name:
+        return True
+    return False
+
+
 async def _check_http(
     name: str,
     health_url: str,
@@ -35,7 +66,11 @@ async def _check_http(
     expect_status: tuple = (200,),
     profile_full: bool = False,
 ) -> dict:
-    """Checa um serviço HTTP com httpx GET. Retorna dict pro frontend."""
+    """Checa um serviço HTTP com httpx GET. Retorna dict pro frontend.
+
+    Estado "not_started" (novo): serviço opcional cujo container nem existe
+    na network. UI renderiza como info/cinza, não erro/vermelho.
+    """
     t0 = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
@@ -44,6 +79,7 @@ async def _check_http(
             return {
                 "name": name,
                 "ok": ok,
+                "not_started": False,
                 "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
                 "description": description,
                 "ui_url": ui_url,
@@ -56,18 +92,25 @@ async def _check_http(
                 ),
             }
     except Exception as e:
+        # Serviço opcional + falha de conexão (DNS/timeout) = container não
+        # existe. NÃO é erro: é estado normal pra quem não rodou --profile full.
+        not_started = profile_full and _is_container_absent(e)
         return {
             "name": name,
             "ok": False,
+            "not_started": not_started,
             "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
             "description": description,
             "ui_url": ui_url,
             "health_url": health_url,
             "status_code": None,
-            "error": f"{type(e).__name__}: {str(e)[:80]}",
+            "error": None if not_started else f"{type(e).__name__}: {str(e)[:80]}",
             "hint": (
-                "Serviço opcional — rode `docker compose --profile full up -d`"
-                if profile_full else None
+                "Serviço opcional não iniciado — rode `docker compose --profile full up -d` se quiser observabilidade"
+                if not_started else (
+                    "Serviço opcional — rode `docker compose --profile full up -d`"
+                    if profile_full else None
+                )
             ),
         }
 
@@ -83,6 +126,7 @@ async def _check_postgres() -> dict:
         return {
             "name": "postgres",
             "ok": True,
+            "not_started": False,
             "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
             "description": "Banco principal (agentes, interações, evidências)",
             "ui_url": None,
@@ -95,6 +139,7 @@ async def _check_postgres() -> dict:
         return {
             "name": "postgres",
             "ok": False,
+            "not_started": False,
             "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
             "description": "Banco principal (agentes, interações, evidências)",
             "ui_url": None,
@@ -120,6 +165,7 @@ async def _check_redis() -> dict:
         return {
             "name": "redis",
             "ok": ok,
+            "not_started": False,
             "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
             "description": "Cache de contexto + rate-limit (Onda 1)",
             "ui_url": None,
@@ -132,6 +178,7 @@ async def _check_redis() -> dict:
         return {
             "name": "redis",
             "ok": False,
+            "not_started": False,
             "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
             "description": "Cache de contexto + rate-limit (Onda 1)",
             "ui_url": None,
@@ -325,11 +372,15 @@ async def infra_status():
         ),
     )
 
+    not_started_count = sum(1 for c in checks if c.get("not_started"))
     return {
         "services": checks,
         "summary": {
             "total": len(checks),
             "healthy": sum(1 for c in checks if c["ok"]),
-            "unhealthy": sum(1 for c in checks if not c["ok"]),
+            # Apenas serviços problemáticos REAIS (não conta opcionais que
+            # nunca foram subidos — esses ficam em "not_started").
+            "unhealthy": sum(1 for c in checks if not c["ok"] and not c.get("not_started")),
+            "not_started": not_started_count,
         },
     }
