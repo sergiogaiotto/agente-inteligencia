@@ -362,6 +362,24 @@ CREATE TABLE IF NOT EXISTS domains (
     created_at TIMESTAMP DEFAULT now()
 );
 
+-- API keys para integrações externas (Zapier, n8n, scripts, mobile apps).
+-- Header `X-API-Key` é validado contra `key_hash` (SHA-256 da plaintext).
+-- `key_prefix` é gravado pra UI exibir "ag_live_a1b2…" sem revelar o resto.
+-- revoked_at preserva audit (vs DELETE — nunca remove o registro histórico).
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    key_prefix TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT now(),
+    last_used_at TIMESTAMP,
+    revoked_at TIMESTAMP,
+    expires_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash) WHERE revoked_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS api_connectors (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -768,6 +786,7 @@ domains_repo = Repository("domains")
 api_connectors_repo = Repository("api_connectors")
 api_endpoints_repo = Repository("api_endpoints")
 api_call_logs_repo = Repository("api_call_logs")
+api_keys_repo = Repository("api_keys")
 
 
 # ═══════════════════════════════════════════════════════════════

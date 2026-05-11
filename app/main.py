@@ -13,6 +13,7 @@ from app.routes.api_connectors import router as api_connectors_router
 from app.routes.mcp_diagnostics import router as mcp_diagnostics_router
 from app.routes.help import router as help_router
 from app.routes.infra import router as infra_router
+from app.routes.api_keys import router as api_keys_router
 
 BASE_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ app.include_router(api_connectors_router)
 app.include_router(mcp_diagnostics_router)
 app.include_router(help_router)
 app.include_router(infra_router)
+app.include_router(api_keys_router)
 
 @app.get("/api/health")
 async def health():

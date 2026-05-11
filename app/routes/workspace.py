@@ -6,8 +6,10 @@ import ast
 from datetime import datetime
 import aiofiles
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse
+
+from app.core.auth import require_user
 from app.models.schemas import ChatMessage
 from app.agents.engine import execute_interaction
 from app.core.database import interactions_repo, turns_repo
@@ -286,8 +288,13 @@ async def _filter_attachments_by_agent(attachments: list, agent_id: str) -> tupl
 
 
 @router.post("/chat")
-async def chat(data: ChatMessage):
-    """Executa interação (agente individual ou pipeline mesh)."""
+async def chat(data: ChatMessage, request: Request, user: dict = Depends(require_user)):
+    """Executa interação (agente individual ou pipeline mesh).
+
+    Auth: cookie de sessão (UI) OU header `X-API-Key: ag_live_...` (integração
+    externa). Quando X-API-Key é usado, request.state.api_key_id fica disponível
+    pra audit log distinguir UI de chamadas externas.
+    """
     try:
         attachments = []
         if data.attachments:

@@ -93,3 +93,76 @@ def cookie_kwargs() -> dict:
         "secure": s.cookie_secure,
         "max_age": s.session_max_age_seconds,
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Auth unificada — cookie OU X-API-Key (Depends pra endpoints)
+# ═══════════════════════════════════════════════════════════════
+
+from typing import Optional
+from fastapi import HTTPException, Request
+
+
+def _extract_api_key_from_headers(request: Request) -> Optional[str]:
+    """X-API-Key direto, ou Authorization: Bearer ag_live_... (convenção)."""
+    key = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+    if key:
+        return key.strip()
+    authz = request.headers.get("Authorization") or request.headers.get("authorization") or ""
+    if authz.lower().startswith("bearer "):
+        candidate = authz.split(None, 1)[1].strip()
+        if candidate.startswith("ag_live_"):
+            return candidate
+    return None
+
+
+async def require_user(request: Request) -> dict:
+    """Auth obrigatória. 401 se nem cookie nem X-API-Key validarem.
+
+    Convenção pra usar:
+        @router.post("/algo")
+        async def handler(user: dict = Depends(require_user)):
+            uid = user["id"]
+            ...
+
+    Aceita 2 caminhos:
+    1. Cookie `user_id` (UI/browser — comportamento atual).
+    2. Header `X-API-Key: ag_live_...` (integração externa).
+       Também `Authorization: Bearer ag_live_...` se o cliente preferir.
+
+    Side-effect: quando X-API-Key é usado, popula request.state.api_key_id
+    e .api_key_name pra audit log saber qual integração disparou.
+    """
+    from app.core.database import users_repo
+
+    # Cookie path (UI)
+    uid = request.cookies.get("user_id")
+    if uid:
+        user = await users_repo.find_by_id(uid)
+        if user and user.get("status", "active") == "active":
+            return {k: v for k, v in dict(user).items() if k != "password_hash"}
+
+    # API key path (integração externa)
+    api_key = _extract_api_key_from_headers(request)
+    if api_key:
+        from app.core.auth_apikey import verify_api_key
+        key_record = await verify_api_key(api_key)
+        if key_record:
+            user = await users_repo.find_by_id(key_record["user_id"])
+            if user and user.get("status", "active") == "active":
+                request.state.api_key_id = key_record["id"]
+                request.state.api_key_name = key_record["name"]
+                return {k: v for k, v in dict(user).items() if k != "password_hash"}
+
+    raise HTTPException(
+        401,
+        "Autenticação requerida — cookie de sessão ou header X-API-Key",
+    )
+
+
+async def require_user_optional(request: Request) -> Optional[dict]:
+    """Igual a require_user mas devolve None em vez de 401."""
+    try:
+        return await require_user(request)
+    except HTTPException:
+        return None
