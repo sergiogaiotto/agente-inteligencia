@@ -13,6 +13,7 @@ from app.models.schemas import (
 from app.core.database import (
     agents_repo, audit_repo, skills_repo,
     interactions_repo, turns_repo, tool_calls_repo, api_call_logs_repo,
+    binding_executions_repo,
 )
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
@@ -565,6 +566,10 @@ async def get_invocation_detail(agent_id: str, interaction_id: str):
             and started <= log["created_at"] <= ended
         ]
 
+    binding_execs = await binding_executions_repo.find_all(interaction_id=interaction_id, limit=200)
+    # Ordena cronologicamente (find_all retorna DESC)
+    binding_execs.reverse()
+
     audit_events = await audit_repo.find_all(entity_type="interaction", entity_id=interaction_id, limit=100)
     audit_events.reverse()  # cronológico
 
@@ -587,6 +592,7 @@ async def get_invocation_detail(agent_id: str, interaction_id: str):
         "agent": {"id": agent["id"], "name": agent.get("name"), "kind": agent.get("kind")},
         "interaction": _serialize_row(itx),
         "turns": [_serialize_row(t) for t in turns],
+        "binding_executions": [_serialize_row(be) for be in binding_execs],
         "tool_calls": [_serialize_row(tc) for tc in tool_calls],
         "api_call_logs": [_serialize_row(a) for a in api_logs],
         "audit_events": [_serialize_row(a) for a in audit_events],
