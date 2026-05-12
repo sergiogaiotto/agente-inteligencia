@@ -220,15 +220,6 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     created_at TIMESTAMP DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS traces (
-    id TEXT PRIMARY KEY,
-    trace_id TEXT,
-    interaction_id TEXT,
-    spans TEXT DEFAULT '[]',
-    duration_ms REAL DEFAULT 0,
-    created_at TIMESTAMP DEFAULT now()
-);
-
 CREATE TABLE IF NOT EXISTS releases (
     id TEXT PRIMARY KEY,
     name TEXT,
@@ -520,6 +511,10 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS judge_model TEXT",
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS gate_reason TEXT",
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS dimension_breakdown TEXT DEFAULT '{}'",
+    # Tabela `traces` foi criada no schema mas nunca escrita por ninguém — traces
+    # vivem no Tempo via OTLP. Drop idempotente p/ remover de instâncias antigas
+    # (sempre vazia, sem dependentes).
+    "DROP TABLE IF EXISTS traces",
 ]
 
 
@@ -773,7 +768,6 @@ evidence_chunks_repo = Repository("evidence_chunks")  # Onda 3 — chunks de doc
 verifications_repo = Repository("verifications")  # §14.2 — resultado do Verifier multi-dim
 tools_repo = Repository("tools")
 tool_calls_repo = Repository("tool_calls")
-traces_repo = Repository("traces")
 releases_repo = Repository("releases")
 gold_cases_repo = Repository("gold_cases")
 eval_runs_repo = Repository("eval_runs")
