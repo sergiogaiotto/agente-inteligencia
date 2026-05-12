@@ -229,6 +229,24 @@ CREATE TABLE IF NOT EXISTS traces (
     created_at TIMESTAMP DEFAULT now()
 );
 
+-- Onda observability: bindings declarativos executados (1 row por chamada do engine,
+-- inclui compensações). Permite queries como "latência média do binding X" ou
+-- "qual binding falha mais nesta semana". Linka api_call_logs via call_id.
+CREATE TABLE IF NOT EXISTS binding_executions (
+    id TEXT PRIMARY KEY,
+    interaction_id TEXT NOT NULL,
+    agent_id TEXT DEFAULT '',
+    binding_id TEXT NOT NULL,
+    call_id TEXT DEFAULT '',
+    status_code INTEGER DEFAULT 0,
+    latency_ms REAL DEFAULT 0,
+    attempts INTEGER DEFAULT 1,
+    error TEXT,
+    skipped_by_breaker BOOLEAN DEFAULT FALSE,
+    is_compensation BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS releases (
     id TEXT PRIMARY KEY,
     name TEXT,
@@ -525,6 +543,10 @@ _IDEMPOTENT_MIGRATIONS = [
     # temporal) na UI — frágil sob concorrência. NULL em rows pré-migration.
     "ALTER TABLE api_call_logs ADD COLUMN IF NOT EXISTS interaction_id TEXT",
     "CREATE INDEX IF NOT EXISTS idx_api_call_logs_interaction ON api_call_logs(interaction_id)",
+    # Índices da nova tabela binding_executions (lookups por interaction + analytics
+    # cross-agent/cross-binding).
+    "CREATE INDEX IF NOT EXISTS idx_binding_executions_interaction ON binding_executions(interaction_id)",
+    "CREATE INDEX IF NOT EXISTS idx_binding_executions_agent_binding ON binding_executions(agent_id, binding_id)",
 ]
 
 
@@ -779,6 +801,7 @@ verifications_repo = Repository("verifications")  # §14.2 — resultado do Veri
 tools_repo = Repository("tools")
 tool_calls_repo = Repository("tool_calls")
 traces_repo = Repository("traces")
+binding_executions_repo = Repository("binding_executions")
 releases_repo = Repository("releases")
 gold_cases_repo = Repository("gold_cases")
 eval_runs_repo = Repository("eval_runs")
