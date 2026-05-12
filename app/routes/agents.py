@@ -327,15 +327,37 @@ async def get_agent_inputs_schema(agent_id: str):
     return payload
 
 
+async def _resolve_agent(ref: str) -> dict | None:
+    """Resolve um agente por UUID (id PK) ou, em fallback, por name exato.
+    Retorna None se nada bate. Lança 409 se o name é ambíguo (>1 hit) — caller
+    é forçado a usar UUID nesses casos."""
+    agent = await agents_repo.find_by_id(ref)
+    if agent:
+        return agent
+    matches = await agents_repo.find_all(name=ref, limit=2)
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise HTTPException(
+            409,
+            f"Nome '{ref}' é ambíguo — há {len(matches)}+ agentes com esse nome. Use o UUID.",
+        )
+    return None
+
+
 @router.post("/{agent_id}/invoke", response_model=AgentInvokeResponse)
 async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeResponse:
     from app.agents.engine import execute_interaction
     from app.agents.declarative_engine import execute_declarative
     from app.skill_parser.parser import parse_skill_md
 
-    agent = await agents_repo.find_by_id(agent_id)
+    agent = await _resolve_agent(agent_id)
     if not agent:
-        raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
+        raise HTTPException(404, f"Agente '{agent_id}' não encontrado (tentei UUID e name)")
+    # Normaliza: a partir daqui agent_id é sempre o UUID — downstream
+    # (execute_interaction, audit, etc) precisa do PK pra não tentar
+    # find_by_id novamente com o name.
+    agent_id = agent["id"]
 
     parsed_skill = None
     if agent.get("skill_id"):
