@@ -946,7 +946,7 @@ function apiConnectorsPage() {
         },
 
         async copyResponse() {
-            try { await navigator.clipboard.writeText(JSON.stringify(this.response?.data || this.response?.error, null, 2)); showToast('Copiado'); } catch {}
+            if (await copyText(JSON.stringify(this.response?.data || this.response?.error, null, 2))) showToast('Copiado');
         },
 
         // ── Connector CRUD ──
