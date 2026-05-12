@@ -551,13 +551,19 @@ async def get_invocation_detail(agent_id: str, interaction_id: str):
     turns.sort(key=lambda t: t.get("turn_number") or 0)
     tool_calls = await tool_calls_repo.find_all(interaction_id=interaction_id, limit=200)
 
-    started = itx.get("started_at")
-    ended = itx.get("ended_at") or datetime.utcnow()
-    api_logs_raw = await api_call_logs_repo.find_all(agent_id=agent_id, limit=500)
-    api_logs = [
-        log for log in api_logs_raw
-        if started and log.get("created_at") and started <= log["created_at"] <= ended
-    ]
+    # Preferência: FK direto (api_call_logs.interaction_id, populado pelo declarative
+    # engine após Onda X). Fallback: janela temporal pra rows pré-migration (NULL).
+    api_logs = await api_call_logs_repo.find_all(interaction_id=interaction_id, limit=500)
+    if not api_logs:
+        started = itx.get("started_at")
+        ended = itx.get("ended_at") or datetime.utcnow()
+        api_logs_raw = await api_call_logs_repo.find_all(agent_id=agent_id, limit=500)
+        api_logs = [
+            log for log in api_logs_raw
+            if not log.get("interaction_id")
+            and started and log.get("created_at")
+            and started <= log["created_at"] <= ended
+        ]
 
     audit_events = await audit_repo.find_all(entity_type="interaction", entity_id=interaction_id, limit=100)
     audit_events.reverse()  # cronológico

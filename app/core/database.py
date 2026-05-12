@@ -520,6 +520,11 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS judge_model TEXT",
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS gate_reason TEXT",
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS dimension_breakdown TEXT DEFAULT '{}'",
+    # api_call_logs.interaction_id: liga cada chamada HTTP do declarative engine
+    # à invocação que a originou. Antes era inferido por (agent_id + janela
+    # temporal) na UI — frágil sob concorrência. NULL em rows pré-migration.
+    "ALTER TABLE api_call_logs ADD COLUMN IF NOT EXISTS interaction_id TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_api_call_logs_interaction ON api_call_logs(interaction_id)",
 ]
 
 
