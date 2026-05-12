@@ -396,12 +396,13 @@ async def proxy_call(data: ProxyRequest):
         except Exception:
             resp_data = {"raw": r.text[:5000]}
 
-        # Log
+        # Log — proxy manual não tem contexto de interaction; interaction_id fica vazio.
         await log_repo.create({
             "id": call_id,
             "connector_id": data.connector_id,
             "endpoint_id": data.endpoint_id or "",
             "agent_id": "",
+            "interaction_id": "",
             "method": method,
             "url": url,
             "request_headers": json.dumps({k: v for k, v in headers.items()}, ensure_ascii=False),
