@@ -24,7 +24,10 @@ from jinja2.sandbox import SandboxedEnvironment
 from jsonpath_ng.ext import parse as jsonpath_parse
 
 from app.a2a.protocol import ContextDelta, apply_context_delta
-from app.core.database import api_connectors_repo, api_call_logs_repo, interactions_repo
+from app.core.database import (
+    api_connectors_repo, api_call_logs_repo,
+    interactions_repo, binding_executions_repo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -448,15 +451,47 @@ async def _plan_binding(binding: dict, scope: dict, lenient: bool = False) -> tu
 # Binding execution (post-plan)
 # ═══════════════════════════════════════════════════════
 
+async def _persist_binding_execution(
+    result: dict,
+    interaction_id: str,
+    agent_id: str,
+    is_compensation: bool,
+) -> None:
+    """Persiste um row em binding_executions a partir do result dict. Best-effort:
+    falha aqui só loga (não interfere no fluxo do agente)."""
+    if not interaction_id:
+        return  # Sem contexto de interaction, não vale persistir órfão.
+    try:
+        await binding_executions_repo.create({
+            "id": str(uuid.uuid4()),
+            "interaction_id": interaction_id,
+            "agent_id": agent_id or "",
+            "binding_id": result.get("binding_id") or "",
+            "call_id": result.get("call_id") or "",
+            "status_code": int(result.get("status") or 0),
+            "latency_ms": float(result.get("latency_ms") or 0),
+            "attempts": int(result.get("attempts") or 0),
+            "error": result.get("error"),
+            "skipped_by_breaker": bool(result.get("skipped_by_breaker", False)),
+            "is_compensation": bool(is_compensation),
+        })
+    except Exception as e:
+        logger.warning("Falha ao persistir binding_execution: %s", e)
+
+
 async def _execute_planned_binding(
     plan: dict,
     agent: dict,
     skill_parsed: Any,
     interaction_id: str = "",
+    is_compensation: bool = False,
 ) -> dict:
     """Executa um binding previamente resolvido. Retorna dict com
     status, call_id, latency_ms, attempts, additions, error, etc.
     Não muta contexto — caller decide como aplicar.
+
+    Persiste 1 row em binding_executions ao final (best-effort, ignora interaction_id
+    vazio para evitar lixo de proxy manual).
     """
     binding_id = plan["binding_id"]
     connector = plan["connector"]
@@ -464,7 +499,7 @@ async def _execute_planned_binding(
     breaker = _get_breaker(binding_id, breaker_cfg) if breaker_cfg else None
 
     if breaker and not breaker.allow():
-        return {
+        result = {
             "binding_id": binding_id,
             "call_id": "",
             "status": 0,
@@ -474,6 +509,8 @@ async def _execute_planned_binding(
             "error": f"[{binding_id}] circuit breaker aberto — chamada suprimida",
             "skipped_by_breaker": True,
         }
+        await _persist_binding_execution(result, interaction_id, agent.get("id", ""), is_compensation)
+        return result
 
     req_start = time.time()
     resp, last_error, attempts = await _call_with_retry(
@@ -535,20 +572,17 @@ async def _execute_planned_binding(
             if resp is None
             else f"[{binding_id}] HTTP {status_code} — resposta não-2xx"
         )
-        return result
-
-    mapping = plan["output_mapping"]
-    if not mapping:
+    elif not plan["output_mapping"]:
         result["error"] = f"[{binding_id}] output_mapping é obrigatório"
-        return result
-    if resp_json is None:
+    elif resp_json is None:
         result["error"] = f"[{binding_id}] response não é JSON — output_mapping não pôde ser aplicado"
-        return result
+    else:
+        additions, map_errors = _apply_output_mapping(resp_json, plan["output_mapping"], _MAX_CONTEXT_BYTES)
+        result["additions"] = additions
+        if map_errors:
+            result["error"] = f"[{binding_id}] output_mapping: " + "; ".join(map_errors)
 
-    additions, map_errors = _apply_output_mapping(resp_json, mapping, _MAX_CONTEXT_BYTES)
-    result["additions"] = additions
-    if map_errors:
-        result["error"] = f"[{binding_id}] output_mapping: " + "; ".join(map_errors)
+    await _persist_binding_execution(result, interaction_id, agent.get("id", ""), is_compensation)
     return result
 
 
@@ -750,7 +784,7 @@ async def execute_declarative(
             if perr:
                 errors.append(f"[compensate] {perr}")
                 continue
-            res = await _execute_planned_binding(plan, agent, skill_parsed, interaction_id=trace_id)
+            res = await _execute_planned_binding(plan, agent, skill_parsed, interaction_id=trace_id, is_compensation=True)
             compensations_fired.append(comp_id)
             executed.append({
                 "binding_id": comp_id,

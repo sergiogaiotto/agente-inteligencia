@@ -81,6 +81,33 @@
                                     </div>
                                 </div>
 
+                                <!-- Bindings declarativos -->
+                                <details class="rounded border border-surface-200 bg-white" :open="(e._detail.binding_executions||[]).length > 0">
+                                    <summary class="cursor-pointer px-3 py-2 text-[11px] font-semibold text-brand-900 select-none">
+                                        Bindings declarativos <span class="text-surface-400 font-normal" x-text="'(' + (e._detail.binding_executions||[]).length + ')'"></span>
+                                    </summary>
+                                    <div class="border-t border-surface-100 p-3 space-y-1.5">
+                                        <template x-if="(e._detail.binding_executions||[]).length === 0">
+                                            <div class="text-[10px] text-surface-400">Nenhum binding executado (modo LLM ou agente sem skill declarativa).</div>
+                                        </template>
+                                        <template x-for="be in (e._detail.binding_executions||[])" :key="be.id">
+                                            <div class="rounded border border-surface-100 bg-surface-50/30 p-2 text-[10px]">
+                                                <div class="flex items-center gap-2 flex-wrap">
+                                                    <span class="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 font-mono" x-text="be.binding_id"></span>
+                                                    <span class="rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
+                                                          :class="be.skipped_by_breaker?'bg-surface-200 text-surface-500':(be.status_code>=200&&be.status_code<300)?'bg-emerald-50 text-emerald-600':be.status_code>=400?'bg-rose-50 text-rose-600':'bg-amber-50 text-amber-600'"
+                                                          x-text="be.skipped_by_breaker?'breaker open':(be.status_code||'—')"></span>
+                                                    <span x-show="be.is_compensation" class="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">compensação</span>
+                                                    <span class="text-surface-400" x-text="(be.latency_ms||0).toFixed(0) + ' ms'"></span>
+                                                    <span class="text-surface-400" x-show="be.attempts > 1" x-text="be.attempts + ' tentativas'"></span>
+                                                    <span class="text-surface-400 ml-auto font-mono text-[9px]" x-show="be.call_id" x-text="'call: ' + be.call_id.substring(0,8)"></span>
+                                                </div>
+                                                <div x-show="be.error" class="mt-1 text-[10px] text-rose-700 font-mono" x-text="be.error"></div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </details>
+
                                 <!-- Turnos -->
                                 <details class="rounded border border-surface-200 bg-white" :open="e._detail.turns.length > 0">
                                     <summary class="cursor-pointer px-3 py-2 text-[11px] font-semibold text-brand-900 select-none">
