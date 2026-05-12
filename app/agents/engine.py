@@ -66,9 +66,14 @@ class AgentState(TypedDict):
 class DeepAgentHarness:
     """Harness para execução profunda com auto-reflexão e MCP tool calling."""
 
-    def __init__(self, agent_config: dict, max_iterations: int = 3, mcp_tools: list = None):
+    def __init__(self, agent_config: dict, max_iterations: int = 3, mcp_tools: list = None, interaction_id: str = ""):
         self.config = agent_config
         self.max_iterations = max_iterations
+        # interaction_id propagado pelo FSM (state_machine.run_intake) para que
+        # cada tool_call seja persistida com FK válida em tool_calls.interaction_id.
+        # Sem isso a métrica "MCP TOOLS" do painel de rastreabilidade não consegue
+        # contar invocações reais (ficaria zerada mesmo com tools chamadas).
+        self.interaction_id = interaction_id or ""
         # temperature pode vir como None/str/float — normaliza para float com fallback
         try:
             _temp = float(agent_config.get("temperature") if agent_config.get("temperature") is not None else 0.7)
@@ -289,11 +294,40 @@ class DeepAgentHarness:
 
                     logger.info(f"MCP Tool Call [round={round_n}]: {tool_name}({json.dumps(tool_args, ensure_ascii=False)[:200]})")
 
-                    result_text = await execute_tool_call(
-                        tool_name, tool_args, self.mcp_tools, timeout=30
-                    )
+                    _tc_start = time.time()
+                    _tc_status = "completed"
+                    try:
+                        result_text = await execute_tool_call(
+                            tool_name, tool_args, self.mcp_tools, timeout=30
+                        )
+                    except Exception as _tc_err:
+                        _tc_status = "failed"
+                        result_text = f"[tool error] {_tc_err}"
+                        logger.warning(f"MCP Tool Call failed [{tool_name}]: {_tc_err}")
+                    _tc_latency_ms = round((time.time() - _tc_start) * 1000, 2)
 
                     logger.info(f"MCP Tool Result [round={round_n}, {len(result_text)}B]: {result_text[:200]}")
+
+                    # Persiste invocação real em tool_calls (best-effort). Resolve o registry
+                    # entry pelo name pra capturar mcp_server e tool_id. Falha de persistência
+                    # não bloqueia o agente — só loga warning.
+                    try:
+                        from app.core.database import tool_calls_repo
+                        _matched = next((t for t in self.mcp_tools if t.get("name") == tool_name), None)
+                        await tool_calls_repo.create({
+                            "id": str(uuid.uuid4()),
+                            "tool_name": tool_name,
+                            "mcp_server": (_matched or {}).get("mcp_server", ""),
+                            "input_data": json.dumps(tool_args, ensure_ascii=False, default=str)[:5000],
+                            "output_data": (result_text or "")[:5000],
+                            "latency_ms": _tc_latency_ms,
+                            "cost_usd": 0.0,
+                            "interaction_id": self.interaction_id or "",
+                            "tool_id": (_matched or {}).get("id", "") or "",
+                            "status": _tc_status,
+                        })
+                    except Exception as _persist_err:
+                        logger.warning(f"Falha ao persistir tool_call '{tool_name}': {_persist_err}")
 
                     current_messages.append(ToolMessage(
                         content=result_text,
@@ -615,7 +649,7 @@ async def execute_interaction(
         motivo = guard_reason or "Política de acesso negou a solicitação."
         await fsm.run_refuse(motivo, "Reformule a solicitação ou contate o administrador.")
         await fsm.run_log_and_close()
-        return _build_result(ctx, start, mesh_chain=mesh_chain, attachments=attachment_meta, agent=agent, skill_data=skill_data)
+        return await _build_result(ctx, start, mesh_chain=mesh_chain, attachments=attachment_meta, agent=agent, skill_data=skill_data)
 
     skip_evidence = (
         not agent.get("require_evidence", True)
@@ -681,7 +715,7 @@ async def execute_interaction(
         await fsm.run_verify_evidence({"ok": True, "confidence": 1.0})
         await fsm.run_recommend(draft)
         await fsm.run_log_and_close()
-        return _build_result(ctx, start, mesh_chain=mesh_chain, attachments=attachment_meta, agent=agent, skill_data=skill_data)
+        return await _build_result(ctx, start, mesh_chain=mesh_chain, attachments=attachment_meta, agent=agent, skill_data=skill_data)
 
     mcp_tools = []
     mcp_tools_detail = []
@@ -726,7 +760,7 @@ async def execute_interaction(
         # Execution Profile + reflexão adaptativa:
         # fast=1, standard=2 (2ª rodada apenas se heurística sinalizar), rigorous=3 idem.
         _max_iter = 1 if exec_profile == "fast" else (2 if exec_profile == "standard" else 3)
-        harness = DeepAgentHarness(agent, max_iterations=_max_iter, mcp_tools=mcp_tools)
+        harness = DeepAgentHarness(agent, max_iterations=_max_iter, mcp_tools=mcp_tools, interaction_id=ctx.interaction_id)
         graph = harness.build_graph()
         state = {
             "messages": [HumanMessage(content=enriched_input)],
@@ -790,6 +824,24 @@ async def execute_interaction(
                 ctx.metadata["tokens"]["cap_exceeded"] = True
                 ctx.metadata["tokens"]["cap"] = _cap
         else:
+            # Diagnóstico: nenhuma das messages tinha usage_metadata nem
+            # response_metadata.token_usage / .usage. Provavelmente provider
+            # fora do padrão LangChain (Maritaca/Sabia-4 reporta diferente).
+            # Loga shape pra inspeção; follow-up: fallback via tiktoken.
+            try:
+                _shapes = []
+                for _m in (result.get("messages") or [])[:5]:
+                    _shapes.append({
+                        "cls": type(_m).__name__,
+                        "has_usage_meta": bool(getattr(_m, "usage_metadata", None)),
+                        "rm_keys": sorted(list(getattr(_m, "response_metadata", {}) or {}).keys())[:8],
+                    })
+                logger.info(
+                    f"Tokens=0 (provider={agent.get('llm_provider')} model={agent.get('model')}): "
+                    f"messages_shape={json.dumps(_shapes, ensure_ascii=False)[:500]}"
+                )
+            except Exception:
+                pass
             ctx.metadata["tokens"] = {"input": 0, "output": 0, "total": 0, "calls": 0, "input_billed_sum": 0, "total_billed": 0}
     except Exception as llm_err:
         err_str = str(llm_err)
@@ -900,7 +952,7 @@ async def execute_interaction(
         tracker.log_generation(trace, "response", user_input, ctx.final_output, agent.get("model", "gpt-4o"))
         tracker.flush()
 
-    return _build_result(
+    return await _build_result(
         ctx, start, mesh_chain=mesh_chain, attachments=attachment_meta,
         agent=agent, skill_data=skill_data, mcp_tools_detail=mcp_tools_detail,
         verification=verification,
@@ -928,14 +980,19 @@ def _serialize_verification(v) -> dict | None:
     }
 
 
-def _build_result(
+async def _build_result(
     ctx: InteractionContext, start_time: float,
     mesh_chain: list = None, attachments: list = None,
     agent: dict = None, skill_data: dict = None,
     mcp_tools_detail: list = None,
     verification=None,
 ) -> dict:
-    """Constrói resultado enriquecido com detalhes de execução."""
+    """Constrói resultado enriquecido com detalhes de execução.
+
+    Async pra puxar contagens reais de invocações de tool_calls e
+    binding_executions filtradas por interaction_id — as métricas
+    `mcp_tools.length` e `api_tools_count` no painel de rastreabilidade
+    refletem chamadas EXECUTADAS, não apenas tools/bindings declarados."""
     agent = agent or {}
     skill_data = skill_data or {}
     output = ctx.final_output or ""
@@ -955,6 +1012,28 @@ def _build_result(
     final = ctx.current_state.value
     evidence_count = len(ctx.evidences) if ctx.evidences else 0
     evidence_sources = list({e.get("source_name", e.get("snippet_text", "")[:30]) for e in ctx.evidences}) if ctx.evidences else []
+
+    # Métricas de invocações reais — querya tool_calls e binding_executions
+    # filtradas por interaction_id. Best-effort: erro de DB devolve listas vazias
+    # (UI fica com 0 mas não quebra o response).
+    mcp_tools_invoked: list = []
+    api_tools_invoked_count: int = 0
+    try:
+        from app.core.database import tool_calls_repo, binding_executions_repo
+        _tc_rows = await tool_calls_repo.find_all(interaction_id=ctx.interaction_id, limit=200)
+        mcp_tools_invoked = [
+            {
+                "name": r.get("tool_name") or "",
+                "server": r.get("mcp_server") or "",
+                "status": r.get("status") or "completed",
+                "latency_ms": float(r.get("latency_ms") or 0),
+            }
+            for r in _tc_rows
+        ]
+        _be_rows = await binding_executions_repo.find_all(interaction_id=ctx.interaction_id, limit=200)
+        api_tools_invoked_count = len(_be_rows)
+    except Exception as _metric_err:
+        logger.warning(f"Falha ao carregar métricas de invocação (interaction={ctx.interaction_id}): {_metric_err}")
 
     diagnostics = []
     if final == "Recommend":
@@ -1071,8 +1150,18 @@ def _build_result(
             "require_evidence": bool(agent.get("require_evidence", True)),
             "system_prompt": system_prompt_summary,
             "skill_detail": skill_detail,
-            "mcp_tools": mcp_tools_detail or [],
-            "api_tools_count": int(skill_data.get("_api_bindings_count") or 0),
+            # mcp_tools: invocações REAIS registradas em tool_calls durante esta
+            # interaction (não as tools disponíveis no registry). Métrica do painel
+            # de rastreabilidade lê `.mcp_tools.length` — contagem agora reflete
+            # chamadas executadas. mcp_tools_available preserva a lista declarada
+            # para a aba de "Ferramenta(s) MCP vinculada(s)" no execution_log.
+            "mcp_tools": mcp_tools_invoked,
+            "mcp_tools_available": mcp_tools_detail or [],
+            # api_tools_count: contagem de binding_executions desta interaction. Em
+            # modo LLM normalmente é 0 (bindings só rodam em execute_declarative);
+            # mantido aqui pra simetria semântica com mcp_tools (execução real, não
+            # declaração).
+            "api_tools_count": api_tools_invoked_count,
             "tokens": ctx.metadata.get("tokens") or {"input": 0, "output": 0, "total": 0},
             "execution_log": exec_log,
         },
