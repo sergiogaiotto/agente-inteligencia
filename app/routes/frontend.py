@@ -9,6 +9,7 @@ PAGES = {
     "/": {"template":"pages/dashboard.html","title":"Dashboard","section":"dashboard"},
     "/agents": {"template":"pages/agents.html","title":"Agentes","section":"agents"},
     "/agents/new": {"template":"pages/agent_form.html","title":"Novo Agente","section":"agents"},
+    "/agents/invocations": {"template":"pages/agent_invocations.html","title":"Invocações","section":"agents"},
     "/skills": {"template":"pages/skills.html","title":"Skills","section":"skills"},
     "/skills/new": {"template":"pages/skill_form.html","title":"Nova Skill","section":"skills"},
     "/workspace": {"template":"pages/workspace.html","title":"Workspace","section":"workspace"},
@@ -79,6 +80,8 @@ async def pg_agents(r: Request): return await _render(r, "/agents")
 async def pg_agent_new(r: Request): return await _render(r, "/agents/new")
 @router.get("/agents/{agent_id}/edit", response_class=HTMLResponse)
 async def pg_agent_edit(r: Request, agent_id: str): return await _render(r, "/agents/new", agent_id=agent_id)
+@router.get("/agents/{agent_id}/invocations", response_class=HTMLResponse)
+async def pg_agent_invocations(r: Request, agent_id: str): return await _render(r, "/agents/invocations", agent_id=agent_id)
 @router.get("/skills", response_class=HTMLResponse)
 async def pg_skills(r: Request): return await _render(r, "/skills")
 @router.get("/skills/new", response_class=HTMLResponse)

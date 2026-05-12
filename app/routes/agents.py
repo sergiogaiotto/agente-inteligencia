@@ -1,13 +1,19 @@
 """Rotas de agentes — AOBD, Router, Subagent."""
+import os
 import re
 import time
 import uuid, json
+from datetime import datetime
+from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import (
     AgentCreate, AgentUpdate, AgentInvokeRequest, AgentInvokeResponse,
     PreflightReport,
 )
-from app.core.database import agents_repo, audit_repo, skills_repo
+from app.core.database import (
+    agents_repo, audit_repo, skills_repo,
+    interactions_repo, turns_repo, tool_calls_repo, api_call_logs_repo,
+)
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
@@ -475,3 +481,109 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
         duration_ms=duration,
         evidence_score=result.get("evidence_score"),
     )
+
+
+# ───────────────────────────────────────────────────────────────────
+# Histórico de invocações por agente — observabilidade
+# ───────────────────────────────────────────────────────────────────
+
+def _iso(v):
+    return v.isoformat() if hasattr(v, "isoformat") else v
+
+
+def _serialize_row(r: dict) -> dict:
+    return {k: _iso(v) for k, v in r.items()}
+
+
+@router.get("/{agent_id}/invocations")
+async def list_agent_invocations(
+    agent_id: str,
+    state: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Lista interações deste agente (mais recentes primeiro). Filtro opcional por state da FSM."""
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
+
+    filters: dict = {"agent_id": agent_id}
+    if state:
+        filters["state"] = state
+    limit_clamped = max(1, min(200, limit))
+    offset_clamped = max(0, offset)
+    rows = await interactions_repo.find_all(limit=limit_clamped, offset=offset_clamped, **filters)
+    total = await interactions_repo.count(**filters)
+
+    return {
+        "agent": {"id": agent["id"], "name": agent.get("name"), "kind": agent.get("kind")},
+        "invocations": [
+            {
+                "id": r["id"],
+                "title": r.get("title") or "",
+                "channel": r.get("channel") or "api",
+                "state": r.get("state") or "",
+                "journey_id": r.get("journey_id") or "",
+                "started_at": _iso(r.get("started_at")),
+                "ended_at": _iso(r.get("ended_at")),
+                "created_at": _iso(r.get("created_at")),
+            }
+            for r in rows
+        ],
+        "total": total,
+        "limit": limit_clamped,
+        "offset": offset_clamped,
+    }
+
+
+@router.get("/{agent_id}/invocations/{interaction_id}")
+async def get_invocation_detail(agent_id: str, interaction_id: str):
+    """Detalhe completo de uma invocação: turns + tool_calls + api_call_logs (matchados
+    por janela temporal, já que api_call_logs não tem interaction_id) + audit + tempo_link."""
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
+    itx = await interactions_repo.find_by_id(interaction_id)
+    if not itx or itx.get("agent_id") != agent_id:
+        raise HTTPException(404, "Invocação não encontrada para este agente")
+
+    turns = await turns_repo.find_all(interaction_id=interaction_id, limit=200)
+    turns.sort(key=lambda t: t.get("turn_number") or 0)
+    tool_calls = await tool_calls_repo.find_all(interaction_id=interaction_id, limit=200)
+
+    started = itx.get("started_at")
+    ended = itx.get("ended_at") or datetime.utcnow()
+    api_logs_raw = await api_call_logs_repo.find_all(agent_id=agent_id, limit=500)
+    api_logs = [
+        log for log in api_logs_raw
+        if started and log.get("created_at") and started <= log["created_at"] <= ended
+    ]
+
+    audit_events = await audit_repo.find_all(entity_type="interaction", entity_id=interaction_id, limit=100)
+    audit_events.reverse()  # cronológico
+
+    trace_id = next((a["trace_id"] for a in audit_events if a.get("trace_id")), None)
+    if not trace_id:
+        try:
+            td = json.loads(itx.get("trace_data") or "{}")
+            trace_id = td.get("trace_id")
+        except Exception:
+            pass
+
+    tempo_link = None
+    if trace_id:
+        grafana_url = os.getenv("GRAFANA_PUBLIC_URL", "http://localhost:3000").rstrip("/")
+        left = ('{"datasource":"tempo","queries":[{"refId":"A","query":"' + trace_id +
+                '"}],"range":{"from":"now-24h","to":"now"}}')
+        tempo_link = f"{grafana_url}/explore?left={quote(left)}"
+
+    return {
+        "agent": {"id": agent["id"], "name": agent.get("name"), "kind": agent.get("kind")},
+        "interaction": _serialize_row(itx),
+        "turns": [_serialize_row(t) for t in turns],
+        "tool_calls": [_serialize_row(tc) for tc in tool_calls],
+        "api_call_logs": [_serialize_row(a) for a in api_logs],
+        "audit_events": [_serialize_row(a) for a in audit_events],
+        "trace_id": trace_id,
+        "tempo_link": tempo_link,
+    }
