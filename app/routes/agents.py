@@ -580,6 +580,71 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
 
     pipeline_context = json.dumps(data.context, ensure_ascii=False) if data.context else None
 
+    # Detecta pipeline: agente com outgoing mesh_connections é entry de uma
+    # cadeia. Nesse caso execute_pipeline itera por cada agente da chain e
+    # carrega os MCP bindings de CADA um — única forma de subagentes
+    # downstream rodarem suas próprias tools (Tavily etc). execute_interaction
+    # sozinha só executa o agente entry com os bindings DELE, então MCPs de
+    # subagentes ficavam de fora (bug observado: /workspace/chat?mode=pipeline
+    # consumia Tavily, /invoke não).
+    from app.core.database import mesh_repo
+    is_pipeline_entry = bool(await mesh_repo.find_all(source_agent_id=agent["id"], limit=1))
+
+    if is_pipeline_entry:
+        from app.agents.engine import execute_pipeline
+        try:
+            pipe_result = await execute_pipeline(
+                entry_agent_id=agent_id,
+                user_input=user_input,
+                channel=data.channel or "api",
+                attachments=attachments_internal or None,
+            )
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"Erro na execução do pipeline: {e}")
+
+        pipe_status = pipe_result.get("status") or "completed"
+        any_completed = pipe_result.get("completed_agents", 0) > 0
+        invoke_status = "ok" if any_completed and pipe_status == "completed" else (
+            "partial" if any_completed else "failed"
+        )
+        duration = pipe_result.get("duration_ms") or round((time.time() - start) * 1000, 2)
+
+        await audit_repo.create({
+            "entity_type": "agent",
+            "entity_id": agent_id,
+            "action": "invoked",
+            "details": json.dumps({
+                "mode": "pipeline",
+                "session_id": pipe_result.get("interaction_id"),
+                "total_agents": pipe_result.get("total_agents", 0),
+                "completed_agents": pipe_result.get("completed_agents", 0),
+                "passthrough_agents": pipe_result.get("passthrough_agents", 0),
+                "duration_ms": duration,
+            }, ensure_ascii=False),
+        })
+
+        return AgentInvokeResponse(
+            session_id=pipe_result.get("interaction_id"),
+            agent_id=agent_id,
+            status=invoke_status,
+            outputs={
+                "answer": pipe_result.get("output", ""),
+                "final_state": pipe_result.get("final_state"),
+                "pipeline_steps": pipe_result.get("pipeline_steps", []),
+                "total_agents": pipe_result.get("total_agents", 0),
+                "completed_agents": pipe_result.get("completed_agents", 0),
+                "passthrough_agents": pipe_result.get("passthrough_agents", 0),
+            },
+            context=data.context or {},
+            trace_id=pipe_result.get("interaction_id"),
+            duration_ms=duration,
+            evidence_score=pipe_result.get("evidence_score"),
+            rejected_attachments=rejected_attachments,
+        )
+
+    # Subagent standalone — execução de um único agente
     try:
         result = await execute_interaction(
             agent_id=agent_id,
