@@ -1,4 +1,6 @@
 """Rotas de agentes — AOBD, Router, Subagent."""
+import base64
+import mimetypes
 import os
 import re
 import time
@@ -16,6 +18,58 @@ from app.core.database import (
     binding_executions_repo,
 )
 
+_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024   # 10MB raw (~13MB em base64)
+_MAX_ATTACHMENTS_PER_INVOKE = 5
+_ATTACHMENT_TEXT_TRUNCATE = 50_000          # alinhado com workspace/upload
+
+
+def _decode_attachments(items: list) -> tuple[list, list]:
+    """Decodifica AttachmentInput (base64) → formato interno usado pelo engine
+    e por _filter_attachments_by_agent ({name, type, size, content}).
+    Aplica limites de quantidade e tamanho. Retorna (aceitos, rejeitados_meta)."""
+    accepted: list = []
+    rejected: list = []
+    if not items:
+        return accepted, rejected
+
+    overflow = items[_MAX_ATTACHMENTS_PER_INVOKE:]
+    items = items[:_MAX_ATTACHMENTS_PER_INVOKE]
+    for att in overflow:
+        rejected.append({
+            "name": getattr(att, "filename", "") or "",
+            "type": getattr(att, "content_type", "") or "",
+            "kind": "overflow",
+            "reason": f"Excedeu limite de {_MAX_ATTACHMENTS_PER_INVOKE} anexos por invocação",
+        })
+
+    for att in items:
+        filename = att.filename or ""
+        ctype = att.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        try:
+            raw = base64.b64decode(att.content_base64 or "", validate=True)
+        except Exception as e:
+            rejected.append({"name": filename, "type": ctype, "kind": "invalid_base64",
+                             "reason": f"base64 inválido: {e}"})
+            continue
+        if len(raw) > _MAX_ATTACHMENT_BYTES:
+            rejected.append({"name": filename, "type": ctype, "kind": "oversize",
+                             "reason": f"Excedeu 10MB ({len(raw)} bytes)"})
+            continue
+        # Texto se decodifica como UTF-8; binário fica com content vazio (engine
+        # lê metadata pra prompt e o disco/contexto via fluxo multimodal).
+        text_content = ""
+        try:
+            text_content = raw.decode("utf-8")[:_ATTACHMENT_TEXT_TRUNCATE]
+        except UnicodeDecodeError:
+            pass
+        accepted.append({
+            "name": filename,
+            "type": ctype,
+            "size": len(raw),
+            "content": text_content,
+        })
+    return accepted, rejected
+
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 @router.get("")
@@ -26,6 +80,51 @@ async def list_agents(limit: int = 50, offset: int = 0, kind: str = None, status
     if domain: f["domain"] = domain
     agents = await agents_repo.find_all(limit=limit, offset=offset, **f)
     return {"agents": agents, "total": await agents_repo.count(**f)}
+
+async def _is_callable_externally(agent: dict) -> tuple[bool, str]:
+    """Regra de exposição do /invoke pro cliente externo:
+    - orquestrador (aobd/router) COM pipeline configurada (tem outgoing) → ok
+    - subagent standalone (sem nenhuma conexão de mesh) → ok
+    - resto → bloqueia, força invocar via orquestrador.
+    """
+    from app.core.database import mesh_repo
+    aid = agent["id"]
+    kind = (agent.get("kind") or "subagent").lower()
+    outgoing = await mesh_repo.find_all(source_agent_id=aid, limit=1)
+    incoming = await mesh_repo.find_all(target_agent_id=aid, limit=1)
+    has_out = bool(outgoing)
+    has_in = bool(incoming)
+    if kind in ("aobd", "router"):
+        if has_out:
+            return True, "orquestrador com pipeline"
+        return False, "orquestrador sem pipeline — configure conexões no AI Mesh antes de invocar"
+    # subagent (ou kind desconhecido por default)
+    if has_in or has_out:
+        return False, "subagent é parte de um pipeline — invoke o orquestrador de entrada"
+    return True, "subagent standalone"
+
+
+@router.get("/callable")
+async def list_callable_agents(limit: int = 100):
+    """Lista só agentes invocáveis externamente via /invoke (orquestradores com
+    pipeline + subagents standalone). Pensado para clientes externos descobrirem
+    quem é seguro invocar sem precisar entender a topologia do mesh."""
+    rows = await agents_repo.find_all(limit=max(1, min(500, limit)))
+    out = []
+    for a in rows:
+        if (a.get("status") or "active") != "active":
+            continue
+        ok, reason = await _is_callable_externally(a)
+        if ok:
+            out.append({
+                "id": a["id"],
+                "name": a.get("name"),
+                "kind": a.get("kind"),
+                "domain": a.get("domain"),
+                "reason": reason,
+            })
+    return {"agents": out, "total": len(out)}
+
 
 @router.get("/{agent_id}")
 async def get_agent(agent_id: str):
@@ -349,6 +448,7 @@ async def _resolve_agent(ref: str) -> dict | None:
 async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeResponse:
     from app.agents.engine import execute_interaction
     from app.agents.declarative_engine import execute_declarative
+    from app.routes.workspace import _filter_attachments_by_agent
     from app.skill_parser.parser import parse_skill_md
 
     agent = await _resolve_agent(agent_id)
@@ -358,6 +458,18 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
     # (execute_interaction, audit, etc) precisa do PK pra não tentar
     # find_by_id novamente com o name.
     agent_id = agent["id"]
+
+    # Regra de exposição: bloqueia invocação direta de subagents que fazem parte
+    # de pipeline e de orquestradores sem pipeline configurada. Bypass via env
+    # ALLOW_DIRECT_SUBAGENT_INVOKE=true (rollback emergencial, não recomendado).
+    if os.getenv("ALLOW_DIRECT_SUBAGENT_INVOKE", "").lower() not in ("1", "true", "yes"):
+        ok, reason = await _is_callable_externally(agent)
+        if not ok:
+            raise HTTPException(403, detail={
+                "message": "Agente não pode ser invocado diretamente via API externa",
+                "reason": reason,
+                "hint": "Use GET /api/v1/agents/callable pra descobrir os agentes invocáveis.",
+            })
 
     parsed_skill = None
     if agent.get("skill_id"):
@@ -375,6 +487,21 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
     if not is_declarative and not data.message and not data.inputs:
         raise HTTPException(400, "Informe ao menos 'message' ou 'inputs'")
     # Modo declarativo não exige inputs — bindings podem ser auto-contidos.
+
+    # Anexos: decodifica base64 + filtra por accepts_images/accepts_documents.
+    # Modo declarativo não tem onde injetar arquivos (bindings HTTP usam só inputs),
+    # então rejeita aqui em vez de silenciosamente ignorar.
+    attachments_internal: list = []
+    rejected_attachments: list = []
+    if data.attachments:
+        if is_declarative:
+            raise HTTPException(400, detail={
+                "message": "Modo declarativo não suporta anexos",
+                "hint": "Use um agente em modo LLM para enviar arquivos, ou inclua os dados em 'inputs'.",
+            })
+        decoded, rejected_decode = _decode_attachments(data.attachments)
+        attachments_internal, rejected_filter = await _filter_attachments_by_agent(decoded, agent["id"])
+        rejected_attachments = rejected_decode + rejected_filter
 
     start = time.time()
 
@@ -436,6 +563,7 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
             duration_ms=duration,
             evidence_score=None,
             errors=errs,
+            rejected_attachments=rejected_attachments,
         )
 
     # Caminho LLM (Fase 1) — permanece como fallback
@@ -459,6 +587,7 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
             session_id=data.session_id,
             channel=data.channel or "api",
             journey=data.journey or "",
+            attachments=attachments_internal or None,
             pipeline_context=pipeline_context,
         )
     except ValueError as e:
@@ -503,6 +632,7 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
         trace_id=result.get("interaction_id"),
         duration_ms=duration,
         evidence_score=result.get("evidence_score"),
+        rejected_attachments=rejected_attachments,
     )
 
 

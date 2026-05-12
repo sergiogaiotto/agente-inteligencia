@@ -82,6 +82,13 @@ class InvokeOptions(BaseModel):
     timeout_ms: Optional[int] = None
     dry_run: Optional[bool] = False
 
+class AttachmentInput(BaseModel):
+    """Anexo binário enviado serializado em base64 no body do /invoke.
+    Filtragem por accepts_images/accepts_documents do agente acontece server-side."""
+    filename: str
+    content_type: Optional[str] = None  # auto-detectado do filename se ausente
+    content_base64: str
+
 class AgentInvokeRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     context: Optional[dict[str, Any]] = None
@@ -90,6 +97,7 @@ class AgentInvokeRequest(BaseModel):
     journey: Optional[str] = ""
     message: Optional[str] = None
     options: Optional[InvokeOptions] = None
+    attachments: Optional[list[AttachmentInput]] = None  # máx 5 itens, 10MB cada
 
 class AgentInvokeResponse(BaseModel):
     session_id: Optional[str] = None
@@ -101,6 +109,7 @@ class AgentInvokeResponse(BaseModel):
     duration_ms: float = 0
     evidence_score: Optional[float] = None
     errors: list = Field(default_factory=list)
+    rejected_attachments: list = Field(default_factory=list)  # anexos filtrados (mime não aceito, oversize)
 
 class MeshConnectionCreate(BaseModel):
     source_agent_id: str; target_agent_id: str
