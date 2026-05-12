@@ -547,7 +547,8 @@
             <p class="text-[11px] text-surface-500 leading-relaxed">
                 Use estas chaves pra chamar a API a partir de Zapier, n8n, scripts próprios ou apps mobile.
                 Envie no header <code class="text-[10px] bg-white px-1 rounded">X-API-Key: ag_live_...</code> em qualquer endpoint
-                que aceita auth (ex: <code class="text-[10px] bg-white px-1 rounded">POST /api/v1/workspace/chat</code>).
+                que aceita auth (canônico: <code class="text-[10px] bg-white px-1 rounded">POST /api/v1/agents/&lcub;id&rcub;/invoke</code> — liste
+                os agentes invocáveis em <code class="text-[10px] bg-white px-1 rounded">GET /api/v1/agents/callable</code>).
                 A chave é mostrada <strong>uma única vez</strong> na criação — guarde no password manager imediatamente.
             </p>
         </div>
@@ -657,12 +658,25 @@
                             </button>
                         </div>
                     </div>
-                    <div class="rounded-lg border border-violet-100 bg-violet-50/50 px-3 py-2 text-[11px] text-violet-700 leading-relaxed">
-                        <strong>Exemplo de uso:</strong>
-                        <pre class="mt-1 bg-white px-2 py-1.5 rounded font-mono text-[10px] overflow-x-auto">curl -X POST {{ "{HOST}" }}/api/v1/workspace/chat \
+                    <div class="rounded-lg border border-violet-100 bg-violet-50/50 px-3 py-2 text-[11px] text-violet-700 leading-relaxed space-y-2">
+                        <div>
+                            <strong>Exemplo de uso (invoke direto):</strong>
+                            <pre class="mt-1 bg-white px-2 py-1.5 rounded font-mono text-[10px] overflow-x-auto">curl -X POST {{ "{HOST}" }}/api/v1/agents/&lt;AGENT_ID&gt;/invoke \
   -H "X-API-Key: <span x-text="apiKeyJustCreated.key"></span>" \
   -H "Content-Type: application/json" \
-  -d '{"agent_id":"...","message":"...","mode":"pipeline"}'</pre>
+  -d '{"message":"..."}'</pre>
+                        </div>
+                        <div>
+                            <strong>Com anexos (base64, máx 10MB/arquivo, 5 por chamada):</strong>
+                            <pre class="mt-1 bg-white px-2 py-1.5 rounded font-mono text-[10px] overflow-x-auto">-d '{"message":"analise este doc","attachments":[
+        {"filename":"x.pdf","content_base64":"..."}
+     ]}'</pre>
+                        </div>
+                        <div>
+                            <strong>Descobrir agentes invocáveis:</strong>
+                            <pre class="mt-1 bg-white px-2 py-1.5 rounded font-mono text-[10px] overflow-x-auto">curl {{ "{HOST}" }}/api/v1/agents/callable \
+  -H "X-API-Key: <span x-text="apiKeyJustCreated.key"></span>"</pre>
+                        </div>
                     </div>
                 </div>
                 <div class="border-t border-surface-100 px-5 py-3 flex justify-end">
