@@ -62,7 +62,7 @@ async def create_api_key(data: APIKeyCreate, request: Request, user: dict = Depe
         "entity_type": "api_key",
         "entity_id": key_id,
         "action": "created",
-        "user_id": user["id"],
+        "actor": user["id"],
         "details": json.dumps({"name": name, "prefix": prefix}),
     })
 
@@ -114,7 +114,7 @@ async def revoke_api_key(key_id: str, user: dict = Depends(require_user)):
         "entity_type": "api_key",
         "entity_id": key_id,
         "action": "revoked",
-        "user_id": user["id"],
+        "actor": user["id"],
         "details": json.dumps({"name": row["name"], "prefix": row["key_prefix"]}),
     })
     return {"message": "API key revogada", "id": key_id}
