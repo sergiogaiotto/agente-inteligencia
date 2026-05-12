@@ -458,7 +458,7 @@ function toolsPage() {
         removeOp(i) { const o=this.parsedOps; o.splice(i,1); this.form.operations=JSON.stringify(o); },
         updateOp(i,v) { const o=this.parsedOps; o[i]=v; this.form.operations=JSON.stringify(o); },
         generateBinding(t) { const ops=this.parseOps(t.operations); const c=t.requires_trusted_context?'\n  - Condição: requires_trusted_context = true':'\n  - Condição: sempre disponível'; return `- **${t.name||'nome.da.tool'}**\n  - Servidor MCP: ${t.mcp_server||'http://localhost:PORT'}\n  - Operações: ${ops}${c}\n  - Classificação: ${t.sensitivity||'internal'}\n  - Custo: $${(t.cost_per_call||0).toFixed(4)}/chamada\n  - Timeout: 30s\n  - Retry: 2x com backoff exponencial`; },
-        async copyBinding(t) { try{await navigator.clipboard.writeText(this.generateBinding(t));showToast('Snippet copiado')}catch{showToast('Erro','error')} },
+        async copyBinding(t) { if (await copyText(this.generateBinding(t))) showToast('Snippet copiado'); else showToast('Erro','error'); },
 
         // ══════════════════════════════════════════════════════════
         // Exec result — copiar, formatar JSON/Markdown, expandir
@@ -648,8 +648,8 @@ function toolsPage() {
         toggleExecExpand() { this.execExpanded = !this.execExpanded; },
         async copyExecResult() {
             const text = this.execFormatted ? this.execFormattedText : (this.execResult?.data || this.execResult?.error || '');
-            try { await navigator.clipboard.writeText(text); showToast('Resultado copiado'); }
-            catch { showToast('Erro ao copiar', 'error'); }
+            if (await copyText(text)) showToast('Resultado copiado');
+            else showToast('Erro ao copiar', 'error');
         },
 
         openPreview(tool) { this.previewId=tool.id; this.previewTool=tool; },

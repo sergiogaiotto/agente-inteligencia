@@ -856,6 +856,29 @@
         t.className = `fixed bottom-4 right-4 z-[999] ${c[type]||c.info} text-white text-[13px] font-medium px-4 py-2.5 rounded-lg shadow-lg fade-in`;
         t.textContent = msg; document.body.appendChild(t); setTimeout(()=>t.remove(),3500);
     }
+    // navigator.clipboard.writeText() exige contexto seguro (HTTPS, localhost ou
+    // 127.0.0.1). Fora disso, cai no fallback textarea+execCommand('copy') que
+    // funciona em HTTP origins (ex: deploy atrás de reverse proxy interno sem TLS).
+    // Retorna true/false — caller decide o toast.
+    window.copyText = async function(text) {
+        if (!text) return false;
+        if (window.isSecureContext && navigator.clipboard?.writeText) {
+            try { await navigator.clipboard.writeText(text); return true; } catch {}
+        }
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '0'; ta.style.left = '0';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus(); ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            return ok;
+        } catch { return false; }
+    };
     </script>
     {% block scripts %}{% endblock %}
 </body>

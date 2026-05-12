@@ -1105,7 +1105,7 @@ function workspacePage() {
             const summary=d.filter(x=>x.level==='success'&&x.text?.startsWith('Pipeline'));
             return[...summary,...lastD];
         },
-        async copyMsg(t){try{await navigator.clipboard.writeText(t||'');showToast('Copiado')}catch{showToast('Erro','error')}},
+        async copyMsg(t){ if (await copyText(t||'')) showToast('Copiado'); else showToast('Erro','error'); },
 
         async exportLogXlsx(){
             if(!this.liveLog.length) return;

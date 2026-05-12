@@ -295,10 +295,7 @@ function infraPage() {
         },
 
         async copyHealthUrl(s) {
-            try {
-                await navigator.clipboard.writeText(s.health_url);
-                if (window.showToast) showToast('Health URL copiada');
-            } catch {}
+            if (await copyText(s.health_url) && window.showToast) showToast('Health URL copiada');
         },
     };
 }

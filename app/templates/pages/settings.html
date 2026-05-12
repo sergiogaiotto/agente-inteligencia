@@ -767,12 +767,10 @@ function settingsPage() {
 
         async copyAPIKey() {
             if (!this.apiKeyJustCreated?.key) return;
-            try {
-                await navigator.clipboard.writeText(this.apiKeyJustCreated.key);
+            if (await copyText(this.apiKeyJustCreated.key))
                 showToast('Key copiada — guarde no password manager');
-            } catch {
+            else
                 showToast('Não consegui copiar automaticamente — selecione e Ctrl+C', 'error');
-            }
         },
 
         agoApi(iso) {
@@ -966,7 +964,7 @@ function settingsPage() {
         },
 
         async copyPrompt(p) {
-            try{await navigator.clipboard.writeText(p.prompt_text);showToast('Prompt copiado')}catch{showToast('Erro ao copiar','error')}
+            if (await copyText(p.prompt_text)) showToast('Prompt copiado'); else showToast('Erro ao copiar','error');
         },
 
         /* ── Users ── */
