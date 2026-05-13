@@ -137,7 +137,7 @@ _BOOL_FIELDS = ("require_evidence", "accepts_images", "accepts_documents")
 
 @router.post("/preflight", response_model=PreflightReport)
 async def preflight_agent(data: AgentCreate) -> PreflightReport:
-    """Roda 9 checks semânticos contra o payload (sem persistir).
+    """Roda 10 checks semânticos contra o payload (sem persistir).
     UI consome para mostrar lista de checks na step Revisão.
     """
     from app.agents.preflight import run_preflight
