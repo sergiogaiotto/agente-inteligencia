@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 import json
 import os
@@ -7,7 +8,7 @@ from datetime import datetime
 import aiofiles
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.auth import require_user
 from app.models.schemas import ChatMessage
@@ -285,6 +286,82 @@ async def _filter_attachments_by_agent(attachments: list, agent_id: str) -> tupl
                 "reason": f"Agente não aceita {kind}s — habilite em 'Editar Agente'",
             })
     return accepted, rejected
+
+
+@router.post("/chat/stream")
+async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(require_user)):
+    """Versão streaming (SSE) do /chat — emite eventos por step do pipeline.
+
+    Mesmo payload do /chat, mas a response é text/event-stream com 1 evento por
+    transição relevante: pipeline_start, agent_start, agent_done (ou
+    agent_passthrough, agent_skipped, agent_error) e por fim pipeline_done com
+    o result completo. Cliente conecta via fetch + ReadableStream e renderiza
+    cada evento em tempo real (mostrando o processing_message de cada agente
+    enquanto ele roda).
+
+    Só faz sentido pra modo=pipeline (vários steps). Pra modo=agent o /chat
+    sync continua sendo o caminho — overhead de SSE não compensa em 1 só step.
+    """
+    if data.mode != "pipeline":
+        raise HTTPException(400, "Stream só suporta mode=pipeline. Use POST /chat pra modo agent.")
+
+    attachments = []
+    if data.attachments:
+        for att in data.attachments:
+            attachments.append({
+                "name": att.get("filename", ""),
+                "type": att.get("content_type", ""),
+                "size": att.get("size", 0),
+                "content": att.get("text_content", ""),
+            })
+    attachments, _rejected = await _filter_attachments_by_agent(attachments, data.agent_id)
+
+    queue: asyncio.Queue = asyncio.Queue()
+    _DONE = object()  # sentinela pra encerrar o consumidor
+
+    async def _cb(event: dict) -> None:
+        await queue.put(event)
+
+    async def _run_pipeline():
+        from app.agents.engine import execute_pipeline
+        try:
+            await execute_pipeline(
+                entry_agent_id=data.agent_id,
+                user_input=data.message,
+                channel=data.channel,
+                attachments=attachments,
+                progress_callback=_cb,
+            )
+        except Exception as e:
+            await queue.put({"type": "stream_error", "error": str(e)[:300]})
+        finally:
+            await queue.put(_DONE)
+
+    asyncio.create_task(_run_pipeline())
+
+    async def _event_gen():
+        # Heartbeat inicial pra que proxies (Caddy) flushem headers e o browser
+        # confirme a conexão antes do primeiro evento real (que pode demorar
+        # alguns segundos por causa do LLM).
+        yield ":ok\n\n"
+        while True:
+            item = await queue.get()
+            if item is _DONE:
+                yield "event: end\ndata: {}\n\n"
+                break
+            payload = json.dumps(item, ensure_ascii=False, default=str)
+            event_name = item.get("type", "message") if isinstance(item, dict) else "message"
+            yield f"event: {event_name}\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        _event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # Caddy/nginx: não bufferiza, libera flush
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/chat")

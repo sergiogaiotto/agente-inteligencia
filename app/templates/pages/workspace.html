@@ -907,11 +907,17 @@ function workspacePage() {
             this._startLiveAnimation();
 
             try{
-                const result=await api.post('/api/v1/workspace/chat',{
+                const _payload={
                     agent_id:this.selectedAgentId,message:text,session_id:this.currentSessionId,
                     attachments:this.pendingFiles.length?this.pendingFiles:null,
                     mode:this.execMode,
-                });
+                };
+                // Pipeline usa SSE pra mostrar processing_message de cada agente
+                // em tempo real (Fase 2 do feedback narrativo). Modo agent
+                // continua sync — 1 step só, overhead de stream não compensa.
+                const result = this.execMode==='pipeline'
+                    ? await this._sendPipelineStream(_payload)
+                    : await api.post('/api/v1/workspace/chat', _payload);
                 this.currentSessionId=result.interaction_id||this.currentSessionId;
                 this._clearAnimTimers();
 
@@ -954,6 +960,96 @@ function workspacePage() {
                 showToast('Erro','error');
             }
             this.sending=false;this.scrollToBottom();this.$refs.chatInput?.focus();
+        },
+
+        // ═══════════════════════════════════════════════════
+        // Pipeline streaming (Fase 2 — SSE)
+        // ═══════════════════════════════════════════════════
+        // Conecta no /workspace/chat/stream e processa eventos SSE em tempo real,
+        // atualizando progressSteps + liveLog conforme cada agente arranca/conclui.
+        // Retorna o `result` final do pipeline (mesmo formato do /chat sync) pra
+        // que o send() faça a renderização das messages no padrão atual.
+        async _sendPipelineStream(payload){
+            const resp = await fetch('/api/v1/workspace/chat/stream', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify(payload),
+            });
+            if (!resp.ok || !resp.body) {
+                throw new Error(`Stream falhou: HTTP ${resp.status}`);
+            }
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalResult = null;
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                let sep;
+                while ((sep = buffer.indexOf('\n\n')) >= 0) {
+                    const raw = buffer.slice(0, sep);
+                    buffer = buffer.slice(sep + 2);
+                    if (!raw.trim() || raw.startsWith(':')) continue; // heartbeat / vazio
+                    let eventName = 'message';
+                    let dataStr = '';
+                    for (const line of raw.split('\n')) {
+                        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+                        else if (line.startsWith('data:')) dataStr = line.slice(5).trim();
+                    }
+                    if (!dataStr) continue;
+                    let event;
+                    try { event = JSON.parse(dataStr); } catch { continue; }
+                    this._onPipelineStreamEvent(eventName, event);
+                    if (eventName === 'pipeline_done') {
+                        finalResult = event.result;
+                    }
+                }
+            }
+            return finalResult;
+        },
+
+        _onPipelineStreamEvent(name, event){
+            // Cada evento avança UM passo da progressSteps + injeta linha no liveLog.
+            // A animação sintética (_startLiveAnimation) já está rodando em paralelo
+            // — pra modo stream, esses updates reais sobrepõem o placeholder.
+            if (name === 'pipeline_start') {
+                // Re-inicializa progressSteps com a chain real (caso _initProgressSteps
+                // não tenha resolvido o número certo de steps).
+                if (Array.isArray(event.chain) && event.chain.length) {
+                    this.progressSteps = event.chain.map(a => ({
+                        agent_name: a.name || '?',
+                        agent_kind: a.kind || 'subagent',
+                        status: 'waiting',
+                        duration: '',
+                    }));
+                }
+                this._addLog('pipeline', '🔗', `Pipeline iniciado — ${event.total_agents} agente(s)`, '', 'info');
+            } else if (name === 'agent_start') {
+                const i = event.step_index;
+                if (this.progressSteps[i]) this.progressSteps[i].status = 'running';
+                const pm = (event.processing_message || '').trim() || 'Processando...';
+                this._addLog('agent', '💬', `${event.agent_name}: ${pm}`, '', 'info');
+            } else if (name === 'agent_passthrough') {
+                const i = event.step_index;
+                if (this.progressSteps[i]) { this.progressSteps[i].status = 'done'; this.progressSteps[i].duration = '0'; }
+                this._addLog('agent', '⚡', `${event.agent_name}: pass-through (0ms)`, '', 'info');
+            } else if (name === 'agent_done') {
+                const i = event.step_index;
+                if (this.progressSteps[i]) {
+                    this.progressSteps[i].status = 'done';
+                    this.progressSteps[i].duration = Math.round(event.duration_ms || 0).toString();
+                }
+                this._addLog('agent', '✓', `${event.agent_name}: concluído em ${Math.round(event.duration_ms||0)}ms`, '', 'success');
+            } else if (name === 'agent_skipped') {
+                const i = event.step_index;
+                if (this.progressSteps[i]) this.progressSteps[i].status = 'error';
+                this._addLog('agent', '⊘', `${event.agent_name}: ignorado (${event.reason || 'inativo'})`, '', 'warning');
+            } else if (name === 'agent_error' || name === 'stream_error') {
+                const i = event.step_index;
+                if (typeof i === 'number' && this.progressSteps[i]) this.progressSteps[i].status = 'error';
+                this._addLog('error', '💥', event.agent_name || 'Pipeline error', event.error || '', 'danger');
+            }
+            // pipeline_done é tratado no caller (finalResult)
         },
 
         // ═══════════════════════════════════════════════════
