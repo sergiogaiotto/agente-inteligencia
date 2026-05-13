@@ -1,6 +1,6 @@
 """Pre-flight checks para agent create/edit — Onda 4.
 
-9 checks ortogonais. Cada um retorna CheckResult ou None (passou).
+10 checks ortogonais. Cada um retorna CheckResult ou None (passou).
 run_preflight() orquestra e produz PreflightReport.
 
 Filosofia:
@@ -314,6 +314,56 @@ async def check_output_contract_json(payload: dict, skills_repo) -> Optional[Pre
     return None
 
 
+async def check_tool_calling_support(payload: dict, skills_repo) -> Optional[PreflightCheckResult]:
+    """C10 — modelo suporta function calling se skill declara tool_bindings.
+
+    Maritaca/Sabia aceita o parâmetro `tools` no request (compat OpenAI) mas
+    não retorna `tool_calls` no response — agente carrega Tavily/MCP, log mostra
+    "Ferramenta(s) MCP vinculada(s)" mas o LLM nunca invoca. Falha silenciosa:
+    nenhuma exception, métrica MCP TOOLS fica zerada, usuário não sabe por quê.
+
+    Bypass: se `task_type=tool_calling`, routing live-resolve pro modelo certo
+    (Azure GPT-4o por default em app/llm_routing.py) — não warna.
+    """
+    skill_id = payload.get("skill_id")
+    if not skill_id:
+        return None
+    # task_type=tool_calling pula o snapshot e usa routing — sempre safe.
+    if (payload.get("task_type") or "").strip().lower() == "tool_calling":
+        return None
+    skill = await skills_repo.find_by_id(skill_id)
+    if not skill or not skill.get("raw_content"):
+        return None
+    try:
+        from app.skill_parser.parser import parse_skill_md
+        parsed = parse_skill_md(skill["raw_content"])
+    except Exception:
+        return None
+    if not (parsed.tool_bindings or "").strip():
+        return None  # sem bindings, nada pra invocar
+    provider = (payload.get("llm_provider") or "").strip().lower()
+    model = (payload.get("model") or "").strip().lower()
+    # Maritaca/Sabia não retorna tool_calls mesmo com tools bound.
+    # Ollama varia por modelo (Llama-3.1+ suporta, Llama-2 não) — não warna pra
+    # não gerar false positives; deixa user-deployment decidir.
+    is_unsupported = provider == "maritaca" or model.startswith("sabia")
+    if not is_unsupported:
+        return None
+    return _check(
+        "C10_tool_calling_support", "warning",
+        "Modelo não suporta function calling",
+        f"O SKILL.md vinculado declara `tool_bindings` (MCP tools) mas o agente "
+        f"usa provider/modelo '{provider}/{model}'. Esses modelos aceitam o "
+        "parâmetro `tools` no request mas não geram `tool_calls` no response — "
+        "as ferramentas serão listadas como disponíveis mas nunca invocadas "
+        "(métrica MCP TOOLS no painel de rastreabilidade fica zerada). "
+        "Use um modelo OpenAI/Azure (ex: gpt-4o, gpt-4-turbo) ou Anthropic "
+        "(claude-3.5+), ou defina `task_type=tool_calling` para que o routing "
+        "automaticamente selecione um modelo compatível.",
+        fix_hint="/settings", field="model",
+    )
+
+
 async def check_inputs_cover_refs(payload: dict, skills_repo) -> Optional[PreflightCheckResult]:
     """C5 — Inputs declarados cobrem `{{inputs.X}}` dos api_bindings."""
     skill_id = payload.get("skill_id")
@@ -398,6 +448,7 @@ async def run_preflight(payload: dict) -> PreflightReport:
         check_mcp_tools_resolve(payload, skills_repo, tools_repo),
         check_output_contract_json(payload, skills_repo),
         check_inputs_cover_refs(payload, skills_repo),
+        check_tool_calling_support(payload, skills_repo),
     ]
     async_outputs = await asyncio.gather(*async_coros, return_exceptions=True)
     for r in async_outputs:
