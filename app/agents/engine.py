@@ -1312,12 +1312,18 @@ async def execute_pipeline(
     user_input: str,
     channel: str = "api",
     attachments: list = None,
+    progress_callback=None,
 ) -> dict:
     """Executa pipeline completo pelo AI Mesh.
 
     MELHORIA: Short-circuit para agentes pass-through.
     Agentes sem SKILL.md e com prompt genérico são ignorados (0ms),
     propagando o input diretamente ao próximo agente da cadeia.
+
+    progress_callback: opcional, `async def cb(event: dict) -> None`. Quando
+    presente, é chamado em pontos-chave (pipeline_start, agent_start,
+    agent_passthrough, agent_done) pra streaming via SSE. Erro no callback
+    é absorvido — não afeta a execução do pipeline.
     """
     start = time.time()
     entry_agent = await agents_repo.find_by_id(entry_agent_id)
@@ -1327,6 +1333,25 @@ async def execute_pipeline(
     chain = await _resolve_ordered_chain(entry_agent_id)
     if not chain:
         chain = [entry_agent_id]
+
+    async def _emit(event: dict) -> None:
+        if progress_callback is None:
+            return
+        try:
+            await progress_callback(event)
+        except Exception as cb_err:
+            logger.warning(f"progress_callback erro (ignored): {cb_err}")
+
+    # Pré-resolve os nomes da chain pro evento pipeline_start (não bloqueia)
+    _chain_meta = []
+    for _aid in chain:
+        try:
+            _a = await agents_repo.find_by_id(_aid)
+            if _a:
+                _chain_meta.append({"id": _aid, "name": _a.get("name", ""), "kind": _a.get("kind", "")})
+        except Exception:
+            pass
+    await _emit({"type": "pipeline_start", "total_agents": len(chain), "chain": _chain_meta})
 
     steps = []
     current_input = user_input
@@ -1338,6 +1363,13 @@ async def execute_pipeline(
         agent = await agents_repo.find_by_id(agent_id)
         if not agent or agent.get("status") != "active":
             steps.append({"agent_id": agent_id, "agent_name": agent.get("name","?") if agent else "?", "status": "skipped", "reason": "inativo"})
+            await _emit({
+                "type": "agent_skipped",
+                "step_index": i,
+                "agent_id": agent_id,
+                "agent_name": agent.get("name", "?") if agent else "?",
+                "reason": "inativo",
+            })
             continue
 
         # ══════════════════════════════════════════════════════
@@ -1350,6 +1382,14 @@ async def execute_pipeline(
                 f"Pipeline short-circuit: agent '{agent.get('name','')}' "
                 f"(kind={agent.get('kind','')}) is pass-through — skipping LLM"
             )
+            await _emit({
+                "type": "agent_passthrough",
+                "step_index": i,
+                "agent_id": agent_id,
+                "agent_name": agent.get("name", ""),
+                "agent_kind": agent.get("kind", ""),
+                "processing_message": (agent.get("processing_message") or "").strip(),
+            })
             steps.append({
                 "agent_id": agent_id,
                 "agent_name": agent.get("name", ""),
@@ -1393,6 +1433,18 @@ async def execute_pipeline(
                 f"## Solicitação original:\n{user_input}"
             )
 
+        # Emite agent_start ANTES de chamar execute_interaction (LLM tarda 1-30s,
+        # esse evento é o que destrava o UX "ao vivo" durante a chamada).
+        await _emit({
+            "type": "agent_start",
+            "step_index": i,
+            "agent_id": agent_id,
+            "agent_name": agent.get("name", ""),
+            "agent_kind": agent.get("kind", ""),
+            "agent_model": agent.get("model", ""),
+            "processing_message": (agent.get("processing_message") or "").strip(),
+        })
+
         try:
             result = await execute_interaction(
                 agent_id=agent_id,
@@ -1423,11 +1475,28 @@ async def execute_pipeline(
                 "interaction_id": iid,
             })
             last_result = result
+            await _emit({
+                "type": "agent_done",
+                "step_index": i,
+                "agent_id": agent_id,
+                "agent_name": agent.get("name", ""),
+                "status": "completed",
+                "duration_ms": result.get("duration_ms", 0),
+                "final_state": result.get("final_state", ""),
+                "output_preview": (result.get("output", "") or "")[:300],
+            })
         except Exception as e:
             steps.append({
                 "agent_id": agent_id,
                 "agent_name": agent.get("name",""),
                 "status": "error",
+                "error": str(e)[:200],
+            })
+            await _emit({
+                "type": "agent_error",
+                "step_index": i,
+                "agent_id": agent_id,
+                "agent_name": agent.get("name", ""),
                 "error": str(e)[:200],
             })
             break
@@ -1511,7 +1580,7 @@ async def execute_pipeline(
             all_exec_logs.append({"cat": "pipeline", "icon": "🔗", "title": f"─── {step_name} ({status_label}) ───", "detail": "", "level": "info"})
             all_exec_logs.extend(s["trace"]["execution_log"])
 
-    return {
+    final_result = {
         "mode": "pipeline",
         "output": final_output,
         "pipeline_steps": steps,
@@ -1536,6 +1605,10 @@ async def execute_pipeline(
             "execution_log": all_exec_logs,
         },
     }
+
+    await _emit({"type": "pipeline_done", "result": final_result})
+
+    return final_result
 
 
 async def _resolve_ordered_chain(entry_agent_id: str) -> list:
