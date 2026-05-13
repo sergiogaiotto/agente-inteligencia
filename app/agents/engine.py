@@ -1183,6 +1183,14 @@ def _build_execution_log(
     kind_labels = {"aobd": "AOBD — Orquestrador", "router": "AR — Roteador", "subagent": "SA — Subagente"}
     _add("agent", "🤖", f"{agent.get('name', '?')}",
          f"{kind_labels.get(agent.get('kind',''), agent.get('kind',''))} · {agent.get('llm_provider','')}/{agent.get('model','')} · v{agent.get('version','1.0.0')}")
+    # Frase de status humanizada — primeiro entry visível após o header do agente
+    # ("Orquestrando seu pedido", "Escolhendo o especialista", "Pensando na sua
+    # consulta"). Aparece no painel de rastreabilidade pra dar feedback narrativo
+    # ao usuário sem custo de perf (apenas append no log que já estava sendo
+    # construído).
+    _pm = (agent.get("processing_message") or "").strip()
+    if _pm:
+        _add("agent", "💬", _pm[:140])
     if agent.get("domain"):
         _add("agent", "🏢", f"Domínio: {agent.get('domain')}")
 
@@ -1362,9 +1370,16 @@ async def execute_pipeline(
                     "agent_kind": agent.get("kind", ""),
                     "agent_model": agent.get("model", ""),
                     "agent_provider": agent.get("llm_provider", ""),
-                    "execution_log": [
-                        {"cat": "agent", "icon": "⚡", "title": f"Pass-through: {agent.get('name','')}", "detail": f"Sem SKILL.md + prompt genérico → short-circuit (0ms). Kind: {agent.get('kind','')}.", "level": "info"},
-                    ],
+                    "execution_log": (
+                        [
+                            {"cat": "agent", "icon": "⚡", "title": f"Pass-through: {agent.get('name','')}", "detail": f"Sem SKILL.md + prompt genérico → short-circuit (0ms). Kind: {agent.get('kind','')}.", "level": "info"},
+                        ]
+                        + (
+                            [{"cat": "agent", "icon": "💬", "title": (agent.get("processing_message") or "").strip()[:140], "detail": "", "level": "info"}]
+                            if (agent.get("processing_message") or "").strip()
+                            else []
+                        )
+                    ),
                 },
             })
             # current_input e last_result permanecem inalterados
