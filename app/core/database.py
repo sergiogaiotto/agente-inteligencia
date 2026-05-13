@@ -513,6 +513,12 @@ _IDEMPOTENT_MIGRATIONS = [
     # llm_provider/model direto). Setado = resolve via app/llm_routing.py
     # consultando platform_settings.
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS task_type TEXT",
+    # processing_message: humaniza o execution_log no painel de rastreabilidade.
+    # Cada agente expõe uma frase de status (ex: "Orquestrando seu pedido",
+    # "Escolhendo o especialista", "Pensando na sua consulta") que aparece no
+    # topo do segmento do agente no log pós-execução. Zero impacto de perf —
+    # injetado durante a montagem do log que já estava sendo construído.
+    "ALTER TABLE agents ADD COLUMN IF NOT EXISTS processing_message TEXT",
     # Golden Dataset enriquecido — taxonomia, peso ponderado, match flexível, sentinelas
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS category TEXT",
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS weight REAL DEFAULT 1.0",

@@ -40,6 +40,16 @@
                 <textarea x-model="form.description" rows="3" placeholder="O que este agente faz..."
                           class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition resize-none"></textarea>
             </div>
+            <div>
+                <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">
+                    Mensagem de status
+                    <span class="text-[10px] font-normal text-surface-400">— mostrada no painel de rastreabilidade enquanto o agente processa</span>
+                </label>
+                <input type="text" x-model="form.processing_message" maxlength="140"
+                       placeholder='Ex: "Orquestrando seu pedido", "Escolhendo o especialista", "Pensando na sua consulta"...'
+                       class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition">
+                <p class="mt-1 text-[10px] text-surface-400">Opcional. Até 140 caracteres. Aparece como entrada 💬 no log de execução, humanizando a narrativa do pipeline.</p>
+            </div>
             <div class="grid grid-cols-3 gap-4">
                 <div>
                     <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Tipo (Camada)</label>
@@ -428,6 +438,7 @@ function agentForm(editId) {
             temperature: 0.7,
             accepts_images: false,
             accepts_documents: false,
+            processing_message: '',
         },
         // Onda 7: mapa task_id → "provider/model" do routing settings.
         // Carregado via GET /llm-routing em load(). Atualiza UI dos cards.
@@ -609,6 +620,7 @@ function agentForm(editId) {
                     temperature: Number(this.form.temperature) || 0.7,
                     accepts_images: !!this.form.accepts_images,
                     accepts_documents: !!this.form.accepts_documents,
+                    processing_message: (this.form.processing_message || '').trim() || null,
                 };
                 this.preflight.report = await api.post('/api/v1/agents/preflight', payload);
             } catch (e) {

@@ -25,6 +25,10 @@ class AgentCreate(BaseModel):
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     accepts_images: Optional[bool] = False
     accepts_documents: Optional[bool] = False
+    # Frase humana mostrada no execution_log quando o agente está processando
+    # ("Orquestrando seu pedido", "Escolhendo o especialista", etc.). Limite curto
+    # pra evitar logs poluídos. NULL/vazio = não injeta nada (back-compat).
+    processing_message: Optional[str] = Field(default=None, max_length=140)
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None
@@ -41,6 +45,7 @@ class AgentUpdate(BaseModel):
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     accepts_images: Optional[bool] = None
     accepts_documents: Optional[bool] = None
+    processing_message: Optional[str] = Field(default=None, max_length=140)
 
 
 class PreflightCheckResult(BaseModel):
