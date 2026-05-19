@@ -75,3 +75,9 @@ jsonschema>=4.21.0
 # evita 6+ libs separadas.  https://github.com/microsoft/markitdown
 # [all] inclui audio-transcription (precisa ffmpeg no sistema) + outras opcionais.
 markitdown[all]>=0.1.5
+
+# === Testing (dev) ===
+# Testes de lógica pura (Pydantic, parsers, state machines). Integração
+# com Postgres não é coberta por enquanto — smoke test manual em docs/catalog.
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
