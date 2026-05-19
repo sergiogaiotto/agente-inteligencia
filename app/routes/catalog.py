@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.catalog.lifecycle import can_transition_entry, can_transition_review
 from app.catalog.models import (
+    BulkDecisionPayload,
     CapabilityDisclosure,
     CatalogEntryCreate,
     CatalogEntryUpdate,
@@ -851,3 +852,86 @@ async def reassign_entry(
     updated = await catalog_entries_repo.update(entry_id, updates)
     await _audit("stewardship_reassigned", entry_id, user["id"], audit_details)
     return db_row_to_entry_dict(updated) if updated else {"message": "realocada"}
+
+
+# ═════════════════════════════════════════════════════════════════
+# Bulk decide (Onda 2) — Root processa várias submissions de uma vez
+# ═════════════════════════════════════════════════════════════════
+
+
+@router.post("/submissions/bulk-decide")
+async def bulk_decide(
+    data: BulkDecisionPayload,
+    user: dict = Depends(require_user),
+):
+    """Aplica a mesma decisão a múltiplas submissions. Apenas Root.
+
+    Falhas individuais não interrompem as demais — response detalha
+    sucessos e erros para o front exibir resumo.
+    """
+    if not is_root(user):
+        raise HTTPException(403, "Apenas Root pode decidir submissões")
+
+    new_entry_status = "approved" if data.decision == "approved" else "draft"
+    now = datetime.now(timezone.utc)
+
+    succeeded: list[str] = []
+    failed: list[dict] = []
+
+    for sub_id in data.submission_ids:
+        try:
+            sub = await catalog_submissions_repo.find_by_id(sub_id)
+            if not sub:
+                failed.append({"submission_id": sub_id, "reason": "não encontrada"})
+                continue
+            if not can_transition_review(sub.get("review_status"), data.decision):
+                failed.append({
+                    "submission_id": sub_id,
+                    "reason": f"review_status='{sub.get('review_status')}' não admite '{data.decision}'",
+                })
+                continue
+            entry = await catalog_entries_repo.find_by_id(sub["entry_id"])
+            if not entry:
+                failed.append({"submission_id": sub_id, "reason": "entry vinculada não existe"})
+                continue
+            if not can_transition_entry(entry.get("status"), new_entry_status):
+                failed.append({
+                    "submission_id": sub_id,
+                    "reason": f"entry em '{entry.get('status')}' não pode ir para '{new_entry_status}'",
+                })
+                continue
+
+            await catalog_submissions_repo.update(sub_id, {
+                "review_status": data.decision,
+                "reviewed_by": user["id"],
+                "reviewed_at": now,
+                "review_notes": data.notes or "",
+            })
+            await catalog_entries_repo.update(sub["entry_id"], {
+                "status": new_entry_status,
+                "updated_at": now,
+            })
+            await _audit(
+                f"review_{data.decision}",
+                sub["entry_id"],
+                user["id"],
+                {
+                    "submission_id": sub_id,
+                    "new_entry_status": new_entry_status,
+                    "notes": data.notes or "",
+                    "bulk": True,
+                },
+            )
+            succeeded.append(sub_id)
+        except Exception as e:
+            logger.warning(f"bulk_decide falhou para {sub_id}: {e}")
+            failed.append({"submission_id": sub_id, "reason": str(e)})
+
+    return {
+        "decision": data.decision,
+        "total": len(data.submission_ids),
+        "succeeded_count": len(succeeded),
+        "failed_count": len(failed),
+        "succeeded": succeeded,
+        "failed": failed,
+    }
