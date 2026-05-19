@@ -256,3 +256,26 @@ class ReassignPayload(BaseModel):
 
     def has_any_change(self) -> bool:
         return self.new_owner_user_id is not None or self.new_steward_team is not None
+
+
+# ─── Bulk decide (Onda 2) ────────────────────────────────────────
+
+
+class BulkDecisionPayload(BaseModel):
+    """Decisão em batch sobre múltiplas submissões. Apenas Root.
+
+    Mesma decision e notes aplicados a todas as submissions listadas.
+    Falhas individuais (submission já decidida, transição inválida etc.)
+    são reportadas no response — não interrompem as demais.
+    """
+
+    submission_ids: list[str] = Field(..., min_length=1, max_length=100)
+    decision: Literal["approved", "rejected", "changes_requested"]
+    notes: str = ""
+
+    @field_validator("submission_ids")
+    @classmethod
+    def _ids_unique(cls, v: list[str]) -> list[str]:
+        if len(set(v)) != len(v):
+            raise ValueError("submission_ids contém duplicatas")
+        return v

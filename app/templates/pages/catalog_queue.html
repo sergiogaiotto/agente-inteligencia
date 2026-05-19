@@ -36,16 +36,57 @@
     <template x-if="!forbidden">
         <div>
             <!-- Filtro de status (tabs) -->
-            <div class="border-b border-surface-200 mb-4">
+            <div class="border-b border-surface-200 mb-3">
                 <div class="flex gap-1">
                     <template x-for="t in statusTabs" :key="t.value">
-                        <button @click="filterStatus = t.value; load()"
+                        <button @click="filterStatus = t.value; selectedIds.clear(); load()"
                                 :class="filterStatus === t.value ? 'border-brand-500 text-brand-600 font-semibold' : 'border-transparent text-surface-500 hover:text-brand-700'"
                                 class="px-3 py-2 text-[12px] border-b-2 transition-colors flex items-center gap-1.5">
                             <span x-text="t.label"></span>
                             <span x-show="filterStatus === t.value && total > 0" class="rounded-full bg-brand-100 text-brand-700 px-1.5 py-0.5 text-[10px] font-bold" x-text="total"></span>
                         </button>
                     </template>
+                </div>
+            </div>
+
+            <!-- Filtros client-side avançados (Onda 2) -->
+            <div class="rounded-xl border border-surface-200 bg-white p-3 mb-3">
+                <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-[10px] font-semibold uppercase text-surface-400">Filtros:</span>
+                    <input type="text" x-model="filterSubmitter" placeholder="Submitter (user_id)" class="rounded-lg border border-surface-200 px-2 py-1 text-[11px] outline-none font-mono w-[180px]">
+                    <select x-model="filterKind" class="rounded-lg border border-surface-200 px-2 py-1 text-[11px] outline-none">
+                        <option value="">Todos kinds</option>
+                        <option value="agent">Agentes</option>
+                        <option value="skill">Skills</option>
+                        <option value="external_platform">Externas</option>
+                        <option value="recipe">Recipes</option>
+                        <option value="application">Aplicações</option>
+                    </select>
+                    <select x-model="filterCapability" class="rounded-lg border border-surface-200 px-2 py-1 text-[11px] outline-none">
+                        <option value="">Toda capability</option>
+                        <option value="processes_pii">Só PII</option>
+                        <option value="processes_financial">Só financeiro</option>
+                        <option value="processes_health">Só saúde</option>
+                        <option value="calls_external_apis">Só chama APIs externas</option>
+                        <option value="trains_on_input">Só treina com input</option>
+                    </select>
+                    <input type="text" x-model="filterResidency" placeholder="Residency (BR/EU/US)" class="rounded-lg border border-surface-200 px-2 py-1 text-[11px] outline-none w-[140px]">
+                    <button x-show="hasClientFilters()" @click="clearClientFilters()" class="text-[11px] text-surface-500 hover:text-brand-600 px-2 py-1">Limpar</button>
+                    <span class="ml-auto text-[10px] text-surface-400" x-text="filteredEnriched.length + ' / ' + enriched.length"></span>
+                </div>
+            </div>
+
+            <!-- Bulk action bar (aparece quando há seleção em pending) -->
+            <div x-show="selectedIds.size > 0 && filterStatus === 'pending'" x-transition
+                 class="rounded-xl bg-brand-50 border border-brand-200 px-4 py-3 mb-3 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <span class="text-[12px] font-semibold text-brand-800" x-text="selectedIds.size + ' submissões selecionadas'"></span>
+                    <button @click="selectedIds.clear()" class="text-[11px] text-brand-600 hover:underline">desmarcar tudo</button>
+                </div>
+                <div class="flex gap-2">
+                    <button @click="openBulkDecide('approved')" class="px-3 py-1.5 text-[11px] rounded-lg bg-emerald-500 text-white font-semibold hover:bg-emerald-600">Aprovar todas</button>
+                    <button @click="openBulkDecide('changes_requested')" class="px-3 py-1.5 text-[11px] rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600">Pedir mudanças</button>
+                    <button @click="openBulkDecide('rejected')" class="px-3 py-1.5 text-[11px] rounded-lg bg-rose-500 text-white font-semibold hover:bg-rose-600">Rejeitar todas</button>
                 </div>
             </div>
 
@@ -62,13 +103,33 @@
                 </div>
             </template>
 
+            <!-- Filtrado mas server tem itens -->
+            <template x-if="!loading && enriched.length > 0 && filteredEnriched.length === 0">
+                <div class="rounded-xl border border-surface-200 bg-white p-8 text-center">
+                    <p class="text-[13px] text-surface-500 mb-2">Nenhuma submissão casa com os filtros aplicados</p>
+                    <button @click="clearClientFilters()" class="text-[12px] text-brand-600 hover:underline">Limpar filtros</button>
+                </div>
+            </template>
+
             <!-- Lista de submissões -->
+            <!-- Select-all (só para pending) -->
+            <div x-show="filterStatus === 'pending' && filteredEnriched.length > 0" class="flex items-center gap-2 px-3 mb-2">
+                <input type="checkbox" :checked="allSelected()" @change="toggleAll()" class="rounded border-surface-300">
+                <span class="text-[10px] text-surface-500">Selecionar tudo (visível)</span>
+            </div>
+
             <div class="space-y-2">
-                <template x-for="item in enriched" :key="item.id">
-                    <div class="rounded-xl border border-surface-200 bg-white p-4">
+                <template x-for="item in filteredEnriched" :key="item.id">
+                    <div class="rounded-xl border bg-white p-4"
+                         :class="selectedIds.has(item.id) ? 'border-brand-400 bg-brand-50/30' : 'border-surface-200'">
 
                         <!-- Header da submissão -->
                         <div class="flex items-start justify-between gap-3 mb-3">
+                            <!-- Checkbox (só para pending) -->
+                            <input x-show="filterStatus === 'pending'" type="checkbox"
+                                   :checked="selectedIds.has(item.id)"
+                                   @change="toggleSelect(item.id)"
+                                   class="mt-1 rounded border-surface-300 shrink-0">
                             <div class="flex-1 min-w-0">
                                 <div class="flex items-center gap-2 mb-1 flex-wrap">
                                     <a :href="'/catalog/' + item.entry_id" class="text-[14px] font-semibold text-brand-900 hover:text-brand-600 truncate"
@@ -180,6 +241,48 @@
             </div>
         </div>
     </div>
+
+    <!-- ═══ MODAL: bulk decide (Onda 2) ═══ -->
+    <div x-show="bulkModalOpen" @keydown.escape.window="bulkModalOpen = false"
+         x-transition.opacity
+         class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
+        <div @click.outside="bulkModalOpen = false" class="bg-white rounded-2xl w-full max-w-md p-5 shadow-xl">
+            <h3 class="text-[14px] font-bold text-brand-900 mb-2"
+                x-text="(bulkAction === 'approved' ? 'Aprovar ' : bulkAction === 'changes_requested' ? 'Pedir mudanças em ' : 'Rejeitar ') + selectedIds.size + ' submissões'"></h3>
+            <p class="text-[11px] text-surface-500 mb-3">
+                Mesma decisão e notas aplicadas a todas. Falhas individuais (submission já decidida, etc.) são reportadas mas não interrompem as demais.
+            </p>
+            <textarea x-model="bulkNotes" rows="3"
+                      placeholder="Notas aplicadas a todas as submissões selecionadas..."
+                      class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[11px] outline-none focus:border-brand-400"></textarea>
+            <!-- Resultado do bulk (após submit) -->
+            <div x-show="bulkResult" class="mt-3 text-[11px]">
+                <p class="font-semibold text-brand-900">
+                    <span x-text="bulkResult?.succeeded_count"></span> ok ·
+                    <span class="text-rose-700" x-text="bulkResult?.failed_count"></span> falharam
+                </p>
+                <template x-if="bulkResult?.failed_count > 0">
+                    <div class="mt-1 max-h-[120px] overflow-y-auto bg-rose-50 border border-rose-100 rounded p-2 space-y-0.5">
+                        <template x-for="f in bulkResult.failed" :key="f.submission_id">
+                            <p class="text-[10px] text-rose-700">
+                                <span class="font-mono" x-text="f.submission_id.substring(0,8)"></span>: <span x-text="f.reason"></span>
+                            </p>
+                        </template>
+                    </div>
+                </template>
+            </div>
+            <div class="flex justify-end gap-2 mt-4">
+                <button @click="bulkModalOpen = false; bulkResult = null" class="px-3 py-1.5 text-[12px] rounded-lg border border-surface-200 hover:bg-surface-50">
+                    <span x-text="bulkResult ? 'Fechar' : 'Cancelar'"></span>
+                </button>
+                <button x-show="!bulkResult" @click="submitBulkDecide()" :disabled="bulkSaving"
+                        class="px-3 py-1.5 text-[12px] rounded-lg text-white"
+                        :class="bulkAction === 'approved' ? 'bg-emerald-500 hover:bg-emerald-600' : bulkAction === 'changes_requested' ? 'bg-amber-500 hover:bg-amber-600' : 'bg-rose-500 hover:bg-rose-600'">
+                    <span x-text="bulkSaving ? 'Aplicando...' : 'Confirmar'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}
 
@@ -206,6 +309,94 @@ function queuePage() {
         decideAction: null,
         decideNotes: '',
         decideSaving: false,
+
+        // Bulk decide + filtros client-side (Onda 2)
+        selectedIds: new Set(),
+        bulkModalOpen: false,
+        bulkAction: null,
+        bulkNotes: '',
+        bulkSaving: false,
+        bulkResult: null,
+        filterSubmitter: '',
+        filterKind: '',
+        filterCapability: '',
+        filterResidency: '',
+
+        hasClientFilters() {
+            return this.filterSubmitter || this.filterKind || this.filterCapability || this.filterResidency;
+        },
+
+        clearClientFilters() {
+            this.filterSubmitter = '';
+            this.filterKind = '';
+            this.filterCapability = '';
+            this.filterResidency = '';
+        },
+
+        get filteredEnriched() {
+            const list = this.enriched;
+            if (!this.hasClientFilters()) return list;
+            return list.filter(item => {
+                if (this.filterSubmitter && !(item.submitted_by || '').toLowerCase().includes(this.filterSubmitter.toLowerCase())) return false;
+                if (this.filterKind && item.entry?.kind !== this.filterKind) return false;
+                if (this.filterResidency && (item.disclosure?.data_residency || '').toUpperCase() !== this.filterResidency.toUpperCase()) return false;
+                if (this.filterCapability && !item.disclosure?.[this.filterCapability]) return false;
+                return true;
+            });
+        },
+
+        toggleSelect(id) {
+            // Set não é reativo no Alpine por default; reassigna
+            const next = new Set(this.selectedIds);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            this.selectedIds = next;
+        },
+
+        allSelected() {
+            return this.filteredEnriched.length > 0 &&
+                this.filteredEnriched.every(item => this.selectedIds.has(item.id));
+        },
+
+        toggleAll() {
+            if (this.allSelected()) {
+                this.selectedIds = new Set();
+            } else {
+                this.selectedIds = new Set(this.filteredEnriched.map(item => item.id));
+            }
+        },
+
+        openBulkDecide(action) {
+            this.bulkAction = action;
+            this.bulkNotes = '';
+            this.bulkResult = null;
+            this.bulkModalOpen = true;
+        },
+
+        async submitBulkDecide() {
+            if (this.selectedIds.size === 0) return;
+            this.bulkSaving = true;
+            try {
+                const r = await fetch('/api/v1/catalog/submissions/bulk-decide', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        submission_ids: Array.from(this.selectedIds),
+                        decision: this.bulkAction,
+                        notes: this.bulkNotes,
+                    }),
+                });
+                if (!r.ok) throw new Error((await r.json()).detail || 'erro');
+                this.bulkResult = await r.json();
+                showToast(`${this.bulkResult.succeeded_count} aplicadas, ${this.bulkResult.failed_count} falharam`);
+                // Recarrega após sucesso, mas mantém modal aberto para mostrar resultado
+                this.selectedIds = new Set();
+                await this.load();
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+            this.bulkSaving = false;
+        },
 
         async load() {
             this.loading = true;

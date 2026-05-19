@@ -1248,3 +1248,97 @@ class TestReassign:
                    json={"new_steward_team": ""})
         assert r.status_code == 200
         assert fake_storage["entries"][eid]["steward_team"] is None
+
+
+# ═════════════════════════════════════════════════════════════════
+# Bulk decide (Onda 2 / PR 5)
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestBulkDecide:
+    def _setup_two_pending(self, fake_storage):
+        """Cria 2 entries draft → submete cada uma → retorna lista de submission_ids."""
+        c = make_client({"id": "u1", "role": "comum"})
+        ids = []
+        for i in range(2):
+            eid = _create_draft(c, fake_storage, "u1")
+            body = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={}).json()
+            ids.append(body["submission_id"])
+        return ids
+
+    def test_non_root_forbidden(self, fake_storage):
+        sids = self._setup_two_pending(fake_storage)
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.post("/api/v1/catalog/submissions/bulk-decide",
+                   json={"submission_ids": sids, "decision": "approved"})
+        assert r.status_code == 403
+
+    def test_empty_ids_rejected(self, fake_storage):
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.post("/api/v1/catalog/submissions/bulk-decide",
+                   json={"submission_ids": [], "decision": "approved"})
+        assert r.status_code == 422
+
+    def test_duplicates_rejected(self, fake_storage):
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.post("/api/v1/catalog/submissions/bulk-decide",
+                   json={"submission_ids": ["a", "a"], "decision": "approved"})
+        assert r.status_code == 422
+
+    def test_unknown_decision_rejected(self, fake_storage):
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.post("/api/v1/catalog/submissions/bulk-decide",
+                   json={"submission_ids": ["a"], "decision": "maybe"})
+        assert r.status_code == 422
+
+    def test_bulk_approve_success(self, fake_storage):
+        sids = self._setup_two_pending(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.post("/api/v1/catalog/submissions/bulk-decide",
+                        json={"submission_ids": sids, "decision": "approved", "notes": "lote"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["succeeded_count"] == 2
+        assert body["failed_count"] == 0
+        # Todas viraram approved
+        for sid in sids:
+            assert fake_storage["submissions"][sid]["review_status"] == "approved"
+
+    def test_bulk_with_one_invalid_id(self, fake_storage):
+        sids = self._setup_two_pending(fake_storage)
+        sids_with_ghost = sids + ["nonexistent"]
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.post("/api/v1/catalog/submissions/bulk-decide",
+                        json={"submission_ids": sids_with_ghost, "decision": "approved"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["succeeded_count"] == 2
+        assert body["failed_count"] == 1
+        assert body["failed"][0]["submission_id"] == "nonexistent"
+
+    def test_bulk_skips_already_decided(self, fake_storage):
+        sids = self._setup_two_pending(fake_storage)
+        # Decide a primeira individualmente antes do bulk
+        c_root = make_client({"id": "root1", "role": "root"})
+        c_root.post(f"/api/v1/catalog/submissions/{sids[0]}/decide",
+                    json={"decision": "approved"})
+        # Agora bulk com as duas → primeira deve falhar
+        r = c_root.post("/api/v1/catalog/submissions/bulk-decide",
+                        json={"submission_ids": sids, "decision": "rejected"})
+        body = r.json()
+        assert body["succeeded_count"] == 1
+        assert body["failed_count"] == 1
+
+    def test_bulk_audits_each_success(self, fake_storage):
+        sids = self._setup_two_pending(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        c_root.post("/api/v1/catalog/submissions/bulk-decide",
+                    json={"submission_ids": sids, "decision": "approved"})
+        # Cada sucesso gera 1 audit 'review_approved'
+        approved_actions = [a for a in fake_storage["audit"] if a["action"] == "review_approved"]
+        assert len(approved_actions) == 2
+        # E todas marcadas como bulk no details
+        import json as _json
+        for a in approved_actions:
+            details = a["details"] if isinstance(a["details"], dict) else _json.loads(a["details"])
+            assert details.get("bulk") is True
