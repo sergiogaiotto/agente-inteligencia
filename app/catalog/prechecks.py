@@ -84,13 +84,14 @@ def run_prechecks(
             severity="warning" if status != "active" else "error",  # warning porque entry pode preexistir
         ) if status != "active" else _check("owner_active", True, "ok"))
 
-    # 5. Capability disclosure presente — warning na Onda 1 (CRUD vem no PR 4).
-    # Na Onda 2 vira error (gate).
+    # 5. Capability disclosure presente — error a partir do PR 4 (CRUD entregue).
+    # Não bloqueia submit (precheck só sinaliza), mas Root deve rejeitar entries
+    # sem disclosure declarada — governança interna de IA depende disso (R6.3).
     checks.append(_check(
         "capability_disclosure_present",
         disclosure is not None,
-        "capability disclosure ausente — declare em /catalog/entries/{id}/capability (PR 4)",
-        severity="warning",
+        "capability disclosure ausente — declare em PUT /catalog/entries/{id}/capability",
+        severity="error",
     ))
 
     # 6. Visibility coerente: department exige scope

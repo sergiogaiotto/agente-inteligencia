@@ -26,13 +26,22 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.catalog.lifecycle import can_transition_entry, can_transition_review
-from app.catalog.models import CatalogEntryCreate, CatalogEntryUpdate, SubmissionCreate, SubmissionDecision
+from app.catalog.models import (
+    CapabilityDisclosure,
+    CatalogEntryCreate,
+    CatalogEntryUpdate,
+    SubmissionCreate,
+    SubmissionDecision,
+)
 from app.catalog.prechecks import run_prechecks
 from app.catalog.queries import (
     can_user_see,
     db_row_to_entry_dict,
+    delete_disclosure,
+    get_disclosure,
     is_root,
     list_visible_entries,
+    upsert_disclosure,
 )
 from app.catalog.urn import make_urn
 from app.core.auth import require_user
@@ -40,7 +49,6 @@ from app.core.database import (
     audit_repo,
     catalog_entries_repo,
     catalog_submissions_repo,
-    catalog_disclosure_repo,
     users_repo,
 )
 
@@ -284,8 +292,8 @@ async def submit_entry(
         raise HTTPException(403, "Apenas owner ou root podem submeter")
     await _require_status_transition(entry, "submitted")
 
-    # Insumos para pré-checks
-    disclosure = await catalog_disclosure_repo.find_by_id(entry_id)  # PK = entry_id
+    # Insumos para pré-checks (disclosure tem PK = entry_id, helper especializado)
+    disclosure = await get_disclosure(entry_id)
     owner = await users_repo.find_by_id(entry.get("owner_user_id"))
     report = run_prechecks(entry, disclosure=disclosure, owner=owner)
 
@@ -448,3 +456,86 @@ async def entry_submissions(entry_id: str, user: dict = Depends(require_user)):
         raise HTTPException(403, "Apenas owner ou root podem ver histórico")
     items = await catalog_submissions_repo.find_all(entry_id=entry_id, limit=100)
     return {"submissions": items, "total": len(items)}
+
+
+# ═════════════════════════════════════════════════════════════════
+# Capability Disclosure — "etiqueta nutricional" R6.3
+# ═════════════════════════════════════════════════════════════════
+
+
+@router.get("/entries/{entry_id}/capability")
+async def get_capability(entry_id: str, user: dict = Depends(require_user)):
+    """Lê a capability disclosure de uma entry.
+
+    Visível para qualquer usuário que possa ver a entry (transparência —
+    consumer precisa saber o que invoca ANTES de invocar). 404 se entry
+    invisível OU se ainda não há disclosure declarada.
+    """
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not can_user_see(user, entry):
+        raise HTTPException(404, "Entry não encontrada")
+    disclosure = await get_disclosure(entry_id)
+    if not disclosure:
+        raise HTTPException(404, "Capability disclosure ainda não declarada")
+    return disclosure
+
+
+@router.put("/entries/{entry_id}/capability")
+async def put_capability(
+    entry_id: str,
+    data: CapabilityDisclosure,
+    user: dict = Depends(require_user),
+):
+    """Upsert da capability disclosure. Apenas owner/root.
+
+    Restringido a entries em status='draft': mudança de capabilities após
+    aprovação altera a postura de risco e exige re-submissão. Para alterar
+    em entry publicada, depreque + crie nova versão.
+    """
+    entry = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry não encontrada")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem declarar disclosure")
+    if entry.get("status") != "draft":
+        raise HTTPException(
+            409,
+            f"Entry em status '{entry.get('status')}' não aceita edição de disclosure — "
+            "depreque + nova versão para alterar capabilities",
+        )
+
+    payload = data.model_dump()
+    result = await upsert_disclosure(entry_id, payload)
+    await _audit("capability_declared", entry_id, user["id"], {
+        "processes_pii": data.processes_pii,
+        "calls_external_apis": data.calls_external_apis,
+        "data_residency": data.data_residency,
+    })
+    return result
+
+
+@router.delete("/entries/{entry_id}/capability")
+async def delete_capability(entry_id: str, user: dict = Depends(require_user)):
+    """Remove capability disclosure. Apenas owner/root, apenas em draft.
+
+    Uso raro — limpa declaração para começar do zero (ex: refatorou e quer
+    re-declarar). Submissão exigirá nova declaração.
+    """
+    entry = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry não encontrada")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem remover disclosure")
+    if entry.get("status") != "draft":
+        raise HTTPException(
+            409,
+            f"Entry em status '{entry.get('status')}' não permite remover disclosure",
+        )
+    ok = await delete_disclosure(entry_id)
+    if not ok:
+        raise HTTPException(404, "Disclosure não encontrada")
+    await _audit("capability_removed", entry_id, user["id"], {})
+    return {"message": "Capability disclosure removida", "entry_id": entry_id}

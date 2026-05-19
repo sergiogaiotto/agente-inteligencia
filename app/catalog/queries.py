@@ -159,3 +159,112 @@ async def list_visible_entries(
         total = await con.fetchval(count_sql, *params) or 0
 
     return [db_row_to_entry_dict(r) for r in rows], int(total)
+
+
+# ─── Capability Disclosure (PK = entry_id, não 'id') ─────────────
+
+
+# Colunas escrevíveis via API. Exclui PK (entry_id), timestamps
+# automáticos (created_at/updated_at) e campos preenchidos por
+# verificação por execução (Onda 2: verified_at, declared_vs_detected).
+_DISCLOSURE_WRITABLE_COLS = (
+    "reads_user_kb",
+    "writes_user_kb",
+    "calls_external_apis",
+    "external_apis_list",
+    "stores_input",
+    "storage_retention_days",
+    "accesses_internet",
+    "processes_pii",
+    "processes_financial",
+    "processes_health",
+    "trains_on_input",
+    "output_is_deterministic",
+    "data_residency",
+    "additional_notes",
+    "verification_method",
+)
+
+
+async def get_disclosure(entry_id: str) -> Optional[dict]:
+    """Busca capability disclosure por entry_id. None se ausente."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        r = await con.fetchrow(
+            "SELECT * FROM catalog_capability_disclosure WHERE entry_id=$1",
+            entry_id,
+        )
+    if not r:
+        return None
+    out = dict(r)
+    # external_apis_list é TEXT JSON — parseia para list[str]
+    raw_apis = out.get("external_apis_list")
+    if isinstance(raw_apis, str):
+        try:
+            out["external_apis_list"] = json.loads(raw_apis) if raw_apis else []
+        except json.JSONDecodeError:
+            out["external_apis_list"] = []
+    return out
+
+
+async def upsert_disclosure(entry_id: str, payload: dict) -> dict:
+    """Upsert disclosure. payload = subset de _DISCLOSURE_WRITABLE_COLS.
+
+    Usa ON CONFLICT (entry_id) DO UPDATE — mesmo padrão de SettingsStore.
+    Campos ausentes em UPDATE mantêm valor anterior (não zera).
+    """
+    # Filtra para campos conhecidos + serializa list/dict como JSON
+    filtered: dict[str, Any] = {}
+    for k in _DISCLOSURE_WRITABLE_COLS:
+        if k in payload:
+            v = payload[k]
+            if k == "external_apis_list" and isinstance(v, list):
+                v = json.dumps(v)
+            filtered[k] = v
+
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        if filtered:
+            cols = ["entry_id"] + list(filtered.keys())
+            values = [entry_id] + list(filtered.values())
+            placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))
+            updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in filtered.keys())
+            sql = (
+                f"INSERT INTO catalog_capability_disclosure ({', '.join(cols)}) "
+                f"VALUES ({placeholders}) "
+                f"ON CONFLICT (entry_id) DO UPDATE SET {updates}, updated_at = now() "
+                f"RETURNING *"
+            )
+            r = await con.fetchrow(sql, *values)
+        else:
+            # Payload vazio: cria row stub se ausente, senão no-op
+            sql = (
+                "INSERT INTO catalog_capability_disclosure (entry_id) VALUES ($1) "
+                "ON CONFLICT (entry_id) DO UPDATE SET updated_at = now() "
+                "RETURNING *"
+            )
+            r = await con.fetchrow(sql, entry_id)
+
+    out = dict(r) if r else {"entry_id": entry_id}
+    raw_apis = out.get("external_apis_list")
+    if isinstance(raw_apis, str):
+        try:
+            out["external_apis_list"] = json.loads(raw_apis) if raw_apis else []
+        except json.JSONDecodeError:
+            out["external_apis_list"] = []
+    return out
+
+
+async def delete_disclosure(entry_id: str) -> bool:
+    """Remove disclosure. True se removeu, False se não existia."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        res = await con.execute(
+            "DELETE FROM catalog_capability_disclosure WHERE entry_id=$1",
+            entry_id,
+        )
+    try:
+        n = int(res.rsplit(" ", 1)[-1])
+    except (ValueError, IndexError):
+        n = 0
+    return n > 0

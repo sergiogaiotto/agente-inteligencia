@@ -19,7 +19,6 @@ from fastapi.testclient import TestClient
 from app.core.auth import require_user
 from app.core.database import (
     audit_repo,
-    catalog_disclosure_repo,
     catalog_entries_repo,
     catalog_submissions_repo,
     users_repo,
@@ -85,8 +84,8 @@ def _bind_repo(monkeypatch, repo, store: dict):
 def fake_storage(monkeypatch):
     """Mock in-memory de todos os repos usados pelas rotas do catálogo.
 
-    Retorna dict com sub-dicts (entries/submissions/disclosures/users/audit)
-    para inspeção e setup pelos testes.
+    Disclosure usa get/upsert/delete (helpers em queries.py com PK=entry_id),
+    não Repository genérico — mock direto no namespace de rotas.
     """
     entries: dict[str, dict] = {}
     submissions: dict[str, dict] = {}
@@ -96,8 +95,24 @@ def fake_storage(monkeypatch):
 
     _bind_repo(monkeypatch, catalog_entries_repo, entries)
     _bind_repo(monkeypatch, catalog_submissions_repo, submissions)
-    _bind_repo(monkeypatch, catalog_disclosure_repo, disclosures)
     _bind_repo(monkeypatch, users_repo, users)
+
+    async def fake_get_disclosure(entry_id):
+        return dict(disclosures[entry_id]) if entry_id in disclosures else None
+
+    async def fake_upsert_disclosure(entry_id, payload):
+        existing = disclosures.get(entry_id, {})
+        existing.update({k: v for k, v in payload.items() if v is not None or k in existing})
+        existing["entry_id"] = entry_id
+        disclosures[entry_id] = existing
+        return dict(existing)
+
+    async def fake_delete_disclosure(entry_id):
+        return disclosures.pop(entry_id, None) is not None
+
+    monkeypatch.setattr("app.routes.catalog.get_disclosure", fake_get_disclosure)
+    monkeypatch.setattr("app.routes.catalog.upsert_disclosure", fake_upsert_disclosure)
+    monkeypatch.setattr("app.routes.catalog.delete_disclosure", fake_delete_disclosure)
 
     async def fake_audit_create(data):
         audit_log.append(dict(data))
@@ -450,12 +465,29 @@ class TestSubmit:
         assert subs[0]["submitted_by"] == "u1"
         assert subs[0]["review_status"] == "pending"
 
-    def test_submit_runs_prechecks_with_warning_when_disclosure_missing(self, fake_storage):
+    def test_submit_runs_prechecks_with_error_when_disclosure_missing(self, fake_storage):
         c = make_client({"id": "u1", "role": "comum"})
         eid = _create_draft(c, fake_storage, "u1")
         body = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={}).json()
-        # Disclosure não foi criada — espera-se 1+ warning
-        assert body["precheck_report"]["warnings_count"] >= 1
+        # Disclosure ausente é ERROR a partir do PR 4 (CRUD entregue)
+        assert body["precheck_report"]["errors_count"] >= 1
+        assert body["precheck_report"]["passed"] is False
+        # Submit ainda assim acontece — Root decide
+        assert body["entry_status"] == "submitted"
+
+    def test_submit_passes_prechecks_when_disclosure_declared(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        # Declara disclosure mínima antes de submeter
+        c.put(
+            f"/api/v1/catalog/entries/{eid}/capability",
+            json={},  # CapabilityDisclosure tem defaults para tudo
+        )
+        body = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={}).json()
+        # Disclosure agora existe — precheck deste item passa
+        report = body["precheck_report"]
+        cap_check = next(c for c in report["checks"] if c["name"] == "capability_disclosure_present")
+        assert cap_check["passed"]
 
     def test_submit_audits(self, fake_storage):
         c = make_client({"id": "u1", "role": "comum"})
@@ -677,3 +709,171 @@ class TestEntrySubmissions:
         r = c_root.get(f"/api/v1/catalog/entries/{eid}/submissions")
         assert r.status_code == 200
         assert r.json()["total"] == 1
+
+
+# ═════════════════════════════════════════════════════════════════
+# Capability Disclosure CRUD (PR 4)
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestCapabilityPut:
+    def test_owner_declares_minimal(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        r = c.put(f"/api/v1/catalog/entries/{eid}/capability", json={})
+        assert r.status_code == 200
+        body = r.json()
+        # Todos os defaults False
+        assert body["reads_user_kb"] is False
+        assert body["processes_pii"] is False
+        # entry_id no payload
+        assert body["entry_id"] == eid
+
+    def test_owner_declares_full_payload(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        payload = {
+            "reads_user_kb": True,
+            "calls_external_apis": True,
+            "external_apis_list": ["https://api.openai.com", "https://api.anthropic.com"],
+            "processes_pii": True,
+            "stores_input": True,
+            "storage_retention_days": 30,
+            "data_residency": "BR",
+            "additional_notes": "Pseudonimização aplicada antes do storage",
+        }
+        r = c.put(f"/api/v1/catalog/entries/{eid}/capability", json=payload)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["calls_external_apis"] is True
+        assert body["external_apis_list"] == payload["external_apis_list"]
+        assert body["data_residency"] == "BR"
+
+    def test_external_apis_list_required_when_flag_true(self, fake_storage):
+        # Pydantic CapabilityDisclosure valida: calls_external_apis=True exige lista não vazia
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        r = c.put(
+            f"/api/v1/catalog/entries/{eid}/capability",
+            json={"calls_external_apis": True, "external_apis_list": []},
+        )
+        assert r.status_code == 422
+
+    def test_negative_retention_rejected(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        r = c.put(
+            f"/api/v1/catalog/entries/{eid}/capability",
+            json={"stores_input": True, "storage_retention_days": -1},
+        )
+        assert r.status_code == 422
+
+    def test_nonowner_forbidden(self, fake_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, fake_storage, "u1")
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.put(f"/api/v1/catalog/entries/{eid}/capability", json={})
+        assert r.status_code == 403
+
+    def test_root_can_declare_for_others(self, fake_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, fake_storage, "u1")
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.put(f"/api/v1/catalog/entries/{eid}/capability", json={})
+        assert r.status_code == 200
+
+    def test_cant_edit_after_submit(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "submitted"
+        r = c.put(f"/api/v1/catalog/entries/{eid}/capability", json={})
+        assert r.status_code == 409
+
+    def test_cant_edit_after_publish(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "published"
+        r = c.put(f"/api/v1/catalog/entries/{eid}/capability", json={})
+        assert r.status_code == 409
+
+    def test_audits_declaration(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        c.put(f"/api/v1/catalog/entries/{eid}/capability", json={"processes_pii": True})
+        actions = [a["action"] for a in fake_storage["audit"]]
+        assert "capability_declared" in actions
+
+    def test_404_when_entry_missing(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.put("/api/v1/catalog/entries/missing/capability", json={})
+        assert r.status_code == 404
+
+
+class TestCapabilityGet:
+    def test_owner_reads_own(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        c.put(f"/api/v1/catalog/entries/{eid}/capability", json={"processes_pii": True})
+        r = c.get(f"/api/v1/catalog/entries/{eid}/capability")
+        assert r.status_code == 200
+        assert r.json()["processes_pii"] is True
+
+    def test_404_when_not_declared(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        r = c.get(f"/api/v1/catalog/entries/{eid}/capability")
+        assert r.status_code == 404
+
+    def test_404_when_entry_invisible(self, fake_storage):
+        # u1 cria + declara; u2 não consegue ver entry draft → não consegue ver capability
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, fake_storage, "u1")
+        c1.put(f"/api/v1/catalog/entries/{eid}/capability", json={})
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.get(f"/api/v1/catalog/entries/{eid}/capability")
+        assert r.status_code == 404
+
+    def test_other_user_reads_published_entry_disclosure(self, fake_storage):
+        # Transparência: consumer vê disclosure antes de invocar
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, fake_storage, "u1")
+        c1.put(f"/api/v1/catalog/entries/{eid}/capability", json={"processes_pii": True})
+        # Move para published+company para outros verem
+        fake_storage["entries"][eid]["status"] = "published"
+        fake_storage["entries"][eid]["visibility"] = "company"
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.get(f"/api/v1/catalog/entries/{eid}/capability")
+        assert r.status_code == 200
+        assert r.json()["processes_pii"] is True
+
+
+class TestCapabilityDelete:
+    def test_owner_deletes(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        c.put(f"/api/v1/catalog/entries/{eid}/capability", json={})
+        r = c.delete(f"/api/v1/catalog/entries/{eid}/capability")
+        assert r.status_code == 200
+        assert eid not in fake_storage["disclosures"]
+
+    def test_404_when_not_declared(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        r = c.delete(f"/api/v1/catalog/entries/{eid}/capability")
+        assert r.status_code == 404
+
+    def test_nonowner_forbidden(self, fake_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, fake_storage, "u1")
+        c1.put(f"/api/v1/catalog/entries/{eid}/capability", json={})
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.delete(f"/api/v1/catalog/entries/{eid}/capability")
+        assert r.status_code == 403
+
+    def test_cant_delete_after_submit(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        c.put(f"/api/v1/catalog/entries/{eid}/capability", json={})
+        fake_storage["entries"][eid]["status"] = "submitted"
+        r = c.delete(f"/api/v1/catalog/entries/{eid}/capability")
+        assert r.status_code == 409

@@ -75,13 +75,15 @@ class TestRunPrechecks:
         assert chk and not chk["passed"]
         assert chk["severity"] == "warning"
 
-    def test_missing_disclosure_is_warning(self):
+    def test_missing_disclosure_is_error(self):
+        # A partir do PR 4 (CRUD entregue), ausência de disclosure é error,
+        # não warning — sinaliza claramente para Root que falta governança.
         r = run_prechecks(_entry(), disclosure=None, owner=_active_user())
         chk = _check_by_name(r, "capability_disclosure_present")
         assert chk and not chk["passed"]
-        assert chk["severity"] == "warning"
-        # Warning não bloqueia
-        assert r["passed"] is True
+        assert chk["severity"] == "error"
+        # Error faz precheck_passed=False (mas submit segue — Root decide)
+        assert r["passed"] is False
 
     def test_department_without_scope_is_error(self):
         r = run_prechecks(
