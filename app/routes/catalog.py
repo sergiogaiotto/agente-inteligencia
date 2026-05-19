@@ -42,6 +42,7 @@ from app.catalog.queries import (
     get_disclosure,
     get_external_metadata,
     is_root,
+    list_inventory,
     list_visible_entries,
     upsert_disclosure,
     upsert_external_metadata,
@@ -613,3 +614,162 @@ async def put_external(
         "contract_status": data.contract_status,
     })
     return result
+
+
+# ═════════════════════════════════════════════════════════════════
+# Inventário Regulatório (Onda 2 — R13)
+# ═════════════════════════════════════════════════════════════════
+
+
+def _parse_optional_bool(v: Optional[str]) -> Optional[bool]:
+    """Converte query param string em bool tristate (true/false/None)."""
+    if v is None or v == "":
+        return None
+    return str(v).lower() in ("true", "1", "yes")
+
+
+def _inventory_filters_from_query(
+    processes_pii: Optional[str],
+    processes_financial: Optional[str],
+    processes_health: Optional[str],
+    calls_external_apis: Optional[str],
+    accesses_internet: Optional[str],
+    stores_input: Optional[str],
+    writes_user_kb: Optional[str],
+    reads_user_kb: Optional[str],
+    trains_on_input: Optional[str],
+) -> dict:
+    """Constrói dict de flags a partir dos query params (strings tristate)."""
+    return {
+        "processes_pii": _parse_optional_bool(processes_pii),
+        "processes_financial": _parse_optional_bool(processes_financial),
+        "processes_health": _parse_optional_bool(processes_health),
+        "calls_external_apis": _parse_optional_bool(calls_external_apis),
+        "accesses_internet": _parse_optional_bool(accesses_internet),
+        "stores_input": _parse_optional_bool(stores_input),
+        "writes_user_kb": _parse_optional_bool(writes_user_kb),
+        "reads_user_kb": _parse_optional_bool(reads_user_kb),
+        "trains_on_input": _parse_optional_bool(trains_on_input),
+    }
+
+
+@router.get("/inventory")
+async def get_inventory(
+    processes_pii: Optional[str] = Query(None),
+    processes_financial: Optional[str] = Query(None),
+    processes_health: Optional[str] = Query(None),
+    calls_external_apis: Optional[str] = Query(None),
+    accesses_internet: Optional[str] = Query(None),
+    stores_input: Optional[str] = Query(None),
+    writes_user_kb: Optional[str] = Query(None),
+    reads_user_kb: Optional[str] = Query(None),
+    trains_on_input: Optional[str] = Query(None),
+    residency: Optional[str] = Query(None),
+    kind: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    limit: int = Query(500, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    user: dict = Depends(require_user),
+):
+    """Inventário regulatório cross-entries (Root only).
+
+    Junta entry + capability_disclosure + external_metadata. Filtros por flag
+    aceitos como query params tristate (true/false/omitido).
+
+    Útil para comitê de privacidade/segurança ('quais entries processam PII?',
+    'quais APIs externas chamamos?', 'qual exposição em USD/mês?').
+    """
+    if not is_root(user):
+        raise HTTPException(403, "Inventário regulatório é acessível apenas para Root")
+
+    flags = _inventory_filters_from_query(
+        processes_pii, processes_financial, processes_health,
+        calls_external_apis, accesses_internet, stores_input,
+        writes_user_kb, reads_user_kb, trains_on_input,
+    )
+    rows, total = await list_inventory(
+        flags=flags,
+        residency=residency,
+        kind=kind,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+    return {"entries": rows, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/inventory/export.csv")
+async def export_inventory_csv(
+    processes_pii: Optional[str] = Query(None),
+    processes_financial: Optional[str] = Query(None),
+    processes_health: Optional[str] = Query(None),
+    calls_external_apis: Optional[str] = Query(None),
+    accesses_internet: Optional[str] = Query(None),
+    stores_input: Optional[str] = Query(None),
+    writes_user_kb: Optional[str] = Query(None),
+    reads_user_kb: Optional[str] = Query(None),
+    trains_on_input: Optional[str] = Query(None),
+    residency: Optional[str] = Query(None),
+    kind: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    user: dict = Depends(require_user),
+):
+    """Export do inventário regulatório como CSV. Mesmos filtros do GET.
+
+    Limite mais alto (2000) — para audit externa, exportar tudo. Sem paginação
+    no CSV: tudo cabe no download.
+    """
+    if not is_root(user):
+        raise HTTPException(403, "Export do inventário é acessível apenas para Root")
+
+    flags = _inventory_filters_from_query(
+        processes_pii, processes_financial, processes_health,
+        calls_external_apis, accesses_internet, stores_input,
+        writes_user_kb, reads_user_kb, trains_on_input,
+    )
+    rows, _ = await list_inventory(
+        flags=flags,
+        residency=residency,
+        kind=kind,
+        status=status,
+        limit=2000,
+        offset=0,
+    )
+
+    import csv
+    import io
+    from datetime import datetime as _dt
+    from fastapi.responses import StreamingResponse
+
+    columns = [
+        "id", "urn", "name", "kind", "status", "version", "domain",
+        "owner_user_id", "steward_team", "visibility",
+        "processes_pii", "processes_financial", "processes_health",
+        "calls_external_apis", "accesses_internet", "stores_input",
+        "writes_user_kb", "reads_user_kb", "trains_on_input",
+        "data_residency", "external_apis_list", "storage_retention_days",
+        "vendor", "monthly_cost_usd", "contract_status", "contract_renewal_date",
+        "created_at", "published_at",
+    ]
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        # Normaliza listas/datetimes para CSV
+        row = dict(r)
+        if isinstance(row.get("external_apis_list"), list):
+            row["external_apis_list"] = "; ".join(row["external_apis_list"])
+        for k in ("created_at", "published_at", "contract_renewal_date"):
+            if row.get(k) is not None and not isinstance(row[k], str):
+                row[k] = str(row[k])
+        writer.writerow(row)
+
+    buf.seek(0)
+    timestamp = _dt.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"maestro-catalog-inventory-{timestamp}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

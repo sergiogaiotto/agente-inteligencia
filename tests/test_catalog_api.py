@@ -1043,3 +1043,94 @@ class TestExternalMetadataGet:
         r = c2.get(f"/api/v1/catalog/entries/{eid}/external-metadata")
         assert r.status_code == 200
         assert r.json()["vendor"] == "OpenAI"
+
+
+# ═════════════════════════════════════════════════════════════════
+# Inventário Regulatório (Onda 2 / PR 3)
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestInventory:
+    """Endpoints /inventory e /inventory/export.csv só testam plumbing HTTP +
+    role gate. A query SQL com JOIN é coberta pelo smoke test."""
+
+    def test_non_root_forbidden_json(self, monkeypatch):
+        async def fake_list(**kwargs):
+            return [], 0
+        monkeypatch.setattr("app.routes.catalog.list_inventory", fake_list)
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/inventory")
+        assert r.status_code == 403
+
+    def test_non_root_forbidden_csv(self, monkeypatch):
+        async def fake_list(**kwargs):
+            return [], 0
+        monkeypatch.setattr("app.routes.catalog.list_inventory", fake_list)
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/inventory/export.csv")
+        assert r.status_code == 403
+
+    def test_root_can_access(self, monkeypatch):
+        async def fake_list(**kwargs):
+            return [{"id": "e1", "name": "X"}], 1
+        monkeypatch.setattr("app.routes.catalog.list_inventory", fake_list)
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/inventory")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert len(body["entries"]) == 1
+
+    def test_filters_passed_to_query(self, monkeypatch):
+        captured = {}
+        async def fake_list(**kwargs):
+            captured.update(kwargs)
+            return [], 0
+        monkeypatch.setattr("app.routes.catalog.list_inventory", fake_list)
+        c = make_client({"id": "root1", "role": "root"})
+        c.get("/api/v1/catalog/inventory?processes_pii=true&calls_external_apis=false&kind=external_platform&residency=BR")
+        assert captured["flags"]["processes_pii"] is True
+        assert captured["flags"]["calls_external_apis"] is False
+        # Não setados ficam None
+        assert captured["flags"]["processes_health"] is None
+        assert captured["kind"] == "external_platform"
+        assert captured["residency"] == "BR"
+
+    def test_empty_flag_means_no_filter(self, monkeypatch):
+        captured = {}
+        async def fake_list(**kwargs):
+            captured.update(kwargs)
+            return [], 0
+        monkeypatch.setattr("app.routes.catalog.list_inventory", fake_list)
+        c = make_client({"id": "root1", "role": "root"})
+        c.get("/api/v1/catalog/inventory?processes_pii=")
+        assert captured["flags"]["processes_pii"] is None
+
+    def test_csv_returns_text_csv(self, monkeypatch):
+        async def fake_list(**kwargs):
+            return [{
+                "id": "e1", "urn": "urn:maestro:default:agent:x:1.0.0",
+                "name": "Agente Fiscal", "kind": "agent", "status": "published",
+                "version": "1.0.0", "domain": "fiscal",
+                "owner_user_id": "u1", "steward_team": None, "visibility": "company",
+                "processes_pii": True, "processes_financial": False, "processes_health": False,
+                "calls_external_apis": False, "accesses_internet": False, "stores_input": False,
+                "writes_user_kb": False, "reads_user_kb": True, "trains_on_input": False,
+                "data_residency": "BR", "external_apis_list": ["https://api.openai.com"],
+                "storage_retention_days": None,
+                "vendor": None, "monthly_cost_usd": None,
+                "contract_status": None, "contract_renewal_date": None,
+                "created_at": "2026-01-01T00:00:00", "published_at": None,
+            }], 1
+        monkeypatch.setattr("app.routes.catalog.list_inventory", fake_list)
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/inventory/export.csv")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/csv")
+        assert "attachment" in r.headers["content-disposition"]
+        # Conteúdo tem header CSV + 1 row
+        text = r.text
+        assert "id,urn,name" in text
+        assert "Agente Fiscal" in text
+        # Lista serializada com "; "
+        assert "https://api.openai.com" in text

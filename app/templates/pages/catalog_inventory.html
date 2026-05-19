@@ -1,0 +1,281 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="inventoryPage()" x-init="load()" class="p-4 lg:p-6">
+
+    <!-- Header -->
+    <div class="mb-4">
+        <p class="text-[11px] text-surface-400 mb-1">
+            <a href="/catalog" class="hover:text-brand-600">Catálogo</a>
+            <span class="mx-1">/</span>
+            <span class="text-brand-900">Inventário Regulatório</span>
+        </p>
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <h2 class="text-[18px] font-bold text-brand-900">Inventário Regulatório</h2>
+                <p class="text-[12px] text-surface-400 mt-0.5">Cross-entries com capability disclosure. Para comitê de privacidade/segurança — "quais entries processam PII? quais APIs externas chamamos? qual exposição mensal?"</p>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+                <button @click="load()" :disabled="loading" class="inline-flex items-center gap-2 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] font-medium text-brand-900 hover:border-brand-300">
+                    <svg class="w-3.5 h-3.5" :class="loading ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+                    Atualizar
+                </button>
+                <a :href="csvUrl()" target="_blank" class="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-emerald-600">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+                    Export CSV
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Forbidden -->
+    <template x-if="forbidden">
+        <div class="rounded-xl border-2 border-dashed border-rose-200 bg-rose-50/30 p-12 text-center">
+            <p class="text-[14px] font-semibold text-rose-700 mb-1">Acesso restrito</p>
+            <p class="text-[12px] text-surface-500 mb-3">Inventário regulatório acessível apenas para usuários com papel <code class="bg-white px-1 rounded">root</code>.</p>
+            <a href="/catalog" class="text-[12px] text-brand-600 hover:underline">Voltar ao catálogo</a>
+        </div>
+    </template>
+
+    <!-- Conteúdo -->
+    <template x-if="!forbidden">
+        <div>
+            <!-- Filtros -->
+            <div class="rounded-xl border border-surface-200 bg-white p-4 mb-4">
+                <p class="text-[11px] font-semibold uppercase tracking-wider text-surface-400 mb-2">Filtros (tristate — vazio = não filtra)</p>
+
+                <!-- Capability flags -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
+                    <template x-for="f in flagFilters" :key="f.key">
+                        <div class="flex items-center gap-2 text-[11px]">
+                            <span class="text-surface-600 flex-1" x-text="f.label"></span>
+                            <select x-model="filters[f.key]" @change="load()" class="rounded border border-surface-200 px-2 py-1 text-[11px] outline-none">
+                                <option value="">—</option>
+                                <option value="true">Sim</option>
+                                <option value="false">Não</option>
+                            </select>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Outros filtros -->
+                <div class="flex flex-wrap items-center gap-2 pt-3 border-t border-surface-100">
+                    <select x-model="filters.kind" @change="load()" class="rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] outline-none">
+                        <option value="">Todos tipos</option>
+                        <option value="agent">Agentes</option>
+                        <option value="skill">Skills</option>
+                        <option value="recipe">Recipes</option>
+                        <option value="application">Aplicações</option>
+                        <option value="external_platform">Plataformas externas</option>
+                    </select>
+                    <select x-model="filters.status" @change="load()" class="rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] outline-none">
+                        <option value="">Todos status</option>
+                        <option value="draft">Draft</option>
+                        <option value="submitted">Submitted</option>
+                        <option value="approved">Approved</option>
+                        <option value="published">Published</option>
+                        <option value="deprecated">Deprecated</option>
+                        <option value="archived">Archived</option>
+                    </select>
+                    <input type="text" x-model="filters.residency" @change="load()" placeholder="Residency (BR/EU/US/global)" class="rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] outline-none w-[200px]">
+                    <button @click="resetFilters()" class="text-[11px] text-surface-500 hover:text-brand-600 px-2 py-1.5">Limpar</button>
+                    <span class="ml-auto text-[10px] text-surface-400" x-text="total + ' entries'"></span>
+                </div>
+            </div>
+
+            <!-- Agregados rápidos -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+                <div class="rounded-lg bg-rose-50 border border-rose-100 px-3 py-2.5">
+                    <div class="text-[9px] font-semibold uppercase text-rose-700">Processam PII</div>
+                    <div class="text-[18px] font-bold text-rose-700 mt-0.5" x-text="agg.pii"></div>
+                </div>
+                <div class="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2.5">
+                    <div class="text-[9px] font-semibold uppercase text-amber-700">Chamam APIs externas</div>
+                    <div class="text-[18px] font-bold text-amber-700 mt-0.5" x-text="agg.external_apis"></div>
+                </div>
+                <div class="rounded-lg bg-brand-50 border border-brand-100 px-3 py-2.5">
+                    <div class="text-[9px] font-semibold uppercase text-brand-700">Plataformas externas</div>
+                    <div class="text-[18px] font-bold text-brand-700 mt-0.5" x-text="agg.external_platforms"></div>
+                </div>
+                <div class="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2.5">
+                    <div class="text-[9px] font-semibold uppercase text-emerald-700">Custo mensal (USD)</div>
+                    <div class="text-[18px] font-bold text-emerald-700 mt-0.5 font-mono" x-text="'$' + agg.monthly_cost_usd.toLocaleString()"></div>
+                </div>
+            </div>
+
+            <!-- Loading / Empty -->
+            <template x-if="loading">
+                <p class="text-center text-[12px] text-surface-400 py-8">Carregando inventário...</p>
+            </template>
+            <template x-if="!loading && entries.length === 0">
+                <div class="rounded-xl border border-surface-200 bg-white p-8 text-center">
+                    <p class="text-[13px] text-surface-500 mb-2">Nenhuma entry casa com os filtros.</p>
+                    <button @click="resetFilters()" class="text-[11px] text-brand-600 hover:underline">Limpar filtros</button>
+                </div>
+            </template>
+
+            <!-- Tabela -->
+            <div x-show="!loading && entries.length > 0" class="rounded-xl border border-surface-200 bg-white overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-[11px]">
+                        <thead class="bg-surface-50 border-b border-surface-200">
+                            <tr class="text-left">
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Entry</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Kind / Status</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Owner</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Capabilities</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Residency</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Vendor</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px] text-right">Custo/mês</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-surface-100">
+                            <template x-for="e in entries" :key="e.id">
+                                <tr class="hover:bg-surface-50/50">
+                                    <td class="px-3 py-2">
+                                        <a :href="'/catalog/' + e.id" class="font-semibold text-brand-900 hover:text-brand-600" x-text="e.name"></a>
+                                        <p class="text-[9px] text-surface-400 font-mono truncate max-w-[200px]" x-text="'v' + e.version"></p>
+                                    </td>
+                                    <td class="px-3 py-2">
+                                        <span class="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase"
+                                              :class="kindBadgeClass(e.kind)" x-text="e.kind"></span>
+                                        <p class="text-[9px] text-surface-500 mt-0.5" x-text="e.status"></p>
+                                    </td>
+                                    <td class="px-3 py-2">
+                                        <p class="font-mono text-surface-700 text-[10px]" x-text="e.owner_user_id"></p>
+                                        <p x-show="e.steward_team" class="text-[9px] text-surface-400" x-text="e.steward_team"></p>
+                                    </td>
+                                    <td class="px-3 py-2">
+                                        <div class="flex flex-wrap gap-1">
+                                            <template x-for="badge in capabilityBadges(e)" :key="badge.label">
+                                                <span class="rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
+                                                      :class="badge.severity === 'high' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'"
+                                                      x-text="badge.label"></span>
+                                            </template>
+                                            <span x-show="capabilityBadges(e).length === 0 && e.processes_pii !== null" class="text-[9px] text-emerald-700">— sem flags ativas —</span>
+                                            <span x-show="e.processes_pii === null" class="text-[9px] italic text-surface-400">disclosure ausente</span>
+                                        </div>
+                                    </td>
+                                    <td class="px-3 py-2">
+                                        <span x-show="e.data_residency" class="rounded-full bg-brand-100 text-brand-700 px-2 py-0.5 text-[9px] font-mono" x-text="e.data_residency"></span>
+                                        <span x-show="!e.data_residency" class="text-[9px] text-surface-400">—</span>
+                                    </td>
+                                    <td class="px-3 py-2 text-[10px]">
+                                        <span x-show="e.vendor" class="text-brand-800 font-medium" x-text="e.vendor"></span>
+                                        <span x-show="!e.vendor" class="text-surface-300">—</span>
+                                    </td>
+                                    <td class="px-3 py-2 text-right">
+                                        <span x-show="e.monthly_cost_usd" class="font-mono text-emerald-700" x-text="'$' + (e.monthly_cost_usd || 0).toLocaleString()"></span>
+                                        <span x-show="!e.monthly_cost_usd" class="text-surface-300">—</span>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function inventoryPage() {
+    return {
+        loading: true, forbidden: false,
+        entries: [], total: 0,
+        filters: {
+            processes_pii: '', processes_financial: '', processes_health: '',
+            calls_external_apis: '', accesses_internet: '', stores_input: '',
+            writes_user_kb: '', reads_user_kb: '', trains_on_input: '',
+            residency: '', kind: '', status: '',
+        },
+        flagFilters: [
+            {key: 'processes_pii', label: 'Processa PII'},
+            {key: 'processes_financial', label: 'Processa financeiro'},
+            {key: 'processes_health', label: 'Processa saúde'},
+            {key: 'calls_external_apis', label: 'Chama APIs externas'},
+            {key: 'accesses_internet', label: 'Acessa internet'},
+            {key: 'stores_input', label: 'Persiste input'},
+            {key: 'writes_user_kb', label: 'Escreve KB'},
+            {key: 'reads_user_kb', label: 'Lê KB'},
+            {key: 'trains_on_input', label: 'Treina com input'},
+        ],
+
+        async load() {
+            this.loading = true;
+            // Auth check
+            try {
+                const me = await fetch('/api/v1/users/me').then(r => r.json()).catch(() => ({user: null}));
+                if ((me.user?.role || '').toLowerCase() !== 'root') {
+                    this.forbidden = true;
+                    this.loading = false;
+                    return;
+                }
+            } catch {
+                this.forbidden = true;
+                this.loading = false;
+                return;
+            }
+
+            try {
+                const r = await fetch('/api/v1/catalog/inventory?' + this.buildQuery());
+                if (!r.ok) throw new Error(r.status);
+                const data = await r.json();
+                this.entries = data.entries || [];
+                this.total = data.total || 0;
+            } catch (e) {
+                showToast('Erro ao carregar inventário', 'error');
+            }
+            this.loading = false;
+        },
+
+        buildQuery() {
+            const params = new URLSearchParams();
+            for (const [k, v] of Object.entries(this.filters)) {
+                if (v) params.set(k, v);
+            }
+            return params.toString();
+        },
+
+        csvUrl() {
+            const q = this.buildQuery();
+            return '/api/v1/catalog/inventory/export.csv' + (q ? '?' + q : '');
+        },
+
+        resetFilters() {
+            for (const k of Object.keys(this.filters)) this.filters[k] = '';
+            this.load();
+        },
+
+        get agg() {
+            const pii = this.entries.filter(e => e.processes_pii).length;
+            const ext_apis = this.entries.filter(e => e.calls_external_apis).length;
+            const ext_pl = this.entries.filter(e => e.kind === 'external_platform').length;
+            const cost = this.entries.reduce((s, e) => s + (e.monthly_cost_usd || 0), 0);
+            return {pii, external_apis: ext_apis, external_platforms: ext_pl, monthly_cost_usd: cost};
+        },
+
+        capabilityBadges(e) {
+            const out = [];
+            if (e.processes_pii) out.push({label: 'PII', severity: 'high'});
+            if (e.processes_financial) out.push({label: 'Financeiro', severity: 'high'});
+            if (e.processes_health) out.push({label: 'Saúde', severity: 'high'});
+            if (e.trains_on_input) out.push({label: 'Treina', severity: 'high'});
+            if (e.accesses_internet) out.push({label: 'Internet', severity: 'high'});
+            if (e.writes_user_kb) out.push({label: 'Escreve KB', severity: 'high'});
+            if (e.calls_external_apis) out.push({label: 'APIs externas', severity: 'medium'});
+            if (e.stores_input) out.push({label: 'Persiste input', severity: 'medium'});
+            if (e.reads_user_kb) out.push({label: 'Lê KB', severity: 'medium'});
+            return out;
+        },
+
+        kindBadgeClass(k) {
+            return ({agent:'bg-violet-50 text-violet-700', skill:'bg-teal-50 text-teal-700', recipe:'bg-brand-50 text-brand-700',
+                     application:'bg-amber-50 text-amber-700', external_platform:'bg-rose-50 text-rose-700'})[k] || 'bg-surface-100 text-surface-600';
+        },
+    }
+}
+</script>
+{% endblock %}

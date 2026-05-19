@@ -356,3 +356,113 @@ async def delete_external_metadata(entry_id: str) -> bool:
     except (ValueError, IndexError):
         n = 0
     return n > 0
+
+
+# ─── Inventário Regulatório (Onda 2) ─────────────────────────────
+
+
+# Whitelist de flags filtráveis em disclosure.
+# Usado pelo endpoint e na construção dinâmica de SQL — protege contra
+# column injection caso o caller passe nome arbitrário.
+_INVENTORY_FLAGS = (
+    "processes_pii",
+    "processes_financial",
+    "processes_health",
+    "calls_external_apis",
+    "accesses_internet",
+    "stores_input",
+    "writes_user_kb",
+    "reads_user_kb",
+    "trains_on_input",
+)
+
+
+async def list_inventory(
+    *,
+    flags: Optional[dict[str, bool]] = None,
+    residency: Optional[str] = None,
+    kind: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 500,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """Inventário regulatório: cross-entries com filtros por capability disclosure.
+
+    Faz LEFT JOIN com disclosure (entries sem disclosure aparecem com flags
+    NULL) + LEFT JOIN com external_metadata (preenche vendor/cost quando
+    aplicável). Filtros por flag são opcionais.
+
+    Args:
+        flags: dict {flag_name: bool} — só flags em _INVENTORY_FLAGS são aceitas.
+        residency: filtra por data_residency exato.
+        kind: filtra entry.kind.
+        status: filtra entry.status.
+    """
+    pool = _get_pool()
+    params: list[Any] = []
+    where_parts: list[str] = []
+
+    if kind:
+        params.append(kind)
+        where_parts.append(f"e.kind = ${len(params)}")
+    if status:
+        params.append(status)
+        where_parts.append(f"e.status = ${len(params)}")
+
+    if flags:
+        for col, val in flags.items():
+            if col not in _INVENTORY_FLAGS or val is None:
+                continue
+            # Filtra disclosure exigindo flag = val. NULL não casa.
+            params.append(val)
+            where_parts.append(f"d.{col} = ${len(params)}")
+
+    if residency:
+        params.append(residency)
+        where_parts.append(f"d.data_residency = ${len(params)}")
+
+    base_join = (
+        "FROM catalog_entries e "
+        "LEFT JOIN catalog_capability_disclosure d ON d.entry_id = e.id "
+        "LEFT JOIN catalog_external_metadata x ON x.entry_id = e.id"
+    )
+    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    select_cols = (
+        "e.id, e.urn, e.name, e.kind, e.status, e.version, e.domain, "
+        "e.owner_user_id, e.steward_team, e.visibility, e.visibility_scope, "
+        "e.created_at, e.published_at, "
+        "d.processes_pii, d.processes_financial, d.processes_health, "
+        "d.calls_external_apis, d.accesses_internet, d.stores_input, "
+        "d.writes_user_kb, d.reads_user_kb, d.trains_on_input, "
+        "d.data_residency, d.external_apis_list, d.storage_retention_days, "
+        "x.vendor, x.monthly_cost_usd, x.contract_status, x.contract_renewal_date"
+    )
+
+    count_sql = f"SELECT COUNT(*) {base_join} {where_sql}"
+
+    params_paginated = params + [limit, offset]
+    limit_ph = f"${len(params_paginated)-1}"
+    offset_ph = f"${len(params_paginated)}"
+    list_sql = (
+        f"SELECT {select_cols} {base_join} {where_sql} "
+        f"ORDER BY e.created_at DESC LIMIT {limit_ph} OFFSET {offset_ph}"
+    )
+
+    async with pool.acquire() as con:
+        rows = await con.fetch(list_sql, *params_paginated)
+        total = await con.fetchval(count_sql, *params) or 0
+
+    # Parseia external_apis_list (TEXT JSON) — outras flags são bool/null nativos
+    out = []
+    for r in rows:
+        d = dict(r)
+        raw = d.get("external_apis_list")
+        if isinstance(raw, str):
+            try:
+                d["external_apis_list"] = json.loads(raw) if raw else []
+            except json.JSONDecodeError:
+                d["external_apis_list"] = []
+        out.append(d)
+
+    return out, int(total)
