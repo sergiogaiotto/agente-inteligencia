@@ -1,0 +1,349 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="queuePage()" x-init="load()" class="p-4 lg:p-6 max-w-5xl mx-auto">
+
+    <!-- Header -->
+    <div class="mb-4">
+        <p class="text-[11px] text-surface-400 mb-1">
+            <a href="/catalog" class="hover:text-brand-600">Catálogo</a>
+            <span class="mx-1">/</span>
+            <span class="text-brand-900">Fila de Revisão</span>
+        </p>
+        <div class="flex items-center justify-between">
+            <div>
+                <h2 class="text-[18px] font-bold text-brand-900">Fila de Revisão</h2>
+                <p class="text-[12px] text-surface-400 mt-0.5">Submissões aguardando decisão Root. Pré-checks são informativos — você decide com base no relatório.</p>
+            </div>
+            <button @click="load()" :disabled="loading"
+                    class="inline-flex items-center gap-2 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] font-medium text-brand-900 hover:border-brand-300">
+                <svg class="w-3.5 h-3.5" :class="loading ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+                Atualizar
+            </button>
+        </div>
+    </div>
+
+    <!-- Forbidden state (se não-root tentar acessar a página) -->
+    <template x-if="forbidden">
+        <div class="rounded-xl border-2 border-dashed border-rose-200 bg-rose-50/30 p-12 text-center">
+            <p class="text-[14px] font-semibold text-rose-700 mb-1">Acesso restrito</p>
+            <p class="text-[12px] text-surface-500 mb-3">A fila de revisão é visível apenas para usuários com papel <code class="bg-white px-1 rounded">root</code>.</p>
+            <a href="/catalog" class="text-[12px] text-brand-600 hover:underline">Voltar ao catálogo</a>
+        </div>
+    </template>
+
+    <!-- Conteúdo (só para Root) -->
+    <template x-if="!forbidden">
+        <div>
+            <!-- Filtro de status (tabs) -->
+            <div class="border-b border-surface-200 mb-4">
+                <div class="flex gap-1">
+                    <template x-for="t in statusTabs" :key="t.value">
+                        <button @click="filterStatus = t.value; load()"
+                                :class="filterStatus === t.value ? 'border-brand-500 text-brand-600 font-semibold' : 'border-transparent text-surface-500 hover:text-brand-700'"
+                                class="px-3 py-2 text-[12px] border-b-2 transition-colors flex items-center gap-1.5">
+                            <span x-text="t.label"></span>
+                            <span x-show="filterStatus === t.value && total > 0" class="rounded-full bg-brand-100 text-brand-700 px-1.5 py-0.5 text-[10px] font-bold" x-text="total"></span>
+                        </button>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Loading -->
+            <template x-if="loading">
+                <p class="text-center text-[12px] text-surface-400 py-8">Carregando fila...</p>
+            </template>
+
+            <!-- Empty -->
+            <template x-if="!loading && enriched.length === 0">
+                <div class="rounded-xl border border-surface-200 bg-white p-10 text-center">
+                    <p class="text-[14px] font-semibold text-brand-900 mb-1" x-text="emptyTitle()"></p>
+                    <p class="text-[12px] text-surface-400" x-text="emptySubtitle()"></p>
+                </div>
+            </template>
+
+            <!-- Lista de submissões -->
+            <div class="space-y-2">
+                <template x-for="item in enriched" :key="item.id">
+                    <div class="rounded-xl border border-surface-200 bg-white p-4">
+
+                        <!-- Header da submissão -->
+                        <div class="flex items-start justify-between gap-3 mb-3">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-1 flex-wrap">
+                                    <a :href="'/catalog/' + item.entry_id" class="text-[14px] font-semibold text-brand-900 hover:text-brand-600 truncate"
+                                       x-text="item.entry?.name || '(entry deletada — ' + item.entry_id.substring(0,8) + ')'"></a>
+                                    <span x-show="item.entry?.kind" class="rounded-full px-2 py-0.5 text-[9px] font-bold uppercase shrink-0"
+                                          :class="kindBadgeClass(item.entry?.kind)" x-text="item.entry?.kind"></span>
+                                    <span x-show="item.entry?.version" class="rounded-full bg-surface-100 px-2 py-0.5 text-[9px] font-mono text-surface-500 shrink-0" x-text="'v' + item.entry?.version"></span>
+                                </div>
+                                <p class="text-[11px] text-surface-500">
+                                    Submetida por <span class="font-mono text-brand-700" x-text="item.submitted_by"></span>
+                                    <span class="text-surface-300 mx-1">•</span>
+                                    <span x-text="formatDate(item.submitted_at)"></span>
+                                </p>
+                                <p x-show="item.review_notes" class="text-[11px] italic text-surface-600 mt-1" x-text="'« ' + item.review_notes + ' »'"></p>
+                            </div>
+
+                            <!-- Precheck summary -->
+                            <div class="shrink-0 flex flex-col items-end gap-1">
+                                <div class="flex items-center gap-1.5">
+                                    <span x-show="precheckData(item).errors_count > 0" class="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+                                        <span x-text="precheckData(item).errors_count"></span> erro<span x-show="precheckData(item).errors_count !== 1">s</span>
+                                    </span>
+                                    <span x-show="precheckData(item).warnings_count > 0" class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                                        <span x-text="precheckData(item).warnings_count"></span> aviso<span x-show="precheckData(item).warnings_count !== 1">s</span>
+                                    </span>
+                                    <span x-show="precheckData(item).errors_count === 0 && precheckData(item).warnings_count === 0"
+                                          class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">pré-checks OK</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Precheck details (expansível) -->
+                        <details class="rounded-lg bg-surface-50 border border-surface-100 px-3 py-2 mb-3">
+                            <summary class="text-[11px] text-brand-600 cursor-pointer hover:underline font-medium">
+                                Ver detalhe dos pré-checks (<span x-text="precheckData(item).checks?.length || 0"></span>)
+                            </summary>
+                            <div class="mt-2 space-y-1">
+                                <template x-for="c in (precheckData(item).checks || [])" :key="c.name">
+                                    <div class="flex items-start gap-2 text-[11px]">
+                                        <span class="rounded-full w-2 h-2 mt-1 shrink-0"
+                                              :class="c.passed ? 'bg-emerald-400' : (c.severity === 'error' ? 'bg-rose-400' : 'bg-amber-400')"></span>
+                                        <div class="flex-1">
+                                            <span class="font-mono text-brand-900" x-text="c.name"></span>
+                                            <span class="text-surface-500 ml-1" x-text="'— ' + c.message"></span>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </details>
+
+                        <!-- Capability disclosure quick view (se entry tem disclosure declarada) -->
+                        <div x-show="item.disclosure" class="rounded-lg bg-brand-50/40 border border-brand-100 px-3 py-2 mb-3">
+                            <p class="text-[10px] font-semibold text-brand-700 uppercase tracking-wider mb-1">Capability declarada</p>
+                            <div class="flex flex-wrap gap-1.5 text-[10px]">
+                                <template x-for="flag in disclosureSummary(item.disclosure)" :key="flag.label">
+                                    <span class="rounded-full px-2 py-0.5"
+                                          :class="flag.severity === 'high' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'"
+                                          x-text="flag.label"></span>
+                                </template>
+                                <span x-show="disclosureSummary(item.disclosure).length === 0" class="text-surface-500 italic">Sem flags ativas declaradas</span>
+                                <span x-show="item.disclosure.data_residency" class="rounded-full bg-brand-100 text-brand-700 px-2 py-0.5" x-text="'Residency: ' + item.disclosure.data_residency"></span>
+                            </div>
+                        </div>
+
+                        <!-- Ações (só para review_status=pending) -->
+                        <div x-show="item.review_status === 'pending'" class="flex justify-end gap-2 pt-2 border-t border-surface-100">
+                            <button @click="openDecide(item, 'approved')" class="px-3 py-1.5 text-[11px] rounded-lg bg-emerald-500 text-white font-semibold hover:bg-emerald-600">Aprovar</button>
+                            <button @click="openDecide(item, 'changes_requested')" class="px-3 py-1.5 text-[11px] rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600">Pedir Mudanças</button>
+                            <button @click="openDecide(item, 'rejected')" class="px-3 py-1.5 text-[11px] rounded-lg bg-rose-500 text-white font-semibold hover:bg-rose-600">Rejeitar</button>
+                        </div>
+
+                        <!-- Resultado da decisão (se já decidida) -->
+                        <div x-show="item.review_status !== 'pending'" class="flex items-center justify-between gap-2 pt-2 border-t border-surface-100 text-[11px]">
+                            <span class="inline-flex items-center gap-1.5">
+                                <span class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase"
+                                      :class="reviewBadgeClass(item.review_status)" x-text="item.review_status"></span>
+                                por <span class="font-mono text-brand-700" x-text="item.reviewed_by"></span>
+                                em <span x-text="formatDate(item.reviewed_at)"></span>
+                            </span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </template>
+
+    <!-- ═══ MODAL: decisão ═══ -->
+    <div x-show="decideModalOpen" @keydown.escape.window="decideModalOpen = false"
+         x-transition.opacity
+         class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
+        <div @click.outside="decideModalOpen = false" class="bg-white rounded-2xl w-full max-w-md p-5 shadow-xl">
+            <h3 class="text-[14px] font-bold text-brand-900 mb-2"
+                x-text="decideAction === 'approved' ? 'Aprovar submissão' : decideAction === 'changes_requested' ? 'Solicitar mudanças' : 'Rejeitar submissão'"></h3>
+            <p class="text-[12px] text-surface-600 mb-1">
+                Entry: <span class="font-semibold text-brand-900" x-text="decideTarget?.entry?.name || decideTarget?.entry_id"></span>
+            </p>
+            <p class="text-[11px] text-surface-500 mb-3"
+               x-text="decideAction === 'approved' ? 'Entry irá para status approved. Owner publica em seguida.' : 'Entry voltará para draft. Owner pode iterar e re-submeter.'"></p>
+            <textarea x-model="decideNotes" rows="3"
+                      placeholder="Notas para o publisher (recomendado, especialmente em rejected/changes_requested)..."
+                      class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[11px] outline-none focus:border-brand-400"></textarea>
+            <div class="flex justify-end gap-2 mt-4">
+                <button @click="decideModalOpen = false" class="px-3 py-1.5 text-[12px] rounded-lg border border-surface-200 hover:bg-surface-50">Cancelar</button>
+                <button @click="submitDecision()" :disabled="decideSaving"
+                        class="px-3 py-1.5 text-[12px] rounded-lg text-white"
+                        :class="decideAction === 'approved' ? 'bg-emerald-500 hover:bg-emerald-600' : decideAction === 'changes_requested' ? 'bg-amber-500 hover:bg-amber-600' : 'bg-rose-500 hover:bg-rose-600'">
+                    <span x-text="decideSaving ? 'Salvando...' : 'Confirmar'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function queuePage() {
+    return {
+        loading: true,
+        forbidden: false,
+        submissions: [], entryMap: {}, disclosureMap: {},
+        total: 0,
+        filterStatus: 'pending',
+        statusTabs: [
+            {value: 'pending', label: 'Pendentes'},
+            {value: 'approved', label: 'Aprovadas'},
+            {value: 'changes_requested', label: 'Mudanças solicitadas'},
+            {value: 'rejected', label: 'Rejeitadas'},
+        ],
+        currentUser: null,
+
+        // Decide modal
+        decideModalOpen: false,
+        decideTarget: null,
+        decideAction: null,
+        decideNotes: '',
+        decideSaving: false,
+
+        async load() {
+            this.loading = true;
+            this.submissions = [];
+            // 1. Verifica role
+            try {
+                const me = await fetch('/api/v1/users/me').then(r => r.json());
+                this.currentUser = me.user;
+                if ((this.currentUser?.role || '').toLowerCase() !== 'root') {
+                    this.forbidden = true;
+                    this.loading = false;
+                    return;
+                }
+            } catch (e) {
+                this.forbidden = true;
+                this.loading = false;
+                return;
+            }
+
+            // 2. Carrega fila + entries em paralelo
+            try {
+                const qParams = new URLSearchParams();
+                qParams.set('status', this.filterStatus);
+                qParams.set('limit', '100');
+                const [qResp, eResp] = await Promise.all([
+                    fetch('/api/v1/catalog/submissions/queue?' + qParams).then(r => r.ok ? r.json() : {submissions: [], total: 0}),
+                    fetch('/api/v1/catalog/entries?limit=500').then(r => r.ok ? r.json() : {entries: []}),
+                ]);
+                this.submissions = qResp.submissions || [];
+                this.total = qResp.total || 0;
+                this.entryMap = Object.fromEntries((eResp.entries || []).map(e => [e.id, e]));
+
+                // 3. Carrega disclosures em paralelo só para submissões pending
+                // (decisões antigas não precisam disclosure live, e o snapshot da submission já está)
+                if (this.filterStatus === 'pending') {
+                    const disclosureFetches = this.submissions.map(s =>
+                        fetch('/api/v1/catalog/entries/' + s.entry_id + '/capability')
+                            .then(r => r.ok ? r.json() : null)
+                            .then(d => [s.entry_id, d])
+                            .catch(() => [s.entry_id, null])
+                    );
+                    const results = await Promise.all(disclosureFetches);
+                    this.disclosureMap = Object.fromEntries(results.filter(([, d]) => d));
+                } else {
+                    this.disclosureMap = {};
+                }
+            } catch (e) {
+                console.error(e);
+                showToast('Erro ao carregar fila', 'error');
+            }
+            this.loading = false;
+        },
+
+        get enriched() {
+            return this.submissions.map(s => ({
+                ...s,
+                entry: this.entryMap[s.entry_id] || null,
+                disclosure: this.disclosureMap[s.entry_id] || null,
+            }));
+        },
+
+        precheckData(item) {
+            const raw = item.precheck_report;
+            if (typeof raw === 'object' && raw) return raw;
+            try { return JSON.parse(raw || '{}'); } catch { return {}; }
+        },
+
+        disclosureSummary(d) {
+            if (!d) return [];
+            const flags = [];
+            if (d.processes_pii) flags.push({label: 'PII', severity: 'high'});
+            if (d.processes_financial) flags.push({label: 'Financeiro', severity: 'high'});
+            if (d.processes_health) flags.push({label: 'Saúde', severity: 'high'});
+            if (d.trains_on_input) flags.push({label: 'Treina com input', severity: 'high'});
+            if (d.calls_external_apis) flags.push({label: 'APIs externas', severity: 'medium'});
+            if (d.accesses_internet) flags.push({label: 'Internet aberta', severity: 'high'});
+            if (d.stores_input) flags.push({label: 'Persiste input', severity: 'medium'});
+            if (d.writes_user_kb) flags.push({label: 'Escreve KB', severity: 'high'});
+            return flags;
+        },
+
+        // ── Decide modal ─────────────────
+        openDecide(item, action) {
+            this.decideTarget = item;
+            this.decideAction = action;
+            this.decideNotes = '';
+            this.decideModalOpen = true;
+        },
+
+        async submitDecision() {
+            if (!this.decideTarget) return;
+            this.decideSaving = true;
+            try {
+                const r = await fetch('/api/v1/catalog/submissions/' + this.decideTarget.id + '/decide', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({decision: this.decideAction, notes: this.decideNotes}),
+                });
+                if (!r.ok) throw new Error((await r.json()).detail || 'erro');
+                showToast('Decisão registrada');
+                this.decideModalOpen = false;
+                await this.load();
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+            this.decideSaving = false;
+        },
+
+        emptyTitle() {
+            const labels = {
+                pending: 'Nenhuma submissão pendente',
+                approved: 'Nenhuma submissão aprovada',
+                changes_requested: 'Nenhuma com mudanças solicitadas',
+                rejected: 'Nenhuma submissão rejeitada',
+            };
+            return labels[this.filterStatus] || 'Fila vazia';
+        },
+
+        emptySubtitle() {
+            if (this.filterStatus === 'pending') return 'Quando publishers submeterem entries, aparecem aqui para sua decisão.';
+            return 'Tente outro filtro acima.';
+        },
+
+        // ── Helpers ─────────────────────
+        kindBadgeClass(k) {
+            return ({agent:'bg-violet-50 text-violet-700', skill:'bg-teal-50 text-teal-700', recipe:'bg-brand-50 text-brand-700',
+                     application:'bg-amber-50 text-amber-700', external_platform:'bg-rose-50 text-rose-700'})[k] || 'bg-surface-100 text-surface-600';
+        },
+        reviewBadgeClass(s) {
+            return ({pending:'bg-amber-50 text-amber-700', approved:'bg-emerald-50 text-emerald-700',
+                     rejected:'bg-rose-50 text-rose-700', changes_requested:'bg-amber-50 text-amber-700'})[s] || 'bg-surface-100 text-surface-500';
+        },
+        formatDate(ds) {
+            if (!ds) return '—';
+            try { return new Date(ds).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}); }
+            catch { return ds; }
+        },
+    }
+}
+</script>
+{% endblock %}

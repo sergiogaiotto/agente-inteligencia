@@ -720,3 +720,89 @@ Wizard `/catalog/publish` em 4 passos: artefato → metadata → disclosure → 
 - [ ] Redireciona para `/catalog/{id}` em sucesso
 - [ ] Em erro, mensagem orienta (entry pode ter ficado parcial)
 - [ ] Botão "Publicar no Catálogo" na lista do catálogo aponta para `/catalog/publish`
+
+---
+
+# Smoke Test — PR 8 (UI Fila de Aprovação Root C1)
+
+Tela `/catalog/queue` exclusiva para Root. Lista submissões com pré-checks
+visuais e ações inline (sem precisar abrir cada entry).
+
+## 39 — Renderização + rotas
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+.venv\Scripts\python.exe -c "from app.main import app; print(sorted([r.path for r in app.routes if r.path.startswith('/catalog')]))"
+```
+
+**Esperado**:
+- 171 passed
+- Rotas: `['/catalog', '/catalog/publish', '/catalog/queue', '/catalog/{entry_id}']`
+
+## 40 — Nav item condicional
+
+1. Logar como user comum → sidebar NÃO mostra "Fila Root"
+2. Logar como Root → sidebar mostra item "Fila Root (revisão)" abaixo de Catálogo
+3. Click → carrega `/catalog/queue`
+
+## 41 — Acesso negado para não-Root
+
+1. Logar como user comum
+2. Acessar manualmente `/catalog/queue` (URL direto)
+3. **Esperado**: card "Acesso restrito" + link para voltar ao catálogo
+
+## 42 — Fila vazia
+
+Sem submissões pendentes:
+- Card "Nenhuma submissão pendente"
+- Subtítulo explicativo
+
+## 43 — Fila com submissões
+
+Pré: ter 2+ entries submetidas (PR 7 ou cURL).
+
+- Tab "Pendentes" mostra contador
+- Cada item:
+  - Nome da entry como link para `/catalog/{id}`
+  - Badges (kind, version)
+  - Submetida por + data
+  - Pré-checks: badges resumidos (X erros, Y avisos, ou "OK")
+  - `<details>` expansível mostrando cada check com bullet colorido
+  - **Capability declarada** preview (flags coloreadas por severidade)
+  - **Botões inline**: Aprovar / Pedir Mudanças / Rejeitar
+
+## 44 — Modal de decisão
+
+1. Click em qualquer botão → abre modal
+2. Header mostra entry name + texto contextual
+3. Textarea para notas (especialmente recomendado em rejected/changes_requested)
+4. Confirmar → POST /submissions/{sid}/decide → toast + recarrega fila
+
+## 45 — Tabs de status
+
+- "Aprovadas": entries que viraram approved
+- "Mudanças solicitadas": entries que voltaram para draft
+- "Rejeitadas": entries rejeitadas
+
+Cada item nas tabs decididas mostra reviewer + data + notes.
+
+## 46 — Fluxo completo end-to-end
+
+1. User comum submete entry (PR 7)
+2. Root abre `/catalog/queue` → vê pré-checks
+3. Decide pela UI (Aprovar/Mudanças/Rejeitar)
+4. Tab "Pendentes" atualiza, item migra para tab apropriada
+5. User recebe (não há notificação ainda — vê no /catalog/{id})
+
+## Critérios de aceitação do PR 8
+
+- [x] 171 testes passam (sem regressão)
+- [x] Rota `/catalog/queue` registrada
+- [x] Template parseia
+- [ ] Nav item "Fila Root" aparece SÓ para role=root
+- [ ] Não-Root acessando `/catalog/queue` vê "Acesso restrito"
+- [ ] Lista paginada de submissões com filtro por status
+- [ ] Pré-checks resumidos + detalhe expansível
+- [ ] Capability declarada exibe flags coloreadas
+- [ ] Botões inline funcionam (modal + POST decide + recarrega)
+- [ ] Tabs decididas mostram reviewer/data/notes
