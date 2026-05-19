@@ -1438,3 +1438,77 @@ publicados também (agents do catálogo).
 - [x] Status badges coloridos (running/completed/partial/failed/success/error/skipped)
 - [x] Zero novo arquivo .py — apenas `catalog_detail.html` mudou
 - [ ] Smoke manual no browser — pendente em homolog
+
+---
+
+# Smoke Test — Onda 4 / PR 3 (Cost pleno por provider/model)
+
+Substitui o `cost_usd=0` placeholder do PR #67. Agora cada step success
+calcula custo real baseado em `tokens.input × input_per_1k + tokens.output × output_per_1k`,
+buscando pricing por `provider/model` do agent.
+
+## 1 — Testes unitários
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Esperado**: 298 passed (281 anteriores + 17 novos):
+- `test_llm_pricing.py` (15): lookup case-insensitive, calculo basico, input/output separados, ollama=0, anthropic claude-opus, maritaca sabia, modelo desconhecido → 0 + warning, estrutura consistente da tabela
+- `test_catalog_recipe_execution.py` ajustes: mock default agora retorna tokens_input/tokens_output/provider/model; assertion adicional em cost_auto_wire valida cost_usd > 0 e provider/model registrados no step_result
+
+## 2 — Pricing snapshot
+
+Os preços são hardcoded em `app/core/llm_pricing.py`. Snapshot de 2026-05:
+
+| Provider/Model | Input USD/1k | Output USD/1k |
+|---|---|---|
+| azure/gpt-4o | 0.0025 | 0.01 |
+| azure/gpt-4o-mini | 0.00015 | 0.0006 |
+| azure/gpt-4-turbo | 0.01 | 0.03 |
+| anthropic/claude-opus-4-7 | 0.015 | 0.075 |
+| anthropic/claude-sonnet-4-6 | 0.003 | 0.015 |
+| maritaca/sabia-4 | 0.0005 | 0.0015 |
+| ollama/* | 0 | 0 |
+
+Modelo novo? Adicionar em `PRICING` dict + commit. Modelo desconhecido em
+runtime → custo=0 + log WARNING (não derruba o fluxo).
+
+## 3 — Validação end-to-end (com Postgres + LLM real)
+
+Pré: recipe published com 2 steps apontando para agents reais.
+
+1. Executar recipe via UI (`/catalog/{id}` → tab Execuções → ▶ Executar).
+2. Aguardar polling terminar com status `completed`.
+3. Verificar no modal de polling:
+   - Cada step success mostra `tokens` > 0
+   - Custo total agregado no header
+4. Validar persistência:
+```sql
+SELECT entry_id, cost_usd, tokens_used, latency_ms
+FROM catalog_costs
+WHERE invoked_at > now() - interval '5 minutes'
+ORDER BY invoked_at DESC;
+```
+**Esperado**: 1 row por step success com `cost_usd > 0`. Valor coerente
+com a tabela acima (ex.: gpt-4o-mini com ~500 in + 200 out ≈ $0.0002).
+
+5. Dashboard `/catalog/cost` agora mostra custos reais (não mais zeros).
+   Filtrar por entry_id do recipe — totalizado por dia.
+
+## 4 — Modelo desconhecido (defensivo)
+
+Se agent estiver configurado com provider/model fora da tabela:
+- Step ainda completa com sucesso
+- `cost_usd=0` gravado em catalog_costs
+- WARNING no log: `llm_pricing: modelo desconhecido 'foo/bar'`
+
+## Critérios de aceitação Onda 4 / PR 3
+
+- [x] 298 testes passam (281 + 17 novos)
+- [x] `compute_cost(provider, model, in_tok, out_tok)` substitui placeholder no executor
+- [x] Engine retorna tokens.input/output separados — executor passa ambos
+- [x] step_results agora incluem tokens_input, tokens_output, provider, model
+- [x] Modelo desconhecido → 0 + warning (não quebra fluxo)
+- [x] Tabela cobre azure, openai, anthropic, maritaca, ollama
+- [ ] Smoke manual com Postgres + LLM real (seção 3) — pendente em homolog

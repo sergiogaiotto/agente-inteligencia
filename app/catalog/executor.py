@@ -30,6 +30,7 @@ from app.catalog.queries import (
     record_invocation_cost,
 )
 from app.core.database import catalog_entries_repo
+from app.core.llm_pricing import compute_cost
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,8 @@ async def _invoke_step(
     target_entry: dict, current_input: str, consumer_user_id: str
 ) -> dict:
     """Invoca o agente do target e retorna dict normalizado:
-    {output, duration_ms, tokens_total, interaction_id}.
+    {output, duration_ms, tokens_input, tokens_output, tokens_total,
+     provider, model, interaction_id, final_state}.
     Levanta exception para erros técnicos (caller trata)."""
     # Import lazy — engine carrega LLM clients pesados na importação.
     from app.agents.engine import execute_interaction
@@ -91,11 +93,16 @@ async def _invoke_step(
         channel="recipe",
         journey=f"recipe:{target_entry.get('id')}",
     )
-    tokens = (result.get("trace") or {}).get("tokens") or {}
+    trace = result.get("trace") or {}
+    tokens = trace.get("tokens") or {}
     return {
         "output": result.get("output") or "",
         "duration_ms": int(result.get("duration_ms") or 0),
+        "tokens_input": int(tokens.get("input") or 0),
+        "tokens_output": int(tokens.get("output") or 0),
         "tokens_total": int(tokens.get("total") or 0),
+        "provider": trace.get("agent_provider"),
+        "model": trace.get("agent_model"),
         "interaction_id": result.get("interaction_id"),
         "final_state": result.get("final_state"),
     }
@@ -198,10 +205,15 @@ async def execute_recipe(
                 })
                 continue
 
-            # Success do step — registra cost row best-effort
-            step_cost_usd = 0.0  # Onda 4 PR #67: placeholder; pricing fica para PR #69
+            # Success do step — calcula cost real (PR #69) e grava best-effort
             step_latency_ms = inv["duration_ms"] or int((time.time() - step_start) * 1000)
-            step_tokens = inv["tokens_total"]
+            step_tokens_in = inv["tokens_input"]
+            step_tokens_out = inv["tokens_output"]
+            step_tokens_total = inv["tokens_total"] or (step_tokens_in + step_tokens_out)
+            step_cost_usd = compute_cost(
+                inv.get("provider"), inv.get("model"),
+                step_tokens_in, step_tokens_out,
+            )
 
             try:
                 await record_invocation_cost(
@@ -211,7 +223,7 @@ async def execute_recipe(
                         if isinstance(consumer_user.get("domains"), list) else None,
                     interaction_id=inv.get("interaction_id"),
                     cost_usd=step_cost_usd,
-                    tokens_used=step_tokens,
+                    tokens_used=step_tokens_total,
                     latency_ms=step_latency_ms,
                 )
             except Exception as e:
@@ -233,8 +245,12 @@ async def execute_recipe(
                 "output": _truncate(inv["output"]),
                 "error": None,
                 "cost_usd": step_cost_usd,
-                "tokens_used": step_tokens,
+                "tokens_used": step_tokens_total,
+                "tokens_input": step_tokens_in,
+                "tokens_output": step_tokens_out,
                 "latency_ms": step_latency_ms,
+                "provider": inv.get("provider"),
+                "model": inv.get("model"),
                 "interaction_id": inv.get("interaction_id"),
                 "final_state": inv.get("final_state"),
                 "started_at": step_iso_start,

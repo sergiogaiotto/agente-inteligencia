@@ -367,12 +367,16 @@ def executor_storage(monkeypatch):
     monkeypatch.setattr("app.catalog.executor.finalize_execution", fake_finalize)
     monkeypatch.setattr("app.catalog.executor.record_invocation_cost", fake_record_cost)
 
-    # _invoke_step injetável por teste — default: echo simples
+    # _invoke_step injetável por teste — default: echo simples + tokens fictícios
     async def default_invoke(target_entry, current_input, consumer_user_id):
         return {
             "output": f"out:{target_entry['id']}:{current_input}",
             "duration_ms": 100,
+            "tokens_input": 30,
+            "tokens_output": 20,
             "tokens_total": 50,
+            "provider": "azure",
+            "model": "gpt-4o-mini",
             "interaction_id": f"int-{target_entry['id']}",
             "final_state": "Recommend",
         }
@@ -467,7 +471,11 @@ async def test_executor_skip_apos_falha(executor_storage):
         return {
             "output": f"out:{target_entry['id']}",
             "duration_ms": 50,
+            "tokens_input": 6,
+            "tokens_output": 4,
             "tokens_total": 10,
+            "provider": "azure",
+            "model": "gpt-4o-mini",
             "interaction_id": None,
             "final_state": "Recommend",
         }
@@ -603,6 +611,16 @@ async def test_executor_cost_auto_wire(executor_storage):
     assert executor_storage["cost_rows"][0]["tokens_used"] == 50
     # consumer_department puxado do primeiro elemento de domains
     assert executor_storage["cost_rows"][0]["consumer_department"] == "fiscal"
+    # PR #69: cost_usd agora é real, calculado de tokens × pricing
+    # mock default usa azure/gpt-4o-mini: 30 in × 0.00015 + 20 out × 0.0006 = 0.0000165
+    assert executor_storage["cost_rows"][0]["cost_usd"] > 0
+    # step_results devem trazer tokens_input/output e provider/model
+    success_steps = [s for s in executor_storage["appended"] if s["status"] == "success"]
+    assert success_steps[0]["tokens_input"] == 30
+    assert success_steps[0]["tokens_output"] == 20
+    assert success_steps[0]["provider"] == "azure"
+    assert success_steps[0]["model"] == "gpt-4o-mini"
+    assert success_steps[0]["cost_usd"] > 0
 
 
 @pytest.mark.asyncio
