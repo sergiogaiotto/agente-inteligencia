@@ -132,3 +132,108 @@ Esperado: JSON com `"status": "ok"`, `"app": "Maestro"`, fingerprint do código.
 - [ ] CRUD básico via Repository funciona (script seção 4)
 - [ ] Regressão das telas existentes OK (sem 500)
 - [ ] /api/health retorna 200
+
+---
+
+# Smoke Test — PR 2 (API CRUD de entries)
+
+Adicionado: `app/routes/catalog.py` com 5 endpoints REST montados em `/api/v1/catalog`.
+
+## 6 — Testes unitários (sem banco)
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Esperado**: 117 passed (PR 1 + PR 2). Cobre `is_root`, `_user_domains`,
+`can_user_see` (12 cenários de visibility), `db_row_to_entry_dict` (parsing
+JSON), e plumbing HTTP de todos os 5 endpoints com auth mockada.
+
+## 7 — Endpoints REST (com app rodando)
+
+Pré: login em `/login` para ter cookie `user_id`.
+
+### POST — criar entry draft
+
+```powershell
+curl -X POST http://localhost:7000/api/v1/catalog/entries `
+  -H "Content-Type: application/json" `
+  -b "user_id=<seu-user-id>" `
+  -d '{"name":"Agente Smoke","kind":"agent","artifact_type":"agent","artifact_id":"<id-de-agent-existente>","version":"0.1.0"}'
+```
+
+**Esperado**: 201 com body contendo `id`, `urn=urn:maestro:default:agent:agente-smoke:0.1.0`, `status="draft"`, `owner_user_id=<seu-id>`.
+
+### POST — rejeita kind=agent sem artifact link → 422
+
+```powershell
+curl -X POST http://localhost:7000/api/v1/catalog/entries `
+  -H "Content-Type: application/json" -b "user_id=<id>" `
+  -d '{"name":"X","kind":"agent","version":"1.0.0"}'
+```
+
+**Esperado**: 422 com detail mencionando "vínculo".
+
+### POST — external_platform sem artifact link → 201
+
+```powershell
+curl -X POST http://localhost:7000/api/v1/catalog/entries `
+  -H "Content-Type: application/json" -b "user_id=<id>" `
+  -d '{"name":"ChatGPT Enterprise","kind":"external_platform"}'
+```
+
+**Esperado**: 201.
+
+### GET — list paginado
+
+```powershell
+curl "http://localhost:7000/api/v1/catalog/entries?limit=10" -b "user_id=<id>"
+```
+
+**Esperado**: `{"entries": [...], "total": N, "limit": 10, "offset": 0}`. Só entries visíveis ao user (regras `can_user_see`).
+
+### GET single → 404 se não visível
+
+Logue como user B e tente acessar entry criada por user A em status='draft'. Esperado: 404 (não vaza existência).
+
+### PUT — só draft, só owner/root
+
+```powershell
+curl -X PUT http://localhost:7000/api/v1/catalog/entries/<id> `
+  -H "Content-Type: application/json" -b "user_id=<id>" `
+  -d '{"description":"editado"}'
+```
+
+**Esperado**: 200 se draft e owner/root. 409 se status != draft. 403 se outro user.
+
+### DELETE — só draft/archived, só owner/root
+
+```powershell
+curl -X DELETE http://localhost:7000/api/v1/catalog/entries/<id> -b "user_id=<id>"
+```
+
+**Esperado**: 200 se draft/archived e owner/root. 409 se published/etc. 403 se outro user.
+
+## 8 — Validar audit_log
+
+```sql
+SELECT entity_type, action, actor, details, created_at
+FROM audit_log
+WHERE entity_type = 'catalog_entry'
+ORDER BY created_at DESC LIMIT 10;
+```
+
+**Esperado**: 1 row por created/updated/deleted, com `actor=<user_id>` e `details` JSON com URN/changed_keys.
+
+## Critérios de aceitação do PR 2
+
+- [x] 117 testes unitários passam (58 do PR 1 + 59 novos)
+- [x] 5 rotas montadas em `/api/v1/catalog/entries`
+- [ ] POST cria entry com URN gerado e status='draft'
+- [ ] POST 422 quando agent/skill sem artifact_id
+- [ ] GET single 404 quando user não tem visibilidade
+- [ ] PUT 403 para não-owner não-root
+- [ ] PUT 409 quando status != 'draft'
+- [ ] DELETE 409 quando status not in ('draft','archived')
+- [ ] audit_log popula em create/update/delete
+- [ ] Regressão das telas/endpoints existentes OK
