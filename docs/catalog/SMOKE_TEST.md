@@ -1368,3 +1368,73 @@ para PR de cost auto-wire pleno).
 - [x] Audit `recipe_execution_started` registrado
 - [x] Zero breaking changes em PRs Onda 1-3
 - [ ] Smoke manual com Postgres rodando (seções 2-5 desta) — pendente em homolog
+
+---
+
+# Smoke Test — Onda 4 / PR 2 (UI de execução de recipes)
+
+Coloca rosto na execução real do PR #67. Tab nova "Execuções" em
+`/catalog/{id}` (visível só p/ kind=recipe), modal de disparo e modal
+de polling em tempo real.
+
+## 1 — Testes unitários
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Esperado**: 281 passed (mesmo do PR #67 — este PR é só template, sem código novo testável via pytest).
+
+## 2 — Fluxo via UI
+
+Pré: ter um recipe `published` com manifest válido com ao menos 2 steps
+publicados também (agents do catálogo).
+
+1. Acessar `/catalog/{recipe_id}` como qualquer user que vê a entry.
+2. **Verificar tab nova "Execuções"** aparece (só p/ kind=recipe).
+3. Tab "Execuções" mostra:
+   - Botão `▶ Executar recipe` (visível só se status='published' e manifest com steps).
+   - Tabela de execuções anteriores (vazia inicialmente) ou empty state.
+4. Clicar `▶ Executar recipe` → abre **modal de disparo** com textarea.
+5. Digitar input + clicar **▶ Executar**.
+6. **Modal de polling** abre automaticamente:
+   - Status badge `running` + indicador "↻ polling" pulsando.
+   - Steps aparecem progressivamente conforme executor avança.
+   - Cada step mostra: nome do target, status colorido (success/error/skipped),
+     output (truncado a 5000 chars), tokens, latência.
+   - Botão **Fechar** fica disabled enquanto `running`.
+7. Quando status vira `completed | partial | failed`:
+   - Badge atualiza cor.
+   - Polling para automaticamente.
+   - Botão Fechar habilita.
+   - Histórico no fundo da tab atualiza com nova entry.
+8. Clicar **Ver** em uma execução do histórico → modal abre com drill-down
+   da execução passada (sem polling — read-only).
+
+## 3 — Validações de gating
+
+| Cenário | Comportamento esperado |
+|---|---|
+| Entry kind=agent | Tab "Execuções" não aparece |
+| Recipe em draft | Banner amber "só published é executável"; botão Executar oculto |
+| Recipe sem steps | Banner amber "declare manifest"; botão Executar oculto |
+| Recipe published com steps | Botão Executar visível para qualquer user que vê a entry |
+
+## 4 — Polling resiliente
+
+- Se GET /executions/{id} retornar 4xx/5xx, polling para automaticamente
+  (não fica martelando).
+- Esc fecha modal de disparo (se não está submitting).
+- Esc no modal de polling: só fecha se status != running.
+
+## Critérios de aceitação Onda 4 / PR 2
+
+- [x] 281 testes continuam passando (sem regressão)
+- [x] Tab "Execuções" condicional a `kind=recipe`
+- [x] Botão `▶ Executar recipe` gated em `status='published'` + manifest com steps
+- [x] Modal de disparo com textarea (1-50000 chars)
+- [x] Modal de polling auto a cada 1.5s; para sozinho ao terminar
+- [x] Drill-down de execuções históricas (read-only) reusa o mesmo modal
+- [x] Status badges coloridos (running/completed/partial/failed/success/error/skipped)
+- [x] Zero novo arquivo .py — apenas `catalog_detail.html` mudou
+- [ ] Smoke manual no browser — pendente em homolog

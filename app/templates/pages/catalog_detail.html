@@ -397,11 +397,89 @@
                             </template>
                         </div>
 
-                        <div class="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-[10px] text-amber-700">
-                            ⓘ Execução real do recipe (chain pelo engine) vem na Onda 4. Por enquanto é manifest declarativo.
+                        <div x-show="entry.status !== 'published'" class="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-[10px] text-amber-700">
+                            ⓘ Recipe só é executável após status='published'. Veja a aba <strong>Execuções</strong> para disparar runs e acompanhar histórico.
+                        </div>
+                        <div x-show="entry.status === 'published'" class="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2 text-[10px] text-emerald-700">
+                            ✓ Recipe publicado. Vá para a aba <strong>Execuções</strong> para disparar uma run.
                         </div>
                     </div>
                 </template>
+            </div>
+
+            <!-- Tab content: Execuções (apenas kind=recipe) -->
+            <div x-show="activeTab === 'executions'">
+                <div class="rounded-xl border border-surface-200 bg-white p-4">
+                    <div class="flex items-start justify-between mb-3 gap-3">
+                        <div>
+                            <h3 class="text-[12px] font-bold text-brand-900 uppercase tracking-wider">Execuções do Recipe</h3>
+                            <p class="text-[11px] text-surface-500 mt-0.5">Chain sequencial: output[N-1] vira input[N]. Falha de step quebra chain (demais ficam skipped).</p>
+                        </div>
+                        <button x-show="entry.status === 'published' && (recipe?.steps?.length || 0) > 0"
+                                @click="openRunModal()"
+                                class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600 whitespace-nowrap">
+                            ▶ Executar recipe
+                        </button>
+                    </div>
+
+                    <!-- Pré-condições -->
+                    <template x-if="entry.status !== 'published'">
+                        <div class="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-[11px] text-amber-700 mb-3">
+                            Recipe em status <strong x-text="entry.status"></strong> — só recipes <strong>published</strong> são executáveis.
+                        </div>
+                    </template>
+                    <template x-if="entry.status === 'published' && (!recipe || !recipe.steps || recipe.steps.length === 0)">
+                        <div class="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-[11px] text-amber-700 mb-3">
+                            Recipe sem steps — declare o manifest na aba <strong>Recipe Steps</strong> antes de executar.
+                        </div>
+                    </template>
+
+                    <!-- Histórico -->
+                    <div x-show="executionsLoading" class="text-[11px] text-surface-400 py-2">Carregando histórico…</div>
+                    <template x-if="!executionsLoading && executions.length === 0">
+                        <div class="rounded-lg border border-dashed border-surface-200 px-3 py-6 text-center text-[11px] text-surface-400">
+                            Nenhuma execução registrada ainda.
+                        </div>
+                    </template>
+                    <div x-show="!executionsLoading && executions.length > 0" class="overflow-x-auto">
+                        <table class="w-full text-[11px]">
+                            <thead class="text-[10px] uppercase tracking-wider text-surface-400">
+                                <tr class="border-b border-surface-200">
+                                    <th class="text-left py-2 pr-2">Quando</th>
+                                    <th class="text-left py-2 pr-2">Status</th>
+                                    <th class="text-left py-2 pr-2">Steps</th>
+                                    <th class="text-right py-2 pr-2">Latência</th>
+                                    <th class="text-right py-2 pr-2">Tokens</th>
+                                    <th class="py-2"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="ex in executions" :key="ex.id">
+                                    <tr class="border-b border-surface-100 hover:bg-surface-50">
+                                        <td class="py-2 pr-2 text-surface-600" x-text="formatDate(ex.started_at)"></td>
+                                        <td class="py-2 pr-2">
+                                            <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                                                  :class="statusBadgeClass(ex.status)"
+                                                  x-text="ex.status"></span>
+                                        </td>
+                                        <td class="py-2 pr-2 text-surface-600">
+                                            <span x-text="(ex.steps_results || []).filter(s => s.status === 'success').length"></span>
+                                            /
+                                            <span x-text="(ex.steps_results || []).length"></span>
+                                            ok
+                                        </td>
+                                        <td class="py-2 pr-2 text-right text-surface-600" x-text="(ex.total_latency_ms || 0) + 'ms'"></td>
+                                        <td class="py-2 pr-2 text-right text-surface-600"
+                                            x-text="(ex.steps_results || []).reduce((a,s) => a + (s.tokens_used || 0), 0)"></td>
+                                        <td class="py-2 text-right">
+                                            <button @click="viewExecution(ex.id)" class="text-brand-600 hover:underline text-[11px]">Ver</button>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
 
             <!-- Tab content: Manifest -->
@@ -527,6 +605,118 @@
         </div>
     </div>
 
+    <!-- ═══ MODAL: disparar execução (Onda 4) ═══ -->
+    <div x-show="runModalOpen" @keydown.escape.window="if (!runSubmitting) runModalOpen = false"
+         x-transition.opacity
+         class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
+        <div @click.outside="if (!runSubmitting) runModalOpen = false" class="bg-white rounded-2xl w-full max-w-lg p-5 shadow-xl">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-[14px] font-bold text-brand-900">Executar Recipe</h3>
+                <button @click="runModalOpen = false" :disabled="runSubmitting" class="text-surface-400 hover:text-brand-600 disabled:opacity-30">×</button>
+            </div>
+            <p class="text-[11px] text-surface-500 mb-3">
+                Input vai alimentar o <strong>step 1</strong>. Output de cada step vira input do próximo (chain).
+                Steps em sequência: <strong x-text="(recipe?.steps?.length || 0) + ' steps'"></strong>.
+            </p>
+            <textarea x-model="runInput" rows="6"
+                      placeholder="Digite o input inicial do recipe…"
+                      class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400 font-mono"></textarea>
+            <div class="text-[10px] text-surface-400 mt-1" x-text="runInput.length + ' / 50000 chars'"></div>
+            <div class="flex justify-end gap-2 mt-4">
+                <button @click="runModalOpen = false" :disabled="runSubmitting" class="px-3 py-1.5 text-[12px] rounded-lg border border-surface-200 hover:bg-surface-50 disabled:opacity-50">Cancelar</button>
+                <button @click="executeRecipe()" :disabled="runSubmitting || !runInput.trim() || runInput.length > 50000" class="px-3 py-1.5 text-[12px] rounded-lg bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50">
+                    <span x-text="runSubmitting ? 'Disparando…' : '▶ Executar'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: polling de execução em andamento / drill-down (Onda 4) ═══ -->
+    <div x-show="pollModalOpen" @keydown.escape.window="closePollModal()"
+         x-transition.opacity
+         class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
+        <div @click.outside="closePollModal()" class="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-5 shadow-xl">
+            <div class="flex items-center justify-between mb-3 gap-3">
+                <div class="flex items-center gap-2">
+                    <h3 class="text-[14px] font-bold text-brand-900">Execução</h3>
+                    <span class="inline-block px-2 py-0.5 rounded text-[10px] font-semibold"
+                          :class="statusBadgeClass(currentExecution?.status)"
+                          x-text="currentExecution?.status || '—'"></span>
+                    <span x-show="currentExecution?.status === 'running'" class="text-[10px] text-surface-400 animate-pulse">↻ polling</span>
+                </div>
+                <button @click="closePollModal()" class="text-surface-400 hover:text-brand-600">×</button>
+            </div>
+
+            <!-- Resumo -->
+            <div class="grid grid-cols-3 gap-2 mb-3 text-[10px]">
+                <div class="rounded-lg bg-surface-50 px-2 py-1.5">
+                    <div class="text-surface-400 uppercase tracking-wider">Latência</div>
+                    <div class="text-brand-900 font-semibold text-[12px]" x-text="(currentExecution?.total_latency_ms ?? 0) + 'ms'"></div>
+                </div>
+                <div class="rounded-lg bg-surface-50 px-2 py-1.5">
+                    <div class="text-surface-400 uppercase tracking-wider">Steps</div>
+                    <div class="text-brand-900 font-semibold text-[12px]">
+                        <span x-text="(currentExecution?.steps_results || []).filter(s => s.status === 'success').length"></span>
+                        /
+                        <span x-text="(currentExecution?.steps_results || []).length"></span>
+                        ok
+                    </div>
+                </div>
+                <div class="rounded-lg bg-surface-50 px-2 py-1.5">
+                    <div class="text-surface-400 uppercase tracking-wider">Tokens</div>
+                    <div class="text-brand-900 font-semibold text-[12px]"
+                         x-text="(currentExecution?.steps_results || []).reduce((a,s) => a + (s.tokens_used || 0), 0)"></div>
+                </div>
+            </div>
+
+            <!-- Input -->
+            <div class="mb-3">
+                <p class="text-[10px] font-semibold text-surface-400 uppercase tracking-wider mb-1">Input inicial</p>
+                <pre class="rounded-lg bg-brand-950 text-brand-100 p-2 text-[11px] font-mono overflow-x-auto max-h-32" x-text="currentExecution?.input || '—'"></pre>
+            </div>
+
+            <!-- Steps -->
+            <div class="space-y-2">
+                <p class="text-[10px] font-semibold text-surface-400 uppercase tracking-wider">Steps</p>
+                <template x-for="step in (currentExecution?.steps_results || [])" :key="step.order">
+                    <div class="rounded-lg border border-surface-200 p-3">
+                        <div class="flex items-start justify-between gap-2 mb-1">
+                            <div class="flex items-center gap-2">
+                                <span class="text-[11px] font-bold text-brand-900" x-text="'#' + step.order"></span>
+                                <span class="text-[12px] text-brand-900 font-semibold" x-text="step.target_name || step.target_entry_id"></span>
+                                <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                                      :class="statusBadgeClass(step.status)"
+                                      x-text="step.status"></span>
+                            </div>
+                            <div class="text-[10px] text-surface-400 whitespace-nowrap">
+                                <span x-show="step.latency_ms != null" x-text="(step.latency_ms || 0) + 'ms'"></span>
+                                <span x-show="step.tokens_used" class="ml-2" x-text="step.tokens_used + ' tok'"></span>
+                            </div>
+                        </div>
+                        <p x-show="step.notes" class="text-[10px] text-surface-500 italic mb-1" x-text="step.notes"></p>
+                        <pre x-show="step.status === 'success' && step.output" class="rounded bg-surface-50 p-2 text-[10px] font-mono overflow-x-auto max-h-32" x-text="step.output"></pre>
+                        <pre x-show="step.status === 'error' && step.error" class="rounded bg-rose-50 text-rose-700 p-2 text-[10px] font-mono overflow-x-auto max-h-32" x-text="step.error"></pre>
+                        <p x-show="step.status === 'skipped'" class="text-[10px] text-surface-400 italic" x-text="step.error || 'step pulado'"></p>
+                    </div>
+                </template>
+                <template x-if="(currentExecution?.steps_results || []).length === 0 && currentExecution?.status === 'running'">
+                    <div class="text-[11px] text-surface-400 italic py-2">Aguardando primeiro step…</div>
+                </template>
+            </div>
+
+            <div x-show="currentExecution?.error_message" class="mt-3 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2 text-[11px] text-rose-700">
+                <strong>Erro fatal:</strong> <span x-text="currentExecution.error_message"></span>
+            </div>
+
+            <div class="flex justify-end mt-4">
+                <button @click="closePollModal()" :disabled="currentExecution?.status === 'running'"
+                        class="px-3 py-1.5 text-[12px] rounded-lg border border-surface-200 hover:bg-surface-50 disabled:opacity-50">
+                    <span x-text="currentExecution?.status === 'running' ? 'Aguarde…' : 'Fechar'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- ═══ MODAL: editar metadata externa (Onda 2) ═══ -->
     <div x-show="externalModalOpen" @keydown.escape.window="externalModalOpen = false"
          x-transition.opacity
@@ -627,6 +817,7 @@ function catalogDetailPage(entryId) {
             {id: 'capability', label: 'Capability Disclosure'},
             {id: 'external', label: 'Metadata Externa', onlyKind: 'external_platform'},
             {id: 'recipe', label: 'Recipe Steps', onlyKind: 'recipe'},
+            {id: 'executions', label: 'Execuções', onlyKind: 'recipe'},
             {id: 'history', label: 'Histórico'},
             {id: 'manifest', label: 'Manifest'},
         ],
@@ -643,6 +834,15 @@ function catalogDetailPage(entryId) {
         recipeSaving: false,
         recipeSteps: [],         // edição: lista mutável
         availableEntries: [],    // pick de target_entry_id no modal
+        // Recipe Executions (Onda 4)
+        executions: [],
+        executionsLoading: false,
+        runModalOpen: false,
+        runInput: '',
+        runSubmitting: false,
+        pollModalOpen: false,
+        currentExecution: null,
+        pollHandle: null,
 
         get visibleTabs() {
             return this.tabs.filter(t => !t.onlyKind || t.onlyKind === this.entry?.kind);
@@ -718,6 +918,8 @@ function catalogDetailPage(entryId) {
                             const rr = await fetch('/api/v1/catalog/entries/' + this.entryId + '/recipe');
                             if (rr.ok) this.recipe = await rr.json();
                         } catch {}
+                        // Onda 4: histórico de execuções (qualquer user que vê o recipe)
+                        this.loadExecutions();
                     }
 
                     // Histórico de submissões (só para owner/root)
@@ -1048,6 +1250,110 @@ function catalogDetailPage(entryId) {
         parseReport(raw) {
             if (typeof raw === 'object') return raw;
             try { return JSON.parse(raw || '{}'); } catch { return {}; }
+        },
+
+        // ── Recipe Executions (Onda 4) ──────────────────────
+        async loadExecutions() {
+            this.executionsLoading = true;
+            try {
+                const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/executions?limit=50');
+                if (r.ok) {
+                    const body = await r.json();
+                    this.executions = body.items || [];
+                }
+            } catch (e) { console.error('loadExecutions:', e); }
+            this.executionsLoading = false;
+        },
+        openRunModal() {
+            this.runInput = '';
+            this.runModalOpen = true;
+        },
+        async executeRecipe() {
+            if (!this.runInput.trim()) return;
+            this.runSubmitting = true;
+            try {
+                const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/execute', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({input: this.runInput}),
+                });
+                if (!r.ok) {
+                    const err = await r.json().catch(() => ({detail: 'erro desconhecido'}));
+                    throw new Error(err.detail || 'erro');
+                }
+                const body = await r.json();
+                showToast('Execução disparada');
+                this.runModalOpen = false;
+                this.runInput = '';
+                // Abre modal de polling e começa a buscar
+                this.currentExecution = {
+                    id: body.execution_id,
+                    status: 'running',
+                    steps_results: [],
+                    input: this.runInput,
+                    total_latency_ms: 0,
+                };
+                this.pollModalOpen = true;
+                this.pollExecution(body.execution_id);
+                this.startPolling(body.execution_id);
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+            this.runSubmitting = false;
+        },
+        startPolling(execId) {
+            this.stopPolling();
+            this.pollHandle = setInterval(() => this.pollExecution(execId), 1500);
+        },
+        stopPolling() {
+            if (this.pollHandle) {
+                clearInterval(this.pollHandle);
+                this.pollHandle = null;
+            }
+        },
+        async pollExecution(execId) {
+            try {
+                const r = await fetch('/api/v1/catalog/executions/' + execId);
+                if (!r.ok) {
+                    this.stopPolling();
+                    return;
+                }
+                this.currentExecution = await r.json();
+                if (this.currentExecution.status !== 'running') {
+                    this.stopPolling();
+                    // Atualiza a lista do histórico quando a execução termina
+                    this.loadExecutions();
+                }
+            } catch (e) {
+                console.error('pollExecution:', e);
+                this.stopPolling();
+            }
+        },
+        async viewExecution(execId) {
+            this.pollModalOpen = true;
+            this.currentExecution = {id: execId, status: 'running', steps_results: []};
+            await this.pollExecution(execId);
+            if (this.currentExecution?.status === 'running') {
+                this.startPolling(execId);
+            }
+        },
+        closePollModal() {
+            if (this.currentExecution?.status === 'running') return;
+            this.stopPolling();
+            this.pollModalOpen = false;
+            this.currentExecution = null;
+        },
+        statusBadgeClass(status) {
+            switch (status) {
+                case 'completed': return 'bg-emerald-100 text-emerald-700';
+                case 'partial': return 'bg-amber-100 text-amber-700';
+                case 'failed': return 'bg-rose-100 text-rose-700';
+                case 'running': return 'bg-sky-100 text-sky-700';
+                case 'success': return 'bg-emerald-100 text-emerald-700';
+                case 'error': return 'bg-rose-100 text-rose-700';
+                case 'skipped': return 'bg-surface-100 text-surface-500';
+                default: return 'bg-surface-100 text-surface-600';
+            }
         },
     }
 }
