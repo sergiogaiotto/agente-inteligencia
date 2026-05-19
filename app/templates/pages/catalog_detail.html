@@ -1,0 +1,657 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="catalogDetailPage('{{ entry_id }}')" x-init="load()" class="p-4 lg:p-6 max-w-6xl mx-auto">
+
+    <!-- Loading -->
+    <template x-if="loading">
+        <div class="text-center py-12 text-[12px] text-surface-400">Carregando entry...</div>
+    </template>
+
+    <!-- Not found -->
+    <template x-if="!loading && !entry">
+        <div class="rounded-xl border-2 border-dashed border-rose-200 bg-rose-50/30 p-12 text-center">
+            <p class="text-[14px] font-semibold text-rose-700 mb-1">Entry não encontrada</p>
+            <p class="text-[12px] text-surface-500 mb-3">Pode ter sido removida, ou você não tem permissão para vê-la.</p>
+            <a href="/catalog" class="text-[12px] text-brand-600 hover:underline">Voltar ao catálogo</a>
+        </div>
+    </template>
+
+    <!-- Content -->
+    <template x-if="!loading && entry">
+        <div>
+
+            <!-- Breadcrumb -->
+            <div class="text-[11px] text-surface-400 mb-3">
+                <a href="/catalog" class="hover:text-brand-600">Catálogo</a>
+                <span class="mx-1">/</span>
+                <span x-text="entry.kind"></span>
+                <span class="mx-1">/</span>
+                <span class="text-brand-900" x-text="entry.name"></span>
+            </div>
+
+            <!-- Header -->
+            <div class="rounded-xl border border-surface-200 bg-white p-5 mb-4">
+                <div class="flex items-start justify-between gap-4">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                            <h1 class="text-[20px] font-bold text-brand-900" x-text="entry.name"></h1>
+                            <span class="rounded-full px-2 py-0.5 text-[9px] font-bold uppercase"
+                                  :class="statusBadgeClass(entry.status)" x-text="entry.status"></span>
+                            <span class="rounded-full px-2 py-0.5 text-[9px] font-bold uppercase"
+                                  :class="kindBadgeClass(entry.kind)" x-text="kindLabel(entry.kind)"></span>
+                            <span class="rounded-full bg-surface-100 px-2 py-0.5 text-[9px] font-mono text-surface-500" x-text="'v' + entry.version"></span>
+                        </div>
+                        <p class="text-[11px] text-surface-400 font-mono mb-3" x-text="entry.urn"></p>
+                        <p class="text-[13px] text-surface-700 leading-relaxed" x-text="entry.description || 'Sem descrição.'"></p>
+                    </div>
+
+                    <!-- Actions menu -->
+                    <div class="flex flex-col gap-2 shrink-0">
+                        <!-- Submit (draft, owner/root) -->
+                        <button x-show="canMutate && entry.status === 'draft'" @click="submit()"
+                                class="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-brand-600">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+                            Submeter para Revisão
+                        </button>
+
+                        <!-- Root decide (submitted, root) -->
+                        <template x-if="isRoot && entry.status === 'submitted'">
+                            <div class="flex flex-col gap-1.5">
+                                <button @click="openDecide('approved')" class="rounded-lg bg-emerald-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-emerald-600">Aprovar</button>
+                                <button @click="openDecide('changes_requested')" class="rounded-lg bg-amber-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-amber-600">Pedir Mudanças</button>
+                                <button @click="openDecide('rejected')" class="rounded-lg bg-rose-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-rose-600">Rejeitar</button>
+                            </div>
+                        </template>
+
+                        <!-- Publish (approved, owner/root) -->
+                        <button x-show="canMutate && entry.status === 'approved'" @click="publish()"
+                                class="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-emerald-600">
+                            Publicar
+                        </button>
+
+                        <!-- Deprecate (published, owner/root) -->
+                        <button x-show="canMutate && entry.status === 'published'" @click="deprecate()"
+                                class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-[12px] font-semibold text-amber-700 hover:bg-amber-50">
+                            Depreciar
+                        </button>
+
+                        <!-- Edit Capability (draft, owner/root) -->
+                        <button x-show="canMutate && entry.status === 'draft'" @click="openCapabilityEdit()"
+                                class="inline-flex items-center gap-2 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] font-medium text-brand-900 hover:border-brand-300">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                            <span x-text="disclosure ? 'Editar Disclosure' : 'Declarar Disclosure'"></span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stats row -->
+                <div class="border-t border-surface-100 mt-4 pt-3 grid grid-cols-2 md:grid-cols-5 gap-3 text-[11px]">
+                    <div>
+                        <div class="text-surface-400 text-[9px] uppercase tracking-wider">Owner</div>
+                        <div class="font-mono text-surface-700 truncate mt-0.5" x-text="entry.owner_user_id"></div>
+                    </div>
+                    <div>
+                        <div class="text-surface-400 text-[9px] uppercase tracking-wider">Steward</div>
+                        <div class="text-surface-700 mt-0.5" x-text="entry.steward_team || '—'"></div>
+                    </div>
+                    <div>
+                        <div class="text-surface-400 text-[9px] uppercase tracking-wider">Domínio</div>
+                        <div class="text-surface-700 mt-0.5" x-text="entry.domain || '—'"></div>
+                    </div>
+                    <div>
+                        <div class="text-surface-400 text-[9px] uppercase tracking-wider">Visibilidade</div>
+                        <div class="text-surface-700 mt-0.5" x-text="visibilityLabel(entry)"></div>
+                    </div>
+                    <div>
+                        <div class="text-surface-400 text-[9px] uppercase tracking-wider">Criada</div>
+                        <div class="text-surface-700 mt-0.5" x-text="formatDate(entry.created_at)"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="border-b border-surface-200 mb-4">
+                <div class="flex gap-1">
+                    <template x-for="t in tabs" :key="t.id">
+                        <button @click="activeTab = t.id"
+                                :class="activeTab === t.id ? 'border-brand-500 text-brand-600 font-semibold' : 'border-transparent text-surface-500 hover:text-brand-700'"
+                                class="px-3 py-2 text-[12px] border-b-2 transition-colors"
+                                x-text="t.label"></button>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Tab content: Visão Geral -->
+            <div x-show="activeTab === 'overview'" class="space-y-4">
+                <!-- Trust metrics card -->
+                <div class="rounded-xl border border-surface-200 bg-white p-4">
+                    <h3 class="text-[12px] font-bold text-brand-900 mb-3 uppercase tracking-wider">Métricas de Confiabilidade</h3>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div>
+                            <div class="text-surface-400 text-[10px] uppercase tracking-wider">Reliability</div>
+                            <div class="text-[20px] font-bold mt-1" :class="reliabilityClass(entry.trust_reliability)" x-text="formatReliability(entry.trust_reliability)"></div>
+                        </div>
+                        <div>
+                            <div class="text-surface-400 text-[10px] uppercase tracking-wider">Latência p95</div>
+                            <div class="text-[20px] font-bold text-brand-900 mt-1" x-text="formatLatency(entry.trust_latency_p95_ms)"></div>
+                        </div>
+                        <div>
+                            <div class="text-surface-400 text-[10px] uppercase tracking-wider">Custo Médio</div>
+                            <div class="text-[20px] font-bold text-brand-900 mt-1" x-text="formatCost(entry.trust_avg_cost_usd)"></div>
+                        </div>
+                        <div>
+                            <div class="text-surface-400 text-[10px] uppercase tracking-wider">Invocações</div>
+                            <div class="text-[20px] font-bold text-brand-900 mt-1" x-text="(entry.trust_invocation_count || 0).toLocaleString()"></div>
+                            <div x-show="entry.trust_last_invoked_at" class="text-[9px] text-surface-400 mt-0.5">
+                                última: <span x-text="formatDate(entry.trust_last_invoked_at)"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Adapter binding -->
+                <div class="rounded-xl border border-surface-200 bg-white p-4">
+                    <h3 class="text-[12px] font-bold text-brand-900 mb-3 uppercase tracking-wider">Adapter</h3>
+                    <div class="grid grid-cols-2 gap-3 text-[12px]">
+                        <div>
+                            <span class="text-surface-400 text-[10px] uppercase">Tipo</span>
+                            <p class="font-mono text-brand-900 mt-1" x-text="entry.adapter_type"></p>
+                        </div>
+                        <div>
+                            <span class="text-surface-400 text-[10px] uppercase">Artefato</span>
+                            <p class="text-brand-900 mt-1" x-text="entry.artifact_type ? (entry.artifact_type + ': ' + entry.artifact_id) : '—'"></p>
+                        </div>
+                    </div>
+                    <div x-show="entry.adapter_config && Object.keys(entry.adapter_config).length > 0" class="mt-3">
+                        <span class="text-surface-400 text-[10px] uppercase">Config</span>
+                        <pre class="rounded-lg bg-surface-50 border border-surface-100 p-2 text-[10px] font-mono mt-1 overflow-x-auto" x-text="JSON.stringify(entry.adapter_config, null, 2)"></pre>
+                    </div>
+                </div>
+
+                <!-- Tags -->
+                <div x-show="entry.tags && entry.tags.length > 0" class="rounded-xl border border-surface-200 bg-white p-4">
+                    <h3 class="text-[12px] font-bold text-brand-900 mb-3 uppercase tracking-wider">Tags</h3>
+                    <div class="flex flex-wrap gap-1.5">
+                        <template x-for="tag in entry.tags" :key="tag">
+                            <span class="rounded-full bg-surface-100 px-2 py-1 text-[11px] text-surface-600" x-text="tag"></span>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab content: Capability Disclosure -->
+            <div x-show="activeTab === 'capability'">
+                <template x-if="!disclosure">
+                    <div class="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50/30 p-8 text-center">
+                        <p class="text-[14px] font-semibold text-amber-800 mb-1">Disclosure ainda não declarada</p>
+                        <p class="text-[12px] text-surface-500 mb-3 max-w-md mx-auto">A etiqueta nutricional R6.3 é obrigatória para Root aprovar a entry. Declare antes de submeter.</p>
+                        <button x-show="canMutate && entry.status === 'draft'" @click="openCapabilityEdit()" class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600">
+                            Declarar Agora
+                        </button>
+                    </div>
+                </template>
+
+                <template x-if="disclosure">
+                    <div class="space-y-3">
+                        <!-- Header com soberania -->
+                        <div class="rounded-xl border border-surface-200 bg-white p-4 flex items-center justify-between">
+                            <div>
+                                <p class="text-[11px] text-surface-400">Soberania de dados</p>
+                                <p class="text-[14px] font-bold text-brand-900 mt-0.5" x-text="disclosure.data_residency || 'Não restrita'"></p>
+                            </div>
+                            <span class="text-[10px] text-surface-400" x-text="'Método: ' + (disclosure.verification_method || 'declared')"></span>
+                        </div>
+
+                        <!-- Seções de capability -->
+                        <template x-for="section in capabilitySections" :key="section.title">
+                            <div class="rounded-xl border border-surface-200 bg-white p-4">
+                                <h3 class="text-[12px] font-bold text-brand-900 mb-3 uppercase tracking-wider flex items-center gap-2">
+                                    <span x-text="section.icon"></span>
+                                    <span x-text="section.title"></span>
+                                </h3>
+                                <div class="space-y-2">
+                                    <template x-for="row in section.rows" :key="row.label">
+                                        <div class="flex items-start justify-between gap-3 text-[12px]">
+                                            <div class="flex-1">
+                                                <p class="text-brand-900" x-text="row.label"></p>
+                                                <p x-show="row.detail" class="text-[10px] text-surface-400 mt-0.5" x-text="row.detail"></p>
+                                            </div>
+                                            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold shrink-0"
+                                                  :class="row.value ? (row.severity === 'high' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700') : 'bg-emerald-50 text-emerald-700'"
+                                                  x-text="row.value ? 'Sim' : 'Não'"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- Notas -->
+                        <div x-show="disclosure.additional_notes" class="rounded-xl border border-surface-200 bg-white p-4">
+                            <h3 class="text-[12px] font-bold text-brand-900 mb-2 uppercase tracking-wider">Notas Adicionais</h3>
+                            <p class="text-[12px] text-surface-700 leading-relaxed whitespace-pre-wrap" x-text="disclosure.additional_notes"></p>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Tab content: Histórico (submissões) -->
+            <div x-show="activeTab === 'history'">
+                <template x-if="!canMutate">
+                    <div class="rounded-xl border border-surface-200 bg-white p-6 text-center text-[12px] text-surface-500">
+                        Histórico de submissões visível apenas para owner ou Root.
+                    </div>
+                </template>
+                <template x-if="canMutate && submissions.length === 0">
+                    <div class="rounded-xl border border-surface-200 bg-white p-6 text-center text-[12px] text-surface-500">
+                        Esta entry ainda não foi submetida.
+                    </div>
+                </template>
+                <div x-show="canMutate && submissions.length > 0" class="space-y-2">
+                    <template x-for="sub in submissions" :key="sub.id">
+                        <div class="rounded-xl border border-surface-200 bg-white p-4">
+                            <div class="flex items-center justify-between mb-2">
+                                <div class="flex items-center gap-2">
+                                    <span class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase"
+                                          :class="reviewBadgeClass(sub.review_status)" x-text="sub.review_status"></span>
+                                    <span class="text-[11px] text-surface-500">submetido por <span class="font-mono text-surface-700" x-text="sub.submitted_by"></span></span>
+                                </div>
+                                <span class="text-[10px] text-surface-400" x-text="formatDate(sub.submitted_at)"></span>
+                            </div>
+                            <div x-show="sub.reviewed_by" class="text-[11px] text-surface-500 mb-2">
+                                Decisão de <span class="font-mono" x-text="sub.reviewed_by"></span> em <span x-text="formatDate(sub.reviewed_at)"></span>
+                            </div>
+                            <div x-show="sub.review_notes" class="rounded-lg bg-surface-50 px-3 py-2 text-[11px] text-surface-700 italic" x-text="'« ' + sub.review_notes + ' »'"></div>
+                            <details x-show="sub.precheck_report" class="mt-2">
+                                <summary class="text-[10px] text-brand-600 cursor-pointer hover:underline">
+                                    Pré-checks (<span x-text="parseReport(sub.precheck_report)?.errors_count || 0"></span> errors,
+                                    <span x-text="parseReport(sub.precheck_report)?.warnings_count || 0"></span> warnings)
+                                </summary>
+                                <pre class="rounded-lg bg-surface-50 border border-surface-100 p-2 text-[10px] font-mono mt-2 overflow-x-auto" x-text="JSON.stringify(parseReport(sub.precheck_report), null, 2)"></pre>
+                            </details>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Tab content: Manifest -->
+            <div x-show="activeTab === 'manifest'">
+                <div class="rounded-xl border border-surface-200 bg-white p-4">
+                    <h3 class="text-[12px] font-bold text-brand-900 mb-3 uppercase tracking-wider">Manifest (JSON)</h3>
+                    <pre class="rounded-lg bg-brand-950 text-brand-100 p-4 text-[11px] font-mono overflow-x-auto max-h-[60vh]" x-text="JSON.stringify(entry, null, 2)"></pre>
+                </div>
+            </div>
+
+        </div>
+    </template>
+
+    <!-- ═══ MODAL: editar capability disclosure ═══ -->
+    <div x-show="capModalOpen" @keydown.escape.window="capModalOpen = false"
+         x-transition.opacity
+         class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
+        <div @click.outside="capModalOpen = false" class="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5 shadow-xl">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-[14px] font-bold text-brand-900">Declarar Capability Disclosure</h3>
+                <button @click="capModalOpen = false" class="text-surface-400 hover:text-brand-600">×</button>
+            </div>
+            <div class="space-y-3 text-[12px]">
+                <template x-for="(group, gi) in capFormGroups" :key="gi">
+                    <div>
+                        <p class="text-[11px] font-semibold text-surface-400 uppercase tracking-wider mb-1.5" x-text="group.title"></p>
+                        <div class="space-y-1.5">
+                            <template x-for="field in group.fields" :key="field.key">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" x-model="capForm[field.key]" class="rounded border-surface-300">
+                                    <span class="text-brand-900" x-text="field.label"></span>
+                                </label>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- External APIs list (condicional) -->
+                <div x-show="capForm.calls_external_apis">
+                    <p class="text-[11px] font-semibold text-surface-400 uppercase tracking-wider mb-1">APIs externas (uma por linha)</p>
+                    <textarea x-model="capExternalApisText" rows="3" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[11px] font-mono outline-none focus:border-brand-400" placeholder="https://api.openai.com&#10;https://api.anthropic.com"></textarea>
+                </div>
+
+                <!-- Storage retention (condicional) -->
+                <div x-show="capForm.stores_input">
+                    <p class="text-[11px] font-semibold text-surface-400 uppercase tracking-wider mb-1">Retenção (dias)</p>
+                    <input type="number" min="0" x-model.number="capForm.storage_retention_days" class="w-32 rounded-lg border border-surface-200 px-2 py-1.5 text-[11px] outline-none focus:border-brand-400">
+                </div>
+
+                <!-- Soberania -->
+                <div>
+                    <p class="text-[11px] font-semibold text-surface-400 uppercase tracking-wider mb-1">Soberania de dados</p>
+                    <select x-model="capForm.data_residency" class="rounded-lg border border-surface-200 px-2 py-1.5 text-[11px] outline-none">
+                        <option value="">Sem restrição</option>
+                        <option value="BR">BR (Brasil)</option>
+                        <option value="EU">EU (Europa)</option>
+                        <option value="US">US (Estados Unidos)</option>
+                        <option value="global">Global</option>
+                    </select>
+                </div>
+
+                <!-- Notas -->
+                <div>
+                    <p class="text-[11px] font-semibold text-surface-400 uppercase tracking-wider mb-1">Notas adicionais</p>
+                    <textarea x-model="capForm.additional_notes" rows="2" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[11px] outline-none focus:border-brand-400" placeholder="Ex: PII pseudonimizada antes do storage"></textarea>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-2 mt-5">
+                <button @click="capModalOpen = false" class="px-3 py-1.5 text-[12px] rounded-lg border border-surface-200 hover:bg-surface-50">Cancelar</button>
+                <button @click="saveCapability()" :disabled="capSaving" class="px-3 py-1.5 text-[12px] rounded-lg bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50">
+                    <span x-text="capSaving ? 'Salvando...' : 'Salvar'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: decisão Root ═══ -->
+    <div x-show="decideModalOpen" @keydown.escape.window="decideModalOpen = false"
+         x-transition.opacity
+         class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
+        <div @click.outside="decideModalOpen = false" class="bg-white rounded-2xl w-full max-w-md p-5 shadow-xl">
+            <h3 class="text-[14px] font-bold text-brand-900 mb-3" x-text="decideAction === 'approved' ? 'Aprovar entry' : decideAction === 'changes_requested' ? 'Solicitar mudanças' : 'Rejeitar entry'"></h3>
+            <p class="text-[12px] text-surface-500 mb-3" x-text="decideAction === 'approved' ? 'Entry irá para status approved. Owner publica em seguida.' : 'Entry voltará para draft. Publisher pode iterar e re-submeter.'"></p>
+            <textarea x-model="decideNotes" rows="3" placeholder="Notas para o publisher (opcional)..." class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[11px] outline-none focus:border-brand-400"></textarea>
+            <div class="flex justify-end gap-2 mt-4">
+                <button @click="decideModalOpen = false" class="px-3 py-1.5 text-[12px] rounded-lg border border-surface-200 hover:bg-surface-50">Cancelar</button>
+                <button @click="submitDecision()" :disabled="decideSaving"
+                        class="px-3 py-1.5 text-[12px] rounded-lg text-white"
+                        :class="decideAction === 'approved' ? 'bg-emerald-500 hover:bg-emerald-600' : decideAction === 'changes_requested' ? 'bg-amber-500 hover:bg-amber-600' : 'bg-rose-500 hover:bg-rose-600'">
+                    <span x-text="decideSaving ? 'Salvando...' : 'Confirmar'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function catalogDetailPage(entryId) {
+    return {
+        entryId,
+        entry: null,
+        disclosure: null,
+        submissions: [],
+        loading: true,
+        activeTab: 'overview',
+        tabs: [
+            {id: 'overview', label: 'Visão Geral'},
+            {id: 'capability', label: 'Capability Disclosure'},
+            {id: 'history', label: 'Histórico'},
+            {id: 'manifest', label: 'Manifest'},
+        ],
+        // Auth context
+        currentUser: null,
+
+        get isRoot() { return (this.currentUser?.role || '').toLowerCase() === 'root'; },
+        get canMutate() {
+            if (!this.entry || !this.currentUser) return false;
+            return this.isRoot || this.entry.owner_user_id === this.currentUser.id;
+        },
+
+        // ── Capability modal state ─────────────────────────
+        capModalOpen: false,
+        capSaving: false,
+        capForm: {},
+        capExternalApisText: '',
+        capFormGroups: [
+            {title: 'Dados do consumer', fields: [
+                {key: 'reads_user_kb', label: 'Lê base de conhecimento do consumer'},
+                {key: 'writes_user_kb', label: 'Escreve em base do consumer'},
+                {key: 'stores_input', label: 'Persiste input do consumer'},
+            ]},
+            {title: 'Integrações externas', fields: [
+                {key: 'calls_external_apis', label: 'Chama APIs externas'},
+                {key: 'accesses_internet', label: 'Acessa internet aberta'},
+            ]},
+            {title: 'Dados regulados', fields: [
+                {key: 'processes_pii', label: 'Processa PII (dados pessoais)'},
+                {key: 'processes_financial', label: 'Processa dados financeiros'},
+                {key: 'processes_health', label: 'Processa dados de saúde'},
+            ]},
+            {title: 'Modelo', fields: [
+                {key: 'trains_on_input', label: 'Input vira training data'},
+                {key: 'output_is_deterministic', label: 'Output determinístico'},
+            ]},
+        ],
+
+        // ── Decide modal state ─────────────────────────────
+        decideModalOpen: false,
+        decideAction: null,
+        decideNotes: '',
+        decideSaving: false,
+
+        async load() {
+            this.loading = true;
+            // Carrega user atual + entry em paralelo
+            try {
+                const [meResp, entryResp] = await Promise.all([
+                    fetch('/api/v1/users/me').then(r => r.json()).catch(() => ({user: null})),
+                    fetch('/api/v1/catalog/entries/' + this.entryId).then(r => r.ok ? r.json() : null),
+                ]);
+                this.currentUser = meResp.user;
+                this.entry = entryResp;
+
+                if (this.entry) {
+                    // Disclosure: 404 normal se ainda não declarada
+                    try {
+                        const dr = await fetch('/api/v1/catalog/entries/' + this.entryId + '/capability');
+                        if (dr.ok) this.disclosure = await dr.json();
+                    } catch {}
+
+                    // Histórico de submissões (só para owner/root)
+                    if (this.canMutate) {
+                        try {
+                            const sr = await fetch('/api/v1/catalog/entries/' + this.entryId + '/submissions');
+                            if (sr.ok) this.submissions = (await sr.json()).submissions || [];
+                        } catch {}
+                    }
+                }
+            } catch (e) {
+                console.error(e);
+                showToast('Erro ao carregar entry', 'error');
+            }
+            this.loading = false;
+        },
+
+        // ── Actions ─────────────────────────────────────────
+        async submit() {
+            if (!confirm('Submeter esta entry para revisão Root?')) return;
+            try {
+                const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/submit', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({notes: ''}),
+                });
+                if (!r.ok) throw new Error((await r.json()).detail || 'erro');
+                showToast('Submetida para revisão');
+                await this.load();
+            } catch (e) { showToast('Erro: ' + e.message, 'error'); }
+        },
+
+        async publish() {
+            if (!confirm('Publicar esta entry agora?')) return;
+            try {
+                const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/publish', {method: 'POST'});
+                if (!r.ok) throw new Error((await r.json()).detail || 'erro');
+                showToast('Publicada');
+                await this.load();
+            } catch (e) { showToast('Erro: ' + e.message, 'error'); }
+        },
+
+        async deprecate() {
+            if (!confirm('Marcar como depreciada? Consumers verão aviso.')) return;
+            try {
+                const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/deprecate', {method: 'POST'});
+                if (!r.ok) throw new Error((await r.json()).detail || 'erro');
+                showToast('Depreciada');
+                await this.load();
+            } catch (e) { showToast('Erro: ' + e.message, 'error'); }
+        },
+
+        // ── Capability disclosure modal ────────────────────
+        openCapabilityEdit() {
+            // Inicia com valores atuais ou defaults
+            const d = this.disclosure || {};
+            this.capForm = {
+                reads_user_kb: !!d.reads_user_kb,
+                writes_user_kb: !!d.writes_user_kb,
+                stores_input: !!d.stores_input,
+                storage_retention_days: d.storage_retention_days || null,
+                calls_external_apis: !!d.calls_external_apis,
+                accesses_internet: !!d.accesses_internet,
+                processes_pii: !!d.processes_pii,
+                processes_financial: !!d.processes_financial,
+                processes_health: !!d.processes_health,
+                trains_on_input: !!d.trains_on_input,
+                output_is_deterministic: !!d.output_is_deterministic,
+                data_residency: d.data_residency || '',
+                additional_notes: d.additional_notes || '',
+            };
+            this.capExternalApisText = (d.external_apis_list || []).join('\n');
+            this.capModalOpen = true;
+        },
+
+        async saveCapability() {
+            this.capSaving = true;
+            try {
+                const payload = {...this.capForm};
+                payload.external_apis_list = this.capExternalApisText
+                    .split('\n').map(s => s.trim()).filter(Boolean);
+                if (!payload.data_residency) payload.data_residency = null;
+                const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/capability', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                });
+                if (!r.ok) {
+                    const err = await r.json();
+                    throw new Error(err.detail || JSON.stringify(err));
+                }
+                showToast('Disclosure salva');
+                this.capModalOpen = false;
+                await this.load();
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+            this.capSaving = false;
+        },
+
+        // ── Decide modal (Root) ────────────────────────────
+        openDecide(action) {
+            this.decideAction = action;
+            this.decideNotes = '';
+            this.decideModalOpen = true;
+        },
+
+        async submitDecision() {
+            // Precisa do submission_id mais recente (pending)
+            const pending = this.submissions.find(s => s.review_status === 'pending');
+            if (!pending) { showToast('Sem submissão pendente', 'error'); return; }
+            this.decideSaving = true;
+            try {
+                const r = await fetch('/api/v1/catalog/submissions/' + pending.id + '/decide', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({decision: this.decideAction, notes: this.decideNotes}),
+                });
+                if (!r.ok) throw new Error((await r.json()).detail || 'erro');
+                showToast('Decisão registrada');
+                this.decideModalOpen = false;
+                await this.load();
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+            this.decideSaving = false;
+        },
+
+        // ── Computed: capability sections para tab ─────────
+        get capabilitySections() {
+            if (!this.disclosure) return [];
+            const d = this.disclosure;
+            return [
+                {title: 'Dados do consumer', icon: '🔐', rows: [
+                    {label: 'Lê base de conhecimento do consumer', value: d.reads_user_kb, severity: 'medium'},
+                    {label: 'Escreve em base do consumer', value: d.writes_user_kb, severity: 'high'},
+                    {label: 'Persiste input do consumer', value: d.stores_input, severity: 'high',
+                     detail: d.storage_retention_days ? ('Retenção: ' + d.storage_retention_days + ' dias') : ''},
+                ]},
+                {title: 'Integrações externas', icon: '🌐', rows: [
+                    {label: 'Chama APIs externas', value: d.calls_external_apis, severity: 'medium',
+                     detail: (d.external_apis_list || []).join(', ')},
+                    {label: 'Acessa internet aberta', value: d.accesses_internet, severity: 'high'},
+                ]},
+                {title: 'Dados regulados', icon: '⚖️', rows: [
+                    {label: 'Processa PII', value: d.processes_pii, severity: 'high'},
+                    {label: 'Processa dados financeiros', value: d.processes_financial, severity: 'high'},
+                    {label: 'Processa dados de saúde', value: d.processes_health, severity: 'high'},
+                ]},
+                {title: 'Modelo', icon: '🧠', rows: [
+                    {label: 'Input vira training data', value: d.trains_on_input, severity: 'high'},
+                    {label: 'Output determinístico', value: d.output_is_deterministic, severity: 'medium'},
+                ]},
+            ];
+        },
+
+        // ── Helpers de formatação ──────────────────────────
+        kindLabel(k) {
+            return ({agent:'Agente', skill:'Skill', recipe:'Recipe', application:'Aplicação', external_platform:'Externa'})[k] || k;
+        },
+        kindBadgeClass(k) {
+            return ({agent:'bg-violet-50 text-violet-700', skill:'bg-teal-50 text-teal-700', recipe:'bg-brand-50 text-brand-700',
+                     application:'bg-amber-50 text-amber-700', external_platform:'bg-rose-50 text-rose-700'})[k] || 'bg-surface-100 text-surface-600';
+        },
+        statusBadgeClass(s) {
+            return ({draft:'bg-surface-100 text-surface-500', submitted:'bg-amber-50 text-amber-700', approved:'bg-brand-50 text-brand-700',
+                     published:'bg-emerald-50 text-emerald-700', deprecated:'bg-amber-100 text-amber-800', archived:'bg-surface-200 text-surface-500'})[s] || 'bg-surface-100 text-surface-500';
+        },
+        reviewBadgeClass(s) {
+            return ({pending:'bg-amber-50 text-amber-700', approved:'bg-emerald-50 text-emerald-700',
+                     rejected:'bg-rose-50 text-rose-700', changes_requested:'bg-amber-50 text-amber-700'})[s] || 'bg-surface-100 text-surface-500';
+        },
+        visibilityLabel(e) {
+            if (e.visibility === 'private') return 'Privada';
+            if (e.visibility === 'department') return 'Depto: ' + (e.visibility_scope || '—');
+            return 'Empresa';
+        },
+        formatReliability(v) {
+            if (v === null || v === undefined) return '—';
+            return Math.round(v * 100) + '%';
+        },
+        reliabilityClass(v) {
+            if (v === null || v === undefined) return 'text-surface-400';
+            if (v >= 0.9) return 'text-emerald-600';
+            if (v >= 0.7) return 'text-brand-600';
+            if (v >= 0.5) return 'text-amber-600';
+            return 'text-rose-600';
+        },
+        formatLatency(ms) {
+            if (!ms) return '—';
+            if (ms < 1000) return Math.round(ms) + 'ms';
+            return (ms / 1000).toFixed(1) + 's';
+        },
+        formatCost(usd) {
+            if (!usd) return '—';
+            if (usd < 0.01) return '<$0.01';
+            return '$' + usd.toFixed(3);
+        },
+        formatDate(ds) {
+            if (!ds) return '—';
+            try { return new Date(ds).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}); }
+            catch { return ds; }
+        },
+        parseReport(raw) {
+            if (typeof raw === 'object') return raw;
+            try { return JSON.parse(raw || '{}'); } catch { return {}; }
+        },
+    }
+}
+</script>
+{% endblock %}

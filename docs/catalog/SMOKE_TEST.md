@@ -532,3 +532,106 @@ Card linka para `/catalog/{id}` — rota será criada no PR 6. Por enquanto, dev
 - [ ] Cards mostram trust metrics
 - [ ] Empty state quando catálogo vazio
 - [ ] Click em card → tenta /catalog/{id} (404 até PR 6)
+
+---
+
+# Smoke Test — PR 6 (UI Detalhe da Entry A2)
+
+Página `/catalog/{entry_id}` com tabs, ações contextuais e 2 modais
+(editar capability + decidir submissão Root).
+
+## 24 — Renderização do template + rota
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+.venv\Scripts\python.exe -c "from app.main import app; print('/catalog/{entry_id}' in [r.path for r in app.routes])"
+```
+
+**Esperado**: 171 passed, rota `/catalog/{entry_id}` presente.
+
+## 25 — Fluxo visual end-to-end
+
+Pré: app rodando, login como `u1`, ter uma entry draft criada (PRs 2-4).
+
+1. Acesse `/catalog` → click em uma entry → carrega `/catalog/{id}`
+2. **Header**: nome grande + URN monospace + 3 badges (status, kind, version)
+3. **Stats row**: owner, steward, domínio, visibilidade, data criação
+4. **Action menu** (direita, contextual):
+   - Status=draft + owner/root: **Submeter** + **Declarar Disclosure**
+   - Status=submitted + Root: **Aprovar** / **Pedir Mudanças** / **Rejeitar**
+   - Status=approved + owner/root: **Publicar**
+   - Status=published + owner/root: **Depreciar**
+5. **Tabs**: Visão Geral / Capability Disclosure / Histórico / Manifest
+
+## 26 — Tab Capability Disclosure (diferencial UX)
+
+Quando disclosure não existe:
+- Card amarelo "Disclosure ainda não declarada"
+- Botão "Declarar Agora" (se canMutate + draft)
+
+Quando disclosure existe:
+- Header com soberania + método de verificação
+- 4 cards de categoria:
+  - 🔐 Dados do consumer (reads_user_kb, writes_user_kb, stores_input + retention)
+  - 🌐 Integrações externas (calls_external_apis + lista, accesses_internet)
+  - ⚖️ Dados regulados (PII, financial, health)
+  - 🧠 Modelo (trains_on_input, output_is_deterministic)
+- Cada linha: label + badge Sim (rose/amber se high-severity, emerald para "Não")
+- Notas adicionais ao final
+
+## 27 — Modal editar capability
+
+1. Click "Declarar Disclosure" → abre modal
+2. Checkboxes agrupados por categoria
+3. Condicionais:
+   - `calls_external_apis=true` → textarea "APIs externas (uma por linha)"
+   - `stores_input=true` → input numérico "Retenção (dias)"
+4. Select "Soberania" (BR/EU/US/global ou Sem restrição)
+5. Textarea "Notas adicionais"
+6. Validações:
+   - calls_external_apis=true + lista vazia → 422 + toast erro
+   - retention negativo → 422 + toast erro
+7. Save → modal fecha + toast "Disclosure salva" + recarrega
+
+## 28 — Modal decidir (Root)
+
+Pré: entry está submitted, logar como Root.
+
+1. Click "Aprovar" / "Pedir Mudanças" / "Rejeitar" → abre modal
+2. Header explica consequência (entry → approved / draft)
+3. Textarea para notas
+4. Confirmar → POST /submissions/{sid}/decide → toast + recarrega
+
+## 29 — Tab Histórico (submissões)
+
+- Não-owner não-root: card "visível apenas para owner ou Root"
+- Owner/Root: lista de submissões com badges, datas, notas, pré-checks expansível (`<details>`)
+
+## 30 — Tab Manifest (debug)
+
+JSON cru da entry em bloco escuro com sintaxe monoespaçada.
+
+## 31 — Fluxo completo via UI
+
+1. Owner cria entry via API → vai para `/catalog/{id}` → status=draft
+2. Click "Declarar Disclosure" → preenche modal → salva
+3. Click "Submeter" → status=submitted, aparece na fila (futura PR 8)
+4. Logar como Root → mesma página → status=submitted → Aprovar
+5. Voltar como owner → status=approved → Publicar
+6. Click "Depreciar" → status=deprecated
+
+Todo o ciclo de governança pela UI, sem cURL.
+
+## Critérios de aceitação do PR 6
+
+- [x] 171 testes passam (sem regressão)
+- [x] Rota `/catalog/{entry_id}` registrada
+- [x] Template parseia
+- [ ] Tab "Visão Geral" mostra trust metrics + adapter + tags
+- [ ] Tab "Capability Disclosure" mostra etiqueta nutricional bonita
+- [ ] Tab "Histórico" lista submissões com pré-checks expansível
+- [ ] Tab "Manifest" mostra JSON cru
+- [ ] Botões de ação aparecem só para status + role corretos
+- [ ] Modal capability salva via PUT, valida calls_external_apis
+- [ ] Modal decide (Root) envia POST decide e recarrega
+- [ ] Toasts de erro/sucesso aparecem corretamente
