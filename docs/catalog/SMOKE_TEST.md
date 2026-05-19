@@ -443,3 +443,92 @@ ORDER BY created_at DESC LIMIT 10;
 - [ ] DELETE só draft, só owner/root
 - [ ] Submit reporta error em disclosure ausente; passa quando declarada
 - [ ] Regressão de PR 1-3 OK
+
+---
+
+# Smoke Test — PR 5 (UI Catálogo A1)
+
+Primeiro trilho de UI. Tela `/catalog` com grid de cards, busca client-side
+e filtros server-side. Nova entrada na nav (categoria Principal, após Skills).
+
+## 16 — Renderização do template
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+**Esperado**: 171 passed (sem regressão).
+
+```powershell
+.venv\Scripts\python.exe -c "from app.main import app; print('/catalog' in [r.path for r in app.routes])"
+```
+
+**Esperado**: `True`.
+
+## 17 — Navegação no browser
+
+1. Login em `/login`
+2. Sidebar mostra "Catálogo" como item novo em **Principal** (após Skills)
+3. Click → carrega `/catalog`
+4. Header mostra "Catálogo" + descrição
+5. Item da sidebar fica destacado (active state)
+
+## 18 — Lista vazia (instalação nova)
+
+Sem entries cadastradas:
+- Card grande "Catálogo vazio" no centro
+- CTA aponta para `/agents` para criar agente que será publicado
+
+## 19 — Lista com entries
+
+Pré: criar 2-3 entries via API (ver seção 7 do PR 2):
+```powershell
+# Entry pública para u1
+curl -X POST http://localhost:7000/api/v1/catalog/entries `
+  -H "Content-Type: application/json" -b "user_id=<u1>" `
+  -d '{"name":"Agente Fiscal","kind":"agent","artifact_type":"agent","artifact_id":"<aid>","domain":"fiscal","description":"Classifica NF por CFOP","visibility":"company","version":"1.0.0"}'
+# Publicar (precisa passar pelo workflow PR 3 — ou setar status='published' manualmente em SQL para o smoke)
+```
+
+**Esperado**:
+- Grid mostra cards com nome, URN truncado, badges (kind/version/status/domain)
+- Trust metrics (reliability, p95, custo) — "—" se zerado
+- Descrição truncada em 2 linhas
+- Tags se houver
+- Hover destaca borda azul
+
+## 20 — Busca client-side
+
+Digite no campo de busca: filtra cards já carregados (nome / descrição / URN).
+Contador "X / Y" no header atualiza.
+
+## 21 — Filtros server-side
+
+- **Tipo**: agent / skill / recipe / application / external_platform — recarrega via API
+- **Status**: draft / submitted / approved / published / deprecated / archived
+- **Domínio**: input texto livre
+
+Cada filtro dispara `load()` novamente (watcher em Alpine.init).
+
+## 22 — Click no card
+
+Card linka para `/catalog/{id}` — rota será criada no PR 6. Por enquanto, devolve 404 — comportamento esperado.
+
+## 23 — Visibilidade
+
+- User comum vê apenas suas próprias entries (qualquer status) + visibility=company published/deprecated + department-match
+- Root vê tudo
+- Testar logando com 2 users diferentes
+
+## Critérios de aceitação do PR 5
+
+- [x] 171 testes passam (sem regressão)
+- [x] Rota `/catalog` registrada em `app.routes`
+- [x] Templates parseiam (catalog.html + base.html)
+- [ ] Item "Catálogo" aparece na sidebar em Principal
+- [ ] Page carrega entries via `/api/v1/catalog/entries`
+- [ ] Busca filtra em tempo real (client-side)
+- [ ] Filtros tipo/status/domínio recarregam (server-side)
+- [ ] Cards mostram trust metrics
+- [ ] Empty state quando catálogo vazio
+- [ ] Click em card → tenta /catalog/{id} (404 até PR 6)

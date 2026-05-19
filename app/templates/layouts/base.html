@@ -100,6 +100,12 @@
                     </a>
                     <button @click="openHelp('skills')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
                 </div>
+                <div class="relative" id="tour-nav-catalog">
+                    <a href="/catalog" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'catalog' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/></svg>
+                        <span x-show="!sidebarCollapsed">Catálogo</span>
+                    </a>
+                </div>
 
                 <div class="px-2 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-surface-400" x-show="!sidebarCollapsed">Operação</div>
 
