@@ -56,13 +56,16 @@ class CatalogEntryCreate(BaseModel):
         return v
 
     def require_artifact_link(self) -> None:
-        """Onda 1: agent/skill/recipe exigem vínculo a artefato. external_platform não.
+        """agent/skill exigem vínculo a artefato. external_platform e recipe não.
 
         Chamado pelo handler do endpoint após validação base. Mantido aqui para
         co-localizar a regra com o model (não vira validator porque depende da
         regra de produto, não da forma).
+
+        Recipe (Onda 3): não tem artefato — sua definição é a composição
+        declarativa em catalog_recipes.steps.
         """
-        if self.kind in ("agent", "skill", "recipe"):
+        if self.kind in ("agent", "skill"):
             if not self.artifact_type or not self.artifact_id:
                 raise ValueError(
                     f"kind={self.kind} requer artifact_type + artifact_id (vínculo a artefato existente)"
@@ -298,3 +301,43 @@ class InvocationCostRecord(BaseModel):
     cost_usd: float = Field(0, ge=0)
     tokens_used: int = Field(0, ge=0)
     latency_ms: float = Field(0, ge=0)
+
+
+# ─── Recipes (Onda 3) ────────────────────────────────────────────
+
+
+class RecipeStep(BaseModel):
+    """Step individual em um recipe — referencia outra entry do catálogo."""
+
+    order: int = Field(..., ge=1)
+    target_entry_id: str = Field(..., min_length=1)
+    notes: Optional[str] = None
+
+
+class RecipeDefinition(BaseModel):
+    """Definição completa de um recipe (lista ordenada de steps).
+
+    Steps devem ter `order` único e contínuo a partir de 1. Validador
+    normaliza/reordena para evitar gaps.
+    """
+
+    steps: list[RecipeStep] = Field(..., min_length=1, max_length=50)
+
+    @field_validator("steps")
+    @classmethod
+    def _normalize_order(cls, steps: list[RecipeStep]) -> list[RecipeStep]:
+        # Detecta orders duplicados
+        orders = [s.order for s in steps]
+        if len(set(orders)) != len(orders):
+            raise ValueError("steps com 'order' duplicado")
+        # Detecta target_entry_id duplicado no mesmo recipe — Onda 3
+        # restringe (recipe que invoca a mesma entry 2x pode existir, mas é
+        # raro; vamos permitir só para Onda 4 quando houver execução real).
+        targets = [s.target_entry_id for s in steps]
+        if len(set(targets)) != len(targets):
+            raise ValueError("steps com target_entry_id duplicado — uma entry por step")
+        # Reordena ascendente e renumera 1..N para garantir continuidade
+        sorted_steps = sorted(steps, key=lambda s: s.order)
+        for idx, s in enumerate(sorted_steps, start=1):
+            s.order = idx
+        return sorted_steps

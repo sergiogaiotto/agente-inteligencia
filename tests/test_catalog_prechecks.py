@@ -178,3 +178,50 @@ class TestExternalMetadataCheck:
         chk = _check_by_name(r, "external_metadata_present")
         assert chk and not chk["passed"]
         assert chk["severity"] == "warning"
+
+
+# ─── Recipe checks (Onda 3) ───────────────────────────────────────
+
+
+class TestRecipeChecks:
+    def test_recipe_kind_skips_a2a_artifact_check(self):
+        # Recipe é a2a mas não tem artifact — a2a_has_artifact deve passar
+        e = _entry(kind="recipe", adapter_type="a2a",
+                   artifact_type=None, artifact_id=None)
+        r = run_prechecks(e, disclosure={"entry_id": "e1"}, owner=_active_user(),
+                          recipe={"steps": [{"order": 1, "target_entry_id": "t1"}]})
+        chk = _check_by_name(r, "a2a_has_artifact")
+        assert chk and chk["passed"]
+
+    def test_recipe_without_steps_is_error(self):
+        e = _entry(kind="recipe", adapter_type="a2a",
+                   artifact_type=None, artifact_id=None)
+        r = run_prechecks(e, disclosure={"entry_id": "e1"}, owner=_active_user(),
+                          recipe=None)
+        chk = _check_by_name(r, "recipe_has_steps")
+        assert chk and not chk["passed"]
+        assert chk["severity"] == "error"
+        assert r["passed"] is False
+
+    def test_recipe_with_empty_steps_is_error(self):
+        e = _entry(kind="recipe", adapter_type="a2a",
+                   artifact_type=None, artifact_id=None)
+        r = run_prechecks(e, disclosure={"entry_id": "e1"}, owner=_active_user(),
+                          recipe={"steps": []})
+        chk = _check_by_name(r, "recipe_has_steps")
+        assert chk and not chk["passed"]
+
+    def test_recipe_with_steps_passes(self):
+        e = _entry(kind="recipe", adapter_type="a2a",
+                   artifact_type=None, artifact_id=None)
+        r = run_prechecks(e, disclosure={"entry_id": "e1"}, owner=_active_user(),
+                          recipe={"steps": [{"order": 1, "target_entry_id": "t1"}]})
+        chk = _check_by_name(r, "recipe_has_steps")
+        assert chk and chk["passed"]
+
+    def test_non_recipe_skips_recipe_check(self):
+        for k in ("agent", "skill", "external_platform"):
+            e = _entry(kind=k)
+            r = run_prechecks(e, disclosure={"entry_id": "e1"}, owner=_active_user())
+            chk = _check_by_name(r, "recipe_has_steps")
+            assert chk and chk["passed"]

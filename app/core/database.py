@@ -633,6 +633,21 @@ CREATE TABLE IF NOT EXISTS catalog_external_metadata (
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now()
 );
+
+-- ═══════════════════════════════════════════════════════════════
+-- Recipes (Onda 3) — composição declarativa de entries existentes.
+-- 1:1 com catalog_entries quando kind='recipe'. Steps são ordered
+-- list em JSONB com referência a outras entries.
+-- Onda 3 entrega apenas o manifest declarativo; execução real (chain
+-- sequencial pelo engine) vem na Onda 4.
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS catalog_recipes (
+    entry_id TEXT PRIMARY KEY REFERENCES catalog_entries(id) ON DELETE CASCADE,
+    -- Steps: [{"order":1, "target_entry_id":"...", "notes":"..."}, ...]
+    steps JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
 """
 
 # ═══════════════════════════════════════════════════════════════

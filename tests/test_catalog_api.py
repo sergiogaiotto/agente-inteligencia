@@ -1555,3 +1555,262 @@ class TestExportCostCsv:
         c = make_client({"id": "u1", "role": "comum"})
         r = c.get("/api/v1/catalog/cost/export.csv?scope=all")
         assert r.status_code == 403
+
+
+# ═════════════════════════════════════════════════════════════════
+# Recipes (Onda 3 / PR 3)
+# ═════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def recipe_storage(monkeypatch, fake_storage):
+    """Mocks de get_recipe / upsert_recipe / delete_recipe sobre fake_storage."""
+    recipes: dict[str, dict] = {}
+
+    async def fake_get(entry_id):
+        if entry_id not in recipes:
+            return None
+        # Enriquece steps com target_name/kind do entries fake
+        rec = dict(recipes[entry_id])
+        enriched = []
+        for s in rec.get("steps", []):
+            tid = s.get("target_entry_id")
+            t = fake_storage["entries"].get(tid)
+            enriched.append({
+                **s,
+                "target_name": t.get("name") if t else None,
+                "target_kind": t.get("kind") if t else None,
+                "target_status": t.get("status") if t else None,
+                "target_exists": t is not None,
+            })
+        rec["steps"] = enriched
+        return rec
+
+    async def fake_upsert(entry_id, steps):
+        # Replica regras do real: anti-self e target deve existir
+        for s in steps:
+            if s.get("target_entry_id") == entry_id:
+                raise ValueError("recipe não pode invocar a si mesmo")
+        target_ids = [s.get("target_entry_id") for s in steps]
+        missing = [tid for tid in target_ids if tid not in fake_storage["entries"]]
+        if missing:
+            raise ValueError(f"target_entry_id(s) inexistente(s): {missing}")
+        recipes[entry_id] = {"entry_id": entry_id, "steps": steps}
+        return {"entry_id": entry_id, "steps": steps}
+
+    async def fake_delete(entry_id):
+        return recipes.pop(entry_id, None) is not None
+
+    monkeypatch.setattr("app.routes.catalog.get_recipe", fake_get)
+    monkeypatch.setattr("app.routes.catalog.upsert_recipe", fake_upsert)
+    monkeypatch.setattr("app.routes.catalog.delete_recipe", fake_delete)
+
+    return {**fake_storage, "recipes": recipes}
+
+
+def _create_recipe_draft(client, storage, owner_id: str) -> str:
+    """Cria entry kind=recipe (sem artifact)."""
+    _seed_owner(storage, owner_id)
+    r = client.post(
+        "/api/v1/catalog/entries",
+        json={
+            "name": "Pipeline Fiscal",
+            "kind": "recipe",
+            "description": "Recipe que encadeia agentes fiscais",
+        },
+    )
+    assert r.status_code == 201, r.json()
+    return r.json()["id"]
+
+
+def _seed_target(storage, name="Step Target", kind="agent"):
+    """Insere uma entry no fake storage diretamente (sem passar pela API)."""
+    import uuid
+    tid = f"target-{uuid.uuid4().hex[:8]}"
+    storage["entries"][tid] = {
+        "id": tid, "name": name, "kind": kind, "status": "published",
+        "version": "1.0.0", "urn": f"urn:maestro:default:{kind}:slug:1.0.0",
+        "owner_user_id": "u-owner",
+    }
+    return tid
+
+
+class TestRecipeKindCreation:
+    def test_recipe_kind_no_artifact_required(self, recipe_storage):
+        """Onda 3: recipe não exige artifact_type/artifact_id."""
+        c = make_client({"id": "u1", "role": "comum"})
+        _seed_owner(recipe_storage, "u1")
+        r = c.post(
+            "/api/v1/catalog/entries",
+            json={"name": "R1", "kind": "recipe"},
+        )
+        assert r.status_code == 201
+        assert r.json()["kind"] == "recipe"
+
+
+class TestRecipePut:
+    def test_owner_defines_steps(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        t1 = _seed_target(recipe_storage, "Extrair", "agent")
+        t2 = _seed_target(recipe_storage, "Classificar", "agent")
+        r = c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [
+                {"order": 1, "target_entry_id": t1, "notes": "extrai"},
+                {"order": 2, "target_entry_id": t2, "notes": "classifica"},
+            ],
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["steps"]) == 2
+        assert body["steps"][0]["target_entry_id"] == t1
+
+    def test_rejects_self_reference(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        r = c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [{"order": 1, "target_entry_id": rid}],
+        })
+        assert r.status_code == 422
+        assert "si mesmo" in r.json()["detail"]
+
+    def test_rejects_nonexistent_target(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        r = c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [{"order": 1, "target_entry_id": "ghost"}],
+        })
+        assert r.status_code == 422
+
+    def test_rejects_duplicate_target(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        t1 = _seed_target(recipe_storage)
+        r = c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [
+                {"order": 1, "target_entry_id": t1},
+                {"order": 2, "target_entry_id": t1},  # duplicado
+            ],
+        })
+        assert r.status_code == 422
+
+    def test_rejects_empty_steps(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        r = c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={"steps": []})
+        assert r.status_code == 422
+
+    def test_normalizes_order_gaps(self, recipe_storage):
+        """Validator renumera para 1..N mesmo se vier com gaps."""
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        t1 = _seed_target(recipe_storage, "A")
+        t2 = _seed_target(recipe_storage, "B")
+        r = c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [
+                {"order": 5, "target_entry_id": t1},
+                {"order": 10, "target_entry_id": t2},
+            ],
+        })
+        assert r.status_code == 200
+        # Renumerado para 1, 2
+        orders = [s["order"] for s in r.json()["steps"]]
+        assert orders == [1, 2]
+
+    def test_nonowner_forbidden(self, recipe_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c1, recipe_storage, "u1")
+        t1 = _seed_target(recipe_storage)
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [{"order": 1, "target_entry_id": t1}],
+        })
+        assert r.status_code == 403
+
+    def test_cant_edit_after_submit(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        recipe_storage["entries"][rid]["status"] = "submitted"
+        t1 = _seed_target(recipe_storage)
+        r = c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [{"order": 1, "target_entry_id": t1}],
+        })
+        assert r.status_code == 409
+
+    def test_non_recipe_kind_rejected(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, recipe_storage, "u1")  # kind=agent
+        t1 = _seed_target(recipe_storage)
+        r = c.put(f"/api/v1/catalog/entries/{eid}/recipe", json={
+            "steps": [{"order": 1, "target_entry_id": t1}],
+        })
+        assert r.status_code == 422
+        assert "recipe" in r.json()["detail"]
+
+    def test_audits_definition(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        t1 = _seed_target(recipe_storage)
+        c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [{"order": 1, "target_entry_id": t1}],
+        })
+        actions = [a["action"] for a in recipe_storage["audit"]]
+        assert "recipe_defined" in actions
+
+
+class TestRecipeGet:
+    def test_owner_reads(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        t1 = _seed_target(recipe_storage, "Extrair", "agent")
+        c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [{"order": 1, "target_entry_id": t1}],
+        })
+        r = c.get(f"/api/v1/catalog/entries/{rid}/recipe")
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["steps"]) == 1
+        # Enriquecido
+        assert body["steps"][0]["target_name"] == "Extrair"
+
+    def test_404_when_not_defined(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        r = c.get(f"/api/v1/catalog/entries/{rid}/recipe")
+        assert r.status_code == 404
+
+    def test_404_for_non_recipe_kind(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, recipe_storage, "u1")
+        r = c.get(f"/api/v1/catalog/entries/{eid}/recipe")
+        assert r.status_code == 404
+
+
+class TestRecipeDelete:
+    def test_owner_deletes(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        t1 = _seed_target(recipe_storage)
+        c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [{"order": 1, "target_entry_id": t1}],
+        })
+        r = c.delete(f"/api/v1/catalog/entries/{rid}/recipe")
+        assert r.status_code == 200
+        assert rid not in recipe_storage["recipes"]
+
+    def test_404_when_not_defined(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        r = c.delete(f"/api/v1/catalog/entries/{rid}/recipe")
+        assert r.status_code == 404
+
+    def test_cant_delete_after_submit(self, recipe_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        rid = _create_recipe_draft(c, recipe_storage, "u1")
+        t1 = _seed_target(recipe_storage)
+        c.put(f"/api/v1/catalog/entries/{rid}/recipe", json={
+            "steps": [{"order": 1, "target_entry_id": t1}],
+        })
+        recipe_storage["entries"][rid]["status"] = "submitted"
+        r = c.delete(f"/api/v1/catalog/entries/{rid}/recipe")
+        assert r.status_code == 409

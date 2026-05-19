@@ -708,6 +708,112 @@ async def aggregate_costs(
     return [dict(r) for r in rows], (dict(totals) if totals else {})
 
 
+# ─── Recipes (Onda 3) ────────────────────────────────────────────
+
+
+async def get_recipe(entry_id: str) -> Optional[dict]:
+    """Lê o manifest do recipe + enriquece cada step com target_name/kind/status
+    via lookup em catalog_entries. None se ainda não declarado."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        r = await con.fetchrow(
+            "SELECT steps, created_at, updated_at FROM catalog_recipes WHERE entry_id=$1",
+            entry_id,
+        )
+        if not r:
+            return None
+        out = dict(r)
+        raw_steps = out.get("steps") or []
+        # asyncpg pode retornar JSONB como str OU dict — normaliza
+        if isinstance(raw_steps, str):
+            try:
+                raw_steps = json.loads(raw_steps)
+            except json.JSONDecodeError:
+                raw_steps = []
+        # Enriquece cada step com info do target (uma query por target — OK
+        # para Onda 3; otimiza com JOIN se virar gargalo)
+        target_ids = [s.get("target_entry_id") for s in raw_steps if s.get("target_entry_id")]
+        enriched_steps = []
+        if target_ids:
+            targets_rows = await con.fetch(
+                "SELECT id, name, kind, status FROM catalog_entries WHERE id = ANY($1)",
+                target_ids,
+            )
+            tmap = {r["id"]: dict(r) for r in targets_rows}
+            for s in raw_steps:
+                tid = s.get("target_entry_id")
+                t = tmap.get(tid)
+                enriched_steps.append({
+                    "order": s.get("order"),
+                    "target_entry_id": tid,
+                    "notes": s.get("notes"),
+                    "target_name": t["name"] if t else None,
+                    "target_kind": t["kind"] if t else None,
+                    "target_status": t["status"] if t else None,
+                    "target_exists": t is not None,
+                })
+        out["steps"] = enriched_steps
+    return out
+
+
+async def upsert_recipe(entry_id: str, steps: list[dict]) -> dict:
+    """Upsert do manifest. Valida que cada target_entry_id existe e não
+    referencia o próprio recipe (anti-ciclo trivial). Persiste como JSONB."""
+    # Anti-ciclo: target_entry_id não pode ser o próprio recipe
+    for s in steps:
+        if s.get("target_entry_id") == entry_id:
+            raise ValueError("recipe não pode invocar a si mesmo")
+
+    # Valida existência de todos os targets em uma única query
+    target_ids = [s.get("target_entry_id") for s in steps]
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        existing = await con.fetch(
+            "SELECT id FROM catalog_entries WHERE id = ANY($1)", target_ids,
+        )
+        existing_ids = {r["id"] for r in existing}
+        missing = [tid for tid in target_ids if tid not in existing_ids]
+        if missing:
+            raise ValueError(f"target_entry_id(s) inexistente(s): {missing}")
+
+        # Persiste — INSERT ON CONFLICT como nos outros 1:1 helpers
+        steps_json = json.dumps(steps)
+        r = await con.fetchrow(
+            """
+            INSERT INTO catalog_recipes (entry_id, steps)
+            VALUES ($1, $2::jsonb)
+            ON CONFLICT (entry_id) DO UPDATE SET
+              steps = EXCLUDED.steps,
+              updated_at = now()
+            RETURNING entry_id, steps, created_at, updated_at
+            """,
+            entry_id, steps_json,
+        )
+    out = dict(r)
+    raw = out.get("steps")
+    if isinstance(raw, str):
+        try:
+            out["steps"] = json.loads(raw)
+        except json.JSONDecodeError:
+            out["steps"] = []
+    return out
+
+
+async def delete_recipe(entry_id: str) -> bool:
+    """Remove o manifest do recipe. Cascade já remove ao deletar a entry."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        res = await con.execute(
+            "DELETE FROM catalog_recipes WHERE entry_id=$1",
+            entry_id,
+        )
+    try:
+        n = int(res.rsplit(" ", 1)[-1])
+    except (ValueError, IndexError):
+        n = 0
+    return n > 0
+
+
 async def list_costs_raw(
     *,
     since: Optional[str] = None,
