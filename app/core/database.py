@@ -491,6 +491,123 @@ CREATE TABLE IF NOT EXISTS verifications (
 CREATE INDEX IF NOT EXISTS idx_verifications_turn ON verifications (turn_id);
 CREATE INDEX IF NOT EXISTS idx_verifications_interaction ON verifications (interaction_id);
 CREATE INDEX IF NOT EXISTS idx_verifications_created_at ON verifications (created_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════
+-- Catálogo / Marketplace corporativo (Onda 1)
+-- Agentes, skills e (futuro) recipes/external_platforms publicáveis
+-- com governança Root, capability disclosure e tracking de custo.
+-- URN futuro-proof prevê multi-workspace e federação.
+-- ═══════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS catalog_entries (
+    id TEXT PRIMARY KEY,
+    -- urn:maestro:<workspace>:<kind>:<slug>:<version> — workspace='default' na Onda 1.
+    urn TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    kind TEXT NOT NULL CHECK(kind IN ('agent','skill','application','recipe','external_platform')),
+    -- Vínculo com artefato Maestro existente (NULL para external_platform / recipe stub)
+    artifact_type TEXT CHECK(artifact_type IN ('agent','skill','recipe')),
+    artifact_id TEXT,
+    domain TEXT,
+    version TEXT DEFAULT '0.1.0',
+    -- Lifecycle (state machine): draft → submitted → approved → published → deprecated → archived
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN (
+        'draft','submitted','approved','published','deprecated','archived'
+    )),
+    -- Visibilidade R9: private (só owner+Root) | department (área) | company (toda)
+    visibility TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('private','department','company')),
+    visibility_scope TEXT,  -- nome do departamento quando visibility='department'
+    -- Stewardship R11
+    owner_user_id TEXT NOT NULL,
+    steward_team TEXT,
+    -- Adapter binding R7 (a2a = agente/skill interno via protocolo A2A)
+    adapter_type TEXT NOT NULL DEFAULT 'a2a' CHECK(adapter_type IN (
+        'a2a','mcp','http','openai_assistants'
+    )),
+    adapter_config TEXT DEFAULT '{}',
+    -- Trust metrics R5.2 (atualizadas via batch a partir de catalog_costs / harness)
+    trust_reliability REAL DEFAULT 0,
+    trust_latency_p95_ms REAL DEFAULT 0,
+    trust_avg_cost_usd REAL DEFAULT 0,
+    trust_invocation_count INTEGER DEFAULT 0,
+    trust_last_invoked_at TIMESTAMP,
+    tags TEXT DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now(),
+    published_at TIMESTAMP,
+    deprecated_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_entries_status ON catalog_entries(status);
+CREATE INDEX IF NOT EXISTS idx_catalog_entries_kind ON catalog_entries(kind);
+CREATE INDEX IF NOT EXISTS idx_catalog_entries_owner ON catalog_entries(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_entries_artifact ON catalog_entries(artifact_type, artifact_id);
+
+-- Submissões: 1 row por submit. Entry pode ter múltiplas (re-submissão após changes_requested).
+CREATE TABLE IF NOT EXISTS catalog_submissions (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL REFERENCES catalog_entries(id) ON DELETE CASCADE,
+    submitted_by TEXT NOT NULL,
+    submitted_at TIMESTAMP DEFAULT now(),
+    -- Snapshot do estado da entry no instante da submissão (audit + diff futuro)
+    snapshot TEXT DEFAULT '{}',
+    -- Relatório de pré-checks automáticos (schema, secrets-scan, capability fingerprint, harness)
+    precheck_report TEXT DEFAULT '{}',
+    precheck_passed BOOLEAN DEFAULT FALSE,
+    -- Decisão de revisão (Root na Onda 1)
+    review_status TEXT NOT NULL DEFAULT 'pending' CHECK(review_status IN (
+        'pending','approved','rejected','changes_requested'
+    )),
+    reviewed_by TEXT,
+    reviewed_at TIMESTAMP,
+    review_notes TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_submissions_entry ON catalog_submissions(entry_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_submissions_status ON catalog_submissions(review_status);
+
+-- Capability Disclosure R6.3 — "etiqueta nutricional" obrigatória (1:1 com entry).
+CREATE TABLE IF NOT EXISTS catalog_capability_disclosure (
+    entry_id TEXT PRIMARY KEY REFERENCES catalog_entries(id) ON DELETE CASCADE,
+    reads_user_kb BOOLEAN DEFAULT FALSE,
+    writes_user_kb BOOLEAN DEFAULT FALSE,
+    calls_external_apis BOOLEAN DEFAULT FALSE,
+    external_apis_list TEXT DEFAULT '[]',
+    stores_input BOOLEAN DEFAULT FALSE,
+    storage_retention_days INTEGER,
+    accesses_internet BOOLEAN DEFAULT FALSE,
+    processes_pii BOOLEAN DEFAULT FALSE,
+    processes_financial BOOLEAN DEFAULT FALSE,
+    processes_health BOOLEAN DEFAULT FALSE,
+    trains_on_input BOOLEAN DEFAULT FALSE,
+    output_is_deterministic BOOLEAN DEFAULT FALSE,
+    -- Soberania R6.1 (NULL = sem restrição)
+    data_residency TEXT,
+    additional_notes TEXT DEFAULT '',
+    -- Verificação (Onda 2: 'execution'; Onda 1 sempre 'declared')
+    verified_at TIMESTAMP,
+    verification_method TEXT DEFAULT 'declared' CHECK(verification_method IN (
+        'declared','fingerprint','execution'
+    )),
+    declared_vs_detected TEXT DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+
+-- Tracking de custo por invocação R4.3 (insert-only; agregação fica em queries).
+CREATE TABLE IF NOT EXISTS catalog_costs (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL REFERENCES catalog_entries(id) ON DELETE CASCADE,
+    consumer_user_id TEXT NOT NULL,
+    consumer_department TEXT,
+    interaction_id TEXT,
+    cost_usd REAL DEFAULT 0,
+    tokens_used INTEGER DEFAULT 0,
+    latency_ms REAL DEFAULT 0,
+    invoked_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_costs_entry ON catalog_costs(entry_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_costs_consumer ON catalog_costs(consumer_user_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_costs_invoked_at ON catalog_costs(invoked_at DESC);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -815,6 +932,12 @@ api_connectors_repo = Repository("api_connectors")
 api_endpoints_repo = Repository("api_endpoints")
 api_call_logs_repo = Repository("api_call_logs")
 api_keys_repo = Repository("api_keys")
+
+# Catálogo / Marketplace (Onda 1)
+catalog_entries_repo = Repository("catalog_entries")
+catalog_submissions_repo = Repository("catalog_submissions")
+catalog_disclosure_repo = Repository("catalog_capability_disclosure")
+catalog_costs_repo = Repository("catalog_costs")
 
 
 # ═══════════════════════════════════════════════════════════════
