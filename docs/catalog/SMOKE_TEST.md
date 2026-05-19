@@ -1265,3 +1265,106 @@ Sem código novo. Apenas documentação consolidada de fechamento.
 - [x] SMOKE_TEST.md tem seções 61-77
 
 **Onda 2 do Catálogo está pronta para sign-off e produção.**
+
+---
+
+# Smoke Test — Onda 4 / PR 1 (Execução real de recipes)
+
+Primeiro PR da Onda 4. Recipes deixam de ser apenas manifest declarativo —
+agora são executáveis via chain sequencial. Async (POST 202 + polling),
+chain quebra com skip dos demais ao primeiro erro, cost auto-wire por step.
+
+## 1 — Testes unitários (sem banco)
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Esperado**: 281 passed (257 Onda 1-3 + 24 novos do PR #67):
+- `test_catalog_recipe_execution.py`:
+  - **TestExecuteEndpoint** (7): 404 inexistente, 404 não-visível, 422 não-recipe, 409 draft, 422 sem manifest, 202 caminho feliz, 422 input vazio
+  - **TestGetExecution** (5): 404 inexistente, 404 sem relação, consumer/owner/root podem ver
+  - **TestListExecutions** (4): 404, 422, lista vazia, paginação
+  - **Executor direto** (8): chain 3 steps, skip após falha, target inexistente, draft, kind=skill, sem artifact_id, cost auto-wire, ordenação defensiva
+
+## 2 — Schema (com Postgres)
+
+Subir a app aplica a tabela nova via `CREATE TABLE IF NOT EXISTS`.
+
+```powershell
+uvicorn app.main:app --reload --host 0.0.0.0 --port 7000
+```
+
+```sql
+\dt catalog_recipe_executions
+\d catalog_recipe_executions
+```
+
+**Esperado**: tabela com 12 colunas (id, recipe_entry_id, consumer_user_id,
+input, steps_results JSONB, status com CHECK, total_cost_usd, total_latency_ms,
+error_message, started_at, finished_at) + 3 índices em (recipe_entry_id,
+started_at DESC), (consumer_user_id, started_at DESC) e (status).
+
+## 3 — Fluxo via API (com Postgres)
+
+Pré: ter um recipe `published` com manifest válido (ver smoke do PR #65).
+
+```bash
+# 1. Disparar execução — retorna 202 imediato
+curl -X POST http://localhost:7000/api/v1/catalog/entries/<RECIPE_ID>/execute \
+  -H "X-API-Key: <KEY>" -H "Content-Type: application/json" \
+  -d '{"input":"oi, executa o pipeline"}'
+
+# Esperado: 202 {execution_id, recipe_entry_id, status:"running", step_count, started_at}
+
+# 2. Polling — repetir até status != "running"
+curl http://localhost:7000/api/v1/catalog/executions/<EXEC_ID> \
+  -H "X-API-Key: <KEY>"
+
+# Esperado em sucesso: {status:"completed", steps_results:[...], total_cost_usd, total_latency_ms, finished_at}
+# Esperado em falha de meio: {status:"partial", steps com mix de success/error/skipped}
+
+# 3. Histórico do recipe
+curl "http://localhost:7000/api/v1/catalog/entries/<RECIPE_ID>/executions?limit=10" \
+  -H "X-API-Key: <KEY>"
+
+# Esperado: {items:[...], limit, offset, has_more}
+```
+
+## 4 — Visibilidade
+
+| Caso | Esperado |
+|---|---|
+| Recipe em draft → POST /execute | 409 (só published roda) |
+| Recipe sem manifest → POST /execute | 422 |
+| Entry kind=agent → POST /execute | 422 (só recipe) |
+| Execution de outro user (não consumer/owner/root) → GET | 404 |
+
+## 5 — Cost auto-wire
+
+Após executar com sucesso ao menos 1 step:
+
+```sql
+SELECT entry_id, consumer_user_id, tokens_used, latency_ms, invoked_at
+FROM catalog_costs
+WHERE invoked_at > now() - interval '5 minutes'
+ORDER BY invoked_at DESC;
+```
+
+**Esperado**: 1 row por step `success`. `tokens_used` reflete o total do
+engine. `cost_usd` ainda persiste como `0` nesta onda (pricing table fica
+para PR de cost auto-wire pleno).
+
+## Critérios de aceitação Onda 4 / PR 1 (#67)
+
+- [x] 281 testes passam (257 anteriores + 24 novos)
+- [x] Tabela `catalog_recipe_executions` criada com 3 índices
+- [x] 3 endpoints novos sob `/api/v1/catalog`:
+      `POST /entries/{id}/execute`, `GET /executions/{id}`, `GET /entries/{id}/executions`
+- [x] Executor faz chain (output[N-1] → input[N])
+- [x] Falha de step quebra chain (demais → `skipped`); status final = `partial`
+- [x] Crash do executor finaliza como `failed` (não fica `running` forever)
+- [x] Cost auto-wire grava 1 row em `catalog_costs` por step `success`
+- [x] Audit `recipe_execution_started` registrado
+- [x] Zero breaking changes em PRs Onda 1-3
+- [ ] Smoke manual com Postgres rodando (seções 2-5 desta) — pendente em homolog
