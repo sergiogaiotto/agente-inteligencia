@@ -481,12 +481,19 @@ LOW_RELIABILITY_THRESHOLD = 0.5
 async def list_stewardship(
     *,
     steward_team: Optional[str] = None,
+    restrict_to_teams: Optional[list[str]] = None,
     limit: int = 500,
 ) -> tuple[list[dict], dict]:
     """Lista entries com info de stewardship + flags de saúde.
 
     Joina users para detectar owner inativo (is_orphan). Calcula flags
     derivadas em SQL (is_stale, has_low_reliability).
+
+    Args:
+        steward_team: filtro exato por uma área (UI filter).
+        restrict_to_teams: lista de áreas permitidas (auth filter para
+            non-root). Quando lista vazia, retorna 0 entries. None = sem
+            restrição (Root).
 
     Returns:
         (entries enriched, aggregates_by_team)
@@ -498,6 +505,13 @@ async def list_stewardship(
     if steward_team:
         params.append(steward_team)
         where_parts.append(f"e.steward_team = ${len(params)}")
+
+    if restrict_to_teams is not None:
+        if not restrict_to_teams:
+            # Lista vazia: user é non-root sem nenhum domain — vê nada.
+            return [], {}
+        params.append(restrict_to_teams)
+        where_parts.append(f"e.steward_team = ANY(${len(params)})")
 
     where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
     params.append(limit)
