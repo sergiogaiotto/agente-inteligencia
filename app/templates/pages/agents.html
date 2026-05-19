@@ -74,6 +74,9 @@
                         <a @click.stop :href="'/agents/' + agent.id + '/edit'" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
                         </a>
+                        <a @click.stop :href="'/catalog/publish?kind=agent&artifact_id=' + agent.id" class="p-1.5 rounded-md hover:bg-brand-50 text-surface-400 hover:text-brand-600" title="Publicar no Catálogo">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/></svg>
+                        </a>
                         <button @click.stop="toggleStatus(agent)" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400" :class="agent.status==='active'?'hover:text-amber-600':'hover:text-emerald-600'" :title="agent.status==='active'?'Desativar':'Ativar'">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.636 5.636a9 9 0 1012.728 0M12 3v9"/></svg>
                         </button>

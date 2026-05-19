@@ -806,3 +806,67 @@ Cada item nas tabs decididas mostra reviewer + data + notes.
 - [ ] Capability declarada exibe flags coloreadas
 - [ ] Botões inline funcionam (modal + POST decide + recarrega)
 - [ ] Tabs decididas mostram reviewer/data/notes
+
+---
+
+# Smoke Test — PR 9 (Integrações + Dashboard)
+
+Penúltimo PR. Integra o catálogo com Agentes, Skills, Dashboard, e
+permite pre-fill via query string no wizard de publish.
+
+## 47 — Renderização
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+**Esperado**: 171 passed.
+
+Templates afetados (todos parseiam):
+- `pages/dashboard.html`
+- `pages/agents.html`
+- `pages/skills.html`
+- `pages/catalog_publish.html`
+
+## 48 — Botão "Publicar no Catálogo" em Agentes/Skills
+
+1. Acesse `/agents` → hover em qualquer linha → novo botão (ícone cubo) entre "Editar" e "Toggle status"
+2. Click → vai para `/catalog/publish?kind=agent&artifact_id={agent_id}`
+3. Wizard abre **já no Step 2** (metadata) — Step 1 foi auto-completado
+4. Metadata pré-preenchida com nome/desc/version/domain do agente
+5. Mesmo fluxo em `/skills` (kind=skill)
+
+## 49 — Card Catálogo no Dashboard
+
+Acesse `/` (Dashboard). Abaixo dos 3 cards de topologia (AOBD/AR/SA),
+nova seção "Catálogo Corporativo":
+
+- **Publicadas**: count em verde (entries visíveis a consumers)
+- **Em revisão**: count em amarelo se >0 (submetidas, aguardando Root)
+- **Minhas drafts**: count das suas entries em status=draft
+- **Fila Root** (só visível para Root quando há pendentes): bloco amarelo clicável que leva a `/catalog/queue`. Não-Root vê "Total" no lugar.
+
+Links: "Publicar →" e "Ver catálogo".
+
+## 50 — Pre-fill via query params
+
+Manual:
+```
+/catalog/publish?kind=agent&artifact_id=<id-real>
+```
+**Esperado**: Wizard pula para Step 2 com metadata pré-preenchida.
+
+Edge cases:
+- ID inexistente → fica no Step 1 (pick manual)
+- kind inválido → ignora pre-fill, fica no Step 1
+
+## Critérios de aceitação do PR 9
+
+- [x] 171 testes passam (sem regressão)
+- [x] Templates parseiam
+- [ ] Botão "Publicar no Catálogo" aparece em agents/skills e funciona
+- [ ] Wizard pula para Step 2 quando recebe query params válidos
+- [ ] Card "Catálogo Corporativo" aparece no dashboard
+- [ ] Cards mostram contagens corretas (Publicadas / Em revisão / Minhas drafts)
+- [ ] Bloco "Fila Root" só aparece quando Root + há pendentes
+- [ ] Links "Publicar →" e "Ver catálogo" navegam corretamente

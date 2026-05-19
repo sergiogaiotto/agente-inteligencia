@@ -331,6 +331,20 @@ function publishWizard() {
                 ]);
                 this.agents = (agentsResp.agents || []).map(a => ({...a, _kind: 'agent'}));
                 this.skills = (skillsResp.skills || []).map(s => ({...s, _kind: 'skill'}));
+
+                // Pre-seleção via query string: /catalog/publish?kind=agent&artifact_id=xxx
+                // Vem dos botões "Publicar no Catálogo" em /agents e /skills.
+                const params = new URLSearchParams(window.location.search);
+                const preKind = params.get('kind');
+                const preId = params.get('artifact_id');
+                if (preKind && preId) {
+                    const pool = preKind === 'skill' ? this.skills : this.agents;
+                    const match = pool.find(a => a.id === preId);
+                    if (match) {
+                        this.pickArtifact(match);
+                        this.step = 2;  // pula direto para metadata
+                    }
+                }
             } catch (e) {
                 console.error(e);
                 showToast('Erro ao carregar artefatos', 'error');

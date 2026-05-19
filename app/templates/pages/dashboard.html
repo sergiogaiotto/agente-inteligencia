@@ -58,6 +58,49 @@
         </div>
     </div>
 
+    <!-- ── Catálogo (Onda 1) ────────────────────────────────────────── -->
+    <div class="rounded-xl border border-surface-200 bg-white mb-4">
+        <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3">
+            <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-brand-500" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/></svg>
+                <h2 class="text-[13px] font-semibold text-brand-900">Catálogo Corporativo</h2>
+            </div>
+            <div class="flex items-center gap-2">
+                <a href="/catalog/publish" class="text-[11px] text-brand-600 hover:text-brand-800 font-medium">Publicar →</a>
+                <a href="/catalog" class="text-[11px] text-brand-500 font-medium hover:text-brand-700">Ver catálogo</a>
+            </div>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 p-4">
+            <div class="rounded-lg bg-surface-50 px-3 py-2.5">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Publicadas</div>
+                <div class="text-[20px] font-bold text-emerald-600 leading-tight mt-0.5" x-text="catalog.published"></div>
+                <div class="text-[9px] text-surface-400">visíveis a consumers</div>
+            </div>
+            <div class="rounded-lg bg-surface-50 px-3 py-2.5">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Em revisão</div>
+                <div class="text-[20px] font-bold leading-tight mt-0.5"
+                     :class="catalog.submitted > 0 ? 'text-amber-600' : 'text-surface-400'"
+                     x-text="catalog.submitted"></div>
+                <div class="text-[9px] text-surface-400">aguardando Root</div>
+            </div>
+            <div class="rounded-lg bg-surface-50 px-3 py-2.5">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Minhas drafts</div>
+                <div class="text-[20px] font-bold text-brand-700 leading-tight mt-0.5" x-text="catalog.my_drafts"></div>
+                <div class="text-[9px] text-surface-400">prontas para submeter?</div>
+            </div>
+            <a href="/catalog/queue" x-show="user_role === 'root' && catalog.submitted > 0" class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 hover:bg-amber-100 transition-colors block">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-amber-700">Fila Root</div>
+                <div class="text-[20px] font-bold text-amber-700 leading-tight mt-0.5" x-text="catalog.submitted"></div>
+                <div class="text-[9px] text-amber-600">click para revisar</div>
+            </a>
+            <div x-show="!(user_role === 'root' && catalog.submitted > 0)" class="rounded-lg bg-surface-50 px-3 py-2.5">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Total</div>
+                <div class="text-[20px] font-bold text-brand-900 leading-tight mt-0.5" x-text="catalog.total"></div>
+                <div class="text-[9px] text-surface-400">entries catalogadas</div>
+            </div>
+        </div>
+    </div>
+
     <div class="grid lg:grid-cols-5 gap-6">
         <!-- Coluna esquerda: Interações Recentes + Atividade por Módulo (empilhados) -->
         <div class="lg:col-span-4 space-y-4">
@@ -235,6 +278,10 @@
 <script>
 function dashboardPage(){return{
     stats:{},cards:[],
+    // Catálogo (Onda 1) — populado por loadCatalog()
+    catalog: {published: 0, submitted: 0, my_drafts: 0, total: 0},
+    user_role: '',
+    current_user_id: '',
     modules: [
         // ── Especificação canônica ─────────────────────────────────────
         {section:'§4', label:'Topologia AOBD→AR→SA', tip:'Três camadas de agentes: Orquestrador de Business Domain interpreta intenção e delega; Roteador decompõe processos em DAGs de workflow; Subagente executa tarefas atômicas stateless com tools MCP. Comunicação via protocolo A2A com envelopes tipados e assinados.'},
@@ -270,6 +317,29 @@ function dashboardPage(){return{
         ];
         await this.loadInteractions();
         await this.loadModuleActivity();
+        await this.loadCatalog();
+    },
+
+    /* ── Catálogo (Onda 1) ──────────────────────────── */
+    async loadCatalog() {
+        try {
+            const me = await fetch('/api/v1/users/me').then(r => r.json()).catch(() => ({user: null}));
+            this.user_role = (me.user?.role || '').toLowerCase();
+            this.current_user_id = me.user?.id || '';
+
+            // Carrega entries visíveis para o user atual (backend filtra por can_user_see)
+            const r = await api.get('/api/v1/catalog/entries?limit=500');
+            const entries = r.entries || [];
+            this.catalog = {
+                total: r.total || entries.length,
+                published: entries.filter(e => e.status === 'published').length,
+                submitted: entries.filter(e => e.status === 'submitted').length,
+                my_drafts: entries.filter(e => e.status === 'draft' && e.owner_user_id === this.current_user_id).length,
+            };
+        } catch (e) {
+            // Catálogo opcional no dashboard — falha silenciosa
+            this.catalog = {published: 0, submitted: 0, my_drafts: 0, total: 0};
+        }
     },
 
     /* ── Atividade por Módulo (com paginação) ───────── */
