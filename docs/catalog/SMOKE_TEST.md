@@ -344,3 +344,102 @@ ORDER BY created_at DESC LIMIT 20;
 - [ ] Transições inválidas retornam 409 (ex: deprecate sem publish)
 - [ ] audit_log popula com 'submitted', 'review_*', 'published', 'deprecated'
 - [ ] Regressão das telas/endpoints existentes OK
+
+---
+
+# Smoke Test — PR 4 (Capability Disclosure CRUD)
+
+3 endpoints novos para a etiqueta nutricional R6.3. Pré-check
+`capability_disclosure_present` agora é **error**, não warning — torna
+disclosure efetivamente obrigatória para Root aprovar.
+
+**Bug fix lateral**: corrige uso de `catalog_disclosure_repo.find_by_id`
+no submit do PR 3 (Repository hardcoda `WHERE id=$1`, mas disclosure tem
+`entry_id` como PK — quebraria em prod). PR 4 substitui pelo helper
+especializado `get_disclosure` com SQL correto.
+
+## 12 — Testes unitários
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Esperado**: 171 passed (152 anteriores + 19 novos). Cobre:
+- `test_missing_disclosure_is_error` (upgrade severity)
+- `test_submit_passes_prechecks_when_disclosure_declared` (loop fechado)
+- 17 testes em `TestCapabilityPut`, `TestCapabilityGet`, `TestCapabilityDelete`
+
+## 13 — Workflow com disclosure end-to-end
+
+```powershell
+$cookies = "user_id=<u1>"
+
+# a. Criar entry
+$body = '{"name":"Entry com Disclosure","kind":"agent","artifact_type":"agent","artifact_id":"<agent-id>","description":"Validando ciclo completo com R6.3","version":"0.1.0"}'
+$eid = (curl -X POST http://localhost:7000/api/v1/catalog/entries `
+  -H "Content-Type: application/json" -b $cookies -d $body | ConvertFrom-Json).id
+
+# b. Tenta submeter SEM disclosure → precheck reporta error
+curl -X POST "http://localhost:7000/api/v1/catalog/entries/$eid/submit" `
+  -H "Content-Type: application/json" -b $cookies -d '{}' | ConvertFrom-Json | Select-Object precheck_report
+
+# Reset para draft (ou crie nova entry)
+# c. Declara disclosure
+$cap = '{"reads_user_kb":true,"calls_external_apis":true,"external_apis_list":["https://api.openai.com"],"processes_pii":true,"stores_input":true,"storage_retention_days":30,"data_residency":"BR","additional_notes":"Anonimização aplicada"}'
+curl -X PUT "http://localhost:7000/api/v1/catalog/entries/$eid/capability" `
+  -H "Content-Type: application/json" -b $cookies -d $cap
+
+# d. GET disclosure (transparência — qualquer um que vê a entry pode ler)
+curl "http://localhost:7000/api/v1/catalog/entries/$eid/capability" -b $cookies
+
+# e. Submete agora — precheck passa
+curl -X POST "http://localhost:7000/api/v1/catalog/entries/$eid/submit" `
+  -H "Content-Type: application/json" -b $cookies -d '{}'
+```
+
+**Esperado**:
+- (b) `precheck_report.errors_count >= 1`, com check `capability_disclosure_present` falhando severity=error
+- (c) 200 com payload de retorno
+- (d) 200 com disclosure parseada (external_apis_list como list, não string)
+- (e) `precheck_report.passed=true` (assumindo demais campos OK)
+
+## 14 — Validações Pydantic
+
+```powershell
+# external_apis_list vazia com flag true → 422
+curl -X PUT "http://localhost:7000/api/v1/catalog/entries/$eid/capability" `
+  -H "Content-Type: application/json" -b $cookies `
+  -d '{"calls_external_apis":true,"external_apis_list":[]}'
+
+# storage_retention_days negativo → 422
+curl -X PUT "http://localhost:7000/api/v1/catalog/entries/$eid/capability" `
+  -H "Content-Type: application/json" -b $cookies `
+  -d '{"stores_input":true,"storage_retention_days":-1}'
+```
+
+**Esperado**: 422 em ambos.
+
+## 15 — Audit log capability
+
+```sql
+SELECT action, actor, details, created_at
+FROM audit_log
+WHERE entity_type = 'catalog_entry'
+  AND action IN ('capability_declared','capability_removed')
+ORDER BY created_at DESC LIMIT 10;
+```
+
+**Esperado**: 1+ row por chamada PUT/DELETE, details com flags-chave (processes_pii, calls_external_apis, data_residency).
+
+## Critérios de aceitação do PR 4
+
+- [x] 171 testes unitários passam (152 anteriores + 19 novos)
+- [x] 14 rotas registradas em `/api/v1/catalog` (11 PR 3 + 3 PR 4)
+- [x] Pré-check `capability_disclosure_present` agora severity=error
+- [ ] PUT cria disclosure e retorna 200
+- [ ] PUT bloqueia (409) se entry status != 'draft'
+- [ ] PUT 422 quando calls_external_apis=true + lista vazia
+- [ ] GET transparente (qualquer usuário que vê a entry vê a disclosure)
+- [ ] DELETE só draft, só owner/root
+- [ ] Submit reporta error em disclosure ausente; passa quando declarada
+- [ ] Regressão de PR 1-3 OK
