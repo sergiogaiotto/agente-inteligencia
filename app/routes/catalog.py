@@ -34,6 +34,7 @@ from app.catalog.models import (
     ExternalPlatformMetadata,
     InvocationCostRecord,
     ReassignPayload,
+    RecipeDefinition,
     SubmissionCreate,
     SubmissionDecision,
 )
@@ -43,8 +44,10 @@ from app.catalog.queries import (
     can_user_see,
     db_row_to_entry_dict,
     delete_disclosure,
+    delete_recipe,
     get_disclosure,
     get_external_metadata,
+    get_recipe,
     is_root,
     list_costs_raw,
     list_inventory,
@@ -53,6 +56,7 @@ from app.catalog.queries import (
     record_invocation_cost,
     upsert_disclosure,
     upsert_external_metadata,
+    upsert_recipe,
 )
 from app.catalog.urn import make_urn
 from app.core.auth import require_user
@@ -306,11 +310,20 @@ async def submit_entry(
     # Insumos para pré-checks (disclosure tem PK = entry_id, helper especializado)
     disclosure = await get_disclosure(entry_id)
     owner = await users_repo.find_by_id(entry.get("owner_user_id"))
-    # External metadata só é consultado se kind='external_platform' (otimização)
+    # External metadata e recipe só consultados quando kind aplicável (otimização)
     external_meta = None
+    recipe_data = None
     if entry.get("kind") == "external_platform":
         external_meta = await get_external_metadata(entry_id)
-    report = run_prechecks(entry, disclosure=disclosure, owner=owner, external_metadata=external_meta)
+    elif entry.get("kind") == "recipe":
+        recipe_data = await get_recipe(entry_id)
+    report = run_prechecks(
+        entry,
+        disclosure=disclosure,
+        owner=owner,
+        external_metadata=external_meta,
+        recipe=recipe_data,
+    )
 
     import json
     import uuid
@@ -1018,6 +1031,86 @@ async def export_cost_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ═════════════════════════════════════════════════════════════════
+# Recipes (Onda 3 — R8.1 básico)
+# ═════════════════════════════════════════════════════════════════
+
+
+@router.get("/entries/{entry_id}/recipe")
+async def get_recipe_endpoint(entry_id: str, user: dict = Depends(require_user)):
+    """Lê o manifest do recipe. Transparente para quem vê a entry."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not can_user_see(user, entry):
+        raise HTTPException(404, "Entry não encontrada")
+    if entry.get("kind") != "recipe":
+        raise HTTPException(
+            404,
+            "Recipe manifest só se aplica a kind='recipe'",
+        )
+    recipe = await get_recipe(entry_id)
+    if not recipe:
+        raise HTTPException(404, "Recipe ainda não declarado (sem steps)")
+    return recipe
+
+
+@router.put("/entries/{entry_id}/recipe")
+async def put_recipe(
+    entry_id: str,
+    data: RecipeDefinition,
+    user: dict = Depends(require_user),
+):
+    """Upsert do manifest do recipe (lista de steps). Owner/root, draft,
+    kind=recipe. Valida que cada target_entry_id existe e não há ciclo
+    trivial (target == self)."""
+    entry = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry não encontrada")
+    if entry.get("kind") != "recipe":
+        raise HTTPException(422, "Recipe manifest só se aplica a kind='recipe'")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem editar recipe")
+    if entry.get("status") != "draft":
+        raise HTTPException(
+            409,
+            f"Entry em status '{entry.get('status')}' não aceita edição de recipe — "
+            "depreque + nova versão para alterar composição",
+        )
+
+    steps_payload = [s.model_dump() for s in data.steps]
+    try:
+        result = await upsert_recipe(entry_id, steps_payload)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    await _audit("recipe_defined", entry_id, user["id"], {
+        "step_count": len(steps_payload),
+        "target_entry_ids": [s["target_entry_id"] for s in steps_payload],
+    })
+    return result
+
+
+@router.delete("/entries/{entry_id}/recipe")
+async def delete_recipe_endpoint(entry_id: str, user: dict = Depends(require_user)):
+    """Limpa o manifest do recipe. Owner/root, draft."""
+    entry = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry não encontrada")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem limpar recipe")
+    if entry.get("status") != "draft":
+        raise HTTPException(
+            409,
+            f"Entry em status '{entry.get('status')}' não permite limpar recipe",
+        )
+    ok = await delete_recipe(entry_id)
+    if not ok:
+        raise HTTPException(404, "Recipe não encontrado")
+    await _audit("recipe_cleared", entry_id, user["id"], {})
+    return {"message": "Recipe limpo", "entry_id": entry_id}
 
 
 # ═════════════════════════════════════════════════════════════════

@@ -31,6 +31,7 @@ def run_prechecks(
     disclosure: Optional[dict] = None,
     owner: Optional[dict] = None,
     external_metadata: Optional[dict] = None,
+    recipe: Optional[dict] = None,
 ) -> dict:
     """Executa checks sobre uma entry candidata à submissão.
 
@@ -40,6 +41,7 @@ def run_prechecks(
         owner: row de users (None se não encontrado).
         external_metadata: row de catalog_external_metadata. Só relevante
             quando kind='external_platform'.
+        recipe: row de catalog_recipes. Só relevante quando kind='recipe'.
 
     Returns:
         {checks: [...], passed: bool, errors_count: int, warnings_count: int}
@@ -111,8 +113,9 @@ def run_prechecks(
 
     # 7. Adapter binding mínimo: a2a exige artifact_id (já validado no create,
     # mas re-verificamos aqui — entry pode ter sido criada antes da regra).
+    # Recipe é a2a por convenção mas não tem artifact — pula este check.
     adapter_type = entry.get("adapter_type")
-    if adapter_type == "a2a":
+    if adapter_type == "a2a" and entry.get("kind") != "recipe":
         has_artifact = bool(entry.get("artifact_type") and entry.get("artifact_id"))
         checks.append(_check(
             "a2a_has_artifact",
@@ -135,6 +138,19 @@ def run_prechecks(
         ))
     else:
         checks.append(_check("external_metadata_present", True, "n/a"))
+
+    # 9. Recipes (Onda 3): manifest com pelo menos 1 step.
+    # Error porque recipe sem steps é ininteligível.
+    if entry.get("kind") == "recipe":
+        steps = (recipe or {}).get("steps") or []
+        checks.append(_check(
+            "recipe_has_steps",
+            len(steps) >= 1,
+            "kind='recipe' exige pelo menos 1 step — "
+            "PUT /catalog/entries/{id}/recipe",
+        ))
+    else:
+        checks.append(_check("recipe_has_steps", True, "n/a"))
 
     errors = sum(1 for c in checks if not c["passed"] and c["severity"] == "error")
     warnings = sum(1 for c in checks if not c["passed"] and c["severity"] == "warning")
