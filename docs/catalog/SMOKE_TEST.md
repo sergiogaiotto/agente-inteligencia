@@ -975,3 +975,70 @@ Verificar em SQL: `SELECT * FROM catalog_external_metadata WHERE entry_id='<eid>
 - [ ] CRUD end-to-end OK
 - [ ] CASCADE delete funciona
 - [ ] Regressão Onda 1 OK (171 testes anteriores continuam passando)
+
+---
+
+# Smoke Test — Onda 2 / PR 2 (External Platforms UI)
+
+Habilita criar e visualizar plataformas externas pela UI. Sem mudança backend.
+
+## 57 — Renderização
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+**Esperado**: 196 passed (sem regressão).
+
+## 58 — Detalhe da Entry (tab nova)
+
+Pré: criar entry com kind=external_platform via API.
+
+1. Acesse `/catalog/{id}` da entry external_platform
+2. **Esperado**: aparece tab "Metadata Externa" entre Capability Disclosure e Histórico
+3. Para entries não-external (agent/skill), a tab NÃO aparece
+4. Click na tab:
+   - Sem metadata: card vermelho "Metadata externa não declarada" + botão "Declarar Agora" (se canMutate + draft)
+   - Com metadata: cards organizados (Vendor + Site / Contrato / Aprovação / Casos de uso / Restrições)
+5. Click "Declarar Agora" ou "Editar":
+   - Modal com vendor (obrigatório), URL, contrato (status + renewal date), custo, contato, casos de uso, restrições
+   - Save → PUT external-metadata → toast + recarrega
+
+## 59 — Wizard de Publish: opção External Platform
+
+Acesse `/catalog/publish`:
+
+1. **Step 1**: card vermelho destacado no topo "Registrar Plataforma Externa" + badge "novo"
+2. Click no radio → seleciona kind=external_platform; abaixo, lista de artefatos internos fica deselecionada
+3. Click "Próximo" → vai para Step 2 (metadata padrão)
+4. **Step 3**: aparece bloco vermelho extra acima do disclosure: "Metadata da Plataforma Externa" com vendor (obrigatório), status contrato, custo, restrições. Validação client-side bloqueia Próximo se vendor vazio.
+5. **Step 4**: revisão mostra dados normais (sem section especial — refine no detail)
+6. **Submit final**: 4 chamadas em sequência:
+   - POST `/entries` (cria)
+   - PUT `/external-metadata` (Onda 2 — só quando external)
+   - PUT `/capability` (sempre)
+   - POST `/submit`
+7. Sucesso → redireciona para `/catalog/{id}` → tab "Metadata Externa" já populada
+
+## 60 — Fluxo end-to-end UI
+
+1. `/catalog/publish` → click radio external → Próximo
+2. Step 2: name="ChatGPT Enterprise", description="ChatGPT Enterprise...", version="1.0.0"
+3. Step 3: vendor="OpenAI", contrato status=active, custo=15000, restrições="sem PII"
+4. Step 3: capability disclosure (default checkboxes OK)
+5. Step 4: revisão → Submeter
+6. Redirect para `/catalog/{id}` → 5 tabs visíveis incluindo "Metadata Externa"
+7. Tab "Metadata Externa" mostra OpenAI + contrato + custo + restrições
+8. Click "Editar" → modal → altera custo → salva → toast + recarrega
+
+## Critérios de aceitação Onda 2 / PR 2
+
+- [x] 196 testes passam (sem regressão)
+- [x] Templates parseiam
+- [ ] Tab "Metadata Externa" aparece APENAS para kind=external_platform
+- [ ] Detail page exibe metadata em cards visuais
+- [ ] Modal de edição funciona (PUT)
+- [ ] Wizard mostra card de External Platform no Step 1
+- [ ] Wizard exige vendor no Step 3 quando external
+- [ ] Submit final encadeia 4 chamadas (com PUT external-metadata)
+- [ ] Após submit, entry visível em /catalog com badge "Externa"
