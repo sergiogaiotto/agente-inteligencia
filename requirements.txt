@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════
-# AgenteInteligência-AI — Dependências
+# Maestro — Dependências
 # Instalar: pip install -r requirements.txt
 # ══════════════════════════════════════════
 

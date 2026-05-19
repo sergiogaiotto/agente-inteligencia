@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════
-# AgenteInteligência-AI — docker-compose (VPS Hostinger ready)
+# Maestro — docker-compose (VPS Hostinger ready)
 #
 # Profiles:
 #   - minimal (default): app + postgres + redis + qdrant   (~1.5 GB RAM)

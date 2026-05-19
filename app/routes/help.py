@@ -186,7 +186,7 @@ async def ask_help(req: HelpAskRequest) -> HelpAskResponse:
             raise HTTPException(404, f"Módulo '{req.module_id}' desconhecido.")
 
         system_prompt = (
-            "Você é um assistente técnico do produto AgenteInteligência-AI, "
+            "Você é um assistente técnico do produto Maestro, "
             "uma plataforma multi-agente. Responda perguntas do usuário sobre o "
             "MÓDULO específico que ele está consultando. Use as informações do "
             "CONTEXTO abaixo como verdade canônica. Seja direto e prático.\n\n"
@@ -240,7 +240,7 @@ async def ask_help(req: HelpAskRequest) -> HelpAskResponse:
 # em base.html). Não depende de module-guide.js.
 
 _PAGE_SYSTEM_PROMPT = (
-    "Você é um assistente técnico do produto AgenteInteligência-AI. "
+    "Você é um assistente técnico do produto Maestro. "
     "O usuário está navegando em uma PÁGINA específica e quer ajuda contextual "
     "para usá-la. Use o CONTEXTO DA PÁGINA abaixo como verdade canônica.\n\n"
     "REGRAS:\n"

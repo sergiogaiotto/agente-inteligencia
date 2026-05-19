@@ -1,4 +1,4 @@
-"""AgenteInteligência-AI — Aplicação principal FastAPI."""
+"""Maestro — Aplicação principal FastAPI."""
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path

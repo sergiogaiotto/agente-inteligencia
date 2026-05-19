@@ -49,7 +49,7 @@ async def _render(request: Request, key: str, **extra):
         user_data = {k: v for k, v in dict(user).items() if k != "password_hash"}
     context = {
         "request": request, "title": p["title"], "section": p["section"],
-        "app_name": "AgenteInteligência-AI",
+        "app_name": "Maestro",
         "current_user": user_data,
         "user_role": user_data.get("role", ""),
         **extra,
