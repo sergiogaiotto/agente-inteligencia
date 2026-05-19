@@ -14,6 +14,7 @@ PAGES = {
     "/skills/new": {"template":"pages/skill_form.html","title":"Nova Skill","section":"skills"},
     "/catalog": {"template":"pages/catalog.html","title":"Catálogo","section":"catalog"},
     "/catalog/detail": {"template":"pages/catalog_detail.html","title":"Detalhe da Entry","section":"catalog"},
+    "/catalog/publish": {"template":"pages/catalog_publish.html","title":"Publicar no Catálogo","section":"catalog"},
     "/workspace": {"template":"pages/workspace.html","title":"Workspace","section":"workspace"},
     "/mesh": {"template":"pages/mesh.html","title":"AI Mesh","section":"mesh"},
     "/mcp": {"template":"pages/tools.html","title":"MCP","section":"tools"},
@@ -92,6 +93,8 @@ async def pg_skill_new(r: Request): return await _render(r, "/skills/new")
 async def pg_skill_edit(r: Request, skill_id: str): return await _render(r, "/skills/new", skill_id=skill_id)
 @router.get("/catalog", response_class=HTMLResponse)
 async def pg_catalog(r: Request): return await _render(r, "/catalog")
+@router.get("/catalog/publish", response_class=HTMLResponse)
+async def pg_catalog_publish(r: Request): return await _render(r, "/catalog/publish")
 @router.get("/catalog/{entry_id}", response_class=HTMLResponse)
 async def pg_catalog_detail(r: Request, entry_id: str): return await _render(r, "/catalog/detail", entry_id=entry_id)
 @router.get("/workspace", response_class=HTMLResponse)
