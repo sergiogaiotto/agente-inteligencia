@@ -239,3 +239,20 @@ class ExternalPlatformMetadata(BaseModel):
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
             raise ValueError("contract_renewal_date deve estar em ISO YYYY-MM-DD")
         return v
+
+
+# ─── Stewardship reassign (Onda 2) ───────────────────────────────
+
+
+class ReassignPayload(BaseModel):
+    """Realoca owner e/ou steward de uma entry. Apenas Root.
+
+    Pelo menos um dos dois campos deve vir preenchido. Para "limpar"
+    o steward_team, mandar string vazia explicitamente.
+    """
+
+    new_owner_user_id: Optional[str] = None
+    new_steward_team: Optional[str] = None
+
+    def has_any_change(self) -> bool:
+        return self.new_owner_user_id is not None or self.new_steward_team is not None

@@ -1134,3 +1134,117 @@ class TestInventory:
         assert "Agente Fiscal" in text
         # Lista serializada com "; "
         assert "https://api.openai.com" in text
+
+
+# ═════════════════════════════════════════════════════════════════
+# Stewardship Dashboard (Onda 2 / PR 4)
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestStewardship:
+    def test_non_root_forbidden(self, monkeypatch):
+        async def fake(**kwargs): return [], {}
+        monkeypatch.setattr("app.routes.catalog.list_stewardship", fake)
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/stewardship")
+        assert r.status_code == 403
+
+    def test_root_returns_entries_and_by_team(self, monkeypatch):
+        async def fake(**kwargs):
+            return [{"id": "e1", "name": "X", "steward_team": "fiscal"}], {
+                "fiscal": {"total": 1, "orphan": 0, "stale": 0, "low_reliability": 0,
+                           "published": 1, "deprecated": 0},
+            }
+        monkeypatch.setattr("app.routes.catalog.list_stewardship", fake)
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/stewardship")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert "fiscal" in body["by_team"]
+
+    def test_filter_by_team(self, monkeypatch):
+        captured = {}
+        async def fake(**kwargs):
+            captured.update(kwargs)
+            return [], {}
+        monkeypatch.setattr("app.routes.catalog.list_stewardship", fake)
+        c = make_client({"id": "root1", "role": "root"})
+        c.get("/api/v1/catalog/stewardship?steward_team=fiscal")
+        assert captured["steward_team"] == "fiscal"
+
+
+class TestReassign:
+    def _setup_entry(self, fake_storage, owner_id="u-original", steward="fiscal"):
+        eid = "ent-reassign"
+        fake_storage["entries"][eid] = {
+            "id": eid,
+            "owner_user_id": owner_id,
+            "steward_team": steward,
+            "kind": "agent",
+            "status": "published",
+            "urn": "urn:maestro:default:agent:x:1.0.0",
+            "name": "X",
+            "version": "1.0.0",
+        }
+        return eid
+
+    def test_non_root_forbidden(self, fake_storage):
+        eid = self._setup_entry(fake_storage)
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.post(f"/api/v1/catalog/entries/{eid}/reassign",
+                   json={"new_owner_user_id": "u2"})
+        assert r.status_code == 403
+
+    def test_empty_payload_rejected(self, fake_storage):
+        eid = self._setup_entry(fake_storage)
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.post(f"/api/v1/catalog/entries/{eid}/reassign", json={})
+        assert r.status_code == 422
+
+    def test_404_when_entry_missing(self, fake_storage):
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.post("/api/v1/catalog/entries/nonexistent/reassign",
+                   json={"new_steward_team": "rh"})
+        assert r.status_code == 404
+
+    def test_reassign_owner_requires_existing_user(self, fake_storage):
+        eid = self._setup_entry(fake_storage)
+        c = make_client({"id": "root1", "role": "root"})
+        # new_owner não existe em fake_storage["users"]
+        r = c.post(f"/api/v1/catalog/entries/{eid}/reassign",
+                   json={"new_owner_user_id": "ghost"})
+        assert r.status_code == 422
+
+    def test_reassign_owner_success(self, fake_storage):
+        eid = self._setup_entry(fake_storage)
+        fake_storage["users"]["u-new"] = {"id": "u-new", "status": "active"}
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.post(f"/api/v1/catalog/entries/{eid}/reassign",
+                   json={"new_owner_user_id": "u-new"})
+        assert r.status_code == 200
+        assert fake_storage["entries"][eid]["owner_user_id"] == "u-new"
+
+    def test_reassign_steward_only(self, fake_storage):
+        eid = self._setup_entry(fake_storage)
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.post(f"/api/v1/catalog/entries/{eid}/reassign",
+                   json={"new_steward_team": "rh"})
+        assert r.status_code == 200
+        assert fake_storage["entries"][eid]["steward_team"] == "rh"
+
+    def test_reassign_audit(self, fake_storage):
+        eid = self._setup_entry(fake_storage)
+        c = make_client({"id": "root1", "role": "root"})
+        c.post(f"/api/v1/catalog/entries/{eid}/reassign",
+               json={"new_steward_team": "rh"})
+        actions = [a["action"] for a in fake_storage["audit"]]
+        assert "stewardship_reassigned" in actions
+
+    def test_clear_steward_with_empty_string(self, fake_storage):
+        eid = self._setup_entry(fake_storage)
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.post(f"/api/v1/catalog/entries/{eid}/reassign",
+                   json={"new_steward_team": ""})
+        assert r.status_code == 200
+        assert fake_storage["entries"][eid]["steward_team"] is None

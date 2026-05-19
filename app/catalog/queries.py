@@ -466,3 +466,92 @@ async def list_inventory(
         out.append(d)
 
     return out, int(total)
+
+
+# ─── Stewardship (Onda 2) ────────────────────────────────────────
+
+
+# Threshold de "stale": entry published sem invocações há N dias.
+# Calibração conservadora — 30 dias é onde steward já precisa olhar.
+STALE_THRESHOLD_DAYS = 30
+# Threshold de "low_reliability": trust_reliability < este valor.
+LOW_RELIABILITY_THRESHOLD = 0.5
+
+
+async def list_stewardship(
+    *,
+    steward_team: Optional[str] = None,
+    limit: int = 500,
+) -> tuple[list[dict], dict]:
+    """Lista entries com info de stewardship + flags de saúde.
+
+    Joina users para detectar owner inativo (is_orphan). Calcula flags
+    derivadas em SQL (is_stale, has_low_reliability).
+
+    Returns:
+        (entries enriched, aggregates_by_team)
+    """
+    pool = _get_pool()
+    params: list[Any] = []
+    where_parts: list[str] = []
+
+    if steward_team:
+        params.append(steward_team)
+        where_parts.append(f"e.steward_team = ${len(params)}")
+
+    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+    params.append(limit)
+    limit_ph = f"${len(params)}"
+
+    sql = f"""
+        SELECT
+            e.id, e.name, e.kind, e.status, e.version, e.urn,
+            e.owner_user_id, e.steward_team, e.domain, e.visibility,
+            e.created_at, e.published_at, e.deprecated_at,
+            e.trust_reliability, e.trust_invocation_count, e.trust_last_invoked_at,
+            u.status AS owner_status,
+            u.username AS owner_username,
+            u.display_name AS owner_display_name,
+            (u.id IS NULL OR u.status != 'active') AS is_orphan,
+            (
+                e.status = 'published' AND (
+                    e.trust_last_invoked_at IS NULL
+                    OR e.trust_last_invoked_at < (now() - interval '{STALE_THRESHOLD_DAYS} days')
+                )
+            ) AS is_stale,
+            (
+                e.trust_reliability IS NOT NULL
+                AND e.trust_reliability < {LOW_RELIABILITY_THRESHOLD}
+            ) AS has_low_reliability
+        FROM catalog_entries e
+        LEFT JOIN users u ON u.id = e.owner_user_id
+        {where_sql}
+        ORDER BY e.steward_team NULLS LAST, e.name
+        LIMIT {limit_ph}
+    """
+
+    async with pool.acquire() as con:
+        rows = await con.fetch(sql, *params)
+
+    entries = [dict(r) for r in rows]
+
+    by_team: dict[str, dict] = {}
+    for e in entries:
+        team = e.get("steward_team") or "(sem steward)"
+        t = by_team.setdefault(team, {
+            "total": 0, "orphan": 0, "stale": 0, "low_reliability": 0,
+            "published": 0, "deprecated": 0,
+        })
+        t["total"] += 1
+        if e.get("is_orphan"):
+            t["orphan"] += 1
+        if e.get("is_stale"):
+            t["stale"] += 1
+        if e.get("has_low_reliability"):
+            t["low_reliability"] += 1
+        if e.get("status") == "published":
+            t["published"] += 1
+        elif e.get("status") == "deprecated":
+            t["deprecated"] += 1
+
+    return entries, by_team

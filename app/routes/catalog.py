@@ -31,6 +31,7 @@ from app.catalog.models import (
     CatalogEntryCreate,
     CatalogEntryUpdate,
     ExternalPlatformMetadata,
+    ReassignPayload,
     SubmissionCreate,
     SubmissionDecision,
 )
@@ -43,6 +44,7 @@ from app.catalog.queries import (
     get_external_metadata,
     is_root,
     list_inventory,
+    list_stewardship,
     list_visible_entries,
     upsert_disclosure,
     upsert_external_metadata,
@@ -773,3 +775,79 @@ async def export_inventory_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ═════════════════════════════════════════════════════════════════
+# Stewardship Dashboard (Onda 2 — R11)
+# ═════════════════════════════════════════════════════════════════
+
+
+@router.get("/stewardship")
+async def get_stewardship(
+    steward_team: Optional[str] = Query(None),
+    limit: int = Query(500, ge=1, le=2000),
+    user: dict = Depends(require_user),
+):
+    """Lista entries enriquecidas com flags de saúde para gestão de stewardship.
+
+    Detecta: is_orphan (owner inativo/deletado), is_stale (published sem uso
+    há 30+ dias), has_low_reliability (trust < 0.5). Agrega por steward_team.
+
+    Apenas Root na Onda 2; Onda 3 abre para stewards verem própria área.
+    """
+    if not is_root(user):
+        raise HTTPException(403, "Stewardship dashboard acessível apenas para Root")
+
+    entries, by_team = await list_stewardship(steward_team=steward_team, limit=limit)
+    return {
+        "entries": entries,
+        "by_team": by_team,
+        "total": len(entries),
+    }
+
+
+@router.post("/entries/{entry_id}/reassign")
+async def reassign_entry(
+    entry_id: str,
+    data: ReassignPayload,
+    user: dict = Depends(require_user),
+):
+    """Realoca owner e/ou steward_team de uma entry. Apenas Root.
+
+    Usado quando publisher original sai da empresa ou área reorganiza
+    responsabilidades. Audita action 'stewardship_reassigned' com valores
+    antigos e novos.
+    """
+    if not is_root(user):
+        raise HTTPException(403, "Apenas Root pode realocar entries")
+    if not data.has_any_change():
+        raise HTTPException(422, "Informe ao menos new_owner_user_id ou new_steward_team")
+
+    entry = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry não encontrada")
+
+    updates: dict = {}
+    audit_details = {}
+    if data.new_owner_user_id is not None:
+        # Valida que o novo owner existe
+        target = await users_repo.find_by_id(data.new_owner_user_id)
+        if not target:
+            raise HTTPException(422, f"Usuário '{data.new_owner_user_id}' não encontrado")
+        updates["owner_user_id"] = data.new_owner_user_id
+        audit_details["owner"] = {
+            "from": entry.get("owner_user_id"),
+            "to": data.new_owner_user_id,
+        }
+    if data.new_steward_team is not None:
+        # String vazia limpa o campo
+        updates["steward_team"] = data.new_steward_team or None
+        audit_details["steward_team"] = {
+            "from": entry.get("steward_team"),
+            "to": data.new_steward_team or None,
+        }
+
+    updates["updated_at"] = datetime.now(timezone.utc)
+    updated = await catalog_entries_repo.update(entry_id, updates)
+    await _audit("stewardship_reassigned", entry_id, user["id"], audit_details)
+    return db_row_to_entry_dict(updated) if updated else {"message": "realocada"}
