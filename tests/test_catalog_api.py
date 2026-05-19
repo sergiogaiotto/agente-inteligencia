@@ -114,6 +114,25 @@ def fake_storage(monkeypatch):
     monkeypatch.setattr("app.routes.catalog.upsert_disclosure", fake_upsert_disclosure)
     monkeypatch.setattr("app.routes.catalog.delete_disclosure", fake_delete_disclosure)
 
+    # External metadata (Onda 2)
+    externals: dict[str, dict] = {}
+
+    async def fake_get_external(entry_id):
+        return dict(externals[entry_id]) if entry_id in externals else None
+
+    async def fake_upsert_external(entry_id, payload):
+        existing = externals.get(entry_id, {})
+        # Mesma regra do real: vendor obrigatório na primeira escrita
+        if not existing and not payload.get("vendor"):
+            raise ValueError("vendor é obrigatório na criação de external_metadata")
+        existing.update(payload)
+        existing["entry_id"] = entry_id
+        externals[entry_id] = existing
+        return dict(existing)
+
+    monkeypatch.setattr("app.routes.catalog.get_external_metadata", fake_get_external)
+    monkeypatch.setattr("app.routes.catalog.upsert_external_metadata", fake_upsert_external)
+
     async def fake_audit_create(data):
         audit_log.append(dict(data))
         return data
@@ -124,6 +143,7 @@ def fake_storage(monkeypatch):
         "entries": entries,
         "submissions": submissions,
         "disclosures": disclosures,
+        "externals": externals,
         "users": users,
         "audit": audit_log,
     }
@@ -877,3 +897,149 @@ class TestCapabilityDelete:
         fake_storage["entries"][eid]["status"] = "submitted"
         r = c.delete(f"/api/v1/catalog/entries/{eid}/capability")
         assert r.status_code == 409
+
+
+# ═════════════════════════════════════════════════════════════════
+# External Platforms metadata (Onda 2 / PR 1)
+# ═════════════════════════════════════════════════════════════════
+
+
+def _create_external_draft(client, fake_storage, owner_id: str) -> str:
+    _seed_owner(fake_storage, owner_id)
+    r = client.post(
+        "/api/v1/catalog/entries",
+        json={
+            "name": "ChatGPT Enterprise",
+            "kind": "external_platform",
+            "adapter_type": "openai_assistants",
+            "description": "ChatGPT Enterprise para o time todo",
+        },
+    )
+    assert r.status_code == 201, r.json()
+    return r.json()["id"]
+
+
+class TestExternalMetadataPut:
+    def test_owner_declares_with_vendor(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c, fake_storage, "u1")
+        r = c.put(
+            f"/api/v1/catalog/entries/{eid}/external-metadata",
+            json={"vendor": "OpenAI", "contract_status": "active"},
+        )
+        assert r.status_code == 200
+        assert r.json()["vendor"] == "OpenAI"
+        assert r.json()["contract_status"] == "active"
+
+    def test_first_put_requires_vendor(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c, fake_storage, "u1")
+        r = c.put(
+            f"/api/v1/catalog/entries/{eid}/external-metadata",
+            json={"contract_status": "active"},  # sem vendor
+        )
+        assert r.status_code == 422
+        assert "vendor" in r.json()["detail"].lower()
+
+    def test_second_put_can_omit_vendor(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c, fake_storage, "u1")
+        c.put(f"/api/v1/catalog/entries/{eid}/external-metadata",
+              json={"vendor": "OpenAI"})
+        # Update sem vendor — deve passar (mantém valor)
+        r = c.put(f"/api/v1/catalog/entries/{eid}/external-metadata",
+                  json={"monthly_cost_usd": 15000})
+        assert r.status_code == 200
+        assert r.json()["vendor"] == "OpenAI"
+        assert r.json()["monthly_cost_usd"] == 15000
+
+    def test_rejects_non_external_kind(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")  # kind=agent
+        r = c.put(
+            f"/api/v1/catalog/entries/{eid}/external-metadata",
+            json={"vendor": "X"},
+        )
+        assert r.status_code == 422
+        assert "external_platform" in r.json()["detail"]
+
+    def test_nonowner_forbidden(self, fake_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c1, fake_storage, "u1")
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.put(
+            f"/api/v1/catalog/entries/{eid}/external-metadata",
+            json={"vendor": "Hacker"},
+        )
+        assert r.status_code == 403
+
+    def test_root_can_declare_for_others(self, fake_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c1, fake_storage, "u1")
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.put(
+            f"/api/v1/catalog/entries/{eid}/external-metadata",
+            json={"vendor": "OpenAI"},
+        )
+        assert r.status_code == 200
+
+    def test_cant_edit_after_submit(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "submitted"
+        r = c.put(f"/api/v1/catalog/entries/{eid}/external-metadata",
+                  json={"vendor": "OpenAI"})
+        assert r.status_code == 409
+
+    def test_audits_declaration(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c, fake_storage, "u1")
+        c.put(f"/api/v1/catalog/entries/{eid}/external-metadata",
+              json={"vendor": "OpenAI"})
+        actions = [a["action"] for a in fake_storage["audit"]]
+        assert "external_metadata_declared" in actions
+
+    def test_rejects_bad_iso_date(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c, fake_storage, "u1")
+        r = c.put(
+            f"/api/v1/catalog/entries/{eid}/external-metadata",
+            json={"vendor": "OpenAI", "contract_renewal_date": "31/12/2026"},
+        )
+        assert r.status_code == 422
+
+
+class TestExternalMetadataGet:
+    def test_owner_reads_own(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c, fake_storage, "u1")
+        c.put(f"/api/v1/catalog/entries/{eid}/external-metadata",
+              json={"vendor": "OpenAI"})
+        r = c.get(f"/api/v1/catalog/entries/{eid}/external-metadata")
+        assert r.status_code == 200
+        assert r.json()["vendor"] == "OpenAI"
+
+    def test_404_when_not_declared(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c, fake_storage, "u1")
+        r = c.get(f"/api/v1/catalog/entries/{eid}/external-metadata")
+        assert r.status_code == 404
+
+    def test_404_when_not_external_kind(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")  # agent
+        r = c.get(f"/api/v1/catalog/entries/{eid}/external-metadata")
+        assert r.status_code == 404
+
+    def test_transparent_for_published(self, fake_storage):
+        # Outros users veem metadata externa de entry publicada
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_external_draft(c1, fake_storage, "u1")
+        c1.put(f"/api/v1/catalog/entries/{eid}/external-metadata",
+               json={"vendor": "OpenAI"})
+        fake_storage["entries"][eid]["status"] = "published"
+        fake_storage["entries"][eid]["visibility"] = "company"
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.get(f"/api/v1/catalog/entries/{eid}/external-metadata")
+        assert r.status_code == 200
+        assert r.json()["vendor"] == "OpenAI"

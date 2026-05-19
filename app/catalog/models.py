@@ -204,3 +204,38 @@ class Submission(BaseModel):
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     review_notes: str = ""
+
+
+# ─── External Platforms (Onda 2) ─────────────────────────────────
+
+
+ContractStatus = Literal["none", "negotiating", "active", "expired", "terminated"]
+
+
+class ExternalPlatformMetadata(BaseModel):
+    """Metadata de plataforma externa (R10).
+
+    Catalogada quando kind='external_platform'. Vendor é obrigatório na
+    primeira escrita; demais campos são opcionais e atualizáveis individualmente.
+    """
+
+    vendor: Optional[str] = Field(None, min_length=1, max_length=200)
+    vendor_url: Optional[str] = Field(None, max_length=500)
+    contract_status: Optional[ContractStatus] = None
+    contract_renewal_date: Optional[str] = None  # ISO date YYYY-MM-DD
+    monthly_cost_usd: Optional[float] = Field(None, ge=0)
+    vendor_contact: Optional[str] = Field(None, max_length=500)
+    approved_use_cases: Optional[str] = None
+    restrictions: Optional[str] = None
+    approved_by_user_id: Optional[str] = None
+    approved_at: Optional[datetime] = None
+
+    @field_validator("contract_renewal_date")
+    @classmethod
+    def _date_iso(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        import re
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("contract_renewal_date deve estar em ISO YYYY-MM-DD")
+        return v

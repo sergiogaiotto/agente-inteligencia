@@ -10,6 +10,7 @@ from app.catalog.models import (
     CatalogEntry,
     CatalogEntryCreate,
     CatalogEntryUpdate,
+    ExternalPlatformMetadata,
     SubmissionDecision,
 )
 from app.catalog.urn import make_urn
@@ -172,3 +173,53 @@ class TestSubmissionDecision:
     def test_default_empty_notes(self):
         sd = SubmissionDecision(decision="approved")
         assert sd.notes == ""
+
+
+# ─── ExternalPlatformMetadata (Onda 2) ───────────────────────────
+
+
+class TestExternalPlatformMetadata:
+    def test_all_optional(self):
+        # Todos os campos são opcionais no model (vendor é exigido só no upsert
+        # quando não existe row anterior — regra de negócio, não Pydantic)
+        m = ExternalPlatformMetadata()
+        assert m.vendor is None
+        assert m.contract_status is None
+
+    def test_minimal_with_vendor(self):
+        m = ExternalPlatformMetadata(vendor="OpenAI")
+        assert m.vendor == "OpenAI"
+
+    def test_full_payload(self):
+        m = ExternalPlatformMetadata(
+            vendor="OpenAI",
+            vendor_url="https://openai.com",
+            contract_status="active",
+            contract_renewal_date="2026-12-31",
+            monthly_cost_usd=15000.0,
+            vendor_contact="enterprise@openai.com",
+            approved_use_cases="Code generation, docs",
+            restrictions="No PII data",
+        )
+        assert m.contract_status == "active"
+        assert m.monthly_cost_usd == 15000.0
+
+    def test_rejects_unknown_contract_status(self):
+        with pytest.raises(ValidationError):
+            ExternalPlatformMetadata(contract_status="bogus")
+
+    def test_rejects_negative_cost(self):
+        with pytest.raises(ValidationError):
+            ExternalPlatformMetadata(monthly_cost_usd=-100)
+
+    def test_rejects_bad_date(self):
+        with pytest.raises(ValidationError, match="ISO"):
+            ExternalPlatformMetadata(contract_renewal_date="31/12/2026")
+
+    def test_accepts_iso_date(self):
+        m = ExternalPlatformMetadata(contract_renewal_date="2026-12-31")
+        assert m.contract_renewal_date == "2026-12-31"
+
+    def test_empty_date_normalizes_to_none(self):
+        m = ExternalPlatformMetadata(contract_renewal_date="")
+        assert m.contract_renewal_date is None

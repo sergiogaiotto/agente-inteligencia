@@ -608,6 +608,31 @@ CREATE TABLE IF NOT EXISTS catalog_costs (
 CREATE INDEX IF NOT EXISTS idx_catalog_costs_entry ON catalog_costs(entry_id);
 CREATE INDEX IF NOT EXISTS idx_catalog_costs_consumer ON catalog_costs(consumer_user_id);
 CREATE INDEX IF NOT EXISTS idx_catalog_costs_invoked_at ON catalog_costs(invoked_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════
+-- External Platforms metadata (Onda 2) — 1:1 com catalog_entries
+-- quando kind='external_platform'. Cataloga IAs terceirizadas
+-- aprovadas pela empresa (ChatGPT/Cursor/Copilot/etc.) com vendor,
+-- contrato vigente, custo mensal, contatos, casos de uso aprovados.
+-- Inventário de IA da empresa para governança e compliance.
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS catalog_external_metadata (
+    entry_id TEXT PRIMARY KEY REFERENCES catalog_entries(id) ON DELETE CASCADE,
+    vendor TEXT NOT NULL,
+    vendor_url TEXT,
+    contract_status TEXT NOT NULL DEFAULT 'none' CHECK(contract_status IN (
+        'none','negotiating','active','expired','terminated'
+    )),
+    contract_renewal_date DATE,
+    monthly_cost_usd REAL,
+    vendor_contact TEXT,
+    approved_use_cases TEXT DEFAULT '',
+    restrictions TEXT DEFAULT '',
+    approved_by_user_id TEXT,
+    approved_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
 """
 
 # ═══════════════════════════════════════════════════════════════

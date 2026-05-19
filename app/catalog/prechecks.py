@@ -30,6 +30,7 @@ def run_prechecks(
     *,
     disclosure: Optional[dict] = None,
     owner: Optional[dict] = None,
+    external_metadata: Optional[dict] = None,
 ) -> dict:
     """Executa checks sobre uma entry candidata à submissão.
 
@@ -37,6 +38,8 @@ def run_prechecks(
         entry: row da catalog_entries (dict).
         disclosure: row de catalog_capability_disclosure (None se ausente).
         owner: row de users (None se não encontrado).
+        external_metadata: row de catalog_external_metadata. Só relevante
+            quando kind='external_platform'.
 
     Returns:
         {checks: [...], passed: bool, errors_count: int, warnings_count: int}
@@ -118,6 +121,20 @@ def run_prechecks(
         ))
     else:
         checks.append(_check("a2a_has_artifact", True, "n/a"))
+
+    # 8. External Platforms (Onda 2): metadata vendor é obrigatório.
+    # Warning porque é onda 2 — pode virar error em onda futura.
+    if entry.get("kind") == "external_platform":
+        has_vendor = bool(external_metadata and external_metadata.get("vendor"))
+        checks.append(_check(
+            "external_metadata_present",
+            has_vendor,
+            "kind='external_platform' exige metadata declarada (vendor mínimo) — "
+            "PUT /catalog/entries/{id}/external-metadata",
+            severity="warning",
+        ))
+    else:
+        checks.append(_check("external_metadata_present", True, "n/a"))
 
     errors = sum(1 for c in checks if not c["passed"] and c["severity"] == "error")
     warnings = sum(1 for c in checks if not c["passed"] and c["severity"] == "warning")
