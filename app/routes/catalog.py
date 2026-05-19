@@ -794,16 +794,25 @@ async def get_stewardship(
     Detecta: is_orphan (owner inativo/deletado), is_stale (published sem uso
     há 30+ dias), has_low_reliability (trust < 0.5). Agrega por steward_team.
 
-    Apenas Root na Onda 2; Onda 3 abre para stewards verem própria área.
+    Visibilidade (Onda 3 — aberto a stewards de área):
+    - Root: vê tudo.
+    - Non-root: vê apenas entries cujo steward_team está em user.domains.
+      Sem domains = vê nada (filtro retorna 0).
     """
-    if not is_root(user):
-        raise HTTPException(403, "Stewardship dashboard acessível apenas para Root")
+    from app.catalog.queries import _user_domains
+    restrict = None if is_root(user) else _user_domains(user)
 
-    entries, by_team = await list_stewardship(steward_team=steward_team, limit=limit)
+    entries, by_team = await list_stewardship(
+        steward_team=steward_team,
+        restrict_to_teams=restrict,
+        limit=limit,
+    )
     return {
         "entries": entries,
         "by_team": by_team,
         "total": len(entries),
+        "viewer_is_root": is_root(user),
+        "viewer_domains": _user_domains(user),
     }
 
 

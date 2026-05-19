@@ -1142,13 +1142,6 @@ class TestInventory:
 
 
 class TestStewardship:
-    def test_non_root_forbidden(self, monkeypatch):
-        async def fake(**kwargs): return [], {}
-        monkeypatch.setattr("app.routes.catalog.list_stewardship", fake)
-        c = make_client({"id": "u1", "role": "comum"})
-        r = c.get("/api/v1/catalog/stewardship")
-        assert r.status_code == 403
-
     def test_root_returns_entries_and_by_team(self, monkeypatch):
         async def fake(**kwargs):
             return [{"id": "e1", "name": "X", "steward_team": "fiscal"}], {
@@ -1162,6 +1155,7 @@ class TestStewardship:
         body = r.json()
         assert body["total"] == 1
         assert "fiscal" in body["by_team"]
+        assert body["viewer_is_root"] is True
 
     def test_filter_by_team(self, monkeypatch):
         captured = {}
@@ -1172,6 +1166,60 @@ class TestStewardship:
         c = make_client({"id": "root1", "role": "root"})
         c.get("/api/v1/catalog/stewardship?steward_team=fiscal")
         assert captured["steward_team"] == "fiscal"
+
+    # ── Onda 3: aberto a stewards de área ────────────────
+
+    def test_root_no_team_restriction(self, monkeypatch):
+        captured = {}
+        async def fake(**kwargs):
+            captured.update(kwargs)
+            return [], {}
+        monkeypatch.setattr("app.routes.catalog.list_stewardship", fake)
+        c = make_client({"id": "root1", "role": "root"})
+        c.get("/api/v1/catalog/stewardship")
+        # Root passa restrict_to_teams=None (sem filtro)
+        assert captured["restrict_to_teams"] is None
+
+    def test_non_root_restricted_to_own_domains(self, monkeypatch):
+        captured = {}
+        async def fake(**kwargs):
+            captured.update(kwargs)
+            return [], {}
+        monkeypatch.setattr("app.routes.catalog.list_stewardship", fake)
+        c = make_client({
+            "id": "u1", "role": "comum",
+            "domains": '["fiscal", "rh"]',
+        })
+        r = c.get("/api/v1/catalog/stewardship")
+        assert r.status_code == 200
+        assert captured["restrict_to_teams"] == ["fiscal", "rh"]
+        assert r.json()["viewer_is_root"] is False
+        assert r.json()["viewer_domains"] == ["fiscal", "rh"]
+
+    def test_non_root_no_domains_gets_empty_via_restrict(self, monkeypatch):
+        captured = {}
+        async def fake(**kwargs):
+            captured.update(kwargs)
+            # Mesmo se o query falasse com a DB, restrict_to_teams=[] curto-circuita
+            return [], {}
+        monkeypatch.setattr("app.routes.catalog.list_stewardship", fake)
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/stewardship")
+        assert r.status_code == 200
+        assert captured["restrict_to_teams"] == []
+        assert r.json()["viewer_domains"] == []
+
+    def test_non_root_returns_viewer_metadata(self, monkeypatch):
+        async def fake(**kwargs): return [], {}
+        monkeypatch.setattr("app.routes.catalog.list_stewardship", fake)
+        c = make_client({
+            "id": "u1", "role": "comum",
+            "domains": '["fiscal"]',
+        })
+        r = c.get("/api/v1/catalog/stewardship")
+        body = r.json()
+        assert body["viewer_is_root"] is False
+        assert body["viewer_domains"] == ["fiscal"]
 
 
 class TestReassign:
