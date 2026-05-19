@@ -182,7 +182,7 @@ GROUP BY action;
 Após fluxo end-to-end: linhas para `created`, `updated` (se houve PUT),
 `capability_declared`, `submitted`, `review_approved`, `published`, `deprecated`.
 
-## Sign-off
+## Sign-off Onda 1
 
 Quando todos os critérios das 5 fases passarem:
 
@@ -193,3 +193,87 @@ Quando todos os critérios das 5 fases passarem:
 - [ ] Fase 5 — banco e auditoria OK
 
 **Onda 1 do Catálogo está pronta para produção.**
+
+---
+
+## Fase 6 — Regressão Onda 2
+
+Adicional: External Platforms + Inventário + Stewardship + Bulk decide.
+Total agora: **221 testes** (171 Onda 1 + 50 Onda 2).
+
+### 6.1 Automático
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+Esperado: **221 passed**. Suites Onda 2 adicionadas:
+- `TestExternalMetadataCheck` (4) + `TestExternalPlatformMetadata` (8) + `TestExternalMetadataPut/Get` (13)
+- `TestInventory` (6)
+- `TestStewardship` (3) + `TestReassign` (8)
+- `TestBulkDecide` (8)
+
+### 6.2 Schema novo
+
+```sql
+\d catalog_external_metadata
+```
+
+Esperado: tabela com 13 colunas, PK=entry_id, FK→catalog_entries CASCADE, CHECK em contract_status.
+
+### 6.3 Endpoints novos (7 — total 21)
+
+| Rota | Método | Auth |
+|---|---|---|
+| `/entries/{id}/external-metadata` | GET/PUT | qualquer/owner+root |
+| `/inventory` | GET | Root |
+| `/inventory/export.csv` | GET | Root |
+| `/stewardship` | GET | Root |
+| `/entries/{id}/reassign` | POST | Root |
+| `/submissions/bulk-decide` | POST | Root |
+
+### 6.4 Telas novas + atualizadas
+
+| Página | Status |
+|---|---|
+| `/catalog/inventory` | NOVO — Root only |
+| `/catalog/stewardship` | NOVO — Root only |
+| `/catalog/detail` | tab "Metadata Externa" condicional + modal |
+| `/catalog/publish` | card external + bloco Step 3 + submit 4 chamadas |
+| `/catalog/queue` | checkbox + select-all + bulk bar + 4 filtros client-side |
+
+### 6.5 Nav items condicionais (Root)
+
+- "Inventário (regulatório)"
+- "Stewardship"
+- "Fila Root" (já existia da Onda 1)
+
+### 6.6 Audit actions novas
+
+- `external_metadata_declared`
+- `stewardship_reassigned` (com `details.{owner,steward_team}.{from,to}`)
+- `review_{decision}` com `details.bulk=true` (distingue de individual)
+
+### 6.7 Fluxo end-to-end Onda 2
+
+```
+[publisher] /catalog/publish → External Platform → vendor=OpenAI → submete
+    ↓
+[Root] /catalog/queue → vê + seleciona 3 pendentes → "Aprovar todas"
+    ↓
+[Root] /catalog/inventory → filtro PII=true → vê listagem → Export CSV
+    ↓
+[Root] /catalog/stewardship → identifica órfãs → Realocar owner
+```
+
+## Sign-off Onda 2
+
+- [ ] Fase 6.1 — 221 testes passam
+- [ ] Fase 6.2 — 5 tabelas catalog_* existem (4 Onda 1 + 1 nova)
+- [ ] Fase 6.3 — 21 endpoints REST + 6 UI registrados
+- [ ] Fase 6.4 — telas funcionais
+- [ ] Fase 6.5 — nav items Root-only
+- [ ] Fase 6.6 — audit_log popula com 9 actions distintas
+- [ ] Fase 6.7 — fluxo end-to-end completo
+
+**Onda 2 do Catálogo está pronta para sign-off e produção.**

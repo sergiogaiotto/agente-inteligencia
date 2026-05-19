@@ -1,8 +1,12 @@
-# Catálogo / Marketplace Corporativo — Onda 1
+# Catálogo / Marketplace Corporativo — Ondas 1 + 2
 
-Visão geral do módulo de catálogo entregue em 9 PRs incrementais.
-Etiqueta nutricional R6.3 obrigatória, governança Root, lifecycle
-explícito (draft → submitted → approved → published → deprecated → archived).
+Visão geral do módulo de catálogo entregue em **16 PRs incrementais**
+(10 da Onda 1 + 6 da Onda 2). Etiqueta nutricional R6.3 obrigatória,
+governança Root, lifecycle explícito, External Platforms catalogadas,
+inventário regulatório com CSV export, stewardship dashboard,
+bulk decide para Root.
+
+> **Onda 2 já entregue** — veja [ONDA2.md](ONDA2.md) para o delta específico.
 
 ## O que entrega
 
@@ -164,42 +168,51 @@ Soberania: BR | EU | US | global | NULL.
 | `/catalog/queue` | ❌ "Acesso restrito" | ✅ |
 | Nav "Fila Root" | ❌ oculto | ✅ visível |
 
-## O que NÃO entra na Onda 1
+## O que entrou nas Ondas (status atual)
 
-Reservado para ondas futuras:
+### ✅ Onda 1 entregue (PRs #47-#56)
+Loop básico de governança: schema + API CRUD + workflow + capability disclosure + UI completa.
 
-- **External Platforms** como kind separado (catálogo de ChatGPT/Cursor/Copilot Studio etc. usados pela empresa — R10)
+### ✅ Onda 2 entregue (PRs #57-#62)
+- **External Platforms** como kind separado (R10) — ChatGPT/Cursor/Copilot/etc.
+- **Inventário Regulatório** com CSV export (R13)
+- **Stewardship Dashboard** com flags is_orphan/is_stale/has_low_reliability (R11)
+- **Bulk decide** + filtros avançados na fila Root
+
+### Reservado para Onda 3+
+
 - **Recipes publicáveis** (mesh + bindings como artefato — R8.1)
-- **Stewardship dashboard** (entries órfãs, drift, alertas — R11)
-- **Inventário regulatório** export CSV/PDF (R13)
 - **Sandbox** de invocação com dados mock (R14)
 - **Adapter A2A bidirecional** (consumir Maestros externos; expor agentes como MCP server)
 - **OPA tiered approval** (community auto, verified Root, official auditor — R3.1)
-- **Verificação por execução** do capability disclosure (Onda 2)
+- **Verificação por execução** do capability disclosure (capability fingerprint)
 - **Federation de URN** entre instâncias Maestro (R5.3 — schema já prevê)
 - **Cost & Consumption page** dedicada (dados já coletados em `catalog_costs`)
-- **Bulk decide** + filtros avançados na fila Root
+- **Stewardship aberto a stewards de área** (não só Root)
 - **Trust score erosion** por drift (R5.2)
+- **Revenue-share em recipes**
 
-## Métricas de entrega (Onda 1)
+## Métricas de entrega
 
-| Indicador | Valor |
-|---|---|
-| PRs entregues | 10 (1-10) |
-| Endpoints REST novos | 14 |
-| Páginas UI novas | 4 |
-| Páginas UI alteradas | 4 (agents, skills, dashboard, base layout) |
-| Tabelas PostgreSQL novas | 4 |
-| Testes unitários | 171 (de 0 anteriormente) |
-| Linhas de produção (app/catalog + app/routes/catalog) | ~1300 |
-| Linhas de teste | ~1000 |
-| Linhas de UI | ~1700 |
-| Linhas de docs | ~900 |
+| Indicador | Onda 1 | Onda 2 (delta) | Total |
+|---|---|---|---|
+| PRs entregues | 10 | +6 | **16** |
+| Endpoints REST | 14 | +7 | **21** |
+| Páginas UI novas | 4 | +2 | **6** |
+| Páginas UI alteradas | 4 | +4 | 8 |
+| Tabelas PostgreSQL | 4 | +1 | **5** |
+| Testes unitários | 171 | +50 | **221** |
+| Pré-checks | 7 | +1 | **8** |
+| Audit actions distintas | 6 | +3 | **9** |
+| Breaking changes | 0 | 0 | **0** |
 
 ## Referências
 
+- [ONDA2.md](ONDA2.md) — resumo da Onda 2
 - [REGRESSION.md](REGRESSION.md) — checklist consolidado de regressão
 - [SMOKE_TEST.md](SMOKE_TEST.md) — roteiros manuais por PR
-- PRs: #47 (schema), #48 (CRUD), #49 (workflow), #50 (disclosure),
+- PRs Onda 1: #47 (schema), #48 (CRUD), #49 (workflow), #50 (disclosure),
   #51 (browse), #52 (detail), #53 (publish wizard), #54 (queue),
-  #55 (integrations), #56 (regressão — este)
+  #55 (integrations), #56 (fechamento)
+- PRs Onda 2: #57 (ext backend), #58 (ext UI), #59 (inventário),
+  #60 (stewardship), #61 (bulk decide), #62 (fechamento — este)
