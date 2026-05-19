@@ -114,15 +114,29 @@ async def execute_recipe(
     steps: list[dict],
     consumer_user: dict,
     user_input: str,
+    *,
+    is_sandbox: bool = False,
 ) -> None:
     """Roda o recipe inteiro. Pensado para ser invocado via asyncio.create_task
     (não bloqueia o caller). Erros internos são capturados; status final
-    sempre persiste em catalog_recipe_executions."""
+    sempre persiste em catalog_recipe_executions.
+
+    is_sandbox=True marca run de teste:
+    - NÃO grava em catalog_costs (não polui dashboards de chargeback)
+    - step_results ainda contêm cost_usd calculado (para drill-down)
+    - LLM ainda é chamado real — testa qualidade, latência e comportamento
+    """
     start = time.time()
     total_cost_usd = 0.0
     total_latency_ms = 0
     any_failure = False
     consumer_user_id = consumer_user.get("id")
+
+    if is_sandbox:
+        logger.info(
+            f"sandbox run start: execution={execution_id} "
+            f"recipe={recipe_entry_id} consumer={consumer_user_id}"
+        )
 
     try:
         # Steps em ordem crescente — defensivo caso o repo retorne fora de ordem.
@@ -215,23 +229,27 @@ async def execute_recipe(
                 step_tokens_in, step_tokens_out,
             )
 
-            try:
-                await record_invocation_cost(
-                    target_entry_id,
-                    consumer_user_id=consumer_user_id,
-                    consumer_department=(consumer_user.get("domains") or [None])[0]
-                        if isinstance(consumer_user.get("domains"), list) else None,
-                    interaction_id=inv.get("interaction_id"),
-                    cost_usd=step_cost_usd,
-                    tokens_used=step_tokens_total,
-                    latency_ms=step_latency_ms,
-                )
-            except Exception as e:
-                # Cost grava best-effort — falha aqui não derruba o step
-                logger.warning(
-                    f"record_invocation_cost falhou: execution={execution_id} "
-                    f"step={order}: {type(e).__name__}: {e}"
-                )
+            # Sandbox NÃO grava em catalog_costs — runs de teste não devem
+            # poluir dashboards de chargeback. step_results ainda contém
+            # cost_usd calculado para drill-down.
+            if not is_sandbox:
+                try:
+                    await record_invocation_cost(
+                        target_entry_id,
+                        consumer_user_id=consumer_user_id,
+                        consumer_department=(consumer_user.get("domains") or [None])[0]
+                            if isinstance(consumer_user.get("domains"), list) else None,
+                        interaction_id=inv.get("interaction_id"),
+                        cost_usd=step_cost_usd,
+                        tokens_used=step_tokens_total,
+                        latency_ms=step_latency_ms,
+                    )
+                except Exception as e:
+                    # Cost grava best-effort — falha aqui não derruba o step
+                    logger.warning(
+                        f"record_invocation_cost falhou: execution={execution_id} "
+                        f"step={order}: {type(e).__name__}: {e}"
+                    )
 
             total_cost_usd += step_cost_usd
             total_latency_ms += step_latency_ms

@@ -1512,3 +1512,93 @@ Se agent estiver configurado com provider/model fora da tabela:
 - [x] Modelo desconhecido → 0 + warning (não quebra fluxo)
 - [x] Tabela cobre azure, openai, anthropic, maritaca, ollama
 - [ ] Smoke manual com Postgres + LLM real (seção 3) — pendente em homolog
+
+---
+
+# Smoke Test — Onda 4 / PR 4 (Sandbox de invocação)
+
+Sandbox para o owner/Root rodar o recipe ANTES de publicar, sem poluir
+dashboards de chargeback. LLM real (testa qualidade/latência de verdade),
+mas `record_invocation_cost` é skipado.
+
+## 1 — Testes unitários
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Esperado**: 307 passed (298 anteriores + 9 novos):
+- **TestSandboxEndpoint** (7): 404 inexistente, 403/404 não-owner, 422 não-recipe, 422 sem manifest, 202 owner em draft, 202 root em qualquer status, 202 owner em published
+- **Executor**: sandbox=True NÃO chama record_invocation_cost mas step_results têm cost_usd; default=False continua gravando (regressão)
+
+## 2 — Schema
+
+```sql
+\d catalog_recipe_executions
+```
+
+**Esperado**: coluna nova `is_sandbox BOOLEAN DEFAULT FALSE` (via ALTER TABLE
+idempotente em `_IDEMPOTENT_MIGRATIONS`).
+
+## 3 — Fluxo via UI
+
+Pré: ter um recipe em **draft** com manifest declarado (sem publish).
+
+1. Acessar `/catalog/{recipe_id}` como **owner** do recipe.
+2. Tab "Execuções":
+   - Banner azul: "Recipe em draft — use 🧪 Sandbox para testar antes de publicar"
+   - Botão `🧪 Sandbox` (laranja) aparece
+   - Botão `▶ Executar recipe` NÃO aparece (gated em published)
+3. Clicar **🧪 Sandbox** → modal abre com:
+   - Título "🧪 Sandbox de Recipe"
+   - Banner amber explicando que custo não vai para chargeback
+   - Mesmo textarea de input
+   - Botão primário laranja "🧪 Rodar sandbox"
+4. Submeter → modal de polling abre com badge **🧪 SANDBOX** ao lado do status.
+5. Steps executam de verdade (LLM real); cost_usd aparece nos step_results
+   (drill-down), mas:
+6. **Validar no banco**:
+```sql
+-- Nada novo em catalog_costs nos últimos minutos:
+SELECT count(*) FROM catalog_costs WHERE invoked_at > now() - interval '2 minutes';
+-- Mas a execution está marcada:
+SELECT id, status, is_sandbox FROM catalog_recipe_executions
+WHERE started_at > now() - interval '2 minutes';
+```
+**Esperado**: zero rows novas em catalog_costs; execution com `is_sandbox=true`.
+
+7. Histórico da tab "Execuções" mostra a linha com badge 🧪 ao lado do status.
+8. Clicar **Ver** → modal de polling abre em read-only mostrando os steps
+   com cost_usd > 0 mas total ainda não foi para o chargeback.
+
+## 4 — Validações de auth
+
+| Cenário | Esperado |
+|---|---|
+| Não-owner, não-root → POST /sandbox | 403 (ou 404 se nem vê a entry) |
+| Owner em draft → POST /sandbox | 202 |
+| Owner em published → POST /sandbox | 202 (também pode usar sandbox em prod) |
+| Root em qualquer status, qualquer owner | 202 |
+| Botão `▶ Executar` em draft (qualquer user) | continua oculto (só published) |
+
+## 5 — Audit
+
+```sql
+SELECT action, entity_id, details FROM audit_log
+WHERE action = 'recipe_sandbox_started'
+ORDER BY created_at DESC LIMIT 5;
+```
+
+**Esperado**: 1 row por sandbox disparado, com `details.entry_status` no JSONB
+(pra rastreabilidade do status no momento do teste).
+
+## Critérios de aceitação Onda 4 / PR 4
+
+- [x] 307 testes passam (298 + 9 novos)
+- [x] Coluna `is_sandbox` adicionada idempotente
+- [x] Endpoint `POST /entries/{id}/sandbox` (auth=owner|root, qualquer status)
+- [x] Executor `is_sandbox=True` pula `record_invocation_cost`
+- [x] UI mostra botão Sandbox + badge 🧪 em modal/polling/histórico
+- [x] Audit `recipe_sandbox_started` registrado
+- [x] Zero breaking changes em PRs Onda 1-3 e Onda 4 #67-#69
+- [ ] Smoke manual no browser (seções 3-5) — pendente em homolog

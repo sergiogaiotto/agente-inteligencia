@@ -185,11 +185,12 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
 - **Cost & Consumption** — endpoint de registro + page com agregados + CSV export
 - **Recipes publicáveis** — kind=recipe como composição declarativa (manifest; execução fica para Onda 4)
 
-### 🚧 Onda 4 em andamento (PRs #67-#69 entregues)
+### 🚧 Onda 4 em andamento (PRs #67-#70 entregues)
 
 - **✅ Execução real de recipes** (PR #67) — chain sequencial via engine, async com polling, skip-after-failure, cost auto-wire básico por step. Nova tabela `catalog_recipe_executions` + 3 endpoints sob `/api/v1/catalog`.
 - **✅ UI de execução** (PR #68) — tab "Execuções" em `/catalog/{id}`, modal de disparo + modal de polling em tempo real (1.5s), histórico paginado, drill-down de execuções passadas.
 - **✅ Cost pleno** (PR #69) — `app/core/llm_pricing.py` com tabela de preços por provider/model; executor calcula `cost_usd` real (substituindo placeholder=0) usando `tokens.input × in_per_1k + tokens.output × out_per_1k`. Cobre azure, openai, anthropic, maritaca, ollama. Modelo desconhecido → 0 + warning.
+- **✅ Sandbox de invocação** (PR #70) — owner/Root rodam recipe em qualquer status (incl. draft) com LLM real, mas sem gravar em `catalog_costs`. Coluna `is_sandbox` na tabela de executions + endpoint `POST /sandbox` + botão 🧪 Sandbox + badge laranja no histórico/polling. Audit `recipe_sandbox_started`.
 
 ### Reservado para Onda 4+
 
@@ -205,16 +206,16 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
 
 ## Métricas de entrega
 
-| Indicador | Onda 1 | Onda 2 | Onda 3 | Onda 4 (PR #67-69) | Total |
+| Indicador | Onda 1 | Onda 2 | Onda 3 | Onda 4 (PR #67-70) | Total |
 |---|---|---|---|---|---|
-| PRs entregues | 10 | 6 | 4 | +3 | **23** |
-| Endpoints REST | 14 | 7 | 6 | +3 | **30** |
+| PRs entregues | 10 | 6 | 4 | +4 | **24** |
+| Endpoints REST | 14 | 7 | 6 | +4 | **31** |
 | Páginas UI novas | 4 | 2 | 1 | 0 | **7** |
 | Páginas UI alteradas | 4 | 4 | 4 | +1 | 13 |
 | Tabelas PostgreSQL | 4 | 1 | 1 | +1 | **7** |
-| Testes unitários | 171 | 50 | 36 | +41 | **298** |
+| Testes unitários | 171 | 50 | 36 | +50 | **307** |
 | Pré-checks | 7 | 1 | 1 | 0 | **9** |
-| Audit actions distintas | 6 | 3 | 2 | +2 | **13** |
+| Audit actions distintas | 6 | 3 | 2 | +3 | **14** |
 | Breaking changes | 0 | 0 | 0 | **0** | — |
 
 ## Referências
