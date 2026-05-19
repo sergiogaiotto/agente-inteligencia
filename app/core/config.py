@@ -9,7 +9,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 class Settings(BaseSettings):
     # ── App ──
-    app_name: str = "AgenteInteligência-AI"
+    app_name: str = "Maestro"
     app_env: str = "development"
     app_debug: bool = True
     app_host: str = "0.0.0.0"

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 # ══════════════════════════════════════════════════════════════
-# AgenteInteligência-AI — Dockerfile multi-stage
+# Maestro — Dockerfile multi-stage
 # Stage 1: builder (compila wheels nativos: asyncpg, hiredis, bcrypt)
 # Stage 2: runtime (slim, sem toolchain, com usuário não-root)
 # ══════════════════════════════════════════════════════════════
