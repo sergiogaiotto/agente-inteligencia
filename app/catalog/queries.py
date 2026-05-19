@@ -859,3 +859,164 @@ async def list_costs_raw(
     async with pool.acquire() as con:
         rows = await con.fetch(sql, *params)
     return [dict(r) for r in rows]
+
+
+# ─── Recipe Executions (Onda 4) ──────────────────────────────────
+
+
+def can_user_see_execution(user: dict, execution: dict, recipe_entry: Optional[dict]) -> bool:
+    """Pode ver execution: root | consumer (quem rodou) | owner do recipe."""
+    if is_root(user):
+        return True
+    if execution.get("consumer_user_id") == user.get("id"):
+        return True
+    if recipe_entry and recipe_entry.get("owner_user_id") == user.get("id"):
+        return True
+    return False
+
+
+async def create_execution(
+    *,
+    recipe_entry_id: str,
+    consumer_user_id: str,
+    input_text: str,
+) -> dict:
+    """Cria row em status='running' e retorna o dict completo."""
+    import uuid
+    exec_id = str(uuid.uuid4())
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        r = await con.fetchrow(
+            """
+            INSERT INTO catalog_recipe_executions
+              (id, recipe_entry_id, consumer_user_id, input)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id, recipe_entry_id, consumer_user_id, input,
+                      steps_results, status, total_cost_usd, total_latency_ms,
+                      error_message, started_at, finished_at
+            """,
+            exec_id, recipe_entry_id, consumer_user_id, input_text,
+        )
+    return _normalize_execution_row(r)
+
+
+async def get_execution(execution_id: str, *, enrich: bool = True) -> Optional[dict]:
+    """Lê execution. Quando enrich=True, faz lookup do nome do recipe e
+    enriquece cada step_result com target_name (best-effort)."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        r = await con.fetchrow(
+            """
+            SELECT id, recipe_entry_id, consumer_user_id, input,
+                   steps_results, status, total_cost_usd, total_latency_ms,
+                   error_message, started_at, finished_at
+            FROM catalog_recipe_executions
+            WHERE id=$1
+            """,
+            execution_id,
+        )
+        if not r:
+            return None
+        d = _normalize_execution_row(r)
+        if enrich:
+            rec = await con.fetchrow(
+                "SELECT name FROM catalog_entries WHERE id=$1",
+                d["recipe_entry_id"],
+            )
+            d["recipe_name"] = rec["name"] if rec else None
+            # Cada step pode já trazer target_name persistido pelo executor;
+            # se não tiver, faz lookup. Evita N queries quando possível.
+            missing = [
+                s.get("target_entry_id")
+                for s in d["steps_results"]
+                if s.get("target_entry_id") and not s.get("target_name")
+            ]
+            if missing:
+                rows = await con.fetch(
+                    "SELECT id, name FROM catalog_entries WHERE id = ANY($1::text[])",
+                    list(set(missing)),
+                )
+                name_by_id = {row["id"]: row["name"] for row in rows}
+                for s in d["steps_results"]:
+                    if s.get("target_entry_id") in name_by_id and not s.get("target_name"):
+                        s["target_name"] = name_by_id[s["target_entry_id"]]
+        return d
+
+
+async def list_executions_for_entry(
+    recipe_entry_id: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """Histórico paginado de execuções de um recipe, mais recentes primeiro."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        rows = await con.fetch(
+            """
+            SELECT id, recipe_entry_id, consumer_user_id, input,
+                   steps_results, status, total_cost_usd, total_latency_ms,
+                   error_message, started_at, finished_at
+            FROM catalog_recipe_executions
+            WHERE recipe_entry_id=$1
+            ORDER BY started_at DESC
+            LIMIT $2 OFFSET $3
+            """,
+            recipe_entry_id, limit, offset,
+        )
+    return [_normalize_execution_row(r) for r in rows]
+
+
+async def append_step_result(execution_id: str, step_result: dict) -> None:
+    """Adiciona um step_result ao array JSONB. Usa concatenação atômica."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        await con.execute(
+            """
+            UPDATE catalog_recipe_executions
+            SET steps_results = steps_results || $2::jsonb
+            WHERE id=$1
+            """,
+            execution_id, json.dumps([step_result]),
+        )
+
+
+async def finalize_execution(
+    execution_id: str,
+    *,
+    status: str,
+    total_cost_usd: float,
+    total_latency_ms: int,
+    error_message: Optional[str] = None,
+) -> None:
+    """Sela status final e finished_at."""
+    if status not in ("completed", "partial", "failed"):
+        raise ValueError(f"status final inválido: {status}")
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        await con.execute(
+            """
+            UPDATE catalog_recipe_executions
+            SET status=$2,
+                total_cost_usd=$3,
+                total_latency_ms=$4,
+                error_message=$5,
+                finished_at=now()
+            WHERE id=$1
+            """,
+            execution_id, status, total_cost_usd, total_latency_ms, error_message,
+        )
+
+
+def _normalize_execution_row(r) -> dict:
+    """Converte asyncpg.Record → dict, parseando JSONB em steps_results."""
+    d = dict(r)
+    raw_steps = d.get("steps_results")
+    if isinstance(raw_steps, str):
+        try:
+            d["steps_results"] = json.loads(raw_steps)
+        except (json.JSONDecodeError, TypeError):
+            d["steps_results"] = []
+    elif raw_steps is None:
+        d["steps_results"] = []
+    return d

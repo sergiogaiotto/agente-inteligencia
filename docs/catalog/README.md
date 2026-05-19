@@ -185,12 +185,15 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
 - **Cost & Consumption** — endpoint de registro + page com agregados + CSV export
 - **Recipes publicáveis** — kind=recipe como composição declarativa (manifest; execução fica para Onda 4)
 
+### 🚧 Onda 4 em andamento (PR #67 entregue)
+
+- **✅ Execução real de recipes** (PR #67) — chain sequencial via engine, async com polling, skip-after-failure, cost auto-wire básico por step. Nova tabela `catalog_recipe_executions` + 3 endpoints sob `/api/v1/catalog`.
+
 ### Reservado para Onda 4+
 
 - **A2A bidirecional** (consumir Maestros externos; expor agentes como MCP server)
 - **Verificação por execução** do capability disclosure (capability fingerprint)
-- **Auto-wire do cost** no engine (instrumentação automática de invocações)
-- **Execução real de recipes** (chain sequencial via engine)
+- **Auto-wire do cost pleno** no engine (pricing table — PR #67 deixou cost_usd=0 placeholder)
 - **Sandbox** de invocação com dados mock (R14)
 - **OPA tiered approval** (community auto, verified Root, official auditor — R3.1)
 - **Federation de URN** entre instâncias Maestro (R5.3 — schema já prevê)
@@ -200,17 +203,17 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
 
 ## Métricas de entrega
 
-| Indicador | Onda 1 | Onda 2 | Onda 3 (delta) | Total |
-|---|---|---|---|---|
-| PRs entregues | 10 | 6 | +4 | **20** |
-| Endpoints REST | 14 | 7 | +6 | **27** |
-| Páginas UI novas | 4 | 2 | +1 | **7** |
-| Páginas UI alteradas | 4 | 4 | +4 | 12 |
-| Tabelas PostgreSQL | 4 | 1 | +1 | **6** |
-| Testes unitários | 171 | 50 | +36 | **257** |
-| Pré-checks | 7 | 1 | +1 | **9** |
-| Audit actions distintas | 6 | 3 | +2 | **11** |
-| Breaking changes | 0 | 0 | **0** | — |
+| Indicador | Onda 1 | Onda 2 | Onda 3 | Onda 4 (PR #67) | Total |
+|---|---|---|---|---|---|
+| PRs entregues | 10 | 6 | 4 | +1 | **21** |
+| Endpoints REST | 14 | 7 | 6 | +3 | **30** |
+| Páginas UI novas | 4 | 2 | 1 | 0 | **7** |
+| Páginas UI alteradas | 4 | 4 | 4 | 0 | 12 |
+| Tabelas PostgreSQL | 4 | 1 | 1 | +1 | **7** |
+| Testes unitários | 171 | 50 | 36 | +24 | **281** |
+| Pré-checks | 7 | 1 | 1 | 0 | **9** |
+| Audit actions distintas | 6 | 3 | 2 | +2 | **13** |
+| Breaking changes | 0 | 0 | 0 | **0** | — |
 
 ## Referências
 

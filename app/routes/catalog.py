@@ -16,6 +16,7 @@ Lifecycle:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -35,6 +36,7 @@ from app.catalog.models import (
     InvocationCostRecord,
     ReassignPayload,
     RecipeDefinition,
+    RecipeExecutionRequest,
     SubmissionCreate,
     SubmissionDecision,
 )
@@ -42,14 +44,18 @@ from app.catalog.prechecks import run_prechecks
 from app.catalog.queries import (
     aggregate_costs,
     can_user_see,
+    can_user_see_execution,
+    create_execution,
     db_row_to_entry_dict,
     delete_disclosure,
     delete_recipe,
     get_disclosure,
+    get_execution,
     get_external_metadata,
     get_recipe,
     is_root,
     list_costs_raw,
+    list_executions_for_entry,
     list_inventory,
     list_stewardship,
     list_visible_entries,
@@ -1193,4 +1199,119 @@ async def bulk_decide(
         "failed_count": len(failed),
         "succeeded": succeeded,
         "failed": failed,
+    }
+
+
+# ═════════════════════════════════════════════════════════════════
+# Recipe Executions (Onda 4) — execução real de recipes publicados
+# ═════════════════════════════════════════════════════════════════
+
+
+@router.post("/entries/{entry_id}/execute", status_code=202)
+async def execute_recipe_endpoint(
+    entry_id: str,
+    data: RecipeExecutionRequest,
+    user: dict = Depends(require_user),
+):
+    """Dispara execução do recipe. Modo async: cria row em status='running',
+    lança background task, retorna 202 + execution_id. Cliente faz polling
+    em GET /executions/{id} até status virar completed|partial|failed.
+
+    Pré-condições:
+    - Entry existe e é visível para o user.
+    - Entry é kind='recipe' e status='published'.
+    - Manifest existe (sem steps → 422).
+    """
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not can_user_see(user, entry):
+        raise HTTPException(404, "Entry não encontrada")
+    if entry.get("kind") != "recipe":
+        raise HTTPException(422, "Apenas entries kind='recipe' são executáveis")
+    if entry.get("status") != "published":
+        raise HTTPException(
+            409,
+            f"Recipe em status '{entry.get('status')}' não é executável — "
+            "só recipes published podem rodar",
+        )
+    recipe = await get_recipe(entry_id)
+    if not recipe or not recipe.get("steps"):
+        raise HTTPException(422, "Recipe sem steps — declare o manifest antes de executar")
+
+    execution = await create_execution(
+        recipe_entry_id=entry_id,
+        consumer_user_id=user["id"],
+        input_text=data.input,
+    )
+
+    # Background task — não bloqueia o endpoint
+    from app.catalog.executor import execute_recipe
+    asyncio.create_task(execute_recipe(
+        execution_id=execution["id"],
+        recipe_entry_id=entry_id,
+        steps=recipe["steps"],
+        consumer_user=user,
+        user_input=data.input,
+    ))
+
+    await _audit("recipe_execution_started", entry_id, user["id"], {
+        "execution_id": execution["id"],
+        "input_length": len(data.input),
+        "step_count": len(recipe["steps"]),
+    })
+
+    return {
+        "execution_id": execution["id"],
+        "recipe_entry_id": entry_id,
+        "status": "running",
+        "step_count": len(recipe["steps"]),
+        "started_at": execution.get("started_at").isoformat()
+            if execution.get("started_at") and hasattr(execution["started_at"], "isoformat")
+            else execution.get("started_at"),
+    }
+
+
+@router.get("/executions/{execution_id}")
+async def get_execution_endpoint(
+    execution_id: str,
+    user: dict = Depends(require_user),
+):
+    """Estado atual da execução (para polling). 404 se não existe ou
+    se o user não pode ver. Quem vê: root | consumer (quem rodou) |
+    owner do recipe."""
+    execution = await get_execution(execution_id, enrich=True)
+    if not execution:
+        raise HTTPException(404, "Execução não encontrada")
+    recipe_row = await catalog_entries_repo.find_by_id(execution["recipe_entry_id"])
+    recipe_entry = db_row_to_entry_dict(recipe_row) if recipe_row else None
+    if not can_user_see_execution(user, execution, recipe_entry):
+        raise HTTPException(404, "Execução não encontrada")
+    return execution
+
+
+@router.get("/entries/{entry_id}/executions")
+async def list_executions_endpoint(
+    entry_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: dict = Depends(require_user),
+):
+    """Histórico paginado de execuções de um recipe. Visível para quem
+    pode ver a entry (mesma regra de listagem do catálogo)."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not can_user_see(user, entry):
+        raise HTTPException(404, "Entry não encontrada")
+    if entry.get("kind") != "recipe":
+        raise HTTPException(422, "Apenas recipes têm histórico de execução")
+    items = await list_executions_for_entry(entry_id, limit=limit, offset=offset)
+    return {
+        "items": items,
+        "limit": limit,
+        "offset": offset,
+        "has_more": len(items) == limit,
     }

@@ -648,6 +648,38 @@ CREATE TABLE IF NOT EXISTS catalog_recipes (
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now()
 );
+
+-- ═══════════════════════════════════════════════════════════════
+-- Recipe Executions (Onda 4) — runs reais dos recipes publicados.
+-- 1:N com catalog_entries (kind='recipe') via recipe_entry_id.
+-- Chain mode: output[N-1] vira input[N]. Falha de N marca demais
+-- como 'skipped' (status final = 'partial'). Async: POST cria com
+-- status='running' e background task atualiza até 'completed'/'partial'/'failed'.
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS catalog_recipe_executions (
+    id TEXT PRIMARY KEY,
+    recipe_entry_id TEXT NOT NULL REFERENCES catalog_entries(id) ON DELETE CASCADE,
+    consumer_user_id TEXT NOT NULL,
+    input TEXT NOT NULL,
+    -- steps_results: [{order, target_entry_id, target_name, status:
+    --   success|error|skipped, output, error, cost_usd, latency_ms,
+    --   started_at, finished_at}, ...]
+    steps_results JSONB NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN (
+        'running','completed','partial','failed'
+    )),
+    total_cost_usd REAL DEFAULT 0,
+    total_latency_ms INTEGER DEFAULT 0,
+    error_message TEXT,
+    started_at TIMESTAMP DEFAULT now(),
+    finished_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_recipe_exec_recipe
+    ON catalog_recipe_executions(recipe_entry_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_catalog_recipe_exec_consumer
+    ON catalog_recipe_executions(consumer_user_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_catalog_recipe_exec_status
+    ON catalog_recipe_executions(status);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -978,6 +1010,8 @@ catalog_entries_repo = Repository("catalog_entries")
 catalog_submissions_repo = Repository("catalog_submissions")
 catalog_disclosure_repo = Repository("catalog_capability_disclosure")
 catalog_costs_repo = Repository("catalog_costs")
+# Onda 4: execuções reais de recipes (PK = id; helpers especializados em queries.py)
+catalog_recipe_executions_repo = Repository("catalog_recipe_executions")
 
 
 # ═══════════════════════════════════════════════════════════════

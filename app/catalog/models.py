@@ -341,3 +341,17 @@ class RecipeDefinition(BaseModel):
         for idx, s in enumerate(sorted_steps, start=1):
             s.order = idx
         return sorted_steps
+
+
+# ─── Recipe Executions (Onda 4) ──────────────────────────────────
+
+
+class RecipeExecutionRequest(BaseModel):
+    """Payload para POST /entries/{id}/execute.
+
+    `input` alimenta o step 1; output de cada step vira input do próximo
+    (chain). Limite generoso (50k chars) para tolerar contexto inicial
+    rico sem virar abuso de payload.
+    """
+
+    input: str = Field(..., min_length=1, max_length=50000)
