@@ -237,3 +237,110 @@ ORDER BY created_at DESC LIMIT 10;
 - [ ] DELETE 409 quando status not in ('draft','archived')
 - [ ] audit_log popula em create/update/delete
 - [ ] Regressão das telas/endpoints existentes OK
+
+---
+
+# Smoke Test — PR 3 (Workflow: submit → decide → publish → deprecate)
+
+6 endpoints novos para o ciclo de aprovação Root e transições de lifecycle.
+
+## 9 — Testes unitários
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Esperado**: 152 passed (117 anteriores + 35 novos). Cobre `run_prechecks`
+(11 cenários — name/desc/version/owner/disclosure/visibility/adapter) e
+plumbing de submit/decide/publish/deprecate/queue/submissions-history.
+
+## 10 — Workflow end-to-end com banco
+
+Pré: app rodando, login como user comum (`u1`), e segundo user Root (`root1`).
+
+### a. Cria draft e submete
+
+```powershell
+# Login como u1
+$cookies = "user_id=<u1>"
+
+$body = '{"name":"Smoke Workflow","kind":"agent","artifact_type":"agent","artifact_id":"<agent-id-real>","description":"Entry para validar fluxo de aprovação","version":"0.1.0"}'
+
+# Cria
+$resp = curl -X POST http://localhost:7000/api/v1/catalog/entries `
+  -H "Content-Type: application/json" -b $cookies -d $body
+$eid = ($resp | ConvertFrom-Json).id
+
+# Submete
+curl -X POST "http://localhost:7000/api/v1/catalog/entries/$eid/submit" `
+  -H "Content-Type: application/json" -b $cookies -d '{"notes":"primeira submissão"}'
+```
+
+**Esperado** no submit: status 201, body contém `submission_id`, `entry_status="submitted"`, `precheck_report` com lista de checks.
+
+### b. Verifica fila (Root)
+
+```powershell
+$cookies_root = "user_id=<root1>"
+curl "http://localhost:7000/api/v1/catalog/submissions/queue?status=pending" -b $cookies_root
+```
+
+**Esperado**: total ≥ 1, item com `review_status="pending"`, `precheck_report` JSON.
+
+### c. Aprova
+
+```powershell
+$sid = "<submission_id capturado em a>"
+curl -X POST "http://localhost:7000/api/v1/catalog/submissions/$sid/decide" `
+  -H "Content-Type: application/json" -b $cookies_root `
+  -d '{"decision":"approved","notes":"liberado"}'
+```
+
+**Esperado**: 200, `entry_status="approved"`, submission persiste com `reviewed_by`, `reviewed_at`.
+
+### d. Owner publica
+
+```powershell
+curl -X POST "http://localhost:7000/api/v1/catalog/entries/$eid/publish" -b $cookies
+```
+
+**Esperado**: 200, entry agora com `status="published"`, `published_at` preenchido.
+
+### e. Owner deprecia
+
+```powershell
+curl -X POST "http://localhost:7000/api/v1/catalog/entries/$eid/deprecate" -b $cookies
+```
+
+**Esperado**: 200, `status="deprecated"`, `deprecated_at` preenchido.
+
+### f. Histórico de submissões
+
+```powershell
+curl "http://localhost:7000/api/v1/catalog/entries/$eid/submissions" -b $cookies
+```
+
+**Esperado**: total=1, snapshot+precheck_report+review_status visíveis.
+
+## 11 — Validar audit_log do workflow
+
+```sql
+SELECT action, actor, details->>'submission_id' AS sub_id, created_at
+FROM audit_log
+WHERE entity_type = 'catalog_entry'
+  AND action IN ('submitted','review_approved','review_rejected','review_changes_requested','published','deprecated')
+ORDER BY created_at DESC LIMIT 20;
+```
+
+**Esperado**: linhas para cada transição executada acima, com actor correto.
+
+## Critérios de aceitação do PR 3
+
+- [x] 152 testes unitários passam (117 anteriores + 35 novos)
+- [x] 11 rotas registradas em `/api/v1/catalog` (5 PR 2 + 6 PR 3)
+- [ ] Fluxo a→f completo sem erro
+- [ ] Não-owner / não-root bloqueado em submit/publish/deprecate (403)
+- [ ] Não-root bloqueado em decide e queue (403)
+- [ ] Transições inválidas retornam 409 (ex: deprecate sem publish)
+- [ ] audit_log popula com 'submitted', 'review_*', 'published', 'deprecated'
+- [ ] Regressão das telas/endpoints existentes OK
