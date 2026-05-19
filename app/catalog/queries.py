@@ -268,3 +268,91 @@ async def delete_disclosure(entry_id: str) -> bool:
     except (ValueError, IndexError):
         n = 0
     return n > 0
+
+
+# ─── External Platforms metadata (Onda 2, PK = entry_id) ─────────
+
+
+_EXTERNAL_META_WRITABLE_COLS = (
+    "vendor",
+    "vendor_url",
+    "contract_status",
+    "contract_renewal_date",
+    "monthly_cost_usd",
+    "vendor_contact",
+    "approved_use_cases",
+    "restrictions",
+    "approved_by_user_id",
+    "approved_at",
+)
+
+
+async def get_external_metadata(entry_id: str) -> Optional[dict]:
+    """Busca metadata de plataforma externa. None se ausente."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        r = await con.fetchrow(
+            "SELECT * FROM catalog_external_metadata WHERE entry_id=$1",
+            entry_id,
+        )
+    return dict(r) if r else None
+
+
+async def upsert_external_metadata(entry_id: str, payload: dict) -> dict:
+    """Upsert metadata externo. vendor é o único campo obrigatório no schema."""
+    filtered: dict[str, Any] = {}
+    for k in _EXTERNAL_META_WRITABLE_COLS:
+        if k in payload:
+            filtered[k] = payload[k]
+
+    # vendor é NOT NULL — exige no insert. Em update opcional (mantém valor).
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        existing = await con.fetchrow(
+            "SELECT entry_id FROM catalog_external_metadata WHERE entry_id=$1",
+            entry_id,
+        )
+        if existing is None:
+            # Primeira escrita exige vendor
+            if "vendor" not in filtered or not filtered["vendor"]:
+                raise ValueError("vendor é obrigatório na criação de external_metadata")
+            cols = ["entry_id"] + list(filtered.keys())
+            values = [entry_id] + list(filtered.values())
+            placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))
+            sql = (
+                f"INSERT INTO catalog_external_metadata ({', '.join(cols)}) "
+                f"VALUES ({placeholders}) RETURNING *"
+            )
+            r = await con.fetchrow(sql, *values)
+        elif filtered:
+            sets = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(filtered.keys()))
+            values = list(filtered.values()) + [entry_id]
+            sql = (
+                f"UPDATE catalog_external_metadata SET {sets}, updated_at = now() "
+                f"WHERE entry_id = ${len(values)} RETURNING *"
+            )
+            r = await con.fetchrow(sql, *values)
+        else:
+            # No-op: payload vazio com row existente
+            r = await con.fetchrow(
+                "SELECT * FROM catalog_external_metadata WHERE entry_id=$1",
+                entry_id,
+            )
+
+    return dict(r) if r else {"entry_id": entry_id}
+
+
+async def delete_external_metadata(entry_id: str) -> bool:
+    """Remove metadata externo. Cascade já remove ao deletar entry — útil
+    se publisher quiser limpar antes de mudar kind."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        res = await con.execute(
+            "DELETE FROM catalog_external_metadata WHERE entry_id=$1",
+            entry_id,
+        )
+    try:
+        n = int(res.rsplit(" ", 1)[-1])
+    except (ValueError, IndexError):
+        n = 0
+    return n > 0

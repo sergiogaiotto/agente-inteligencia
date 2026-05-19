@@ -870,3 +870,108 @@ Edge cases:
 - [ ] Cards mostram contagens corretas (Publicadas / Em revisão / Minhas drafts)
 - [ ] Bloco "Fila Root" só aparece quando Root + há pendentes
 - [ ] Links "Publicar →" e "Ver catálogo" navegam corretamente
+
+═══════════════════════════════════════════════════════════════════
+# ONDA 2
+═══════════════════════════════════════════════════════════════════
+
+# Smoke Test — Onda 2 / PR 1 (External Platforms backend)
+
+Adiciona suporte a kind=external_platform com metadata vendor/contrato/custo.
+Catalog continua funcionando para os outros kinds — zero breaking change.
+
+## 51 — Testes unitários
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Esperado**: 196 passed (171 Onda 1 + 25 Onda 2/PR1). Novos:
+- `TestExternalMetadataCheck` (4 testes em prechecks)
+- `TestExternalPlatformMetadata` (8 testes em models)
+- `TestExternalMetadataPut` + `TestExternalMetadataGet` (13 testes em api)
+
+## 52 — Schema migrado
+
+```sql
+\d catalog_external_metadata
+```
+
+**Esperado**: tabela com 13 colunas, PK=entry_id, FK→catalog_entries com CASCADE, CHECK em contract_status.
+
+## 53 — Endpoints novos
+
+```powershell
+.venv\Scripts\python.exe -c "from app.main import app; print(sorted([r.path for r in app.routes if 'external-metadata' in r.path]))"
+```
+
+**Esperado**: 2 rotas (`GET` e `PUT` em `/api/v1/catalog/entries/{entry_id}/external-metadata`).
+
+## 54 — Fluxo end-to-end (cURL)
+
+```powershell
+$cookies = "user_id=<u1>"
+
+# a. Cria entry external_platform (sem artifact link)
+$body = '{"name":"ChatGPT Enterprise","kind":"external_platform","adapter_type":"openai_assistants","description":"ChatGPT Enterprise — license para o time de Eng"}'
+$eid = (curl -X POST http://localhost:7000/api/v1/catalog/entries `
+  -H "Content-Type: application/json" -b $cookies -d $body | ConvertFrom-Json).id
+
+# b. Tenta GET → 404 (ainda não declarado)
+curl "http://localhost:7000/api/v1/catalog/entries/$eid/external-metadata" -b $cookies
+
+# c. Tenta PUT sem vendor → 422
+curl -X PUT "http://localhost:7000/api/v1/catalog/entries/$eid/external-metadata" `
+  -H "Content-Type: application/json" -b $cookies `
+  -d '{"contract_status":"active"}'
+
+# d. PUT com vendor → 200
+$meta = '{"vendor":"OpenAI","vendor_url":"https://openai.com","contract_status":"active","contract_renewal_date":"2026-12-31","monthly_cost_usd":15000,"vendor_contact":"enterprise@openai.com","approved_use_cases":"Code generation, docs","restrictions":"No PII data without anonymization"}'
+curl -X PUT "http://localhost:7000/api/v1/catalog/entries/$eid/external-metadata" `
+  -H "Content-Type: application/json" -b $cookies -d $meta
+
+# e. GET → metadata completa
+curl "http://localhost:7000/api/v1/catalog/entries/$eid/external-metadata" -b $cookies
+
+# f. PUT update parcial (sem vendor — mantém valor)
+curl -X PUT "http://localhost:7000/api/v1/catalog/entries/$eid/external-metadata" `
+  -H "Content-Type: application/json" -b $cookies `
+  -d '{"monthly_cost_usd":18000}'
+```
+
+**Esperado**:
+- (b) 404 sem corpo de erro estranho
+- (c) 422 "vendor é obrigatório..."
+- (d) 200 com payload completo
+- (e) 200 igual ao salvo
+- (f) 200 com vendor preservado + cost atualizado
+
+## 55 — Pré-check funciona
+
+```powershell
+# Submete entry external_platform sem metadata
+curl -X POST "http://localhost:7000/api/v1/catalog/entries/$eid/submit" `
+  -H "Content-Type: application/json" -b $cookies -d '{}'
+```
+
+Verificar no `precheck_report`: check `external_metadata_present` falha com
+severity=warning. Submit prossegue (não bloqueia) mas Root vê o warning.
+
+## 56 — Tabela CASCADE funciona
+
+```powershell
+# DELETE entry → metadata externa some junto
+curl -X DELETE "http://localhost:7000/api/v1/catalog/entries/$eid" -b $cookies
+```
+
+Verificar em SQL: `SELECT * FROM catalog_external_metadata WHERE entry_id='<eid>'` → 0 rows.
+
+## Critérios de aceitação Onda 2 / PR 1
+
+- [x] 196 testes unitários passam (171 + 25 novos)
+- [x] Tabela `catalog_external_metadata` criada via SCHEMA
+- [x] 2 endpoints novos registrados (`GET` + `PUT` `/external-metadata`)
+- [x] Pré-check `external_metadata_present` adicionado (warning para external_platform)
+- [ ] CRUD end-to-end OK
+- [ ] CASCADE delete funciona
+- [ ] Regressão Onda 1 OK (171 testes anteriores continuam passando)

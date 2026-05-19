@@ -30,6 +30,7 @@ from app.catalog.models import (
     CapabilityDisclosure,
     CatalogEntryCreate,
     CatalogEntryUpdate,
+    ExternalPlatformMetadata,
     SubmissionCreate,
     SubmissionDecision,
 )
@@ -39,9 +40,11 @@ from app.catalog.queries import (
     db_row_to_entry_dict,
     delete_disclosure,
     get_disclosure,
+    get_external_metadata,
     is_root,
     list_visible_entries,
     upsert_disclosure,
+    upsert_external_metadata,
 )
 from app.catalog.urn import make_urn
 from app.core.auth import require_user
@@ -295,7 +298,11 @@ async def submit_entry(
     # Insumos para pré-checks (disclosure tem PK = entry_id, helper especializado)
     disclosure = await get_disclosure(entry_id)
     owner = await users_repo.find_by_id(entry.get("owner_user_id"))
-    report = run_prechecks(entry, disclosure=disclosure, owner=owner)
+    # External metadata só é consultado se kind='external_platform' (otimização)
+    external_meta = None
+    if entry.get("kind") == "external_platform":
+        external_meta = await get_external_metadata(entry_id)
+    report = run_prechecks(entry, disclosure=disclosure, owner=owner, external_metadata=external_meta)
 
     import json
     import uuid
@@ -539,3 +546,70 @@ async def delete_capability(entry_id: str, user: dict = Depends(require_user)):
         raise HTTPException(404, "Disclosure não encontrada")
     await _audit("capability_removed", entry_id, user["id"], {})
     return {"message": "Capability disclosure removida", "entry_id": entry_id}
+
+
+# ═════════════════════════════════════════════════════════════════
+# External Platforms metadata (Onda 2 — R10)
+# ═════════════════════════════════════════════════════════════════
+
+
+@router.get("/entries/{entry_id}/external-metadata")
+async def get_external(entry_id: str, user: dict = Depends(require_user)):
+    """Lê metadata externo (vendor/contrato/custo) — visível para qualquer
+    user que veja a entry. 404 se kind != external_platform ou ainda não
+    declarado."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not can_user_see(user, entry):
+        raise HTTPException(404, "Entry não encontrada")
+    if entry.get("kind") != "external_platform":
+        raise HTTPException(
+            404,
+            "Metadata externa só se aplica a kind='external_platform'",
+        )
+    meta = await get_external_metadata(entry_id)
+    if not meta:
+        raise HTTPException(404, "Metadata externa ainda não declarada")
+    return meta
+
+
+@router.put("/entries/{entry_id}/external-metadata")
+async def put_external(
+    entry_id: str,
+    data: ExternalPlatformMetadata,
+    user: dict = Depends(require_user),
+):
+    """Upsert da metadata externa. Apenas owner/root, apenas em draft,
+    apenas para kind='external_platform'.
+
+    vendor é obrigatório na primeira escrita. Updates posteriores podem
+    omitir vendor (mantém valor anterior)."""
+    entry = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry não encontrada")
+    if entry.get("kind") != "external_platform":
+        raise HTTPException(
+            422,
+            "Metadata externa só se aplica a kind='external_platform'",
+        )
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem declarar metadata externa")
+    if entry.get("status") != "draft":
+        raise HTTPException(
+            409,
+            f"Entry em status '{entry.get('status')}' não aceita edição de metadata — "
+            "depreque + nova versão para alterar",
+        )
+
+    payload = data.model_dump(exclude_none=True)
+    try:
+        result = await upsert_external_metadata(entry_id, payload)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    await _audit("external_metadata_declared", entry_id, user["id"], {
+        "vendor": data.vendor,
+        "contract_status": data.contract_status,
+    })
+    return result

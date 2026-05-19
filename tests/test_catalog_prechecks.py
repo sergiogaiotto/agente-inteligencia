@@ -134,3 +134,47 @@ class TestRunPrechecks:
         assert r["errors_count"] >= 2
         assert r["warnings_count"] >= 1
         assert r["passed"] is False
+
+
+# ─── External Platforms metadata check (Onda 2) ──────────────────
+
+
+class TestExternalMetadataCheck:
+    def test_skipped_for_internal_kinds(self):
+        # kind != external_platform → check passes como n/a
+        for k in ("agent", "skill", "recipe"):
+            e = _entry(kind=k)
+            r = run_prechecks(e, disclosure={"entry_id": "e1"}, owner=_active_user())
+            chk = _check_by_name(r, "external_metadata_present")
+            assert chk and chk["passed"]
+
+    def test_warning_when_missing_for_external(self):
+        # kind=external_platform sem metadata → warning
+        e = _entry(kind="external_platform", adapter_type="http",
+                   artifact_type=None, artifact_id=None)
+        r = run_prechecks(e, disclosure={"entry_id": "e1"}, owner=_active_user(),
+                          external_metadata=None)
+        chk = _check_by_name(r, "external_metadata_present")
+        assert chk and not chk["passed"]
+        assert chk["severity"] == "warning"
+        # Warning não derruba passed
+        assert r["passed"] is True
+
+    def test_passes_when_metadata_with_vendor(self):
+        e = _entry(kind="external_platform", adapter_type="http",
+                   artifact_type=None, artifact_id=None)
+        r = run_prechecks(e, disclosure={"entry_id": "e1"}, owner=_active_user(),
+                          external_metadata={"vendor": "OpenAI"})
+        chk = _check_by_name(r, "external_metadata_present")
+        assert chk and chk["passed"]
+
+    def test_warning_when_metadata_present_but_no_vendor(self):
+        # Caso edge: row existe mas vendor está vazio (não deveria acontecer,
+        # mas defensivo)
+        e = _entry(kind="external_platform", adapter_type="http",
+                   artifact_type=None, artifact_id=None)
+        r = run_prechecks(e, disclosure={"entry_id": "e1"}, owner=_active_user(),
+                          external_metadata={"vendor": None})
+        chk = _check_by_name(r, "external_metadata_present")
+        assert chk and not chk["passed"]
+        assert chk["severity"] == "warning"
