@@ -635,3 +635,88 @@ Todo o ciclo de governança pela UI, sem cURL.
 - [ ] Modal capability salva via PUT, valida calls_external_apis
 - [ ] Modal decide (Root) envia POST decide e recarrega
 - [ ] Toasts de erro/sucesso aparecem corretamente
+
+---
+
+# Smoke Test — PR 7 (UI Wizard de Submissão B1)
+
+Wizard `/catalog/publish` em 4 passos: artefato → metadata → disclosure → revisão.
+
+## 32 — Renderização + rota
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+.venv\Scripts\python.exe -c "from app.main import app; print(sorted([r.path for r in app.routes if r.path.startswith('/catalog')]))"
+```
+
+**Esperado**:
+- 171 passed
+- Rotas: `['/catalog', '/catalog/publish', '/catalog/{entry_id}']`
+
+**Importante**: `/catalog/publish` precisa estar registrada ANTES de `/catalog/{entry_id}` para o match literal ganhar do path parameter.
+
+## 33 — Acesso pelo catálogo
+
+1. `/catalog` → header tem botão azul "Publicar no Catálogo" (era cinza apontando para /agents)
+2. Click → vai para `/catalog/publish`
+3. Page abre com stepper visual (4 círculos numerados ligados por barras)
+4. Step 1 ativo (azul), demais cinzas
+
+## 34 — Step 1: selecionar artefato
+
+- Lista combinada de agents + skills (badge colorido distingue)
+- Filtros: busca por nome, "Apenas agentes" / "Apenas skills"
+- Click no radio seleciona, destaca borda azul
+- Pré-preenche metadata (name, description, domain, version) — visível ao avançar
+- Botão "Próximo" só habilita quando algo está selecionado
+
+## 35 — Step 2: metadata
+
+- Campos vêm preenchidos com dados do artefato
+- Versão precisa ser semver (`1.0.0`) — botão Próximo desabilita se inválida
+- Visibilidade: select de 3 opções; "Departamento" expõe campo de scope
+- Preview do URN gerado abaixo (atualiza em tempo real)
+
+## 36 — Step 3: capability disclosure
+
+- 4 grupos de checkboxes idênticos ao modal do detalhe
+- Campos condicionais:
+  - `calls_external_apis=true` → textarea de URLs (obrigatório se flag, validação client-side bloqueia Próximo)
+  - `stores_input=true` → input numérico (validação client-side ≥ 0)
+- Select de soberania
+- Textarea de notas adicionais
+
+## 37 — Step 4: revisão + submit
+
+- Resumo dos dados-chave (artefato, URN, visibilidade, steward, capabilities count, soberania)
+- Card amarelo explicando o que vai acontecer (create + capability + submit)
+- Click "Confirmar e Submeter para Revisão":
+  - 3 chamadas sequenciais à API
+  - Sucesso → redireciona para `/catalog/{id}`
+  - Falha → exibe erro com info de qual step falhou (entry pode ter ficado em estado parcial — mensagem orienta usuário)
+
+## 38 — Fluxo end-to-end
+
+1. Owner cria agente novo em `/agents/new`
+2. Vai para `/catalog/publish`
+3. Seleciona o agente recém-criado
+4. Confirma metadata
+5. Declara disclosure (mínimo: nada marcado, sem soberania)
+6. Revisa → Submete
+7. Redireciona para `/catalog/{id}` → status=submitted
+8. Logar como Root → mesma página → aprova
+9. Owner volta → status=approved → publica
+
+## Critérios de aceitação do PR 7
+
+- [x] 171 testes passam (sem regressão)
+- [x] Rota `/catalog/publish` registrada antes de `/catalog/{entry_id}`
+- [x] Template parseia
+- [ ] Stepper visual marca step ativo e completed
+- [ ] Step 1 lista agents + skills com busca/filtro
+- [ ] Pick de artefato pré-preenche step 2
+- [ ] Validações client-side (semver, external_apis_list, retention)
+- [ ] Submit final faz 3 chamadas em sequência
+- [ ] Redireciona para `/catalog/{id}` em sucesso
+- [ ] Em erro, mensagem orienta (entry pode ter ficado parcial)
+- [ ] Botão "Publicar no Catálogo" na lista do catálogo aponta para `/catalog/publish`
