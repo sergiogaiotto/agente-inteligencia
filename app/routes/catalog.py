@@ -1273,6 +1273,71 @@ async def execute_recipe_endpoint(
     }
 
 
+@router.post("/entries/{entry_id}/sandbox", status_code=202)
+async def sandbox_recipe_endpoint(
+    entry_id: str,
+    data: RecipeExecutionRequest,
+    user: dict = Depends(require_user),
+):
+    """Dispara execução de SANDBOX do recipe. Diferenças vs /execute:
+
+    - **Auth**: apenas owner do recipe ou Root (não 'qualquer um que vê').
+    - **Status**: aceita qualquer status (incl. draft) — sandbox é
+      pra testar ANTES de publicar.
+    - **Cost**: não grava em catalog_costs (sandbox é free tier de dev).
+    - **LLM**: real (testa qualidade/latência de verdade).
+
+    Modal de polling no UI mostra badge 'SANDBOX' para distinguir das
+    runs de produção.
+    """
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou Root podem rodar sandbox")
+    if entry.get("kind") != "recipe":
+        raise HTTPException(422, "Sandbox só se aplica a kind='recipe'")
+    recipe = await get_recipe(entry_id)
+    if not recipe or not recipe.get("steps"):
+        raise HTTPException(422, "Recipe sem steps — declare o manifest antes de testar")
+
+    execution = await create_execution(
+        recipe_entry_id=entry_id,
+        consumer_user_id=user["id"],
+        input_text=data.input,
+        is_sandbox=True,
+    )
+
+    from app.catalog.executor import execute_recipe
+    asyncio.create_task(execute_recipe(
+        execution_id=execution["id"],
+        recipe_entry_id=entry_id,
+        steps=recipe["steps"],
+        consumer_user=user,
+        user_input=data.input,
+        is_sandbox=True,
+    ))
+
+    await _audit("recipe_sandbox_started", entry_id, user["id"], {
+        "execution_id": execution["id"],
+        "input_length": len(data.input),
+        "step_count": len(recipe["steps"]),
+        "entry_status": entry.get("status"),
+    })
+
+    return {
+        "execution_id": execution["id"],
+        "recipe_entry_id": entry_id,
+        "status": "running",
+        "step_count": len(recipe["steps"]),
+        "is_sandbox": True,
+        "started_at": execution.get("started_at").isoformat()
+            if execution.get("started_at") and hasattr(execution["started_at"], "isoformat")
+            else execution.get("started_at"),
+    }
+
+
 @router.get("/executions/{execution_id}")
 async def get_execution_endpoint(
     execution_id: str,

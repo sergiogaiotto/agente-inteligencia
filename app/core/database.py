@@ -737,6 +737,10 @@ _IDEMPOTENT_MIGRATIONS = [
     # cross-agent/cross-binding).
     "CREATE INDEX IF NOT EXISTS idx_binding_executions_interaction ON binding_executions(interaction_id)",
     "CREATE INDEX IF NOT EXISTS idx_binding_executions_agent_binding ON binding_executions(agent_id, binding_id)",
+    # Onda 4 PR #70: sandbox flag em execuções de recipe. Runs sandbox NÃO
+    # gravam em catalog_costs (free tier de dev) — flag distingue para
+    # filtragem em UI e queries futuras.
+    "ALTER TABLE catalog_recipe_executions ADD COLUMN IF NOT EXISTS is_sandbox BOOLEAN DEFAULT FALSE",
 ]
 
 

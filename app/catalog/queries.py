@@ -880,8 +880,13 @@ async def create_execution(
     recipe_entry_id: str,
     consumer_user_id: str,
     input_text: str,
+    is_sandbox: bool = False,
 ) -> dict:
-    """Cria row em status='running' e retorna o dict completo."""
+    """Cria row em status='running' e retorna o dict completo.
+
+    is_sandbox=True marca run de teste — não persiste em catalog_costs e
+    fica filtravel no histórico. Veja [[onda4-sandbox]] em docs/catalog.
+    """
     import uuid
     exec_id = str(uuid.uuid4())
     pool = _get_pool()
@@ -889,13 +894,13 @@ async def create_execution(
         r = await con.fetchrow(
             """
             INSERT INTO catalog_recipe_executions
-              (id, recipe_entry_id, consumer_user_id, input)
-            VALUES ($1, $2, $3, $4)
+              (id, recipe_entry_id, consumer_user_id, input, is_sandbox)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING id, recipe_entry_id, consumer_user_id, input,
                       steps_results, status, total_cost_usd, total_latency_ms,
-                      error_message, started_at, finished_at
+                      error_message, started_at, finished_at, is_sandbox
             """,
-            exec_id, recipe_entry_id, consumer_user_id, input_text,
+            exec_id, recipe_entry_id, consumer_user_id, input_text, is_sandbox,
         )
     return _normalize_execution_row(r)
 
@@ -909,7 +914,8 @@ async def get_execution(execution_id: str, *, enrich: bool = True) -> Optional[d
             """
             SELECT id, recipe_entry_id, consumer_user_id, input,
                    steps_results, status, total_cost_usd, total_latency_ms,
-                   error_message, started_at, finished_at
+                   error_message, started_at, finished_at,
+                   COALESCE(is_sandbox, FALSE) AS is_sandbox
             FROM catalog_recipe_executions
             WHERE id=$1
             """,
@@ -956,7 +962,8 @@ async def list_executions_for_entry(
             """
             SELECT id, recipe_entry_id, consumer_user_id, input,
                    steps_results, status, total_cost_usd, total_latency_ms,
-                   error_message, started_at, finished_at
+                   error_message, started_at, finished_at,
+                   COALESCE(is_sandbox, FALSE) AS is_sandbox
             FROM catalog_recipe_executions
             WHERE recipe_entry_id=$1
             ORDER BY started_at DESC

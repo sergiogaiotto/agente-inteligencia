@@ -95,7 +95,7 @@ def exec_api_storage(monkeypatch):
     async def fake_get_recipe(entry_id):
         return dict(recipes[entry_id]) if entry_id in recipes else None
 
-    async def fake_create_execution(*, recipe_entry_id, consumer_user_id, input_text):
+    async def fake_create_execution(*, recipe_entry_id, consumer_user_id, input_text, is_sandbox=False):
         from datetime import datetime, timezone
         exec_id = str(uuid.uuid4())
         row = {
@@ -110,6 +110,7 @@ def exec_api_storage(monkeypatch):
             "error_message": None,
             "started_at": datetime.now(timezone.utc),
             "finished_at": None,
+            "is_sandbox": is_sandbox,
         }
         executions[exec_id] = row
         return dict(row)
@@ -644,3 +645,112 @@ async def test_executor_steps_desordenados_sao_executados_em_ordem(executor_stor
     # Primeiro executado = order 1 (target a), depois order 2 (target b)
     assert executor_storage["invocations"][0]["target_id"] == "a"
     assert executor_storage["invocations"][1]["target_id"] == "b"
+
+
+# ═════════════════════════════════════════════════════════════════
+# Parte 3 — Sandbox (Onda 4 PR #70)
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestSandboxEndpoint:
+    """POST /entries/{id}/sandbox — auth=owner|root, qualquer status, sem cost."""
+
+    def test_404_entry_inexistente(self, exec_api_storage):
+        c = _client({"id": "u1", "role": "comum"})
+        r = c.post("/api/v1/catalog/entries/nope/sandbox", json={"input": "oi"})
+        assert r.status_code == 404
+
+    def test_403_nao_owner_nao_root(self, exec_api_storage):
+        _seed_recipe(exec_api_storage, owner_id="alice", status="draft")
+        c = _client({"id": "bob", "role": "comum"})
+        r = c.post("/api/v1/catalog/entries/rcp-1/sandbox", json={"input": "oi"})
+        assert r.status_code in (403, 404)  # 404 se nem ve a entry; 403 se ve mas nao muda
+
+    def test_422_nao_recipe(self, exec_api_storage):
+        _seed_recipe(exec_api_storage, kind="agent")
+        c = _client({"id": "u1", "role": "root"})
+        r = c.post("/api/v1/catalog/entries/rcp-1/sandbox", json={"input": "oi"})
+        assert r.status_code == 422
+
+    def test_422_sem_manifest(self, exec_api_storage):
+        _seed_recipe(exec_api_storage, with_manifest=False)
+        c = _client({"id": "u1", "role": "root"})
+        r = c.post("/api/v1/catalog/entries/rcp-1/sandbox", json={"input": "oi"})
+        assert r.status_code == 422
+
+    def test_202_owner_em_draft(self, exec_api_storage):
+        """Diferencial do sandbox: aceita draft (vs /execute que exige published)."""
+        _seed_recipe(exec_api_storage, owner_id="u-owner", status="draft")
+        c = _client({"id": "u-owner", "role": "comum"})
+        r = c.post("/api/v1/catalog/entries/rcp-1/sandbox", json={"input": "oi"})
+        assert r.status_code == 202
+        body = r.json()
+        assert body["is_sandbox"] is True
+        assert body["status"] == "running"
+        # Background task disparado com is_sandbox=True
+        assert len(exec_api_storage["bg_calls"]) == 1
+        assert exec_api_storage["bg_calls"][0]["is_sandbox"] is True
+        # Audit do sandbox
+        actions = [e["action"] for e in exec_api_storage["audit"]]
+        assert "recipe_sandbox_started" in actions
+
+    def test_202_root_em_qualquer_status(self, exec_api_storage):
+        # Root pode em qualquer status, mesmo de entry de outro owner
+        _seed_recipe(exec_api_storage, owner_id="alice", status="approved")
+        c = _client({"id": "u-root", "role": "root"})
+        r = c.post("/api/v1/catalog/entries/rcp-1/sandbox", json={"input": "oi"})
+        assert r.status_code == 202
+
+    def test_202_owner_em_published(self, exec_api_storage):
+        """Sandbox também funciona em published (não obriga draft)."""
+        _seed_recipe(exec_api_storage, owner_id="u-owner", status="published")
+        c = _client({"id": "u-owner", "role": "comum"})
+        r = c.post("/api/v1/catalog/entries/rcp-1/sandbox", json={"input": "oi"})
+        assert r.status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_executor_sandbox_nao_grava_cost(executor_storage):
+    """is_sandbox=True não chama record_invocation_cost.
+    step_results ainda contém cost_usd calculado (para drill-down)."""
+    from app.catalog.executor import execute_recipe
+
+    executor_storage["entries"]["a"] = _agent_entry("a")
+    executor_storage["entries"]["b"] = _agent_entry("b")
+
+    await execute_recipe(
+        execution_id="exec-sb-1",
+        recipe_entry_id="rcp-1",
+        steps=[
+            {"order": 1, "target_entry_id": "a", "notes": ""},
+            {"order": 2, "target_entry_id": "b", "notes": ""},
+        ],
+        consumer_user={"id": "u1", "domains": ["fiscal"]},
+        user_input="hi",
+        is_sandbox=True,
+    )
+    # Zero rows em catalog_costs
+    assert len(executor_storage["cost_rows"]) == 0
+    # Mas step_results ainda têm cost_usd calculado (para drill-down)
+    success_steps = [s for s in executor_storage["appended"] if s["status"] == "success"]
+    assert len(success_steps) == 2
+    assert success_steps[0]["cost_usd"] > 0
+    assert success_steps[0]["tokens_input"] == 30
+
+
+@pytest.mark.asyncio
+async def test_executor_default_continua_gravando_cost(executor_storage):
+    """Regressão: sem is_sandbox (default=False), cost_rows são gravados normalmente."""
+    from app.catalog.executor import execute_recipe
+
+    executor_storage["entries"]["a"] = _agent_entry("a")
+
+    await execute_recipe(
+        execution_id="exec-prod-1",
+        recipe_entry_id="rcp-1",
+        steps=[{"order": 1, "target_entry_id": "a", "notes": ""}],
+        consumer_user={"id": "u1"},
+        user_input="hi",
+    )
+    # Default chama record_invocation_cost
+    assert len(executor_storage["cost_rows"]) == 1
