@@ -1390,3 +1390,168 @@ class TestBulkDecide:
         for a in approved_actions:
             details = a["details"] if isinstance(a["details"], dict) else _json.loads(a["details"])
             assert details.get("bulk") is True
+
+
+# ═════════════════════════════════════════════════════════════════
+# Cost & Consumption (Onda 3 / PR 2)
+# ═════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def cost_storage(monkeypatch, fake_storage):
+    """Mocks de record_invocation_cost / aggregate_costs / list_costs_raw
+    sobre o fake_storage existente."""
+    records: list[dict] = []
+
+    async def fake_record(entry_id, **kwargs):
+        rec = {"id": f"c-{len(records)}", "entry_id": entry_id, **kwargs}
+        records.append(rec)
+        return rec
+
+    async def fake_aggregate(**kwargs):
+        relevant = [r for r in records
+                    if not kwargs.get("entry_id") or r["entry_id"] == kwargs["entry_id"]]
+        if kwargs.get("consumer_user_id"):
+            relevant = [r for r in relevant if r.get("consumer_user_id") == kwargs["consumer_user_id"]]
+        gb = kwargs.get("group_by", "entry")
+        if gb not in ("entry", "consumer", "department", "day"):
+            raise ValueError(f"group_by inválido: {gb}")
+        keys: dict = {}
+        for r in relevant:
+            k = r.get("entry_id") if gb == "entry" else r.get("consumer_user_id")
+            keys[k] = keys.get(k, {"group_key": k, "invocations": 0,
+                                    "total_cost_usd": 0, "total_tokens": 0,
+                                    "avg_latency_ms": 0})
+            keys[k]["invocations"] += 1
+            keys[k]["total_cost_usd"] += r.get("cost_usd", 0)
+            keys[k]["total_tokens"] += r.get("tokens_used", 0)
+        totals = {
+            "invocations": len(relevant),
+            "total_cost_usd": sum(r.get("cost_usd", 0) for r in relevant),
+            "total_tokens": sum(r.get("tokens_used", 0) for r in relevant),
+            "avg_latency_ms": 0,
+            "distinct_entries": len({r["entry_id"] for r in relevant}),
+            "distinct_consumers": len({r.get("consumer_user_id") for r in relevant}),
+        }
+        return list(keys.values()), totals
+
+    async def fake_list_raw(**kwargs):
+        relevant = list(records)
+        if kwargs.get("entry_id"):
+            relevant = [r for r in relevant if r["entry_id"] == kwargs["entry_id"]]
+        if kwargs.get("consumer_user_id"):
+            relevant = [r for r in relevant if r.get("consumer_user_id") == kwargs["consumer_user_id"]]
+        return relevant
+
+    monkeypatch.setattr("app.routes.catalog.record_invocation_cost", fake_record)
+    monkeypatch.setattr("app.routes.catalog.aggregate_costs", fake_aggregate)
+    monkeypatch.setattr("app.routes.catalog.list_costs_raw", fake_list_raw)
+
+    return {**fake_storage, "cost_records": records}
+
+
+class TestRecordCost:
+    def test_records_with_user_default(self, cost_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, cost_storage, "u1")
+        cost_storage["entries"][eid]["status"] = "published"
+        cost_storage["entries"][eid]["visibility"] = "company"
+        r = c.post(f"/api/v1/catalog/entries/{eid}/invocation-cost",
+                   json={"cost_usd": 0.02, "tokens_used": 1500, "latency_ms": 320})
+        assert r.status_code == 201
+        body = r.json()
+        assert body["entry_id"] == eid
+        # Default: consumer_user_id = user.id
+        assert body["consumer_user_id"] == "u1"
+
+    def test_records_with_explicit_consumer(self, cost_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, cost_storage, "u1")
+        cost_storage["entries"][eid]["status"] = "published"
+        cost_storage["entries"][eid]["visibility"] = "company"
+        r = c.post(f"/api/v1/catalog/entries/{eid}/invocation-cost",
+                   json={"consumer_user_id": "other-user", "cost_usd": 0.5})
+        assert r.status_code == 201
+        assert r.json()["consumer_user_id"] == "other-user"
+
+    def test_404_when_entry_invisible(self, cost_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, cost_storage, "u1")  # private/draft
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.post(f"/api/v1/catalog/entries/{eid}/invocation-cost",
+                    json={"cost_usd": 0.01})
+        assert r.status_code == 404
+
+    def test_negative_cost_rejected(self, cost_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, cost_storage, "u1")
+        r = c.post(f"/api/v1/catalog/entries/{eid}/invocation-cost",
+                   json={"cost_usd": -1})
+        assert r.status_code == 422
+
+
+class TestGetCost:
+    def test_auto_scope_root_returns_all(self, cost_storage):
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/cost")
+        assert r.status_code == 200
+        assert r.json()["scope"] == "all"
+
+    def test_auto_scope_nonroot_returns_mine(self, cost_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/cost")
+        assert r.status_code == 200
+        assert r.json()["scope"] == "mine"
+
+    def test_nonroot_explicit_all_forbidden(self, cost_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/cost?scope=all")
+        assert r.status_code == 403
+
+    def test_group_by_invalid_returns_422(self, cost_storage):
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/cost?group_by=bogus")
+        assert r.status_code == 422
+
+    def test_mine_filters_to_user(self, cost_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, cost_storage, "u1")
+        cost_storage["entries"][eid]["status"] = "published"
+        cost_storage["entries"][eid]["visibility"] = "company"
+        c1.post(f"/api/v1/catalog/entries/{eid}/invocation-cost", json={"cost_usd": 1.0})
+        c2 = make_client({"id": "u2", "role": "comum"})
+        c2.post(f"/api/v1/catalog/entries/{eid}/invocation-cost", json={"cost_usd": 2.0})
+
+        # u2 vê só o seu (1 row, cost=2)
+        r = c2.get("/api/v1/catalog/cost?group_by=consumer")
+        body = r.json()
+        assert body["totals"]["invocations"] == 1
+        assert body["totals"]["total_cost_usd"] == 2.0
+
+        # Root vê tudo (2 rows somando 3)
+        c_root = make_client({"id": "root1", "role": "root"})
+        r_root = c_root.get("/api/v1/catalog/cost?group_by=consumer")
+        assert r_root.json()["totals"]["invocations"] == 2
+        assert r_root.json()["totals"]["total_cost_usd"] == 3.0
+
+
+class TestExportCostCsv:
+    def test_returns_text_csv(self, cost_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, cost_storage, "u1")
+        cost_storage["entries"][eid]["status"] = "published"
+        cost_storage["entries"][eid]["visibility"] = "company"
+        c.post(f"/api/v1/catalog/entries/{eid}/invocation-cost",
+               json={"cost_usd": 0.5, "tokens_used": 100})
+
+        r = c.get("/api/v1/catalog/cost/export.csv")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/csv")
+        assert "attachment" in r.headers["content-disposition"]
+        assert "id,entry_id,consumer_user_id" in r.text
+        assert "u1" in r.text
+
+    def test_nonroot_all_forbidden(self, cost_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/cost/export.csv?scope=all")
+        assert r.status_code == 403

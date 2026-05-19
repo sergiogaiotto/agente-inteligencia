@@ -32,21 +32,25 @@ from app.catalog.models import (
     CatalogEntryCreate,
     CatalogEntryUpdate,
     ExternalPlatformMetadata,
+    InvocationCostRecord,
     ReassignPayload,
     SubmissionCreate,
     SubmissionDecision,
 )
 from app.catalog.prechecks import run_prechecks
 from app.catalog.queries import (
+    aggregate_costs,
     can_user_see,
     db_row_to_entry_dict,
     delete_disclosure,
     get_disclosure,
     get_external_metadata,
     is_root,
+    list_costs_raw,
     list_inventory,
     list_stewardship,
     list_visible_entries,
+    record_invocation_cost,
     upsert_disclosure,
     upsert_external_metadata,
 )
@@ -861,6 +865,159 @@ async def reassign_entry(
     updated = await catalog_entries_repo.update(entry_id, updates)
     await _audit("stewardship_reassigned", entry_id, user["id"], audit_details)
     return db_row_to_entry_dict(updated) if updated else {"message": "realocada"}
+
+
+# ═════════════════════════════════════════════════════════════════
+# Cost & Consumption (Onda 3 — R4.3)
+# ═════════════════════════════════════════════════════════════════
+
+
+@router.post("/entries/{entry_id}/invocation-cost", status_code=201)
+async def record_cost(
+    entry_id: str,
+    data: InvocationCostRecord,
+    user: dict = Depends(require_user),
+):
+    """Registra custo de uma invocação. Insert-only.
+
+    Quem chama: integrações externas (Zapier/n8n), e — no futuro — o engine
+    via auto-wire (Onda 4). Visibilidade: qualquer user que vê a entry pode
+    registrar (caso comum: consumer registra seu próprio custo).
+
+    Default de consumer_user_id = user.id. Para casos onde sistema registra
+    em nome de outro user, payload pode override (mas auditável).
+    """
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not can_user_see(user, entry):
+        raise HTTPException(404, "Entry não encontrada")
+
+    consumer_id = data.consumer_user_id or user["id"]
+    result = await record_invocation_cost(
+        entry_id,
+        consumer_user_id=consumer_id,
+        consumer_department=data.consumer_department,
+        interaction_id=data.interaction_id,
+        cost_usd=data.cost_usd,
+        tokens_used=data.tokens_used,
+        latency_ms=data.latency_ms,
+    )
+    # Audit best-effort; cost records são insert-only e abundantes — não
+    # auditamos cada um para evitar inflar audit_log. Caso de uso futuro
+    # (anomaly detection) pode auditar limites/picos.
+    return result
+
+
+@router.get("/cost")
+async def get_cost(
+    group_by: str = Query("entry"),
+    since: Optional[str] = Query(None),
+    until: Optional[str] = Query(None),
+    entry_id: Optional[str] = Query(None),
+    consumer_user_id: Optional[str] = Query(None),
+    consumer_department: Optional[str] = Query(None),
+    scope: str = Query("auto"),
+    limit: int = Query(200, ge=1, le=2000),
+    user: dict = Depends(require_user),
+):
+    """Agrega catalog_costs por grupo.
+
+    Scope:
+    - 'mine': força consumer_user_id = user atual (qualquer user)
+    - 'all':  sem restrição (apenas Root)
+    - 'auto': Root vê tudo; demais vêem só próprio consumo
+
+    group_by: 'entry' | 'consumer' | 'department' | 'day'
+    """
+    effective_scope = scope
+    if effective_scope == "auto":
+        effective_scope = "all" if is_root(user) else "mine"
+
+    if effective_scope == "all" and not is_root(user):
+        raise HTTPException(403, "scope='all' requer Root")
+
+    # Quando scope=mine, força filtro pelo user atual mesmo se vier outro
+    if effective_scope == "mine":
+        consumer_user_id = user["id"]
+
+    try:
+        rows, totals = await aggregate_costs(
+            group_by=group_by,
+            since=since,
+            until=until,
+            entry_id=entry_id,
+            consumer_user_id=consumer_user_id,
+            consumer_department=consumer_department,
+            limit=limit,
+        )
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+    return {
+        "group_by": group_by,
+        "scope": effective_scope,
+        "rows": rows,
+        "totals": totals,
+        "since": since,
+        "until": until,
+    }
+
+
+@router.get("/cost/export.csv")
+async def export_cost_csv(
+    since: Optional[str] = Query(None),
+    until: Optional[str] = Query(None),
+    entry_id: Optional[str] = Query(None),
+    consumer_user_id: Optional[str] = Query(None),
+    consumer_department: Optional[str] = Query(None),
+    scope: str = Query("auto"),
+    user: dict = Depends(require_user),
+):
+    """Export raw das rows de catalog_costs. Mesmos filtros + scope que GET /cost."""
+    effective_scope = scope
+    if effective_scope == "auto":
+        effective_scope = "all" if is_root(user) else "mine"
+    if effective_scope == "all" and not is_root(user):
+        raise HTTPException(403, "scope='all' requer Root")
+    if effective_scope == "mine":
+        consumer_user_id = user["id"]
+
+    rows = await list_costs_raw(
+        since=since, until=until,
+        entry_id=entry_id,
+        consumer_user_id=consumer_user_id,
+        consumer_department=consumer_department,
+        limit=5000,
+    )
+
+    import csv
+    import io
+    from datetime import datetime as _dt
+    from fastapi.responses import StreamingResponse
+
+    columns = [
+        "id", "entry_id", "consumer_user_id", "consumer_department",
+        "interaction_id", "cost_usd", "tokens_used", "latency_ms", "invoked_at",
+    ]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        row = dict(r)
+        if row.get("invoked_at") is not None and not isinstance(row["invoked_at"], str):
+            row["invoked_at"] = str(row["invoked_at"])
+        writer.writerow(row)
+
+    buf.seek(0)
+    timestamp = _dt.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"maestro-catalog-costs-{timestamp}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ═════════════════════════════════════════════════════════════════

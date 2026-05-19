@@ -1,0 +1,231 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="costPage()" x-init="load()" class="p-4 lg:p-6">
+
+    <!-- Header -->
+    <div class="mb-4">
+        <p class="text-[11px] text-surface-400 mb-1">
+            <a href="/catalog" class="hover:text-brand-600">Catálogo</a>
+            <span class="mx-1">/</span>
+            <span class="text-brand-900">Custo & Consumo</span>
+        </p>
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <h2 class="text-[18px] font-bold text-brand-900">Custo & Consumo</h2>
+                <p class="text-[12px] text-surface-400 mt-0.5">Agregados por entry/consumer/área/dia. Root vê tudo; demais vêem o próprio consumo.</p>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+                <button @click="load()" :disabled="loading" class="inline-flex items-center gap-2 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] font-medium text-brand-900 hover:border-brand-300">
+                    <svg class="w-3.5 h-3.5" :class="loading ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+                    Atualizar
+                </button>
+                <a :href="csvUrl()" target="_blank" class="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-emerald-600">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+                    Export CSV
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scope banner -->
+    <div class="rounded-lg bg-brand-50 border border-brand-100 px-3 py-2 mb-3 flex items-center justify-between text-[11px] text-brand-700">
+        <span>
+            <strong x-text="scope === 'all' ? 'Visão global' : 'Meu consumo'"></strong>
+            <span x-show="scope === 'all'"> — você vê todos os consumidores</span>
+            <span x-show="scope === 'mine'"> — apenas suas invocações</span>
+        </span>
+        <select x-show="canSeeAll" x-model="scope" @change="load()" class="rounded border border-brand-200 px-2 py-1 text-[10px] outline-none">
+            <option value="auto">Auto</option>
+            <option value="all">Tudo (Root)</option>
+            <option value="mine">Apenas meu</option>
+        </select>
+    </div>
+
+    <!-- Filtros -->
+    <div class="rounded-xl border border-surface-200 bg-white p-3 mb-4">
+        <div class="flex flex-wrap items-center gap-2">
+            <select x-model="groupBy" @change="load()" class="rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] outline-none">
+                <option value="entry">Agrupar por entry</option>
+                <option value="consumer">Agrupar por consumer</option>
+                <option value="department">Agrupar por departamento</option>
+                <option value="day">Agrupar por dia</option>
+            </select>
+            <input type="date" x-model="since" @change="load()" class="rounded-lg border border-surface-200 px-2 py-1 text-[11px] outline-none" title="Desde">
+            <input type="date" x-model="until" @change="load()" class="rounded-lg border border-surface-200 px-2 py-1 text-[11px] outline-none" title="Até">
+            <input type="text" x-model="entryFilter" @change="load()" placeholder="entry_id (filtro)" class="rounded-lg border border-surface-200 px-2 py-1 text-[11px] outline-none font-mono w-[200px]">
+            <input type="text" x-model="deptFilter" @change="load()" placeholder="departamento" class="rounded-lg border border-surface-200 px-2 py-1 text-[11px] outline-none w-[140px]">
+            <button x-show="hasFilters()" @click="clearFilters()" class="text-[11px] text-surface-500 hover:text-brand-600 px-2 py-1">Limpar</button>
+        </div>
+    </div>
+
+    <!-- Totais agregados -->
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+        <div class="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2.5">
+            <div class="text-[9px] font-semibold uppercase text-emerald-700">Custo total</div>
+            <div class="text-[18px] font-bold text-emerald-700 mt-0.5 font-mono" x-text="'$' + formatNum(totals.total_cost_usd || 0)"></div>
+        </div>
+        <div class="rounded-lg bg-brand-50 border border-brand-100 px-3 py-2.5">
+            <div class="text-[9px] font-semibold uppercase text-brand-700">Invocações</div>
+            <div class="text-[18px] font-bold text-brand-700 mt-0.5" x-text="(totals.invocations || 0).toLocaleString()"></div>
+        </div>
+        <div class="rounded-lg bg-violet-50 border border-violet-100 px-3 py-2.5">
+            <div class="text-[9px] font-semibold uppercase text-violet-700">Tokens</div>
+            <div class="text-[18px] font-bold text-violet-700 mt-0.5" x-text="(totals.total_tokens || 0).toLocaleString()"></div>
+        </div>
+        <div class="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2.5">
+            <div class="text-[9px] font-semibold uppercase text-amber-700">Latência média</div>
+            <div class="text-[18px] font-bold text-amber-700 mt-0.5 font-mono" x-text="Math.round(totals.avg_latency_ms || 0) + 'ms'"></div>
+        </div>
+        <div class="rounded-lg bg-surface-50 border border-surface-100 px-3 py-2.5">
+            <div class="text-[9px] font-semibold uppercase text-surface-600">Distintos</div>
+            <div class="text-[12px] font-bold text-surface-700 mt-0.5">
+                <span x-text="totals.distinct_entries || 0"></span> entries
+                · <span x-text="totals.distinct_consumers || 0"></span> consumers
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading / Empty -->
+    <template x-if="loading">
+        <p class="text-center text-[12px] text-surface-400 py-8">Carregando...</p>
+    </template>
+
+    <template x-if="!loading && rows.length === 0">
+        <div class="rounded-xl border border-surface-200 bg-white p-8 text-center">
+            <p class="text-[14px] font-semibold text-brand-900 mb-1">Nenhum custo registrado</p>
+            <p class="text-[12px] text-surface-400 max-w-md mx-auto">
+                Integradores externos (Zapier/n8n) ou o engine (em onda futura) gravam custos via
+                <code class="bg-surface-100 px-1 rounded text-[10px]">POST /api/v1/catalog/entries/{id}/invocation-cost</code>.
+            </p>
+        </div>
+    </template>
+
+    <!-- Tabela de agrupamento -->
+    <div x-show="!loading && rows.length > 0" class="rounded-xl border border-surface-200 bg-white overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="w-full text-[11px]">
+                <thead class="bg-surface-50 border-b border-surface-200">
+                    <tr class="text-left">
+                        <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]" x-text="groupByLabel()"></th>
+                        <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px] text-right">Invocações</th>
+                        <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px] text-right">Tokens</th>
+                        <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px] text-right">Latência média</th>
+                        <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px] text-right">Custo USD</th>
+                        <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px] text-right">% do total</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-surface-100">
+                    <template x-for="r in rows" :key="r.group_key || 'null'">
+                        <tr class="hover:bg-surface-50/50">
+                            <td class="px-3 py-2">
+                                <template x-if="groupBy === 'entry'">
+                                    <a :href="'/catalog/' + r.group_key" class="text-brand-700 hover:text-brand-900 font-mono text-[10px]" x-text="r.group_key || '—'"></a>
+                                </template>
+                                <template x-if="groupBy !== 'entry'">
+                                    <span class="text-brand-900" :class="groupBy === 'consumer' ? 'font-mono text-[10px]' : ''" x-text="r.group_key || '—'"></span>
+                                </template>
+                            </td>
+                            <td class="px-3 py-2 text-right font-mono" x-text="(r.invocations || 0).toLocaleString()"></td>
+                            <td class="px-3 py-2 text-right font-mono" x-text="(r.total_tokens || 0).toLocaleString()"></td>
+                            <td class="px-3 py-2 text-right font-mono" x-text="Math.round(r.avg_latency_ms || 0) + 'ms'"></td>
+                            <td class="px-3 py-2 text-right font-mono font-semibold text-emerald-700" x-text="'$' + formatNum(r.total_cost_usd || 0)"></td>
+                            <td class="px-3 py-2 text-right text-surface-500">
+                                <div class="flex items-center justify-end gap-2">
+                                    <div class="h-1.5 bg-surface-100 rounded-full overflow-hidden w-16">
+                                        <div class="h-full bg-emerald-400" :style="'width: ' + pctOfTotal(r.total_cost_usd) + '%'"></div>
+                                    </div>
+                                    <span class="font-mono text-[10px]" x-text="pctOfTotal(r.total_cost_usd) + '%'"></span>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function costPage() {
+    return {
+        loading: true,
+        rows: [], totals: {},
+        groupBy: 'entry',
+        since: '', until: '',
+        entryFilter: '', deptFilter: '',
+        scope: 'auto',
+        canSeeAll: false,
+
+        async load() {
+            this.loading = true;
+            try {
+                const me = await fetch('/api/v1/users/me').then(r => r.json()).catch(() => ({user: null}));
+                this.canSeeAll = (me.user?.role || '').toLowerCase() === 'root';
+            } catch {}
+
+            try {
+                const params = new URLSearchParams();
+                params.set('group_by', this.groupBy);
+                if (this.since) params.set('since', this.since);
+                if (this.until) params.set('until', this.until);
+                if (this.entryFilter) params.set('entry_id', this.entryFilter);
+                if (this.deptFilter) params.set('consumer_department', this.deptFilter);
+                if (this.scope !== 'auto') params.set('scope', this.scope);
+
+                const r = await fetch('/api/v1/catalog/cost?' + params);
+                if (!r.ok) throw new Error(r.status);
+                const data = await r.json();
+                this.rows = data.rows || [];
+                this.totals = data.totals || {};
+                // Mantém scope atualizado conforme efetivo retornado
+                this.scope = data.scope || 'auto';
+            } catch {
+                showToast('Erro ao carregar custos', 'error');
+            }
+            this.loading = false;
+        },
+
+        csvUrl() {
+            const params = new URLSearchParams();
+            if (this.since) params.set('since', this.since);
+            if (this.until) params.set('until', this.until);
+            if (this.entryFilter) params.set('entry_id', this.entryFilter);
+            if (this.deptFilter) params.set('consumer_department', this.deptFilter);
+            if (this.scope !== 'auto') params.set('scope', this.scope);
+            const q = params.toString();
+            return '/api/v1/catalog/cost/export.csv' + (q ? '?' + q : '');
+        },
+
+        hasFilters() {
+            return this.since || this.until || this.entryFilter || this.deptFilter;
+        },
+
+        clearFilters() {
+            this.since = '';
+            this.until = '';
+            this.entryFilter = '';
+            this.deptFilter = '';
+            this.load();
+        },
+
+        groupByLabel() {
+            return ({entry: 'Entry', consumer: 'Consumer', department: 'Departamento', day: 'Dia'})[this.groupBy] || this.groupBy;
+        },
+
+        pctOfTotal(cost) {
+            const total = this.totals.total_cost_usd || 0;
+            if (!total) return 0;
+            return ((cost / total) * 100).toFixed(1);
+        },
+
+        formatNum(n) {
+            if (n < 0.01 && n > 0) return n.toFixed(4);
+            return n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        },
+    }
+}
+</script>
+{% endblock %}
