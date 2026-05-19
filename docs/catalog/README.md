@@ -1,12 +1,13 @@
-# Catálogo / Marketplace Corporativo — Ondas 1 + 2
+# Catálogo / Marketplace Corporativo — Ondas 1 + 2 + 3
 
-Visão geral do módulo de catálogo entregue em **16 PRs incrementais**
-(10 da Onda 1 + 6 da Onda 2). Etiqueta nutricional R6.3 obrigatória,
+Visão geral do módulo de catálogo entregue em **20 PRs incrementais**
+(10 Onda 1 + 6 Onda 2 + 4 Onda 3). Etiqueta nutricional R6.3 obrigatória,
 governança Root, lifecycle explícito, External Platforms catalogadas,
-inventário regulatório com CSV export, stewardship dashboard,
-bulk decide para Root.
+inventário regulatório com CSV export, stewardship descentralizado a
+stewards de área, cost & consumption com chargeback futuro,
+recipes publicáveis como manifest declarativo.
 
-> **Onda 2 já entregue** — veja [ONDA2.md](ONDA2.md) para o delta específico.
+> **Onda 3 já entregue** — veja [ONDA3.md](ONDA3.md) e [ONDA2.md](ONDA2.md) para o delta específico de cada uma.
 
 ## O que entrega
 
@@ -179,35 +180,41 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
 - **Stewardship Dashboard** com flags is_orphan/is_stale/has_low_reliability (R11)
 - **Bulk decide** + filtros avançados na fila Root
 
-### Reservado para Onda 3+
+### ✅ Onda 3 entregue (PRs #63-#66)
+- **Stewardship descentralizado** — aberto a stewards de área (via `users.domains`)
+- **Cost & Consumption** — endpoint de registro + page com agregados + CSV export
+- **Recipes publicáveis** — kind=recipe como composição declarativa (manifest; execução fica para Onda 4)
 
-- **Recipes publicáveis** (mesh + bindings como artefato — R8.1)
-- **Sandbox** de invocação com dados mock (R14)
-- **Adapter A2A bidirecional** (consumir Maestros externos; expor agentes como MCP server)
-- **OPA tiered approval** (community auto, verified Root, official auditor — R3.1)
+### Reservado para Onda 4+
+
+- **A2A bidirecional** (consumir Maestros externos; expor agentes como MCP server)
 - **Verificação por execução** do capability disclosure (capability fingerprint)
+- **Auto-wire do cost** no engine (instrumentação automática de invocações)
+- **Execução real de recipes** (chain sequencial via engine)
+- **Sandbox** de invocação com dados mock (R14)
+- **OPA tiered approval** (community auto, verified Root, official auditor — R3.1)
 - **Federation de URN** entre instâncias Maestro (R5.3 — schema já prevê)
-- **Cost & Consumption page** dedicada (dados já coletados em `catalog_costs`)
-- **Stewardship aberto a stewards de área** (não só Root)
 - **Trust score erosion** por drift (R5.2)
 - **Revenue-share em recipes**
+- **Audit de anomalias de cost** (alertas de pico/limite)
 
 ## Métricas de entrega
 
-| Indicador | Onda 1 | Onda 2 (delta) | Total |
-|---|---|---|---|
-| PRs entregues | 10 | +6 | **16** |
-| Endpoints REST | 14 | +7 | **21** |
-| Páginas UI novas | 4 | +2 | **6** |
-| Páginas UI alteradas | 4 | +4 | 8 |
-| Tabelas PostgreSQL | 4 | +1 | **5** |
-| Testes unitários | 171 | +50 | **221** |
-| Pré-checks | 7 | +1 | **8** |
-| Audit actions distintas | 6 | +3 | **9** |
-| Breaking changes | 0 | 0 | **0** |
+| Indicador | Onda 1 | Onda 2 | Onda 3 (delta) | Total |
+|---|---|---|---|---|
+| PRs entregues | 10 | 6 | +4 | **20** |
+| Endpoints REST | 14 | 7 | +6 | **27** |
+| Páginas UI novas | 4 | 2 | +1 | **7** |
+| Páginas UI alteradas | 4 | 4 | +4 | 12 |
+| Tabelas PostgreSQL | 4 | 1 | +1 | **6** |
+| Testes unitários | 171 | 50 | +36 | **257** |
+| Pré-checks | 7 | 1 | +1 | **9** |
+| Audit actions distintas | 6 | 3 | +2 | **11** |
+| Breaking changes | 0 | 0 | **0** | — |
 
 ## Referências
 
+- [ONDA3.md](ONDA3.md) — resumo da Onda 3
 - [ONDA2.md](ONDA2.md) — resumo da Onda 2
 - [REGRESSION.md](REGRESSION.md) — checklist consolidado de regressão
 - [SMOKE_TEST.md](SMOKE_TEST.md) — roteiros manuais por PR
@@ -215,4 +222,6 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
   #51 (browse), #52 (detail), #53 (publish wizard), #54 (queue),
   #55 (integrations), #56 (fechamento)
 - PRs Onda 2: #57 (ext backend), #58 (ext UI), #59 (inventário),
-  #60 (stewardship), #61 (bulk decide), #62 (fechamento — este)
+  #60 (stewardship), #61 (bulk decide), #62 (fechamento)
+- PRs Onda 3: #63 (stewardship aberto), #64 (cost), #65 (recipes),
+  #66 (fechamento — este)

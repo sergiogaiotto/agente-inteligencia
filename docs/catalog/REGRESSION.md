@@ -277,3 +277,96 @@ Esperado: tabela com 13 colunas, PK=entry_id, FK→catalog_entries CASCADE, CHEC
 - [ ] Fase 6.7 — fluxo end-to-end completo
 
 **Onda 2 do Catálogo está pronta para sign-off e produção.**
+
+---
+
+## Fase 7 — Regressão Onda 3
+
+Adicional: Stewardship descentralizado + Cost & Consumption + Recipes.
+Total agora: **257 testes** (171 Onda 1 + 50 Onda 2 + 36 Onda 3).
+
+### 7.1 Automático
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+Esperado: **257 passed**. Suites Onda 3 adicionadas:
+- `TestStewardship` (3 novos cenários — auto root/non-root/restrict)
+- `TestRecordCost` (4), `TestGetCost` (5), `TestExportCostCsv` (2)
+- `TestRecipeKindCreation` (1), `TestRecipePut` (10), `TestRecipeGet` (3), `TestRecipeDelete` (3)
+- `TestRecipeChecks` (prechecks — 5)
+
+### 7.2 Schema novo
+
+```sql
+\d catalog_recipes
+```
+
+Esperado: tabela com `entry_id` PK + FK CASCADE, `steps JSONB`, timestamps.
+
+### 7.3 Endpoints novos (6 — total 27)
+
+| Rota | Método | Auth |
+|---|---|---|
+| `/entries/{id}/invocation-cost` | POST | qualquer user que vê a entry |
+| `/cost` | GET | auto scope (Root=all, demais=mine) |
+| `/cost/export.csv` | GET | mesmo scope |
+| `/entries/{id}/recipe` | GET | qualquer user que vê a entry |
+| `/entries/{id}/recipe` | PUT | owner/root, draft, kind=recipe |
+| `/entries/{id}/recipe` | DELETE | owner/root, draft |
+
+### 7.4 Comportamentos alterados
+
+| Endpoint/UI | Antes | Depois |
+|---|---|---|
+| `GET /stewardship` | 403 para non-Root | Root vê tudo; non-Root vê via `user.domains` |
+| Nav "Stewardship" | Só Root | Root OU user com domains não-vazios |
+| Recipe kind | Exigia artifact_type+id | Não exige (composição é o manifest) |
+| Precheck `a2a_has_artifact` | Aplicava a todo kind a2a | Skip para kind=recipe |
+| Precheck novo | — | `recipe_has_steps` (error) |
+
+### 7.5 Telas novas + atualizadas
+
+| Página | Status |
+|---|---|
+| `/catalog/cost` | NOVO — qualquer user, scope auto |
+| `/catalog/stewardship` | Aberto a stewards (banner contextual, botão condicional) |
+| `/catalog/detail` | Tab "Recipe Steps" condicional + modal com reorder |
+| `/catalog/publish` | Card "Construir Recipe" no Step 1 |
+
+### 7.6 Audit actions novas
+
+- `recipe_defined` (details: `step_count`, `target_entry_ids`)
+- `recipe_cleared`
+
+> Cost endpoint NÃO gera audit por invocação (volume alto). Onda 4 pode adicionar audit de anomalias.
+
+### 7.7 Fluxo end-to-end Onda 3
+
+```
+[publisher] /catalog/publish → "Construir Recipe" → cria recipe
+    ↓
+[publisher] /catalog/{id} → tab "Recipe Steps" → modal → add 3 steps
+    ↓
+[publisher] submete → Root aprova → publica
+    ↓
+[consumer] /catalog → vê recipe → invoca cada step manualmente (chain real Onda 4)
+[consumer] POST /entries/{step_id}/invocation-cost (registra custo de cada step)
+    ↓
+[consumer] /catalog/cost → vê próprio consumo agregado
+[Root] /catalog/cost → vê tudo, exporta CSV para chargeback
+[steward] /catalog/stewardship → vê entries da sua área, marca órfãs
+```
+
+## Sign-off Onda 3
+
+- [ ] Fase 7.1 — 257 testes passam
+- [ ] Fase 7.2 — 6 tabelas catalog_* existem (5 anteriores + 1 nova)
+- [ ] Fase 7.3 — 27 endpoints REST + 7 UI registrados
+- [ ] Fase 7.4 — comportamentos alterados funcionam (stewardship aberto, recipe sem artifact)
+- [ ] Fase 7.5 — telas funcionais
+- [ ] Fase 7.6 — audit_log popula com 11 actions distintas
+- [ ] Fase 7.7 — fluxo end-to-end completo
+
+**Onda 3 do Catálogo está pronta para sign-off e produção.**
