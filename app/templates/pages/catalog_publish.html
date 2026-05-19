@@ -34,9 +34,30 @@
 
     <!-- ═══════════ STEP 1: Selecionar artefato ═══════════ -->
     <div x-show="step === 1" class="space-y-4">
+
+        <!-- External platform card (Onda 2) — destaque no topo -->
+        <div class="rounded-xl border border-rose-200 bg-rose-50/40 p-4">
+            <label class="flex items-start gap-3 cursor-pointer"
+                   :class="form.kind === 'external_platform' ? 'opacity-100' : 'opacity-90'">
+                <input type="radio" name="artifact" value="external"
+                       :checked="form.kind === 'external_platform'"
+                       @change="pickExternalPlatform()" class="mt-1 shrink-0">
+                <div class="flex-1">
+                    <div class="flex items-center gap-1.5 mb-1">
+                        <span class="text-[14px] font-bold text-rose-800">Registrar Plataforma Externa</span>
+                        <span class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[9px] font-bold uppercase">novo</span>
+                    </div>
+                    <p class="text-[11px] text-rose-700">
+                        Catalogar uma IA terceirizada aprovada (ChatGPT Enterprise, Cursor, Copilot Studio, Lindy…).
+                        Sem vínculo a agent/skill interno — você declara vendor, contrato, custo mensal e restrições.
+                    </p>
+                </div>
+            </label>
+        </div>
+
         <div class="rounded-xl border border-surface-200 bg-white p-4">
-            <h3 class="text-[13px] font-bold text-brand-900 mb-1">Selecione o artefato</h3>
-            <p class="text-[11px] text-surface-500 mb-3">Apenas agentes e skills da plataforma podem virar entries. Externals/recipes vêm em Ondas futuras.</p>
+            <h3 class="text-[13px] font-bold text-brand-900 mb-1">Ou publique um artefato interno</h3>
+            <p class="text-[11px] text-surface-500 mb-3">Agentes ou skills construídos na plataforma.</p>
 
             <div class="flex items-center gap-2 mb-3 flex-wrap">
                 <input type="text" x-model="step1Search" placeholder="Buscar por nome..."
@@ -137,8 +158,45 @@
         </div>
     </div>
 
-    <!-- ═══════════ STEP 3: Capability Disclosure ═══════════ -->
+    <!-- ═══════════ STEP 3: Capability Disclosure (+ external metadata se aplicável) ═══════════ -->
     <div x-show="step === 3" class="space-y-4">
+
+        <!-- External Platform metadata (Onda 2 — só para kind=external_platform) -->
+        <div x-show="form.kind === 'external_platform'" class="rounded-xl border border-rose-200 bg-rose-50/30 p-4">
+            <h3 class="text-[13px] font-bold text-rose-800 mb-1">Metadata da Plataforma Externa</h3>
+            <p class="text-[11px] text-rose-700 mb-3">Vendor é obrigatório. Demais campos podem ser refinados depois em /catalog/{id}.</p>
+
+            <div class="space-y-3 text-[12px]">
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">Vendor <span class="text-rose-500">*</span></label>
+                    <input type="text" x-model="form.external.vendor" placeholder="OpenAI, Anthropic, GitHub..."
+                           class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-600 mb-1">Status contrato</label>
+                        <select x-model="form.external.contract_status" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none">
+                            <option value="">—</option>
+                            <option value="none">Nenhum</option>
+                            <option value="negotiating">Negociando</option>
+                            <option value="active">Ativo</option>
+                            <option value="expired">Expirado</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-600 mb-1">Custo mensal (USD)</label>
+                        <input type="number" min="0" step="0.01" x-model.number="form.external.monthly_cost_usd"
+                               class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400 font-mono">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">Restrições rápidas (refine depois)</label>
+                    <input type="text" x-model="form.external.restrictions" placeholder="ex: sem PII, sem dados financeiros"
+                           class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400">
+                </div>
+            </div>
+        </div>
+
         <div class="rounded-xl border border-surface-200 bg-white p-4">
             <h3 class="text-[13px] font-bold text-brand-900 mb-1">Capability Disclosure (etiqueta nutricional)</h3>
             <p class="text-[11px] text-surface-500 mb-3">Obrigatória para Root aprovar. Declare o que esta entry faz com dados — consumers verão antes de invocar.</p>
@@ -276,9 +334,10 @@ function publishWizard() {
 
         // Form completo
         form: {
-            kind: '',                 // 'agent' | 'skill'
+            kind: '',                 // 'agent' | 'skill' | 'external_platform'
             artifact_type: '',
             artifact_id: '',
+            adapter_type: 'a2a',      // default; muda para 'openai_assistants' em external
             name: '',
             description: '',
             version: '1.0.0',
@@ -293,6 +352,10 @@ function publishWizard() {
                 processes_pii: false, processes_financial: false, processes_health: false,
                 trains_on_input: false, output_is_deterministic: false,
                 data_residency: '', additional_notes: '',
+            },
+            // External metadata (Onda 2 — só usado quando kind=external_platform)
+            external: {
+                vendor: '', contract_status: '', monthly_cost_usd: null, restrictions: '',
             },
         },
         capExternalApisText: '',
@@ -368,6 +431,7 @@ function publishWizard() {
             this.form.kind = a._kind;
             this.form.artifact_type = a._kind;
             this.form.artifact_id = a.id;
+            this.form.adapter_type = 'a2a';
             // Pré-preenche metadata se ainda vazia
             if (!this.form.name) this.form.name = a.name || '';
             if (!this.form.description) this.form.description = a.description || a.purpose || '';
@@ -375,10 +439,26 @@ function publishWizard() {
             if (!this.form.version || this.form.version === '1.0.0') this.form.version = a.version || '1.0.0';
         },
 
+        pickExternalPlatform() {
+            // Reset seleção de artefato; external não tem artifact_id
+            this.selectedArtifact = null;
+            this.form.kind = 'external_platform';
+            this.form.artifact_type = '';
+            this.form.artifact_id = '';
+            this.form.adapter_type = 'openai_assistants';  // mais comum; pode mudar
+        },
+
         canAdvance() {
-            if (this.step === 1) return !!this.form.artifact_id;
+            if (this.step === 1) {
+                // External platform: kind setado, artifact não obrigatório
+                if (this.form.kind === 'external_platform') return true;
+                return !!this.form.artifact_id;
+            }
             if (this.step === 2) return this.form.name && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(this.form.version);
             if (this.step === 3) {
+                if (this.form.kind === 'external_platform' && !this.form.external.vendor) {
+                    return false;
+                }
                 // Se calls_external_apis=true, lista precisa ter pelo menos 1 URL
                 if (this.form.capability.calls_external_apis &&
                     !this.capExternalApisText.split('\n').map(s => s.trim()).filter(Boolean).length) {
@@ -421,14 +501,16 @@ function publishWizard() {
             this.submitting = true;
             this.submitError = null;
             let entryId = null;
+            const isExternal = this.form.kind === 'external_platform';
             try {
                 // 1. Cria entry
                 const createPayload = {
                     name: this.form.name,
                     description: this.form.description,
                     kind: this.form.kind,
-                    artifact_type: this.form.artifact_type,
-                    artifact_id: this.form.artifact_id,
+                    artifact_type: this.form.artifact_type || null,
+                    artifact_id: this.form.artifact_id || null,
+                    adapter_type: this.form.adapter_type,
                     version: this.form.version,
                     domain: this.form.domain || null,
                     visibility: this.form.visibility,
@@ -446,6 +528,24 @@ function publishWizard() {
                 }
                 const entry = await r1.json();
                 entryId = entry.id;
+
+                // 1b. Se external, salva metadata externa (vendor mínimo já validado no Step 3)
+                if (isExternal) {
+                    const extPayload = {};
+                    for (const [k, v] of Object.entries(this.form.external)) {
+                        if (v === '' || v === null || v === undefined) continue;
+                        extPayload[k] = v;
+                    }
+                    const rExt = await fetch(`/api/v1/catalog/entries/${entryId}/external-metadata`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(extPayload),
+                    });
+                    if (!rExt.ok) {
+                        const err = await rExt.json();
+                        throw new Error('Entry criada (' + entryId + ') mas metadata externa falhou: ' + (err.detail || JSON.stringify(err)));
+                    }
+                }
 
                 // 2. Declara capability
                 const capPayload = {...this.form.capability};
