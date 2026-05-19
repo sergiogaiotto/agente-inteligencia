@@ -17,6 +17,7 @@ PAGES = {
     "/catalog/publish": {"template":"pages/catalog_publish.html","title":"Publicar no Catálogo","section":"catalog"},
     "/catalog/queue": {"template":"pages/catalog_queue.html","title":"Fila de Revisão","section":"catalog_queue"},
     "/catalog/inventory": {"template":"pages/catalog_inventory.html","title":"Inventário Regulatório","section":"catalog_inventory"},
+    "/catalog/stewardship": {"template":"pages/catalog_stewardship.html","title":"Stewardship","section":"catalog_stewardship"},
     "/workspace": {"template":"pages/workspace.html","title":"Workspace","section":"workspace"},
     "/mesh": {"template":"pages/mesh.html","title":"AI Mesh","section":"mesh"},
     "/mcp": {"template":"pages/tools.html","title":"MCP","section":"tools"},
@@ -101,6 +102,8 @@ async def pg_catalog_publish(r: Request): return await _render(r, "/catalog/publ
 async def pg_catalog_queue(r: Request): return await _render(r, "/catalog/queue")
 @router.get("/catalog/inventory", response_class=HTMLResponse)
 async def pg_catalog_inventory(r: Request): return await _render(r, "/catalog/inventory")
+@router.get("/catalog/stewardship", response_class=HTMLResponse)
+async def pg_catalog_stewardship(r: Request): return await _render(r, "/catalog/stewardship")
 @router.get("/catalog/{entry_id}", response_class=HTMLResponse)
 async def pg_catalog_detail(r: Request, entry_id: str): return await _render(r, "/catalog/detail", entry_id=entry_id)
 @router.get("/workspace", response_class=HTMLResponse)

@@ -1,0 +1,282 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="stewardshipPage()" x-init="load()" class="p-4 lg:p-6">
+
+    <!-- Header -->
+    <div class="mb-4">
+        <p class="text-[11px] text-surface-400 mb-1">
+            <a href="/catalog" class="hover:text-brand-600">Catálogo</a>
+            <span class="mx-1">/</span>
+            <span class="text-brand-900">Stewardship</span>
+        </p>
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <h2 class="text-[18px] font-bold text-brand-900">Stewardship Dashboard</h2>
+                <p class="text-[12px] text-surface-400 mt-0.5">Entries agrupadas por área responsável. Detecta órfãs (owner inativo), entries paradas (30+ dias sem uso) e baixa confiabilidade.</p>
+            </div>
+            <button @click="load()" :disabled="loading" class="inline-flex items-center gap-2 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] font-medium text-brand-900 hover:border-brand-300">
+                <svg class="w-3.5 h-3.5" :class="loading ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+                Atualizar
+            </button>
+        </div>
+    </div>
+
+    <template x-if="forbidden">
+        <div class="rounded-xl border-2 border-dashed border-rose-200 bg-rose-50/30 p-12 text-center">
+            <p class="text-[14px] font-semibold text-rose-700 mb-1">Acesso restrito</p>
+            <p class="text-[12px] text-surface-500 mb-3">Stewardship acessível apenas para usuários com papel <code class="bg-white px-1 rounded">root</code>.</p>
+            <a href="/catalog" class="text-[12px] text-brand-600 hover:underline">Voltar ao catálogo</a>
+        </div>
+    </template>
+
+    <template x-if="!forbidden">
+        <div>
+            <!-- Totais agregados -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+                <div class="rounded-lg bg-brand-50 border border-brand-100 px-3 py-2.5">
+                    <div class="text-[9px] font-semibold uppercase text-brand-700">Áreas</div>
+                    <div class="text-[18px] font-bold text-brand-700 mt-0.5" x-text="totals.teams"></div>
+                </div>
+                <div class="rounded-lg bg-rose-50 border border-rose-100 px-3 py-2.5">
+                    <div class="text-[9px] font-semibold uppercase text-rose-700">Órfãs</div>
+                    <div class="text-[18px] font-bold text-rose-700 mt-0.5" x-text="totals.orphan"></div>
+                    <div class="text-[9px] text-rose-600">owner inativo / deletado</div>
+                </div>
+                <div class="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2.5">
+                    <div class="text-[9px] font-semibold uppercase text-amber-700">Paradas</div>
+                    <div class="text-[18px] font-bold text-amber-700 mt-0.5" x-text="totals.stale"></div>
+                    <div class="text-[9px] text-amber-600">published sem uso há 30+ dias</div>
+                </div>
+                <div class="rounded-lg bg-violet-50 border border-violet-100 px-3 py-2.5">
+                    <div class="text-[9px] font-semibold uppercase text-violet-700">Baixa confiab.</div>
+                    <div class="text-[18px] font-bold text-violet-700 mt-0.5" x-text="totals.low_reliability"></div>
+                    <div class="text-[9px] text-violet-600">reliability &lt; 50%</div>
+                </div>
+            </div>
+
+            <!-- Filtro por área -->
+            <div class="rounded-xl border border-surface-200 bg-white p-3 mb-4">
+                <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-[11px] font-semibold text-surface-500">Área:</span>
+                    <select x-model="filterTeam" @change="load()" class="rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] outline-none">
+                        <option value="">Todas</option>
+                        <template x-for="t in teamList" :key="t">
+                            <option :value="t" x-text="t"></option>
+                        </template>
+                    </select>
+                    <button x-show="filterTeam" @click="filterTeam=''; load()" class="text-[11px] text-surface-500 hover:text-brand-600 px-2 py-1.5">Limpar</button>
+                    <span class="ml-auto text-[10px] text-surface-400" x-text="entries.length + ' entries'"></span>
+                </div>
+            </div>
+
+            <template x-if="loading">
+                <p class="text-center text-[12px] text-surface-400 py-8">Carregando...</p>
+            </template>
+
+            <template x-if="!loading && entries.length === 0">
+                <div class="rounded-xl border border-surface-200 bg-white p-8 text-center">
+                    <p class="text-[13px] text-surface-500">Nenhuma entry encontrada.</p>
+                </div>
+            </template>
+
+            <!-- Cards por área -->
+            <div class="space-y-3">
+                <template x-for="(group, team) in entriesByTeam" :key="team">
+                    <div class="rounded-xl border border-surface-200 bg-white">
+                        <div class="flex items-center justify-between border-b border-surface-100 px-4 py-3">
+                            <div>
+                                <h3 class="text-[14px] font-bold text-brand-900" x-text="team"></h3>
+                                <p class="text-[10px] text-surface-400" x-text="group.length + ' entries · ' + countTeamFlags(group)"></p>
+                            </div>
+                        </div>
+                        <div class="divide-y divide-surface-100">
+                            <template x-for="e in group" :key="e.id">
+                                <div class="px-4 py-2.5 flex items-center gap-3">
+                                    <a :href="'/catalog/' + e.id" class="flex-1 min-w-0">
+                                        <div class="flex items-center gap-1.5 flex-wrap">
+                                            <span class="text-[13px] font-semibold text-brand-900 truncate hover:text-brand-600" x-text="e.name"></span>
+                                            <span class="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase"
+                                                  :class="kindBadgeClass(e.kind)" x-text="e.kind"></span>
+                                            <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-500" x-text="'v' + e.version"></span>
+                                            <span class="rounded-full px-1.5 py-0.5 text-[9px]"
+                                                  :class="statusBadgeClass(e.status)" x-text="e.status"></span>
+                                        </div>
+                                        <div class="text-[10px] text-surface-500 mt-0.5">
+                                            owner: <span class="font-mono" x-text="e.owner_username || e.owner_user_id"></span>
+                                            <span x-show="e.trust_invocation_count" class="text-surface-400 ml-2" x-text="(e.trust_invocation_count || 0) + ' invocações'"></span>
+                                            <span x-show="e.trust_last_invoked_at" class="text-surface-400 ml-2" x-text="'última: ' + formatDate(e.trust_last_invoked_at)"></span>
+                                        </div>
+                                    </a>
+                                    <!-- Flags -->
+                                    <div class="flex items-center gap-1 shrink-0">
+                                        <span x-show="e.is_orphan" class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Owner inativo ou deletado">Órfã</span>
+                                        <span x-show="e.is_stale" class="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Published sem uso há 30+ dias">Parada</span>
+                                        <span x-show="e.has_low_reliability" class="rounded-full bg-violet-100 text-violet-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Reliability < 50%">Baixa conf.</span>
+                                    </div>
+                                    <!-- Ações Root -->
+                                    <button @click="openReassign(e)" class="text-[11px] text-brand-600 hover:underline shrink-0">Realocar</button>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </template>
+
+    <!-- ═══ MODAL: reassign ═══ -->
+    <div x-show="reassignModalOpen" @keydown.escape.window="reassignModalOpen = false"
+         x-transition.opacity
+         class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
+        <div @click.outside="reassignModalOpen = false" class="bg-white rounded-2xl w-full max-w-md p-5 shadow-xl">
+            <h3 class="text-[14px] font-bold text-brand-900 mb-2">Realocar entry</h3>
+            <p class="text-[12px] text-surface-600 mb-3" x-text="reassignTarget?.name"></p>
+            <div class="space-y-3 text-[12px]">
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">Novo owner (user_id)</label>
+                    <input type="text" x-model="reassignForm.new_owner_user_id" :placeholder="reassignTarget?.owner_user_id" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] font-mono outline-none focus:border-brand-400">
+                    <p class="text-[9px] text-surface-400 mt-0.5">Deixe vazio para não alterar. User precisa existir.</p>
+                </div>
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">Nova área (steward_team)</label>
+                    <input type="text" x-model="reassignForm.new_steward_team" :placeholder="reassignTarget?.steward_team || '(sem steward)'" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400">
+                    <p class="text-[9px] text-surface-400 mt-0.5">Deixe vazio para não alterar. Para limpar, digite algo e apague.</p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-5">
+                <button @click="reassignModalOpen = false" class="px-3 py-1.5 text-[12px] rounded-lg border border-surface-200 hover:bg-surface-50">Cancelar</button>
+                <button @click="submitReassign()" :disabled="reassignSaving" class="px-3 py-1.5 text-[12px] rounded-lg bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50">
+                    <span x-text="reassignSaving ? 'Salvando...' : 'Confirmar'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function stewardshipPage() {
+    return {
+        loading: true, forbidden: false,
+        entries: [], byTeam: {}, filterTeam: '',
+
+        reassignModalOpen: false, reassignTarget: null,
+        reassignForm: {new_owner_user_id: '', new_steward_team: ''},
+        reassignSaving: false,
+
+        async load() {
+            this.loading = true;
+            // Auth
+            try {
+                const me = await fetch('/api/v1/users/me').then(r => r.json()).catch(() => ({user: null}));
+                if ((me.user?.role || '').toLowerCase() !== 'root') {
+                    this.forbidden = true;
+                    this.loading = false;
+                    return;
+                }
+            } catch {
+                this.forbidden = true;
+                this.loading = false;
+                return;
+            }
+
+            try {
+                const params = new URLSearchParams();
+                if (this.filterTeam) params.set('steward_team', this.filterTeam);
+                const r = await fetch('/api/v1/catalog/stewardship?' + params);
+                if (!r.ok) throw new Error(r.status);
+                const data = await r.json();
+                this.entries = data.entries || [];
+                this.byTeam = data.by_team || {};
+            } catch {
+                showToast('Erro ao carregar stewardship', 'error');
+            }
+            this.loading = false;
+        },
+
+        get entriesByTeam() {
+            const groups = {};
+            for (const e of this.entries) {
+                const team = e.steward_team || '(sem steward)';
+                if (!groups[team]) groups[team] = [];
+                groups[team].push(e);
+            }
+            return groups;
+        },
+
+        get teamList() {
+            return Object.keys(this.entriesByTeam).sort();
+        },
+
+        get totals() {
+            const t = {teams: 0, orphan: 0, stale: 0, low_reliability: 0};
+            for (const [team, agg] of Object.entries(this.byTeam)) {
+                t.teams++;
+                t.orphan += agg.orphan || 0;
+                t.stale += agg.stale || 0;
+                t.low_reliability += agg.low_reliability || 0;
+            }
+            return t;
+        },
+
+        countTeamFlags(group) {
+            const orphan = group.filter(e => e.is_orphan).length;
+            const stale = group.filter(e => e.is_stale).length;
+            const parts = [];
+            if (orphan) parts.push(orphan + ' órfã' + (orphan !== 1 ? 's' : ''));
+            if (stale) parts.push(stale + ' parada' + (stale !== 1 ? 's' : ''));
+            return parts.length ? parts.join(' · ') : 'tudo saudável';
+        },
+
+        openReassign(entry) {
+            this.reassignTarget = entry;
+            this.reassignForm = {new_owner_user_id: '', new_steward_team: ''};
+            this.reassignModalOpen = true;
+        },
+
+        async submitReassign() {
+            const payload = {};
+            // Só envia campos que foram preenchidos
+            if (this.reassignForm.new_owner_user_id.trim())
+                payload.new_owner_user_id = this.reassignForm.new_owner_user_id.trim();
+            if (this.reassignForm.new_steward_team !== '')
+                payload.new_steward_team = this.reassignForm.new_steward_team.trim();
+            if (Object.keys(payload).length === 0) {
+                showToast('Nenhuma mudança para confirmar', 'error');
+                return;
+            }
+            this.reassignSaving = true;
+            try {
+                const r = await fetch('/api/v1/catalog/entries/' + this.reassignTarget.id + '/reassign', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                });
+                if (!r.ok) throw new Error((await r.json()).detail || 'erro');
+                showToast('Entry realocada');
+                this.reassignModalOpen = false;
+                await this.load();
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+            this.reassignSaving = false;
+        },
+
+        kindBadgeClass(k) {
+            return ({agent:'bg-violet-50 text-violet-700', skill:'bg-teal-50 text-teal-700', recipe:'bg-brand-50 text-brand-700',
+                     application:'bg-amber-50 text-amber-700', external_platform:'bg-rose-50 text-rose-700'})[k] || 'bg-surface-100 text-surface-600';
+        },
+        statusBadgeClass(s) {
+            return ({draft:'bg-surface-100 text-surface-500', submitted:'bg-amber-50 text-amber-700', approved:'bg-brand-50 text-brand-700',
+                     published:'bg-emerald-50 text-emerald-700', deprecated:'bg-amber-100 text-amber-800', archived:'bg-surface-200 text-surface-500'})[s] || 'bg-surface-100 text-surface-500';
+        },
+        formatDate(ds) {
+            if (!ds) return '—';
+            try { return new Date(ds).toLocaleDateString('pt-BR'); } catch { return ds; }
+        },
+    }
+}
+</script>
+{% endblock %}
