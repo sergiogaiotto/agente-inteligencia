@@ -1042,3 +1042,226 @@ Acesse `/catalog/publish`:
 - [ ] Wizard exige vendor no Step 3 quando external
 - [ ] Submit final encadeia 4 chamadas (com PUT external-metadata)
 - [ ] Após submit, entry visível em /catalog com badge "Externa"
+
+---
+
+# Smoke Test — Onda 2 / PR 3 (Inventário Regulatório)
+
+Relatório cross-entries para comitê de privacidade/segurança. 2 endpoints
++ 1 página + 1 nav item. Tudo gated por Root.
+
+## 61 — Testes + rotas
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+**Esperado**: 202 passed (196 + 6 novos).
+
+Endpoints: `/api/v1/catalog/inventory`, `/api/v1/catalog/inventory/export.csv`, UI `/catalog/inventory`. Nav "Inventário" abaixo de "Fila Root" gated por Root.
+
+## 62 — Auth gate
+
+| User | Recurso | Esperado |
+|---|---|---|
+| comum | `GET /inventory` | 403 |
+| comum | `GET /inventory/export.csv` | 403 |
+| comum | UI `/catalog/inventory` | "Acesso restrito" |
+| root | tudo acima | 200 OK |
+
+## 63 — Filtros tristate
+
+URL: `/catalog/inventory?processes_pii=true&calls_external_apis=false&kind=external_platform&residency=BR`
+
+Esperado: filtra entries com PII=true E externas APIs=false E kind=external_platform E residency=BR. Vazio = não filtra.
+
+## 64 — Agregados rápidos
+
+4 cards no topo: Processam PII (rosa) / Chamam APIs externas (âmbar) / Plataformas externas (azul) / Custo mensal USD (verde, sum). Atualizam com filtros.
+
+## 65 — Export CSV
+
+Click "Export CSV" → download `maestro-catalog-inventory-<timestamp>.csv` com 28 colunas. `external_apis_list` serializado com `; `. Datetimes em ISO string.
+
+## Critérios de aceitação Onda 2 / PR 3
+
+- [x] 202 testes passam (196 + 6 novos)
+- [x] 3 rotas registradas
+- [ ] Auth gate funciona (3 rotas)
+- [ ] Filtros tristate (true/false/vazio)
+- [ ] Agregados refletem filtros
+- [ ] CSV baixa com 28 colunas e nome timestamp
+
+---
+
+# Smoke Test — Onda 2 / PR 4 (Stewardship Dashboard)
+
+Visualiza saúde de entries agrupadas por área + ação reassign.
+
+## 66 — Testes + rotas
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+**Esperado**: 213 passed (202 + 11 novos).
+
+3 rotas: `GET /api/v1/catalog/stewardship`, `POST /entries/{id}/reassign`, UI `/catalog/stewardship`. Nav "Stewardship" gated por Root.
+
+## 67 — Flags de saúde (SQL-derivadas)
+
+| Flag | Critério |
+|---|---|
+| `is_orphan` | owner deletado OU `users.status != 'active'` |
+| `is_stale` | `status='published'` AND último uso > 30 dias |
+| `has_low_reliability` | `trust_reliability < 0.5` |
+
+## 68 — Reassign
+
+```powershell
+# Root realoca owner + steward
+curl -X POST http://localhost:7000/api/v1/catalog/entries/<eid>/reassign `
+  -H "Content-Type: application/json" -b $cookies_root `
+  -d '{"new_owner_user_id":"<user-id-valido>","new_steward_team":"rh"}'
+```
+
+**Esperado**:
+- 200 com payload atualizado
+- 422 se new_owner_user_id não existe
+- 422 se payload vazio
+- Audit `stewardship_reassigned` com `details.{owner,steward_team}.{from,to}`
+- `new_steward_team=""` limpa o campo (vira NULL)
+
+## 69 — UI
+
+- 4 cards totais (áreas / órfãs / paradas / baixa conf.)
+- Filtro por área
+- Cards por team com entries listadas
+- Flags visuais (rosa/amber/violet) por entry
+- Botão "Realocar" abre modal
+
+## Critérios de aceitação Onda 2 / PR 4
+
+- [x] 213 testes passam (202 + 11 novos)
+- [x] 3 rotas registradas
+- [ ] Auth gate (não-Root bloqueado)
+- [ ] Flags is_orphan / is_stale / has_low_reliability detectadas
+- [ ] Reassign valida user existe
+- [ ] Audit `stewardship_reassigned` com from/to
+- [ ] Nav "Stewardship" visível só para Root
+
+---
+
+# Smoke Test — Onda 2 / PR 5 (Bulk decide + filtros avançados)
+
+Root processa N submissions em batch + filtros client-side adicionais.
+
+## 70 — Testes + endpoint
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+**Esperado**: 221 passed (213 + 8 novos).
+
+Novo endpoint: `POST /api/v1/catalog/submissions/bulk-decide`.
+
+## 71 — Bulk approve em N submissions
+
+```powershell
+curl -X POST http://localhost:7000/api/v1/catalog/submissions/bulk-decide `
+  -H "Content-Type: application/json" -b $cookies_root `
+  -d '{"submission_ids":["sid1","sid2","sid3"],"decision":"approved","notes":"lote OK"}'
+```
+
+**Esperado** response:
+```json
+{
+  "decision": "approved",
+  "total": 3,
+  "succeeded_count": 3,
+  "failed_count": 0,
+  "succeeded": ["sid1", "sid2", "sid3"],
+  "failed": []
+}
+```
+
+## 72 — Validações Pydantic
+
+| Payload | Esperado |
+|---|---|
+| `submission_ids: []` | 422 |
+| `submission_ids: ["a","a"]` | 422 (duplicatas) |
+| `decision: "maybe"` | 422 |
+| `submission_ids` com 101+ itens | 422 (max_length) |
+
+## 73 — Falhas individuais não interrompem batch
+
+Misture IDs válidos com inexistente:
+```json
+{"submission_ids": ["sid_valido", "nonexistent"], "decision": "approved"}
+```
+Esperado: `succeeded_count=1, failed_count=1`, `failed[0].reason="não encontrada"`.
+
+## 74 — UI: checkbox + filtros
+
+Na tela `/catalog/queue` (tab Pendentes):
+- Painel novo de filtros: submitter (input) / kind (select) / capability (select) / residency (input)
+- Contador "X / Y" mostra filtrados/total
+- Checkbox por linha + Select-all no topo
+- Bulk action bar aparece com seleção (Aprovar todas / Pedir mudanças / Rejeitar todas)
+- Modal mostra resultado após submit (succeeded + failed list com motivos)
+
+## 75 — Audit do bulk
+
+```sql
+SELECT action, details->>'bulk' AS bulk, COUNT(*)
+FROM audit_log
+WHERE entity_type = 'catalog_entry'
+  AND action LIKE 'review_%'
+GROUP BY action, bulk;
+```
+
+Esperado: linhas com `bulk=true` distinguíveis das individuais.
+
+## Critérios de aceitação Onda 2 / PR 5
+
+- [x] 221 testes passam (213 + 8 novos)
+- [x] Endpoint `/bulk-decide` registrado
+- [ ] Não-Root: 403
+- [ ] Payload inválido: 422
+- [ ] Falhas individuais isoladas (não bloqueiam batch)
+- [ ] Filtros client-side reduzem visíveis sem nova request
+- [ ] Bulk modal mostra resultado com falhas detalhadas
+- [ ] audit_log com `details.bulk=true`
+
+---
+
+# Smoke Test — Onda 2 / PR 6 (Fechamento)
+
+Sem código novo. Apenas documentação consolidada de fechamento.
+
+## 76 — Documentação atualizada
+
+- `docs/catalog/README.md` — métricas Onda 1+2 + status atual + reservado para Onda 3
+- `docs/catalog/ONDA2.md` — novo, resumo da Onda 2 com mapa de PRs + delta
+- `docs/catalog/REGRESSION.md` — adiciona Fase 6 (Onda 2)
+- `docs/catalog/SMOKE_TEST.md` — seções 61-76 cobrindo todos os PRs Onda 2
+
+## 77 — Sign-off final
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+**Esperado**: 221 passed.
+
+## Critérios de aceitação Onda 2 / PR 6
+
+- [x] 221 testes passam
+- [x] ONDA2.md criado
+- [x] README.md atualizado com métricas combinadas
+- [x] REGRESSION.md tem Fase 6 com checklist Onda 2
+- [x] SMOKE_TEST.md tem seções 61-77
+
+**Onda 2 do Catálogo está pronta para sign-off e produção.**
