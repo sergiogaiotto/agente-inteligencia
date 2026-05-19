@@ -21,9 +21,13 @@ import logging
 import uuid
 from typing import Optional
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.catalog.models import CatalogEntryCreate, CatalogEntryUpdate
+from app.catalog.lifecycle import can_transition_entry, can_transition_review
+from app.catalog.models import CatalogEntryCreate, CatalogEntryUpdate, SubmissionCreate, SubmissionDecision
+from app.catalog.prechecks import run_prechecks
 from app.catalog.queries import (
     can_user_see,
     db_row_to_entry_dict,
@@ -32,7 +36,13 @@ from app.catalog.queries import (
 )
 from app.catalog.urn import make_urn
 from app.core.auth import require_user
-from app.core.database import audit_repo, catalog_entries_repo
+from app.core.database import (
+    audit_repo,
+    catalog_entries_repo,
+    catalog_submissions_repo,
+    catalog_disclosure_repo,
+    users_repo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -228,3 +238,213 @@ async def delete_entry(entry_id: str, user: dict = Depends(require_user)):
         raise HTTPException(404, "Entry não encontrada")
     await _audit("deleted", entry_id, user["id"], {"urn": existing.get("urn")})
     return {"message": "Entry removida", "id": entry_id}
+
+
+# ═════════════════════════════════════════════════════════════════
+# Workflow: submit → review (decide) → publish → deprecate
+# ═════════════════════════════════════════════════════════════════
+
+
+def _entry_snapshot(entry: dict) -> dict:
+    """Captura subset relevante da entry para audit/replay da submissão."""
+    keys = (
+        "id", "urn", "name", "description", "kind", "artifact_type", "artifact_id",
+        "domain", "version", "visibility", "visibility_scope", "owner_user_id",
+        "steward_team", "adapter_type",
+    )
+    return {k: entry.get(k) for k in keys}
+
+
+async def _require_status_transition(entry: dict, to_state: str):
+    """Valida que entry pode transitar para to_state. 409 se não."""
+    current = entry.get("status")
+    if not can_transition_entry(current, to_state):
+        raise HTTPException(
+            409,
+            f"Entry em status '{current}' não pode transitar para '{to_state}'",
+        )
+
+
+@router.post("/entries/{entry_id}/submit", status_code=201)
+async def submit_entry(
+    entry_id: str,
+    data: SubmissionCreate,
+    user: dict = Depends(require_user),
+):
+    """Publisher submete entry para revisão Root.
+
+    Efeitos: roda pré-checks, cria submission (review_status='pending'),
+    transita entry draft→submitted, registra audit.
+    """
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem submeter")
+    await _require_status_transition(entry, "submitted")
+
+    # Insumos para pré-checks
+    disclosure = await catalog_disclosure_repo.find_by_id(entry_id)  # PK = entry_id
+    owner = await users_repo.find_by_id(entry.get("owner_user_id"))
+    report = run_prechecks(entry, disclosure=disclosure, owner=owner)
+
+    import json
+    import uuid
+    sub_id = str(uuid.uuid4())
+    submission = {
+        "id": sub_id,
+        "entry_id": entry_id,
+        "submitted_by": user["id"],
+        "snapshot": json.dumps(_entry_snapshot(entry)),
+        "precheck_report": json.dumps(report),
+        "precheck_passed": report["passed"],
+        "review_status": "pending",
+        "review_notes": (data.notes or ""),
+    }
+    await catalog_submissions_repo.create(submission)
+    await catalog_entries_repo.update(entry_id, {
+        "status": "submitted",
+        "updated_at": datetime.now(timezone.utc),
+    })
+    await _audit("submitted", entry_id, user["id"], {
+        "submission_id": sub_id,
+        "precheck_passed": report["passed"],
+        "warnings": report["warnings_count"],
+        "errors": report["errors_count"],
+    })
+
+    return {
+        "submission_id": sub_id,
+        "entry_status": "submitted",
+        "precheck_report": report,
+    }
+
+
+@router.post("/submissions/{sub_id}/decide")
+async def decide_submission(
+    sub_id: str,
+    data: SubmissionDecision,
+    user: dict = Depends(require_user),
+):
+    """Root decide sobre uma submissão. approved → entry vai para 'approved'
+    (publisher publica em seguida). rejected/changes_requested → entry volta
+    para 'draft' para iteração."""
+    if not is_root(user):
+        raise HTTPException(403, "Apenas Root pode decidir submissões")
+
+    sub = await catalog_submissions_repo.find_by_id(sub_id)
+    if not sub:
+        raise HTTPException(404, "Submissão não encontrada")
+    if not can_transition_review(sub.get("review_status"), data.decision):
+        raise HTTPException(
+            409,
+            f"Submissão em status '{sub.get('review_status')}' não admite transição para '{data.decision}'",
+        )
+
+    # Estado da entry segue a decisão
+    new_entry_status = "approved" if data.decision == "approved" else "draft"
+    entry = await catalog_entries_repo.find_by_id(sub["entry_id"])
+    if not entry:
+        raise HTTPException(404, "Entry da submissão não encontrada")
+    # Validamos a transição da entry também (defesa em profundidade)
+    if not can_transition_entry(entry.get("status"), new_entry_status):
+        raise HTTPException(
+            409,
+            f"Entry em status '{entry.get('status')}' não pode transitar para '{new_entry_status}'",
+        )
+
+    now = datetime.now(timezone.utc)
+    await catalog_submissions_repo.update(sub_id, {
+        "review_status": data.decision,
+        "reviewed_by": user["id"],
+        "reviewed_at": now,
+        "review_notes": data.notes or "",
+    })
+    await catalog_entries_repo.update(sub["entry_id"], {
+        "status": new_entry_status,
+        "updated_at": now,
+    })
+    await _audit(
+        f"review_{data.decision}",
+        sub["entry_id"],
+        user["id"],
+        {"submission_id": sub_id, "new_entry_status": new_entry_status, "notes": data.notes or ""},
+    )
+
+    updated_sub = await catalog_submissions_repo.find_by_id(sub_id)
+    return {"submission": updated_sub, "entry_status": new_entry_status}
+
+
+@router.post("/entries/{entry_id}/publish")
+async def publish_entry(entry_id: str, user: dict = Depends(require_user)):
+    """Owner (ou root) publica entry aprovada. approved → published."""
+    entry = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry não encontrada")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem publicar")
+    await _require_status_transition(entry, "published")
+
+    now = datetime.now(timezone.utc)
+    updated = await catalog_entries_repo.update(entry_id, {
+        "status": "published",
+        "published_at": now,
+        "updated_at": now,
+    })
+    await _audit("published", entry_id, user["id"], {"urn": entry.get("urn")})
+    return db_row_to_entry_dict(updated) if updated else {"message": "publicada"}
+
+
+@router.post("/entries/{entry_id}/deprecate")
+async def deprecate_entry(entry_id: str, user: dict = Depends(require_user)):
+    """Owner (ou root) deprecia entry publicada. published → deprecated.
+    Entry continua invocável mas com aviso ao consumer (UI)."""
+    entry = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry não encontrada")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem depreciar")
+    await _require_status_transition(entry, "deprecated")
+
+    now = datetime.now(timezone.utc)
+    updated = await catalog_entries_repo.update(entry_id, {
+        "status": "deprecated",
+        "deprecated_at": now,
+        "updated_at": now,
+    })
+    await _audit("deprecated", entry_id, user["id"], {"urn": entry.get("urn")})
+    return db_row_to_entry_dict(updated) if updated else {"message": "depreciada"}
+
+
+@router.get("/submissions/queue")
+async def submissions_queue(
+    status: str = Query("pending"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: dict = Depends(require_user),
+):
+    """Fila de submissões para Root revisar.
+
+    Default lista pendentes; query param permite ver decididas.
+    Apenas Root acessa.
+    """
+    if not is_root(user):
+        raise HTTPException(403, "Apenas Root pode ver a fila de revisão")
+    filters = {"review_status": status} if status else {}
+    items = await catalog_submissions_repo.find_all(limit=limit, offset=offset, **filters)
+    total = await catalog_submissions_repo.count(**filters)
+    return {"submissions": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/entries/{entry_id}/submissions")
+async def entry_submissions(entry_id: str, user: dict = Depends(require_user)):
+    """Histórico de submissões de uma entry. Visível para owner/root
+    (mesma regra de mutate — submissões podem expor pré-checks sensíveis)."""
+    entry = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry não encontrada")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem ver histórico")
+    items = await catalog_submissions_repo.find_all(entry_id=entry_id, limit=100)
+    return {"submissions": items, "total": len(items)}

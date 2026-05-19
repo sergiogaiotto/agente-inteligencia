@@ -1,0 +1,134 @@
+"""Testes do runner de pré-checks (run_prechecks)."""
+
+from __future__ import annotations
+
+from app.catalog.prechecks import run_prechecks
+
+
+def _entry(**over):
+    base = {
+        "id": "e1",
+        "name": "Agente Fiscal",
+        "description": "Classifica notas fiscais por CFOP usando regras vigentes",
+        "version": "1.0.0",
+        "owner_user_id": "u-owner",
+        "visibility": "private",
+        "adapter_type": "a2a",
+        "artifact_type": "agent",
+        "artifact_id": "agent-123",
+    }
+    base.update(over)
+    return base
+
+
+def _active_user():
+    return {"id": "u-owner", "status": "active"}
+
+
+def _check_by_name(report, name):
+    for c in report["checks"]:
+        if c["name"] == name:
+            return c
+    return None
+
+
+class TestRunPrechecks:
+    def test_all_pass_happy_path(self):
+        r = run_prechecks(_entry(), disclosure={"entry_id": "e1"}, owner=_active_user())
+        assert r["passed"] is True
+        assert r["errors_count"] == 0
+        # Disclosure presente → warning não aparece
+        cap = _check_by_name(r, "capability_disclosure_present")
+        assert cap and cap["passed"] is True
+
+    def test_short_name_is_error(self):
+        r = run_prechecks(_entry(name="X"), disclosure={"entry_id": "e1"}, owner=_active_user())
+        chk = _check_by_name(r, "name_length")
+        assert chk and not chk["passed"]
+        assert chk["severity"] == "error"
+        assert r["passed"] is False
+
+    def test_short_description_is_warning(self):
+        r = run_prechecks(_entry(description="curta"), disclosure={"entry_id": "e1"}, owner=_active_user())
+        chk = _check_by_name(r, "description_length")
+        assert chk and not chk["passed"]
+        assert chk["severity"] == "warning"
+        # Warnings não derrubam passed
+        assert r["passed"] is True
+        assert r["warnings_count"] >= 1
+
+    def test_bad_version_is_error(self):
+        r = run_prechecks(_entry(version="1.0"), disclosure={"entry_id": "e1"}, owner=_active_user())
+        chk = _check_by_name(r, "version_semver")
+        assert chk and not chk["passed"]
+        assert r["passed"] is False
+
+    def test_missing_owner_is_error(self):
+        r = run_prechecks(_entry(), disclosure={"entry_id": "e1"}, owner=None)
+        chk = _check_by_name(r, "owner_exists")
+        assert chk and not chk["passed"]
+        assert r["passed"] is False
+
+    def test_inactive_owner_is_warning(self):
+        r = run_prechecks(_entry(), disclosure={"entry_id": "e1"}, owner={"status": "inactive"})
+        chk = _check_by_name(r, "owner_active")
+        assert chk and not chk["passed"]
+        assert chk["severity"] == "warning"
+
+    def test_missing_disclosure_is_warning(self):
+        r = run_prechecks(_entry(), disclosure=None, owner=_active_user())
+        chk = _check_by_name(r, "capability_disclosure_present")
+        assert chk and not chk["passed"]
+        assert chk["severity"] == "warning"
+        # Warning não bloqueia
+        assert r["passed"] is True
+
+    def test_department_without_scope_is_error(self):
+        r = run_prechecks(
+            _entry(visibility="department", visibility_scope=None),
+            disclosure={"entry_id": "e1"},
+            owner=_active_user(),
+        )
+        chk = _check_by_name(r, "visibility_scope_for_department")
+        assert chk and not chk["passed"]
+        assert r["passed"] is False
+
+    def test_department_with_scope_passes(self):
+        r = run_prechecks(
+            _entry(visibility="department", visibility_scope="fiscal"),
+            disclosure={"entry_id": "e1"},
+            owner=_active_user(),
+        )
+        chk = _check_by_name(r, "visibility_scope_for_department")
+        assert chk and chk["passed"]
+
+    def test_a2a_without_artifact_is_error(self):
+        r = run_prechecks(
+            _entry(artifact_type=None, artifact_id=None),
+            disclosure={"entry_id": "e1"},
+            owner=_active_user(),
+        )
+        chk = _check_by_name(r, "a2a_has_artifact")
+        assert chk and not chk["passed"]
+        assert r["passed"] is False
+
+    def test_non_a2a_skips_artifact_check(self):
+        # external_platform usa adapter http/openai — não exige artifact
+        r = run_prechecks(
+            _entry(adapter_type="http", artifact_type=None, artifact_id=None),
+            disclosure={"entry_id": "e1"},
+            owner=_active_user(),
+        )
+        chk = _check_by_name(r, "a2a_has_artifact")
+        assert chk and chk["passed"]  # n/a → passed
+
+    def test_report_aggregates_counts(self):
+        # Entry com 2 erros (name curto + version ruim) e 1 warning (desc curta)
+        r = run_prechecks(
+            _entry(name="X", description="x", version="bad"),
+            disclosure={"entry_id": "e1"},
+            owner=_active_user(),
+        )
+        assert r["errors_count"] >= 2
+        assert r["warnings_count"] >= 1
+        assert r["passed"] is False

@@ -17,7 +17,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.core.auth import require_user
-from app.core.database import catalog_entries_repo, audit_repo
+from app.core.database import (
+    audit_repo,
+    catalog_disclosure_repo,
+    catalog_entries_repo,
+    catalog_submissions_repo,
+    users_repo,
+)
 from app.routes.catalog import router as catalog_router
 
 
@@ -36,13 +42,8 @@ def make_client(user: dict) -> TestClient:
     return TestClient(make_app(user))
 
 
-@pytest.fixture
-def fake_storage(monkeypatch):
-    """Substitui os métodos do catalog_entries_repo e audit_repo por mocks
-    em memória. Retorna dict para inspeção pelos testes.
-    """
-    store: dict[str, dict] = {}
-    audit_log: list[dict] = []
+def _bind_repo(monkeypatch, repo, store: dict):
+    """Vincula os métodos CRUD de um Repository a um dict in-memory."""
 
     async def fake_create(data):
         store[data["id"]] = dict(data)
@@ -60,17 +61,57 @@ def fake_storage(monkeypatch):
     async def fake_delete(id_):
         return store.pop(id_, None) is not None
 
+    async def fake_find_all(limit=100, offset=0, **filters):
+        rows = list(store.values())
+        for k, v in filters.items():
+            rows = [r for r in rows if r.get(k) == v]
+        return rows[offset:offset + limit]
+
+    async def fake_count(**filters):
+        rows = list(store.values())
+        for k, v in filters.items():
+            rows = [r for r in rows if r.get(k) == v]
+        return len(rows)
+
+    monkeypatch.setattr(repo, "create", fake_create)
+    monkeypatch.setattr(repo, "find_by_id", fake_find_by_id)
+    monkeypatch.setattr(repo, "update", fake_update)
+    monkeypatch.setattr(repo, "delete", fake_delete)
+    monkeypatch.setattr(repo, "find_all", fake_find_all)
+    monkeypatch.setattr(repo, "count", fake_count)
+
+
+@pytest.fixture
+def fake_storage(monkeypatch):
+    """Mock in-memory de todos os repos usados pelas rotas do catálogo.
+
+    Retorna dict com sub-dicts (entries/submissions/disclosures/users/audit)
+    para inspeção e setup pelos testes.
+    """
+    entries: dict[str, dict] = {}
+    submissions: dict[str, dict] = {}
+    disclosures: dict[str, dict] = {}
+    users: dict[str, dict] = {}
+    audit_log: list[dict] = []
+
+    _bind_repo(monkeypatch, catalog_entries_repo, entries)
+    _bind_repo(monkeypatch, catalog_submissions_repo, submissions)
+    _bind_repo(monkeypatch, catalog_disclosure_repo, disclosures)
+    _bind_repo(monkeypatch, users_repo, users)
+
     async def fake_audit_create(data):
         audit_log.append(dict(data))
         return data
 
-    monkeypatch.setattr(catalog_entries_repo, "create", fake_create)
-    monkeypatch.setattr(catalog_entries_repo, "find_by_id", fake_find_by_id)
-    monkeypatch.setattr(catalog_entries_repo, "update", fake_update)
-    monkeypatch.setattr(catalog_entries_repo, "delete", fake_delete)
     monkeypatch.setattr(audit_repo, "create", fake_audit_create)
 
-    return {"entries": store, "audit": audit_log}
+    return {
+        "entries": entries,
+        "submissions": submissions,
+        "disclosures": disclosures,
+        "users": users,
+        "audit": audit_log,
+    }
 
 
 def _payload(**over):
@@ -360,3 +401,279 @@ class TestList:
         c = make_client({"id": "u1", "role": "comum"})
         r = c.get("/api/v1/catalog/entries?limit=500")
         assert r.status_code == 422
+
+
+# ═════════════════════════════════════════════════════════════════
+# Workflow: submit → decide → publish → deprecate
+# ═════════════════════════════════════════════════════════════════
+
+
+def _seed_owner(fake_storage, user_id: str, status: str = "active"):
+    """Insere user no mock para que prechecks encontrem owner."""
+    fake_storage["users"][user_id] = {"id": user_id, "status": status}
+
+
+def _create_draft(client, fake_storage, owner_id: str) -> str:
+    """Helper: cria entry draft e retorna id. Também garante user no storage."""
+    _seed_owner(fake_storage, owner_id)
+    r = client.post(
+        "/api/v1/catalog/entries",
+        json={**_payload(), "description": "descrição bem longa para passar prechecks"},
+    )
+    assert r.status_code == 201
+    return r.json()["id"]
+
+
+# ─── POST /entries/{id}/submit ────────────────────────────────────
+
+
+class TestSubmit:
+    def test_submit_transitions_to_submitted(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        r = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={"notes": ""})
+        assert r.status_code == 201
+        body = r.json()
+        assert body["entry_status"] == "submitted"
+        assert "submission_id" in body
+        assert "precheck_report" in body
+        # Entry no storage reflete o novo status
+        assert fake_storage["entries"][eid]["status"] == "submitted"
+
+    def test_submit_creates_submission_row(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        c.post(f"/api/v1/catalog/entries/{eid}/submit", json={})
+        subs = list(fake_storage["submissions"].values())
+        assert len(subs) == 1
+        assert subs[0]["entry_id"] == eid
+        assert subs[0]["submitted_by"] == "u1"
+        assert subs[0]["review_status"] == "pending"
+
+    def test_submit_runs_prechecks_with_warning_when_disclosure_missing(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        body = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={}).json()
+        # Disclosure não foi criada — espera-se 1+ warning
+        assert body["precheck_report"]["warnings_count"] >= 1
+
+    def test_submit_audits(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        c.post(f"/api/v1/catalog/entries/{eid}/submit", json={})
+        actions = [a["action"] for a in fake_storage["audit"]]
+        assert "submitted" in actions
+
+    def test_submit_nonowner_forbidden(self, fake_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, fake_storage, "u1")
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.post(f"/api/v1/catalog/entries/{eid}/submit", json={})
+        assert r.status_code == 403
+
+    def test_submit_rejects_non_draft(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "published"
+        r = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={})
+        assert r.status_code == 409
+
+
+# ─── POST /submissions/{id}/decide ────────────────────────────────
+
+
+class TestDecide:
+    def _submit_one(self, fake_storage) -> tuple[str, str]:
+        """Cria entry, submete, retorna (entry_id, submission_id)."""
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        body = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={}).json()
+        return eid, body["submission_id"]
+
+    def test_root_approves(self, fake_storage):
+        eid, sid = self._submit_one(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "approved", "notes": "ok"},
+        )
+        assert r.status_code == 200
+        assert r.json()["entry_status"] == "approved"
+        assert fake_storage["entries"][eid]["status"] == "approved"
+        assert fake_storage["submissions"][sid]["review_status"] == "approved"
+        assert fake_storage["submissions"][sid]["reviewed_by"] == "root1"
+
+    def test_root_rejects_returns_to_draft(self, fake_storage):
+        eid, sid = self._submit_one(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "rejected", "notes": "no"},
+        )
+        assert r.status_code == 200
+        assert r.json()["entry_status"] == "draft"
+
+    def test_root_requests_changes_returns_to_draft(self, fake_storage):
+        eid, sid = self._submit_one(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "changes_requested", "notes": "ajuste X"},
+        )
+        assert r.status_code == 200
+        assert r.json()["entry_status"] == "draft"
+
+    def test_non_root_forbidden(self, fake_storage):
+        _, sid = self._submit_one(fake_storage)
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "approved"},
+        )
+        assert r.status_code == 403
+
+    def test_cant_decide_already_decided(self, fake_storage):
+        _, sid = self._submit_one(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "approved"},
+        )
+        # Segunda decisão deve falhar — review_status já não é pending
+        r = c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "rejected"},
+        )
+        assert r.status_code == 409
+
+    def test_unknown_decision_rejected_by_pydantic(self, fake_storage):
+        _, sid = self._submit_one(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "maybe"},
+        )
+        assert r.status_code == 422
+
+
+# ─── POST /entries/{id}/publish ───────────────────────────────────
+
+
+class TestPublish:
+    def test_owner_publishes_approved(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "approved"
+        r = c.post(f"/api/v1/catalog/entries/{eid}/publish")
+        assert r.status_code == 200
+        assert fake_storage["entries"][eid]["status"] == "published"
+
+    def test_cant_publish_draft(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        # status é draft
+        r = c.post(f"/api/v1/catalog/entries/{eid}/publish")
+        assert r.status_code == 409
+
+    def test_nonowner_forbidden(self, fake_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "approved"
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.post(f"/api/v1/catalog/entries/{eid}/publish")
+        assert r.status_code == 403
+
+
+# ─── POST /entries/{id}/deprecate ─────────────────────────────────
+
+
+class TestDeprecate:
+    def test_owner_deprecates_published(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "published"
+        r = c.post(f"/api/v1/catalog/entries/{eid}/deprecate")
+        assert r.status_code == 200
+        assert fake_storage["entries"][eid]["status"] == "deprecated"
+
+    def test_cant_deprecate_draft(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        r = c.post(f"/api/v1/catalog/entries/{eid}/deprecate")
+        assert r.status_code == 409
+
+
+# ─── GET /submissions/queue ───────────────────────────────────────
+
+
+class TestQueue:
+    def test_root_sees_pending(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        c.post(f"/api/v1/catalog/entries/{eid}/submit", json={})
+
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.get("/api/v1/catalog/submissions/queue")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert len(body["submissions"]) == 1
+        assert body["submissions"][0]["review_status"] == "pending"
+
+    def test_non_root_forbidden(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/submissions/queue")
+        assert r.status_code == 403
+
+    def test_filter_by_status(self, fake_storage):
+        # 2 entries: 1 pending, 1 approved
+        c = make_client({"id": "u1", "role": "comum"})
+        e1 = _create_draft(c, fake_storage, "u1")
+        c.post(f"/api/v1/catalog/entries/{e1}/submit", json={})
+        e2 = _create_draft(c, fake_storage, "u1")
+        c.post(f"/api/v1/catalog/entries/{e2}/submit", json={})
+
+        # Aprova a primeira
+        sid_first = next(iter(fake_storage["submissions"].keys()))
+        c_root = make_client({"id": "root1", "role": "root"})
+        c_root.post(
+            f"/api/v1/catalog/submissions/{sid_first}/decide",
+            json={"decision": "approved"},
+        )
+
+        # Pending agora só tem 1
+        r = c_root.get("/api/v1/catalog/submissions/queue?status=pending")
+        assert r.json()["total"] == 1
+        # Approved agora tem 1
+        r = c_root.get("/api/v1/catalog/submissions/queue?status=approved")
+        assert r.json()["total"] == 1
+
+
+# ─── GET /entries/{id}/submissions ────────────────────────────────
+
+
+class TestEntrySubmissions:
+    def test_owner_sees_history(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        c.post(f"/api/v1/catalog/entries/{eid}/submit", json={})
+        r = c.get(f"/api/v1/catalog/entries/{eid}/submissions")
+        assert r.status_code == 200
+        assert r.json()["total"] == 1
+
+    def test_nonowner_forbidden(self, fake_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, fake_storage, "u1")
+        c1.post(f"/api/v1/catalog/entries/{eid}/submit", json={})
+        c2 = make_client({"id": "u2", "role": "comum"})
+        r = c2.get(f"/api/v1/catalog/entries/{eid}/submissions")
+        assert r.status_code == 403
+
+    def test_root_can_see_history(self, fake_storage):
+        c1 = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c1, fake_storage, "u1")
+        c1.post(f"/api/v1/catalog/entries/{eid}/submit", json={})
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.get(f"/api/v1/catalog/entries/{eid}/submissions")
+        assert r.status_code == 200
+        assert r.json()["total"] == 1
