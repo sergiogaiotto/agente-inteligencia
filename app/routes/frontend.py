@@ -18,6 +18,7 @@ PAGES = {
     "/catalog/queue": {"template":"pages/catalog_queue.html","title":"Fila de Revisão","section":"catalog_queue"},
     "/catalog/inventory": {"template":"pages/catalog_inventory.html","title":"Inventário Regulatório","section":"catalog_inventory"},
     "/catalog/stewardship": {"template":"pages/catalog_stewardship.html","title":"Stewardship","section":"catalog_stewardship"},
+    "/catalog/cost": {"template":"pages/catalog_cost.html","title":"Custo & Consumo","section":"catalog_cost"},
     "/workspace": {"template":"pages/workspace.html","title":"Workspace","section":"workspace"},
     "/mesh": {"template":"pages/mesh.html","title":"AI Mesh","section":"mesh"},
     "/mcp": {"template":"pages/tools.html","title":"MCP","section":"tools"},
@@ -104,6 +105,8 @@ async def pg_catalog_queue(r: Request): return await _render(r, "/catalog/queue"
 async def pg_catalog_inventory(r: Request): return await _render(r, "/catalog/inventory")
 @router.get("/catalog/stewardship", response_class=HTMLResponse)
 async def pg_catalog_stewardship(r: Request): return await _render(r, "/catalog/stewardship")
+@router.get("/catalog/cost", response_class=HTMLResponse)
+async def pg_catalog_cost(r: Request): return await _render(r, "/catalog/cost")
 @router.get("/catalog/{entry_id}", response_class=HTMLResponse)
 async def pg_catalog_detail(r: Request, entry_id: str): return await _render(r, "/catalog/detail", entry_id=entry_id)
 @router.get("/workspace", response_class=HTMLResponse)

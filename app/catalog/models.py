@@ -279,3 +279,22 @@ class BulkDecisionPayload(BaseModel):
         if len(set(v)) != len(v):
             raise ValueError("submission_ids contém duplicatas")
         return v
+
+
+# ─── Cost & Consumption (Onda 3) ─────────────────────────────────
+
+
+class InvocationCostRecord(BaseModel):
+    """Registro de custo de uma invocação. Usado por integradores externos
+    e (futuramente) pelo engine quando auto-wire estiver disponível.
+
+    consumer_user_id é obrigatório — sem isso não dá pra fazer chargeback
+    nem analisar consumo por área. Default = user atual no handler.
+    """
+
+    consumer_user_id: Optional[str] = None  # default: user.id
+    consumer_department: Optional[str] = None
+    interaction_id: Optional[str] = None
+    cost_usd: float = Field(0, ge=0)
+    tokens_used: int = Field(0, ge=0)
+    latency_ms: float = Field(0, ge=0)

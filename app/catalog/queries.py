@@ -569,3 +569,187 @@ async def list_stewardship(
             t["deprecated"] += 1
 
     return entries, by_team
+
+
+# ─── Cost & Consumption (Onda 3) ─────────────────────────────────
+
+
+# Group-by allowlist — protege a coluna gerada de SQL injection.
+_COST_GROUP_COLS = {
+    "entry": "entry_id",
+    "consumer": "consumer_user_id",
+    "department": "consumer_department",
+    "day": "DATE(invoked_at)",
+}
+
+
+async def record_invocation_cost(
+    entry_id: str,
+    *,
+    consumer_user_id: str,
+    consumer_department: Optional[str] = None,
+    interaction_id: Optional[str] = None,
+    cost_usd: float = 0.0,
+    tokens_used: int = 0,
+    latency_ms: float = 0.0,
+) -> dict:
+    """Insere uma row em catalog_costs. Insert-only; nunca update."""
+    import uuid
+    cost_id = str(uuid.uuid4())
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        await con.execute(
+            """
+            INSERT INTO catalog_costs
+              (id, entry_id, consumer_user_id, consumer_department,
+               interaction_id, cost_usd, tokens_used, latency_ms)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            cost_id, entry_id, consumer_user_id, consumer_department,
+            interaction_id, cost_usd, tokens_used, latency_ms,
+        )
+        # Bump métricas agregadas na entry — para o catálogo refletir uso
+        await con.execute(
+            """
+            UPDATE catalog_entries SET
+              trust_invocation_count = COALESCE(trust_invocation_count, 0) + 1,
+              trust_last_invoked_at = now()
+            WHERE id = $1
+            """,
+            entry_id,
+        )
+    return {
+        "id": cost_id,
+        "entry_id": entry_id,
+        "consumer_user_id": consumer_user_id,
+        "cost_usd": cost_usd,
+        "tokens_used": tokens_used,
+        "latency_ms": latency_ms,
+    }
+
+
+async def aggregate_costs(
+    *,
+    group_by: str = "entry",
+    since: Optional[str] = None,  # ISO date YYYY-MM-DD
+    until: Optional[str] = None,
+    entry_id: Optional[str] = None,
+    consumer_user_id: Optional[str] = None,
+    consumer_department: Optional[str] = None,
+    limit: int = 200,
+) -> tuple[list[dict], dict]:
+    """Agrega catalog_costs por grupo (entry|consumer|department|day).
+
+    Returns:
+        (rows, totals) — rows tem {group_key, invocations, total_cost_usd,
+                                    total_tokens, avg_latency_ms};
+                        totals tem agregados globais para os mesmos filtros.
+    """
+    if group_by not in _COST_GROUP_COLS:
+        raise ValueError(f"group_by inválido. Opções: {list(_COST_GROUP_COLS)}")
+    group_expr = _COST_GROUP_COLS[group_by]
+
+    pool = _get_pool()
+    params: list[Any] = []
+    where_parts: list[str] = []
+
+    if since:
+        params.append(since)
+        where_parts.append(f"invoked_at >= ${len(params)}::date")
+    if until:
+        params.append(until)
+        # +1 dia para incluir o dia 'until' inteiro
+        where_parts.append(f"invoked_at < (${len(params)}::date + interval '1 day')")
+    if entry_id:
+        params.append(entry_id)
+        where_parts.append(f"entry_id = ${len(params)}")
+    if consumer_user_id:
+        params.append(consumer_user_id)
+        where_parts.append(f"consumer_user_id = ${len(params)}")
+    if consumer_department:
+        params.append(consumer_department)
+        where_parts.append(f"consumer_department = ${len(params)}")
+
+    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    params.append(limit)
+    limit_ph = f"${len(params)}"
+
+    rows_sql = f"""
+        SELECT
+            {group_expr}::text AS group_key,
+            COUNT(*) AS invocations,
+            COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
+            COALESCE(SUM(tokens_used), 0) AS total_tokens,
+            COALESCE(AVG(latency_ms), 0) AS avg_latency_ms
+        FROM catalog_costs
+        {where_sql}
+        GROUP BY {group_expr}
+        ORDER BY total_cost_usd DESC
+        LIMIT {limit_ph}
+    """
+
+    totals_sql = f"""
+        SELECT
+            COUNT(*) AS invocations,
+            COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
+            COALESCE(SUM(tokens_used), 0) AS total_tokens,
+            COALESCE(AVG(latency_ms), 0) AS avg_latency_ms,
+            COUNT(DISTINCT entry_id) AS distinct_entries,
+            COUNT(DISTINCT consumer_user_id) AS distinct_consumers
+        FROM catalog_costs
+        {where_sql}
+    """
+
+    async with pool.acquire() as con:
+        rows = await con.fetch(rows_sql, *params)
+        totals = await con.fetchrow(totals_sql, *params[:-1])  # exclui o limit
+
+    return [dict(r) for r in rows], (dict(totals) if totals else {})
+
+
+async def list_costs_raw(
+    *,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    entry_id: Optional[str] = None,
+    consumer_user_id: Optional[str] = None,
+    consumer_department: Optional[str] = None,
+    limit: int = 5000,
+) -> list[dict]:
+    """Lista rows cruas de catalog_costs para export CSV. Sem agrupamento."""
+    pool = _get_pool()
+    params: list[Any] = []
+    where_parts: list[str] = []
+
+    if since:
+        params.append(since)
+        where_parts.append(f"invoked_at >= ${len(params)}::date")
+    if until:
+        params.append(until)
+        where_parts.append(f"invoked_at < (${len(params)}::date + interval '1 day')")
+    if entry_id:
+        params.append(entry_id)
+        where_parts.append(f"entry_id = ${len(params)}")
+    if consumer_user_id:
+        params.append(consumer_user_id)
+        where_parts.append(f"consumer_user_id = ${len(params)}")
+    if consumer_department:
+        params.append(consumer_department)
+        where_parts.append(f"consumer_department = ${len(params)}")
+
+    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+    params.append(limit)
+    limit_ph = f"${len(params)}"
+
+    sql = f"""
+        SELECT id, entry_id, consumer_user_id, consumer_department,
+               interaction_id, cost_usd, tokens_used, latency_ms, invoked_at
+        FROM catalog_costs
+        {where_sql}
+        ORDER BY invoked_at DESC
+        LIMIT {limit_ph}
+    """
+    async with pool.acquire() as con:
+        rows = await con.fetch(sql, *params)
+    return [dict(r) for r in rows]
