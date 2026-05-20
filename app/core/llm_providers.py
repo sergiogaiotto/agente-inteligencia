@@ -153,6 +153,73 @@ class OllamaProvider(LLMProvider):
 
 
 # ───────────────────────────────────────────────────────────────
+# GPT-OSS (open-weight 20b / 120b via endpoint OpenAI-compatible)
+# ───────────────────────────────────────────────────────────────
+class GPTOSSProvider(LLMProvider):
+    """Provedor para gpt-oss-20b e gpt-oss-120b.
+
+    Cada size tem URL/api_key/model próprias em platform_settings —
+    permite que cada modelo seja servido por endpoint dedicado (ex: hub
+    interno com 2 GPUs distintas atendendo o 20b vs 120b).
+
+    'not-needed' é valor válido de api_key — o proxy autentica de outra
+    forma (rede interna, mTLS, etc.). Continua mandando o header
+    Authorization Bearer pra compatibilidade com o cliente OpenAI.
+    """
+
+    def __init__(self, size: str = "120b", model: str | None = None, temperature: float = 0.7):
+        if size not in ("20b", "120b"):
+            raise ValueError(f"GPTOSSProvider size deve ser '20b' ou '120b' (got: {size!r})")
+        settings = get_settings()
+        self.size = size
+        if size == "20b":
+            self.api_url = (settings.oss20b_url or "").rstrip("/")
+            self.api_key = settings.oss20b_api_key or "not-needed"
+            self.model = model or settings.oss20b_model
+        else:
+            self.api_url = (settings.oss120b_url or "").rstrip("/")
+            self.api_key = settings.oss120b_api_key or "not-needed"
+            self.model = model or settings.oss120b_model
+        self.temperature = temperature
+        self.timeout = settings.llm_timeout_seconds
+
+    def get_langchain_llm(self):
+        if not self.api_url:
+            return None
+        return ChatOpenAI(
+            model=self.model,
+            api_key=self.api_key,
+            base_url=self.api_url,
+            temperature=self.temperature,
+            timeout=self.timeout,
+        )
+
+    async def generate(self, messages: list[dict], **kwargs) -> dict:
+        if not self.api_url:
+            raise RuntimeError(
+                f"gpt-oss-{self.size}: URL não configurada. "
+                f"Configure em /settings → Plataforma → GPT-OSS."
+            )
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.api_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": self.temperature,
+                    **kwargs,
+                },
+            )
+            return _parse_openai_compatible_response(
+                response, provider=f"gpt-oss-{self.size}", model=self.model,
+            )
+
+
+# ───────────────────────────────────────────────────────────────
 # Helpers
 # ───────────────────────────────────────────────────────────────
 async def _generate_via_langchain(provider, messages: list[dict], **kwargs) -> dict:
@@ -222,7 +289,12 @@ def get_provider(provider_name: str = "azure", **kwargs) -> LLMProvider:
         "maritaca": MaritacaProvider,
         "ollama": OllamaProvider,
     }
+    # gpt-oss tem 2 sizes com URL/key próprias — distinguir via factory
+    if provider_name == "gpt-oss-20b":
+        return GPTOSSProvider(size="20b", **kwargs)
+    if provider_name == "gpt-oss-120b":
+        return GPTOSSProvider(size="120b", **kwargs)
     provider_class = providers.get(provider_name)
     if not provider_class:
-        raise ValueError(f"Provedor '{provider_name}' não suportado. Use: {list(providers.keys())}")
+        raise ValueError(f"Provedor '{provider_name}' não suportado. Use: {list(providers.keys()) + ['gpt-oss-20b', 'gpt-oss-120b']}")
     return provider_class(**kwargs)

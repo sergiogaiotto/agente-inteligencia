@@ -61,6 +61,14 @@ PRICING: dict[str, dict[str, float]] = {
     "ollama/gemma":          {"input": 0.0, "output": 0.0},
     "ollama/gemma2":         {"input": 0.0, "output": 0.0},
     "ollama/qwen2.5":        {"input": 0.0, "output": 0.0},
+
+    # GPT-OSS (open-weight servido por endpoint interno — sem custo por
+    # token; ajustar se passar a cobrar de chargeback infra-as-cost)
+    "gpt-oss-20b/openai/gpt-oss-20b":   {"input": 0.0, "output": 0.0},
+    "gpt-oss-120b/openai/gpt-oss-120b": {"input": 0.0, "output": 0.0},
+    # Aliases sem prefixo openai/ (caso UI guarde sem o prefixo)
+    "gpt-oss-20b/gpt-oss-20b":   {"input": 0.0, "output": 0.0},
+    "gpt-oss-120b/gpt-oss-120b": {"input": 0.0, "output": 0.0},
 }
 
 

@@ -1582,6 +1582,19 @@ class SettingsSave(BaseModel):
     timeout: Optional[int] = 120
     mesh_groups: Optional[str] = None
     mesh_chain_names: Optional[str] = None
+    # GPT-OSS (open-weight) — Onda 4 plataforma
+    oss120b_url: Optional[str] = ""
+    oss120b_model: Optional[str] = "openai/gpt-oss-120b"
+    oss120b_api_key: Optional[str] = "not-needed"
+    oss20b_url: Optional[str] = ""
+    oss20b_model: Optional[str] = "openai/gpt-oss-20b"
+    oss20b_api_key: Optional[str] = "not-needed"
+    llm_timeout_seconds: Optional[int] = 300
+    # Embedding (Azure | Qwen3) — Qwen3 reusa URL/key do OSS source
+    embedding_provider: Optional[str] = "azure"
+    qwen3_source: Optional[str] = "oss120b"
+    qwen3_path: Optional[str] = "qwen3/v1"
+    qwen3_model: Optional[str] = "Qwen/Qwen3-Embedding-0.6B"
 
 @router.get("/settings")
 async def get_settings():
@@ -1632,7 +1645,8 @@ async def test_provider(data: ProviderTestRequest):
     import time as _time
     import httpx
     provider = (data.provider or "").lower().strip()
-    if provider not in {"azure", "openai", "maritaca", "ollama"}:
+    valid_providers = {"azure", "openai", "maritaca", "ollama", "gpt-oss-20b", "gpt-oss-120b", "qwen3"}
+    if provider not in valid_providers:
         raise HTTPException(400, f"Provedor inválido: {data.provider}")
     if not data.model:
         raise HTTPException(400, "Modelo obrigatório (deployment name no caso de Azure)")
@@ -1666,22 +1680,40 @@ async def test_provider(data: ProviderTestRequest):
         api_key = data.api_key or ""
         if not api_key:
             return {"ok": False, "error": "API Key obrigatória para Maritaca"}
-    else:  # ollama
+    elif provider == "ollama":
         base_url = (data.base_url or "http://localhost:11434").rstrip("/")
         chat_url = f"{base_url}/v1/chat/completions"
         api_key = data.api_key or "ollama"
+    elif provider in ("gpt-oss-20b", "gpt-oss-120b"):
+        # base_url já vem com /v1 no final (ex: https://hub-gpus.claro.com.br/gpt120/v1)
+        base_url = (data.base_url or "").rstrip("/")
+        if not base_url:
+            return {"ok": False, "error": f"URL obrigatória para {provider}"}
+        # Se URL não termina em /v1, adiciona; se termina, usa direto
+        chat_url = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
+        api_key = data.api_key or "not-needed"
+    else:  # qwen3 — testa endpoint /embeddings (não /chat/completions)
+        base_url = (data.base_url or "").rstrip("/")
+        if not base_url:
+            return {"ok": False, "error": "URL obrigatória para qwen3 (base do embedding ex: https://hub-gpus.claro.com.br/qwen3/v1)"}
+        chat_url = f"{base_url}/embeddings" if base_url.endswith("/v1") else f"{base_url}/v1/embeddings"
+        api_key = data.api_key or "not-needed"
 
-    payload = {
-        "messages": [
-            {"role": "system", "content": "Você é um agente de teste. Responda em uma única palavra."},
-            {"role": "user", "content": "Diga: pong"},
-        ],
-        "temperature": 0.0,
-        "max_tokens": 16,
-    }
-    # Azure não aceita "model" no body (deployment já vai no path).
-    if provider != "azure":
-        payload["model"] = data.model
+    # Qwen3 testa /embeddings — payload diferente
+    if provider == "qwen3":
+        payload = {"model": data.model, "input": "ping"}
+    else:
+        payload = {
+            "messages": [
+                {"role": "system", "content": "Você é um agente de teste. Responda em uma única palavra."},
+                {"role": "user", "content": "Diga: pong"},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 16,
+        }
+        # Azure não aceita "model" no body (deployment já vai no path).
+        if provider != "azure":
+            payload["model"] = data.model
 
     headers = {"Content-Type": "application/json"}
     if use_bearer:
@@ -1702,6 +1734,18 @@ async def test_provider(data: ProviderTestRequest):
                 msg = r.text[:300]
             return {"ok": False, "status": r.status_code, "latency_ms": latency, "error": str(msg)[:400]}
         data_resp = r.json()
+        if provider == "qwen3":
+            # /embeddings retorna {data: [{embedding: [...], index: 0}], model, usage}
+            items = data_resp.get("data") or []
+            dim = len(items[0].get("embedding", [])) if items else 0
+            return {
+                "ok": True,
+                "status": r.status_code,
+                "latency_ms": latency,
+                "model": data_resp.get("model") or data.model,
+                "sample": f"embedding dim={dim}",
+                "tokens": (data_resp.get("usage") or {}).get("total_tokens") or 0,
+            }
         try:
             sample = data_resp["choices"][0]["message"]["content"][:120]
         except Exception:
