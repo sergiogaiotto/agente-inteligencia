@@ -1,15 +1,15 @@
 # Handoff — Próxima Sessão
 
-> **Última atualização**: 2026-05-20, fim da revisão profunda de API Connectors (PR #84).
+> **Última atualização**: 2026-05-20, A1 (integration test declarative_engine ↔ API Connectors) concluído.
 > **Como usar**: leia este documento primeiro na próxima sessão, depois decida por onde começar.
 
 ---
 
 ## Estado atual da plataforma
 
-- **84 PRs em main**, zero PRs abertos
-- **494 testes verdes** (`pytest tests/`)
-- **Última atividade**: revisão de qualidade do módulo API Connectors (#84) — saiu de zero para 71 testes + 4 features + 6 fixes + 2 schema migrations
+- **85 PRs em main** (após merge de #86), zero PRs abertos
+- **516 testes verdes** (`pytest tests/`) — +22 testes do A1
+- **Última atividade**: A1 do API Connectors concluído (PR #86) — engine migrado para `app.core.http_auth`, ganhou suporte a 5 body types, auth headers passaram a aparecer redactados em `api_call_logs.request_headers`
 
 ### Onde olhar para contexto rápido
 
@@ -29,29 +29,14 @@
 
 Esses 4 itens foram **reconhecidos no PR #84** mas deixados fora do escopo para o PR não inchar. Resolvê-los completa a revisão de qualidade.
 
-#### A1. Teste de integração declarative_engine ↔ API Connectors
+#### A1. ✅ Teste de integração declarative_engine ↔ API Connectors — concluído (PR #86)
 
-**O que é**: O `app/agents/declarative_engine.py` executa API bindings declarativos invocando o mesmo `httpx.AsyncClient` que o `proxy_call`. Hoje **não há nenhum teste** validando que a integração funciona end-to-end (binding YAML do SKILL.md → resolve connector → envia request → grava `api_call_logs` + `binding_executions`).
-
-**Onde toca**:
-- [app/agents/declarative_engine.py:139-175](../app/agents/declarative_engine.py#L139) — `_build_auth_headers` (duplicado; deve usar `app/core/http_auth` agora)
-- [app/agents/declarative_engine.py:189-260](../app/agents/declarative_engine.py#L189) — `_execute_http_call` + `_call_with_retry`
-- [app/agents/declarative_engine.py:465-556](../app/agents/declarative_engine.py#L465) — persistência em `binding_executions` + `api_call_logs`
-
-**Plano técnico**:
-1. Remover `_build_auth_headers` local do declarative_engine; importar de `app.core.http_auth`
-2. Aplicar `prepare_request_body(body_type, body)` no `_execute_http_call` (hoje só JSON)
-3. Criar `tests/test_declarative_engine_api.py` com:
-   - Mock httpx (mesmo padrão do `test_api_connectors_routes.py`)
-   - Fixture com connector + skill com `api_bindings` declarado
-   - Validar request enviado (URL final, headers de auth, body), response renderizado via Jinja2 + jsonpath
-   - Retry com 5xx + backoff
-   - Circuit breaker `on_failure: fail|continue|compensate`
-   - Persistência cruzada (binding_executions linked com api_call_logs via interaction_id)
-
-**Testes esperados**: ~15-20
-
-**Complexidade**: média. Mais testes que código novo (o engine já existe e funciona; falta só cobertura).
+**Entregue 2026-05-20**:
+- `app/agents/declarative_engine.py` migrado para `app.core.http_auth` (remove `_build_auth_headers` e `_redact_headers` duplicados — 99 linhas down de 57)
+- Suporte a 5 body types (json/form_urlencoded/multipart/text/xml) via `prepare_request_body` — antes só JSON
+- `verify_ssl` e `follow_redirects=True` agora respeitados pelo engine (paridade com proxy_call)
+- Auth headers passam por `redact_headers` e aparecem em `api_call_logs.request_headers` para auditoria (antes ficavam só nas chamadas HTTP, fora dos logs)
+- `tests/test_declarative_engine_api.py`: **22 testes E2E novos** cobrindo connector resolution, 5 auth types (com decifragem at-rest), 5 body types, templating Jinja2 + JSONPath, retry/circuit breaker, persistência cruzada binding_executions ↔ api_call_logs, DAG com `depends_on` e compensação
 
 ---
 
@@ -189,14 +174,14 @@ Decisões aprendidas em 84 PRs que devem ser respeitadas em PRs futuros — extr
 
 Copie-cole isto na primeira mensagem da próxima sessão:
 
-> Continue de onde paramos. Leia `docs/HANDOFF_NEXT_SESSION.md` para contexto. Estado atual: 84 PRs em main, 494 testes verdes. Quero atacar os gaps do API Connectors (seção A do handoff) — recomendação atual é começar por **A1 (declarative_engine integration tests)** porque destrava cobertura da parte mais usada do módulo. Concorda ou prefere outro item?
+> Continue de onde paramos. Leia `docs/HANDOFF_NEXT_SESSION.md` para contexto. Estado atual: 85 PRs em main, 516 testes verdes. A1 (declarative_engine integration tests) já saiu. Quero seguir com o próximo gap do API Connectors — recomendação atual é **A2 (SimpleCookie fallback)** porque é baixa complexidade e fecha mais um item da seção A. Concorda ou prefere A3 (charsets) / A4 (circuit breaker)?
 
 A primeira sessão saberá:
 - Estado atual sem precisar reconstruir
-- 4 gaps prioritários do API Connectors com plano técnico de cada
+- 3 gaps restantes do API Connectors com plano técnico de cada (A1 está concluído)
 - 8 itens da Onda 5+ se quiser pivotar
 - Convenções a manter
-- Por onde começar (sugestão A1)
+- Por onde começar (sugestão A2)
 
 ---
 
@@ -210,6 +195,7 @@ A primeira sessão saberá:
 
 | Data | Sessão | PRs entregues | Próximo |
 |---|---|---|---|
+| 2026-05-20 | A1 — declarative_engine integration tests | #86 (1 PR, +22 testes) | A2/A3/A4 do API Connectors |
 | 2026-05-20 | Sessão de qualidade (API Connectors + tool strategy + Guia Interativo) | #77-#84 (8 PRs) | Gaps A1-A4 do API Connectors |
 | 2026-05-19 | Sessão Onda 4 Catálogo + GPT-OSS/Qwen3 + Modelo Primário | #67-#76 (10 PRs) | Reescrita Guia Interativo (5 PRs) |
 | 2026-05-19 | Sessão Catálogo Ondas 1-3 | #47-#66 (20 PRs) | Onda 4 (execução real de recipes) |
