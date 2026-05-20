@@ -213,15 +213,21 @@ class TestCreate:
         assert r.status_code == 422
 
     def test_create_duplicate_urn_returns_409(self, fake_storage, monkeypatch):
+        """Postgres unique violation → 409 com mensagem humana sugerindo bump
+        de versão. Sem expor o jargão 'URN' no detail (UX consumer)."""
         c = make_client({"id": "u1", "role": "comum"})
 
         async def boom(data):
             raise Exception("duplicate key value violates unique constraint")
 
         monkeypatch.setattr(catalog_entries_repo, "create", boom)
-        r = c.post("/api/v1/catalog/entries", json=_payload())
+        r = c.post("/api/v1/catalog/entries", json=_payload(name="Foo", version="1.0.0"))
         assert r.status_code == 409
-        assert "URN" in r.json()["detail"]
+        detail = r.json()["detail"]
+        # Mensagem cita o que duplicou (nome + versão) e sugere ação (subir versão).
+        assert "Foo" in detail
+        assert "1.0.0" in detail
+        assert "versão diferente" in detail.lower() or "versao diferente" in detail.lower()
 
 
 # ─── GET /entries/{id} ────────────────────────────────────────────

@@ -170,10 +170,11 @@
             </div>
         </div>
 
-        <!-- Preview do URN -->
+        <!-- Preview do identificador (URN interno) -->
         <div class="rounded-lg bg-surface-50 border border-surface-100 p-3">
-            <p class="text-[10px] text-surface-400 uppercase tracking-wider mb-1">URN que será gerado</p>
+            <p class="text-[10px] text-surface-400 uppercase tracking-wider mb-1">Identificador único</p>
             <p class="text-[12px] font-mono text-brand-900" x-text="previewUrn()"></p>
+            <p class="text-[10px] text-surface-400 mt-1">Gerado automaticamente a partir do tipo, nome e versão. Cada combinação só pode existir uma vez no catálogo.</p>
         </div>
     </div>
 
@@ -279,7 +280,7 @@
                     <span class="font-mono text-brand-900" x-text="form.kind + ': ' + (selectedArtifact?.name || form.artifact_id)"></span>
                 </div>
                 <div class="flex justify-between">
-                    <span class="text-surface-500">URN</span>
+                    <span class="text-surface-500">Identificador</span>
                     <span class="font-mono text-brand-900 truncate max-w-[60%]" x-text="previewUrn()"></span>
                 </div>
                 <div class="flex justify-between">
@@ -311,9 +312,32 @@
             </ol>
         </div>
 
-        <template x-if="submitError">
+        <!-- Caixa específica: versão já publicada (HTTP 409) — orienta a ação certa -->
+        <template x-if="submitConflict">
+            <div class="rounded-xl border border-amber-300 bg-amber-50 p-4">
+                <div class="flex items-start gap-3">
+                    <span class="text-lg shrink-0">⚠</span>
+                    <div class="flex-1">
+                        <p class="text-[13px] font-bold text-amber-900 mb-1">Esta versão já foi publicada</p>
+                        <p class="text-[12px] text-amber-800 mb-2">
+                            Já existe uma publicação para <strong x-text="form.name"></strong> na versão
+                            <code class="bg-white px-1.5 py-0.5 rounded font-mono text-[11px]" x-text="form.version"></code>.
+                            Para publicar novamente, basta usar uma versão diferente
+                            (ex: <code class="bg-white px-1.5 py-0.5 rounded font-mono text-[11px]" x-text="suggestNextVersion()"></code>).
+                        </p>
+                        <button @click="goAdjustVersion()" type="button"
+                                class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 text-white px-3 py-1.5 text-[12px] font-semibold hover:bg-amber-700">
+                            ← Voltar e ajustar a versão
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- Erro genérico: outros 4xx/5xx -->
+        <template x-if="submitError && !submitConflict">
             <div class="rounded-xl border border-rose-200 bg-rose-50/50 p-4 text-[12px] text-rose-700">
-                <p class="font-semibold mb-1">Erro na submissão:</p>
+                <p class="font-semibold mb-1">Não foi possível concluir a publicação</p>
                 <p x-text="submitError"></p>
             </div>
         </template>
@@ -403,7 +427,29 @@ function publishWizard() {
 
         submitting: false,
         submitError: null,
+        submitConflict: false,  // true quando POST /entries retorna 409 (versão já publicada)
         selectedArtifact: null,
+
+        // Sugere a próxima versão patch a partir da atual (1.0.0 → 1.0.1).
+        // Se não bate o padrão semver, devolve a atual + "-2" como fallback.
+        suggestNextVersion() {
+            const v = (this.form.version || '').trim();
+            const m = v.match(/^(\d+)\.(\d+)\.(\d+)(.*)$/);
+            if (m) return `${m[1]}.${m[2]}.${parseInt(m[3], 10) + 1}${m[4] || ''}`;
+            return v ? `${v}-2` : '1.0.1';
+        },
+
+        // Volta para o step 2 (metadata) e foca o campo versão, pré-preenchido com a sugestão.
+        goAdjustVersion() {
+            this.form.version = this.suggestNextVersion();
+            this.submitConflict = false;
+            this.submitError = null;
+            this.step = 2;
+            this.$nextTick(() => {
+                const el = document.querySelector('[x-model="form.version"]');
+                if (el) { el.focus(); el.select?.(); }
+            });
+        },
 
         async load() {
             try {
@@ -528,6 +574,7 @@ function publishWizard() {
         async finalSubmit() {
             this.submitting = true;
             this.submitError = null;
+            this.submitConflict = false;
             let entryId = null;
             const isExternal = this.form.kind === 'external_platform';
             try {
@@ -551,8 +598,15 @@ function publishWizard() {
                     body: JSON.stringify(createPayload),
                 });
                 if (!r1.ok) {
-                    const err = await r1.json();
-                    throw new Error('Erro ao criar entry: ' + (err.detail || JSON.stringify(err)));
+                    // 409: já existe publicação com mesmo (kind, nome, versão) — UX dedicada
+                    // com botão para voltar e bumpar a versão. Para o resto, mensagem genérica.
+                    if (r1.status === 409) {
+                        this.submitConflict = true;
+                        this.submitting = false;
+                        return;
+                    }
+                    const err = await r1.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Erro inesperado ao publicar. Tente novamente.');
                 }
                 const entry = await r1.json();
                 entryId = entry.id;
