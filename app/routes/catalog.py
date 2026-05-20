@@ -1039,6 +1039,52 @@ async def export_cost_csv(
     )
 
 
+@router.get("/cost/anomalies")
+async def get_cost_anomalies(
+    scope: str = Query("auto"),
+    consumer_department: Optional[str] = Query(None),
+    user: dict = Depends(require_user),
+):
+    """Detecta anomalias no custo do dia atual.
+
+    Tipos detectados (PR #71):
+    - **pico_relativo**: custo hoje > 3× média 7d (ignora se baseline < $1)
+    - **limite_global**: custo hoje > $100 absoluto
+
+    Scope (alinhado com GET /cost):
+    - 'mine': força consumer_user_id = user atual
+    - 'all':  sem restrição (apenas Root)
+    - 'auto': Root → all; demais → mine
+
+    Audit `cost_anomaly_detected` é registrado quando count > 0.
+    """
+    from app.catalog.anomalies import detect_anomalies
+
+    effective_scope = scope
+    if effective_scope == "auto":
+        effective_scope = "all" if is_root(user) else "mine"
+
+    if effective_scope == "all" and not is_root(user):
+        raise HTTPException(403, "scope='all' requer Root")
+
+    consumer_user_id = user["id"] if effective_scope == "mine" else None
+
+    result = await detect_anomalies(
+        consumer_user_id=consumer_user_id,
+        consumer_department=consumer_department,
+    )
+
+    if result["anomalies"]:
+        await _audit("cost_anomaly_detected", entry_id="", actor_id=user["id"], details={
+            "scope": effective_scope,
+            "anomaly_count": len(result["anomalies"]),
+            "anomaly_types": [a["type"] for a in result["anomalies"]],
+            "today_usd": result["today_usd"],
+        })
+
+    return result
+
+
 # ═════════════════════════════════════════════════════════════════
 # Recipes (Onda 3 — R8.1 básico)
 # ═════════════════════════════════════════════════════════════════

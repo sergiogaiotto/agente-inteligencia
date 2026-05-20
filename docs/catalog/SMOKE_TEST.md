@@ -1602,3 +1602,79 @@ ORDER BY created_at DESC LIMIT 5;
 - [x] Audit `recipe_sandbox_started` registrado
 - [x] Zero breaking changes em PRs Onda 1-3 e Onda 4 #67-#69
 - [ ] Smoke manual no browser (seções 3-5) — pendente em homolog
+
+---
+
+# Smoke Test — Onda 4 / PR 5 (Anomalias de cost)
+
+Detecção de picos/limites no consumo do dia. Reusa catalog_costs já
+gravado pelo PR #69. Thresholds hardcoded; banner vermelho em /catalog/cost
++ audit cost_anomaly_detected.
+
+## 1 — Testes unitários
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Esperado**: 322 passed (307 anteriores + 15 novos):
+- **detect_anomalies puro** (8): pico detectado/ignorado por baseline floor/ratio threshold, limite global detectado/ignorado, ambos simultâneos, dia normal sem anomalias, shape do response inclui thresholds
+- **Endpoint** (7): 200 root scope=all, 403 scope=all sem root, auto vira all/mine, filtro department, audit gravado quando há anomalia, audit NÃO gravado quando sem anomalia
+
+## 2 — Thresholds em uso (hardcoded em app/catalog/anomalies.py)
+
+| Constante | Valor | Significado |
+|---|---|---|
+| `PICO_MULTIPLIER` | 3.0 | Hoje ≥ 3× média 7d → pico |
+| `PICO_MIN_BASELINE_USD` | 1.0 | Ignora pico se baseline < $1 (ratio é meaningless) |
+| `LIMITE_GLOBAL_USD` | 100.0 | Hoje > $100 absoluto → limite_global |
+| `BASELINE_WINDOW_DAYS` | 7 | Janela do baseline |
+
+## 3 — Fluxo via UI
+
+Pré: ter dados em `catalog_costs` (rodar alguns recipes em prod via PR #67-#69).
+
+1. Acessar `/catalog/cost`.
+2. Banner vermelho aparece **só se há anomalia** no scope atual:
+   - "1 anomalia(s) detectada(s) no consumo de hoje"
+   - Lista das mensagens humanizadas
+   - Botão "Ocultar" some o banner (session-local)
+3. Mudar scope (Root): banner refaz fetch (`loadAnomalies()` é chamado de dentro de `load()`).
+4. Mudar filtro de department: idem.
+
+Se não há anomalia hoje, banner não aparece (zero ruído visual).
+
+## 4 — Disparar uma anomalia para teste manual
+
+```sql
+-- Injeta cost alto em hoje para gerar pico
+INSERT INTO catalog_costs (id, entry_id, consumer_user_id, cost_usd, tokens_used, latency_ms, invoked_at)
+SELECT gen_random_uuid()::text, id, 'u-test', 50.0, 1000, 100, now()
+FROM catalog_entries WHERE kind='agent' LIMIT 1;
+-- Repetir 3-4x → today_usd > $150
+```
+
+Recarregar `/catalog/cost` → banner aparece com pelo menos `limite_global`.
+
+## 5 — Audit
+
+```sql
+SELECT created_at, actor, details
+FROM audit_log
+WHERE action = 'cost_anomaly_detected'
+ORDER BY created_at DESC LIMIT 5;
+```
+
+**Esperado**: 1 row por chamada de GET /cost/anomalies quando count > 0.
+Sem anomalia, nenhum row é gravado (evita spam).
+
+## Critérios de aceitação Onda 4 / PR 5
+
+- [x] 322 testes passam (307 + 15 novos)
+- [x] Módulo `app/catalog/anomalies.py` com 4 thresholds + `detect_anomalies()`
+- [x] Endpoint `GET /api/v1/catalog/cost/anomalies` (auto-scope)
+- [x] Banner vermelho em `/catalog/cost` com botão Ocultar
+- [x] Audit `cost_anomaly_detected` quando count > 0
+- [x] Sandbox NÃO infla baseline/today (PR #70 não grava em catalog_costs)
+- [x] Zero breaking changes em PRs Onda 1-3 e Onda 4 #67-#70
+- [ ] Smoke manual no browser (seções 3-5) — pendente em homolog
