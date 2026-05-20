@@ -185,12 +185,13 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
 - **Cost & Consumption** — endpoint de registro + page com agregados + CSV export
 - **Recipes publicáveis** — kind=recipe como composição declarativa (manifest; execução fica para Onda 4)
 
-### 🚧 Onda 4 em andamento (PRs #67-#70 entregues)
+### 🚧 Onda 4 em andamento (PRs #67-#71 entregues)
 
 - **✅ Execução real de recipes** (PR #67) — chain sequencial via engine, async com polling, skip-after-failure, cost auto-wire básico por step. Nova tabela `catalog_recipe_executions` + 3 endpoints sob `/api/v1/catalog`.
 - **✅ UI de execução** (PR #68) — tab "Execuções" em `/catalog/{id}`, modal de disparo + modal de polling em tempo real (1.5s), histórico paginado, drill-down de execuções passadas.
 - **✅ Cost pleno** (PR #69) — `app/core/llm_pricing.py` com tabela de preços por provider/model; executor calcula `cost_usd` real (substituindo placeholder=0) usando `tokens.input × in_per_1k + tokens.output × out_per_1k`. Cobre azure, openai, anthropic, maritaca, ollama. Modelo desconhecido → 0 + warning.
 - **✅ Sandbox de invocação** (PR #70) — owner/Root rodam recipe em qualquer status (incl. draft) com LLM real, mas sem gravar em `catalog_costs`. Coluna `is_sandbox` na tabela de executions + endpoint `POST /sandbox` + botão 🧪 Sandbox + badge laranja no histórico/polling. Audit `recipe_sandbox_started`.
+- **✅ Anomalias de cost** (PR #71) — detecção de picos (hoje ≥ 3× média 7d) e limite global ($100/dia) sobre `catalog_costs`. Endpoint `GET /cost/anomalies` (auto-scope) + banner vermelho em `/catalog/cost` + audit `cost_anomaly_detected`. Thresholds hardcoded em `app/catalog/anomalies.py`.
 
 ### Reservado para Onda 4+
 
@@ -206,16 +207,16 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
 
 ## Métricas de entrega
 
-| Indicador | Onda 1 | Onda 2 | Onda 3 | Onda 4 (PR #67-70) | Total |
+| Indicador | Onda 1 | Onda 2 | Onda 3 | Onda 4 (PR #67-71) | Total |
 |---|---|---|---|---|---|
-| PRs entregues | 10 | 6 | 4 | +4 | **24** |
-| Endpoints REST | 14 | 7 | 6 | +4 | **31** |
+| PRs entregues | 10 | 6 | 4 | +5 | **25** |
+| Endpoints REST | 14 | 7 | 6 | +5 | **32** |
 | Páginas UI novas | 4 | 2 | 1 | 0 | **7** |
-| Páginas UI alteradas | 4 | 4 | 4 | +1 | 13 |
+| Páginas UI alteradas | 4 | 4 | 4 | +2 | 14 |
 | Tabelas PostgreSQL | 4 | 1 | 1 | +1 | **7** |
-| Testes unitários | 171 | 50 | 36 | +50 | **307** |
+| Testes unitários | 171 | 50 | 36 | +65 | **322** |
 | Pré-checks | 7 | 1 | 1 | 0 | **9** |
-| Audit actions distintas | 6 | 3 | 2 | +3 | **14** |
+| Audit actions distintas | 6 | 3 | 2 | +4 | **15** |
 | Breaking changes | 0 | 0 | 0 | **0** | — |
 
 ## Referências
