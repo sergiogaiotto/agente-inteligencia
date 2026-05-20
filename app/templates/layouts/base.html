@@ -749,21 +749,29 @@
             },
             /* ══ Tour ══ */
             tourActive: false, tourStep: 0,
+            // Cada step pode ter `optional: true` — se o elemento DOM não existir
+            // (porque é gated por role/permission), o tour pula automaticamente
+            // (ver nextTourStep). Mantém UX fluida para usuário comum e Root.
             tourSteps: [
-                {el:'tour-logo', title:'agente-inteligência', description:'Plataforma multi-agente orientada a SKILL.md sobre AI Mesh. Arquitetura de três camadas: Orquestrador (AOBD), Roteador (AR) e Subagente (SA), conectados via protocolo A2A com Evidence Runtime e FSM de 9 estados.'},
-                {el:'tour-nav-dashboard', title:'Dashboard', description:'Visão geral da plataforma: contagem de agentes por camada (AOBD/AR/SA), skills registradas, interações processadas pela FSM de 9 estados, releases ativas, conectores de API e métricas agregadas.'},
-                {el:'tour-nav-agents', title:'Agentes', description:'CRUD de agentes nas três camadas §4. Cada agente pode ser AOBD, Roteador ou Subagente. Vincule um SKILL.md para definir o comportamento. Agentes sem skill e com prompt genérico são detectados como pass-through e ignorados (0ms) em pipelines do AI Mesh.'},
-                {el:'tour-nav-skills', title:'Skills — SKILL.md §5', description:'Contrato executável do agente. Defina Purpose, Workflow, Tool Bindings, Output Contract, Guardrails e Execution Profile (fast/standard/rigorous). O parser valida a anatomia canônica. O Execution Profile controla quantas chamadas LLM e se há reflexão e verificação de evidência.'},
-                {el:'tour-nav-workspace', title:'Workspace', description:'Execução e interação com agentes. FSM §15: Intake → PolicyCheck → RetrieveEvidence → DraftAnswer → VerifyEvidence → Recommend/Refuse/Escalate → LogAndClose. Respostas JSON são renderizadas automaticamente em formato rico (cards, key-value, markdown). Execution Log ao vivo com exportação XLSX.'},
-                {el:'tour-nav-mesh', title:'AI Mesh — Pipelines', description:'Topologia visual §11 com conexões entre agentes. Crie pipelines sequenciais, paralelas ou condicionais. Agentes pass-through são ignorados automaticamente (0ms). Painel de detalhes mostra timeline, skills, system prompts e conexões de cada pipeline.'},
-                {el:'tour-nav-tools', title:'Ferramentas (MCP §10)', description:'Catálogo de ferramentas MCP que conectam agentes a sistemas externos. Registre endpoints, operações e classificação de sensibilidade. O snippet de Tool Binding gerado é colado no SKILL.md. O Permitted Toolset é a interseção entre inventário MCP e tools declaradas no SKILL.md.'},
-                {el:'tour-nav-evidence', title:'Bases de Conhecimento (RAG §14)', description:'Bases autorizadas para grounding de respostas. O Retriever busca evidências (BM25 + vetorial via Qdrant), o Reranker ordena por relevância. RAG ≠ Verificação: para verificação de fidelidade veja Qualidade (§14.2).'},
-                {el:'tour-nav-api-connectors', title:'API Connectors', description:'Registre e teste APIs externas. Cada conector tem base URL, autenticação (API Key, Bearer, Basic), health check e timeout. Crie endpoints organizados por categoria. O Request Builder permite testar chamadas diretamente, com histórico de execuções e métricas de latência.'},
-                {el:'tour-nav-harness', title:'Avaliação (Harness §9.5)', description:'Avaliação contínua contra Golden Dataset adversarial. Crie casos com category, weight, expected_pattern e red_flags. Execute baseline/regressão e use o gate automático para aprovar ou rejeitar releases baseado em acurácia ponderada, taxa de recusa e falsos positivos.'},
-                {el:'tour-nav-releases', title:'Version Registry §18', description:'Gerenciamento de releases. Cada release é uma tupla imutável (modelo + prompt + índice + policy). Promoção gated: staging → canary → production. Detecção de drift e rollback automático.'},
-                {el:'tour-nav-quality', title:'Qualidade (Verifier §14.2)', description:'Visualização do judge multi-dimensional: factuality, completeness, tone_adherence, safety + ContractValidator. Cards de agregados (média por dimensão, taxa de aprovação, distribuição por judge_model). Lista filtrada com expand para ver unsupported_claims (alucinação suspeita) e contract_errors. Lê de verifications table.'},
-                {el:'tour-nav-observability', title:'Observabilidade §17', description:'Métricas e traces. LangFuse + Tempo (Onda 2). Spans obrigatórios por camada, latência, custo por interação e tokens consumidos.'},
-                {el:'tour-start-btn', title:'Pronto para começar!', description:'A plataforma implementa §1-§24 da especificação funcional. Comece criando um agente, vincule skills com Execution Profile adequado, registre bases de conhecimento, conecte APIs externas via API Connectors, e execute interações pelo Workspace.'},
+                {el:'tour-logo', title:'Bem-vindo ao Maestro', description:'Em poucos minutos você vai conhecer cada área da plataforma. O Maestro é uma plataforma multi-agent orientada a SKILL.md sobre AI Mesh — pense numa orquestra: agents tocam, skills são a partitura, e a plataforma rege.'},
+                {el:'tour-nav-dashboard', title:'Dashboard', description:'O raio-X da plataforma. Em 5 segundos você vê quantos agents estão ativos, quantas interações rodaram nas últimas 24h e qual o estado geral. Use como ponto de partida do dia.'},
+                {el:'tour-nav-agents', title:'Agentes', description:'Os "trabalhadores" da plataforma. Cada agent combina um prompt, um modelo de linguagem e (opcionalmente) ferramentas. Aqui você cria, edita, duplica e invoca — versionado, rastreável, sem código.'},
+                {el:'tour-nav-skills', title:'Skills', description:'Competências reutilizáveis em arquivos SKILL.md. Define o passo-a-passo, quais ferramentas usar e o formato da resposta. A mesma skill serve em vários agents — garante consistência sem replicar lógica.'},
+                {el:'tour-nav-catalog', title:'Catálogo', description:'Marketplace interno da empresa: agents, skills, recipes (composições) e plataformas externas aprovadas (ChatGPT, Cursor). Cada entry passa por revisão Root antes de ficar disponível — governança via etiqueta nutricional.'},
+                {el:'tour-nav-catalog-queue', title:'Fila Root', description:'Onde Root (e só Root) revisa e aprova submissões do Catálogo. Pré-checks automáticos rodam no submit; aqui você vê o relatório e decide aprovar, rejeitar ou pedir mudanças.', optional: true},
+                {el:'tour-nav-catalog-inventory', title:'Inventário Regulatório', description:'Inventário compliance da IA na empresa. Quais agents/skills processam PII, dados regulados, têm soberania específica. Exporta CSV para auditoria. Visível só para Root.', optional: true},
+                {el:'tour-nav-catalog-stewardship', title:'Stewardship', description:'Painel para steward de área — você vê os agents do seu domínio (fiscal, RH, jurídico…) e identifica órfãos, stale ou pouco confiáveis. Aberto a quem tem domains, não só Root.', optional: true},
+                {el:'tour-nav-catalog-cost', title:'Custo & Consumo', description:'Quanto cada agent custou em USD, por quem, em que dia. Base para chargeback interno. Anomalias (pico, limite global) aparecem como banner vermelho automático.'},
+                {el:'tour-nav-workspace', title:'Workspace', description:'O "chat" da plataforma — onde você invoca um agent e vê a resposta ao vivo com cada etapa da execução: recuperação de evidência, raciocínio, verificação. É a tela mais usada no dia-a-dia.'},
+                {el:'tour-nav-mesh', title:'AI Mesh', description:'Topologia visual de como os agents se conectam. Você desenha pipelines sequenciais (A→B→C), paralelos (fan-out) ou condicionais. Agents pass-through são pulados automaticamente.'},
+                {el:'tour-nav-tools', title:'Ferramentas (MCP)', description:'Catálogo de ferramentas externas que os agents podem chamar — consultar ERP, validar CPF/CNPJ, ler banco de dados. Falamos com tools via protocolo MCP padronizado.'},
+                {el:'tour-nav-evidence', title:'Bases de Conhecimento', description:'Onde você cadastra os documentos que o agent vai consultar para responder com fonte: manuais, regulamentos, FAQs. Busca híbrida BM25 + vetorial. Sem isso, o LLM "inventa" do treinamento.'},
+                {el:'tour-nav-api-connectors', title:'API Connectors', description:'Registre APIs externas (CRM, ERP, e-mail, etc.) para que os agents invoquem via HTTP. Builder visual para testar antes, histórico de chamadas, health check periódico.'},
+                {el:'tour-nav-harness', title:'Harness de Avaliação', description:'O "CI/CD de qualidade". Antes de promover uma release, o Harness roda casos do Golden Dataset e decide se passou. Gate automático com thresholds calibráveis.'},
+                {el:'tour-nav-releases', title:'Releases', description:'Versionamento atômico da configuração inteira (modelo + prompt + índice + policy). Promoção gated staging → canary → production. Detecção de drift e rollback automático.'},
+                {el:'tour-nav-quality', title:'Qualidade', description:'A "nota" que a plataforma dá para cada resposta. Verifier multi-dimensional avalia factuality, completeness, tom e safety — 4 dimensões. Detecta drift e alucinação cedo.'},
+                {el:'tour-nav-observability', title:'Observabilidade', description:'Traces, custos e performance detalhados em LangFuse (SaaS) ou stack OTEL self-hosted. Use para investigar incidentes em profundidade e comparar custo entre modelos.'},
+                {el:'tour-start-btn', title:'Pronto para começar', description:'Você viu todas as áreas. Próximo passo natural: criar um agent simples em /agents → invocar no /workspace → ajustar com base no resultado. Use o botão "Ajuda desta página" em qualquer tela para aprofundar.'},
             ],
             get currentTourStep() { return this.tourSteps[this.tourStep] || {} },
             get spotlightStyle() {
@@ -782,10 +790,43 @@
                 if (r.left > 400) return `left:${r.left - 392}px;top:${Math.max(16, r.top - 20)}px`;
                 return `left:${Math.max(16, r.left)}px;top:${r.bottom + 12}px`;
             },
-            startTour() { this.tourStep = 0; this.tourActive = true; },
+            startTour() {
+                this.tourStep = 0;
+                this.tourActive = true;
+                // Pula steps optionais cujo elemento DOM não existe (gated por role/domain)
+                this._skipMissingSteps(1);
+            },
+            // Avança pulando steps optionais sem elemento DOM. dir=+1 (next) ou -1 (prev).
+            _skipMissingSteps(dir) {
+                let safe = this.tourSteps.length;
+                while (safe-- > 0) {
+                    const cur = this.tourSteps[this.tourStep];
+                    if (!cur) return;
+                    // Se não é optional, ou se o elemento existe, para de pular
+                    if (!cur.optional) return;
+                    if (document.getElementById(cur.el)) return;
+                    // Não existe e é optional → pula
+                    const next = this.tourStep + dir;
+                    if (next < 0 || next >= this.tourSteps.length) return;
+                    this.tourStep = next;
+                }
+            },
             endTour() { this.tourActive = false; },
-            nextTourStep() { if (this.tourStep < this.tourSteps.length - 1) this.tourStep++; else this.endTour(); },
-            prevTourStep() { if (this.tourStep > 0) this.tourStep--; },
+            nextTourStep() {
+                if (this.tourStep < this.tourSteps.length - 1) {
+                    this.tourStep++;
+                    this._skipMissingSteps(+1);
+                    if (this.tourStep >= this.tourSteps.length) this.endTour();
+                } else {
+                    this.endTour();
+                }
+            },
+            prevTourStep() {
+                if (this.tourStep > 0) {
+                    this.tourStep--;
+                    this._skipMissingSteps(-1);
+                }
+            },
 
             /* ══ Guia dos Módulos (drawer) ══ */
             moduleGuideOpen: false,
