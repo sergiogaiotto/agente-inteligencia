@@ -223,6 +223,7 @@ real, UI, cost pleno, sandbox, anomalias). Restam para fases futuras:
 
 ## Referências
 
+- [ROADMAP.md](ROADMAP.md) — backlog priorizado da Onda 5+ com contexto para retomar
 - [ONDA4.md](ONDA4.md) — resumo da Onda 4
 - [ONDA3.md](ONDA3.md) — resumo da Onda 3
 - [ONDA2.md](ONDA2.md) — resumo da Onda 2
