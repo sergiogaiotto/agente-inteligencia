@@ -815,6 +815,56 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   },
 
   // ═════════════════════════════════════════════════════════════════
+  // /infra — Infraestrutura
+  // ═════════════════════════════════════════════════════════════════
+  infra: {
+    title: 'Infraestrutura',
+    summary: 'Estado dos componentes da plataforma — banco, cache, vetores, observabilidade — em uma tela só.',
+    sections: [
+      {
+        kind: 'concept',
+        title: 'O que é',
+        body: `
+          <p>A Infraestrutura mostra a saúde dos serviços de baixo nível que a plataforma usa: PostgreSQL (dados), Redis (rate-limit + cache), Qdrant (vetores do RAG), e o stack de observabilidade quando ativo.</p>
+          <p>É o lugar para investigar "por que está lento?" ou "por que essa página não carregou?" — antes de mergulhar em traces específicos no /observability.</p>
+        `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Fundamentos',
+        body: `
+          <p>Os componentes monitorados:</p>
+          <ul>
+            <li><strong>PostgreSQL</strong> — backend único de persistência. Tudo passa por aqui: agents, skills, interactions, audit_log, catalog, etc. Se cair, a plataforma toda fica indisponível.</li>
+            <li><strong>Redis</strong> — usado para rate-limit (sliding window) e cache leve de routing. Falha = rate-limit desligado (failsafe open).</li>
+            <li><strong>Qdrant</strong> — vector DB para o RAG. Falha = busca de evidência cai em BM25-only (degrada com graça).</li>
+            <li><strong>OpenTelemetry / LangFuse</strong> — exportação de traces. Quando configurado e ativo, traces aparecem em Tempo/Grafana ou LangFuse.</li>
+          </ul>
+          <p>Status verificado em tempo real via probes leves (latência de query, ping, health endpoint). Quando algum componente está degradado, o card pisca em laranja/vermelho.</p>
+        `
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Casos de uso',
+        items: [
+          { title: 'Diagnóstico inicial de incidente', body: 'Site lento. Antes de pedir trace, vai em Infra: vê PostgreSQL com latência 2s/query. Foco vira tuning do banco, não da app.' },
+          { title: 'Confirmar setup', body: 'Acabou de configurar OTEL? Abre Infra para confirmar que o exporter está conectado e enviando spans.' },
+          { title: 'Capacity planning', body: 'Acompanhar tamanho do banco, uso de Redis, vetores indexados em Qdrant. Quando um deles passa do limite saudável, é hora de escalar.' }
+        ]
+      },
+      {
+        kind: 'pegadinhas',
+        title: 'Pegadinhas',
+        items: [
+          { title: 'Componente "offline" pode ser config', severity: 'info', body: 'Se LangFuse aparece offline, primeiro checa se as credenciais estão preenchidas em /settings. "Offline" pode significar "nunca configurado".' },
+          { title: 'Qdrant down ≠ plataforma down', severity: 'warning', body: 'Quando Qdrant cai, a plataforma continua funcionando mas o RAG perde a parte vetorial. Busca passa a ser BM25-only. Investigue antes que o cliente perceba qualidade pior.' }
+        ]
+      }
+    ],
+    related: ['observability', 'settings', 'history']
+  },
+
+  // ═════════════════════════════════════════════════════════════════
   // /history — Histórico
   // ═════════════════════════════════════════════════════════════════
   history: {
