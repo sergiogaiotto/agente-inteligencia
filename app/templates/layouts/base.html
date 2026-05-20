@@ -936,7 +936,19 @@
                 this.helpChatOpen = true;
             },
             openHelpChatForPage() {
-                this.helpChatPage = { ...this.pageHelpData };
+                // Se a página foi migrada para o schema rico (help-content.js),
+                // passa o conteúdo V2 inteiro. Senão, cai no payload legacy.
+                if (this.pageHelpV2) {
+                    this.helpChatPage = {
+                        v2: true,
+                        title: this.pageHelpV2.title,
+                        summary: this.pageHelpV2.summary || '',
+                        sections: this.pageHelpV2.sections || [],
+                        related: this.pageHelpV2.related || [],
+                    };
+                } else {
+                    this.helpChatPage = { v2: false, ...this.pageHelpData };
+                }
                 this.helpChatModule = null;
                 this.helpMessages = [];
                 this.helpInput = '';
@@ -966,7 +978,19 @@
                             question: q,
                             history,
                         };
+                    } else if (this.helpChatPage && this.helpChatPage.v2) {
+                        // Schema rico — manda sections inteiras para o LLM
+                        url = '/api/v1/help/ask-context-v2';
+                        body = {
+                            title: this.helpChatPage.title || '',
+                            summary: this.helpChatPage.summary || '',
+                            sections: this.helpChatPage.sections || [],
+                            related: this.helpChatPage.related || [],
+                            question: q,
+                            history,
+                        };
                     } else {
+                        // Legacy — payload plano (páginas ainda não migradas)
                         url = '/api/v1/help/ask-context';
                         body = {
                             title: this.helpChatPage.title || '',
