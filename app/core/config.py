@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     oss20b_api_key: str = ""
     llm_timeout_seconds: int = 300
 
+    # ── Modelo Primário (fallback global) ──
+    # Usado quando agent não tem task_type (Roteamento LLM da Onda 7) NEM
+    # snapshot próprio de llm_provider/model. Quando definido, substitui
+    # o hardcoded azure/gpt-4o do default histórico.
+    primary_provider: str = ""  # ex: "gpt-oss-120b" | "azure" | "maritaca" | "ollama"
+    primary_model: str = ""     # ex: "openai/gpt-oss-120b" | "gpt-4o" | "sabia-4"
+
     # ── Embedding provider (Azure | Qwen3) ──
     # Qwen3 reusa URL/key do OSS source escolhido (oss20b ou oss120b), só
     # muda o path (default 'qwen3/v1'). Veja docs/catalog/SMOKE_TEST.md.
@@ -261,6 +268,9 @@ _UI_TO_ENV_MAP = {
     "oss20b_model":    "OSS20B_MODEL",
     "oss20b_api_key":  "OSS20B_API_KEY",
     "llm_timeout_seconds": "LLM_TIMEOUT_SECONDS",
+    # Modelo Primário (fallback global)
+    "primary_provider": "PRIMARY_PROVIDER",
+    "primary_model":    "PRIMARY_MODEL",
     # Embedding (Qwen3 reusa URL/key do OSS source)
     "embedding_provider": "EMBEDDING_PROVIDER",
     "qwen3_source":       "QWEN3_SOURCE",

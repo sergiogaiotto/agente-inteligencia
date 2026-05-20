@@ -541,6 +541,25 @@ async def execute_interaction(
                 f"usando snapshot do agent ({agent.get('llm_provider')}/{agent.get('model')})"
             )
 
+    # Fallback ao Modelo Primário da plataforma: se nem task_type (Onda 7) NEM
+    # snapshot próprio do agent resolveram o LLM, usa platform_settings
+    # primary_provider/primary_model. Cobre o caso "agent legacy criado
+    # sem provider explícito" e o cenário operacional "quero que tudo use
+    # gpt-oss-120b por padrão" sem editar cada agent.
+    from app.core.config import get_settings as _get_settings_primary
+    _cur_settings = _get_settings_primary()
+    _primary_p = (_cur_settings.primary_provider or "").strip()
+    _primary_m = (_cur_settings.primary_model or "").strip()
+    if _primary_p and _primary_m and (not agent.get("llm_provider") or not agent.get("model")):
+        agent = dict(agent)
+        if not agent.get("llm_provider"):
+            agent["llm_provider"] = _primary_p
+        if not agent.get("model"):
+            agent["model"] = _primary_m
+        logger.info(
+            f"Modelo Primário aplicado: agent={agent_id[:8]} → {_primary_p}/{_primary_m}"
+        )
+
     from app.core.database import mesh_repo
     mesh_chain = await _resolve_mesh_chain(agent_id, agent)
 

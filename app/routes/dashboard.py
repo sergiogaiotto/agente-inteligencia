@@ -1582,6 +1582,9 @@ class SettingsSave(BaseModel):
     timeout: Optional[int] = 120
     mesh_groups: Optional[str] = None
     mesh_chain_names: Optional[str] = None
+    # Modelo Primário (fallback global)
+    primary_provider: Optional[str] = ""
+    primary_model: Optional[str] = ""
     # GPT-OSS (open-weight) — Onda 4 plataforma
     oss120b_url: Optional[str] = ""
     oss120b_model: Optional[str] = "openai/gpt-oss-120b"

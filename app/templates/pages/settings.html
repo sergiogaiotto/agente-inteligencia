@@ -106,6 +106,43 @@
             </button>
         </div>
 
+        <!-- Modelo Primário (fallback global) — destaque no topo -->
+        <div class="rounded-xl border-2 border-brand-300 bg-gradient-to-br from-brand-50 to-white p-5 mb-5">
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-3">
+                    <span class="text-lg">⭐</span>
+                    <div>
+                        <div class="text-[13px] font-semibold text-brand-900">Modelo Primário da Plataforma</div>
+                        <div class="text-[11px] text-surface-500">Usado quando o agent <strong>não</strong> declara <code class="font-mono text-violet-600">task_type</code> e <strong>não</strong> tem snapshot próprio de provider/modelo.</div>
+                    </div>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-500 mb-1">Provider</label>
+                    <select x-model="config.primary_provider" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none focus:border-brand-400">
+                        <option value="">— Não definido (cai em azure/gpt-4o hardcoded) —</option>
+                        <option value="azure">Azure OpenAI</option>
+                        <option value="openai">OpenAI (alias de Azure)</option>
+                        <option value="maritaca">Maritaca AI</option>
+                        <option value="ollama">Ollama</option>
+                        <option value="gpt-oss-20b">GPT-OSS-20B (open-weight)</option>
+                        <option value="gpt-oss-120b">GPT-OSS-120B (open-weight)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-500 mb-1">Modelo</label>
+                    <input x-model="config.primary_model" placeholder="ex: openai/gpt-oss-120b" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-brand-400">
+                </div>
+            </div>
+            <p x-show="config.primary_provider && config.primary_model" class="text-[10px] text-emerald-700 mt-2 flex items-center gap-1">
+                <span>✓</span> Resolvido como <code class="font-mono" x-text="config.primary_provider + '/' + config.primary_model"></code>
+            </p>
+            <p x-show="!(config.primary_provider && config.primary_model)" class="text-[10px] text-amber-700 mt-2">
+                ⓘ Sem primário definido, agents legacy caem em <code class="font-mono">azure/gpt-4o</code>.
+            </p>
+        </div>
+
         <!-- Azure OpenAI (provedor primário — Onda 7 Wave 4) -->
         <div class="rounded-xl border border-blue-200 bg-blue-50/30 p-5 mb-5">
             <div class="flex items-center justify-between mb-4">
@@ -838,6 +875,8 @@ function settingsPage() {
             ollama_url:'http://187.77.46.137:11434',ollama_model:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',
             langfuse_public:'',langfuse_secret:'',langfuse_host:'https://cloud.langfuse.com',
             max_iterations:25,timeout:120,
+            // Modelo Primário (fallback global)
+            primary_provider:'', primary_model:'',
             // GPT-OSS (Onda 4 plataforma)
             oss120b_url:'', oss120b_model:'openai/gpt-oss-120b', oss120b_api_key:'not-needed',
             oss20b_url:'',  oss20b_model:'openai/gpt-oss-20b',   oss20b_api_key:'not-needed',
