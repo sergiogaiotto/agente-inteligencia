@@ -1,17 +1,20 @@
-"""Embedder Azure OpenAI (Onda 3).
+"""Embedder com seletor Azure | Qwen3 (Onda 3 / Onda 4 PR plataforma).
 
-Usa AzureOpenAIEmbeddings do langchain-openai. Singleton lazy. Graceful:
-se Azure não configurado ou a chamada falhar, retorna None — caller decide
-como degradar (ingest aborta com 503; retriever cai em BM25-only).
+Qwen3 (Onda 4): suporta endpoint OpenAI-compatible custom — reusa URL/key
+do OSS source escolhido (oss20b ou oss120b), só muda o path. Permite usar
+o mesmo hub interno (ex: Claro hub-gpus) que serve os LLMs também para
+embeddings.
 
-Não suporta OpenAI público (sem Azure) por simplicidade — basta wirar
-quando tivermos demanda real.
+Singleton lazy. Graceful: se provider configurado falhar, retorna None —
+caller decide degradar (ingest aborta com 503; retriever cai em BM25-only).
 """
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Protocol
+from urllib.parse import urlparse
+
+import httpx
 
 from app.core.config import get_settings
 
@@ -20,12 +23,83 @@ logger = logging.getLogger(__name__)
 _embedder = None  # singleton
 
 
-def _build_embedder():
-    """Constroi o embedder Azure OpenAI."""
-    settings = get_settings()
+class _EmbedderProtocol(Protocol):
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]: ...
+    async def aembed_query(self, text: str) -> list[float]: ...
 
+
+# ───────────────────────────────────────────────────────────────
+# Qwen3 — endpoint OpenAI-compatible (POST /embeddings)
+# ───────────────────────────────────────────────────────────────
+
+
+def _qwen3_base_url(oss_url: str, qwen3_path: str) -> str:
+    """Reusa scheme://host do OSS_URL e concatena com qwen3_path.
+
+    Ex: oss_url='https://hub-gpus.claro.com.br/gpt120/v1', qwen3_path='qwen3/v1'
+        → 'https://hub-gpus.claro.com.br/qwen3/v1'
+    """
+    if not oss_url:
+        return ""
+    parsed = urlparse(oss_url)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}/{qwen3_path.strip('/')}"
+
+
+class Qwen3Embedder:
+    """Embedder que fala /embeddings em endpoint OpenAI-compatible.
+
+    Mantém a interface esperada pelo restante do projeto: `aembed_documents`
+    (batch) e `aembed_query` (single).
+    """
+
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: int = 60):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key or "not-needed"
+        self.model = model
+        self.timeout = timeout
+
+    async def _post(self, payload: dict) -> dict:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            r = await client.post(
+                f"{self.base_url}/embeddings",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        if r.status_code >= 400:
+            raise RuntimeError(f"qwen3 HTTP {r.status_code}: {r.text[:200]}")
+        return r.json()
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        data = await self._post({"model": self.model, "input": texts})
+        items = data.get("data") or []
+        # Ordena por index pra garantir alinhamento com `texts`
+        items.sort(key=lambda x: x.get("index", 0))
+        return [it["embedding"] for it in items]
+
+    async def aembed_query(self, text: str) -> list[float]:
+        data = await self._post({"model": self.model, "input": text})
+        items = data.get("data") or []
+        if not items:
+            raise RuntimeError("qwen3: resposta sem 'data'")
+        return items[0]["embedding"]
+
+
+# ───────────────────────────────────────────────────────────────
+# Builders e seletor
+# ───────────────────────────────────────────────────────────────
+
+
+def _build_azure_embedder():
+    settings = get_settings()
     if not (settings.azure_openai_api_key and settings.azure_openai_endpoint):
-        logger.warning("Azure OpenAI não configurado; embedder retornará None.")
+        logger.warning("Azure OpenAI não configurado; embedder Azure indisponível.")
         return None
     try:
         from langchain_openai import AzureOpenAIEmbeddings
@@ -38,6 +112,37 @@ def _build_embedder():
     except Exception as e:
         logger.warning(f"Falha ao instanciar AzureOpenAIEmbeddings: {e}")
         return None
+
+
+def _build_qwen3_embedder():
+    settings = get_settings()
+    source = (settings.qwen3_source or "oss120b").lower()
+    if source == "oss20b":
+        oss_url, api_key = settings.oss20b_url, settings.oss20b_api_key
+    else:
+        oss_url, api_key = settings.oss120b_url, settings.oss120b_api_key
+    base_url = _qwen3_base_url(oss_url, settings.qwen3_path)
+    if not base_url:
+        logger.warning(
+            f"Qwen3 selecionado mas OSS source '{source}' não configurado "
+            f"(URL vazia ou inválida). Embedder Qwen3 indisponível."
+        )
+        return None
+    return Qwen3Embedder(
+        base_url=base_url,
+        api_key=api_key or "not-needed",
+        model=settings.qwen3_model,
+        timeout=settings.llm_timeout_seconds,
+    )
+
+
+def _build_embedder():
+    """Constroi o embedder ativo baseado em settings.embedding_provider."""
+    settings = get_settings()
+    provider = (settings.embedding_provider or "azure").lower()
+    if provider == "qwen3":
+        return _build_qwen3_embedder()
+    return _build_azure_embedder()
 
 
 def _get_embedder():
@@ -59,7 +164,6 @@ async def embed_texts(texts: list[str]) -> Optional[list[list[float]]]:
     if emb is None:
         return None
     try:
-        # langchain_openai usa httpx async por baixo; aembed_documents é o método async oficial.
         return await emb.aembed_documents(texts)
     except Exception as e:
         logger.warning(f"embed_texts falhou: {type(e).__name__}: {e}")

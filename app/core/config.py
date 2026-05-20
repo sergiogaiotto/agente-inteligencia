@@ -59,6 +59,26 @@ class Settings(BaseSettings):
     ollama_api_key: str = ""
     ollama_model: str = "hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest"
 
+    # ── GPT-OSS (open-weight via endpoint OpenAI-compatible) ──
+    # 2 modelos com URL/key próprias — provedor interno serve cada um em
+    # endpoint dedicado. "not-needed" como api_key é válido (proxy autentica
+    # de outra forma, ex: rede interna).
+    oss120b_url: str = ""
+    oss120b_model: str = "openai/gpt-oss-120b"
+    oss120b_api_key: str = ""
+    oss20b_url: str = ""
+    oss20b_model: str = "openai/gpt-oss-20b"
+    oss20b_api_key: str = ""
+    llm_timeout_seconds: int = 300
+
+    # ── Embedding provider (Azure | Qwen3) ──
+    # Qwen3 reusa URL/key do OSS source escolhido (oss20b ou oss120b), só
+    # muda o path (default 'qwen3/v1'). Veja docs/catalog/SMOKE_TEST.md.
+    embedding_provider: str = "azure"  # 'azure' | 'qwen3'
+    qwen3_source: str = "oss120b"      # 'oss120b' | 'oss20b'
+    qwen3_path: str = "qwen3/v1"
+    qwen3_model: str = "Qwen/Qwen3-Embedding-0.6B"
+
     # ── Observabilidade ──
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
@@ -233,6 +253,19 @@ _UI_TO_ENV_MAP = {
     # Ollama
     "ollama_url":    "OLLAMA_API_URL",
     "ollama_model":  "OLLAMA_MODEL",
+    # GPT-OSS (open-weight via endpoint OpenAI-compatible)
+    "oss120b_url":     "OSS120B_URL",
+    "oss120b_model":   "OSS120B_MODEL",
+    "oss120b_api_key": "OSS120B_API_KEY",
+    "oss20b_url":      "OSS20B_URL",
+    "oss20b_model":    "OSS20B_MODEL",
+    "oss20b_api_key":  "OSS20B_API_KEY",
+    "llm_timeout_seconds": "LLM_TIMEOUT_SECONDS",
+    # Embedding (Qwen3 reusa URL/key do OSS source)
+    "embedding_provider": "EMBEDDING_PROVIDER",
+    "qwen3_source":       "QWEN3_SOURCE",
+    "qwen3_path":         "QWEN3_PATH",
+    "qwen3_model":        "QWEN3_MODEL",
     # LangFuse (observabilidade SaaS opcional)
     "langfuse_public":"LANGFUSE_PUBLIC_KEY",
     "langfuse_secret":"LANGFUSE_SECRET_KEY",
