@@ -2,6 +2,10 @@
 
 CRUD de conectores (aplicações externas), endpoints salvos,
 proxy para execução, health check, e histórico de chamadas.
+
+Revisão de qualidade (2026-05): auth headers e body preparation
+centralizados em app/core/http_auth.py. API keys cifradas at-rest
+via app/core/crypto.py. verify_ssl e body_type por connector/endpoint.
 """
 import uuid
 import json
@@ -12,6 +16,13 @@ import httpx
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
+from app.core.crypto import encrypt_secret, decrypt_secret
+from app.core.http_auth import (
+    build_auth_headers as _http_build_auth_headers,
+    prepare_request_body,
+    BODY_TYPES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +39,12 @@ class ConnectorCreate(BaseModel):
     icon: Optional[str] = "AP"
     color: Optional[str] = "bg-brand-500"
     api_key: Optional[str] = ""
-    auth_type: Optional[str] = "none"       # none | api_key | bearer | basic
+    auth_type: Optional[str] = "none"       # none | api_key | bearer | basic | cookie
     auth_header: Optional[str] = "X-API-Key" # header name for api_key/bearer
     health_path: Optional[str] = "/api/health"
     timeout_ms: Optional[int] = 30000
     sort_order: Optional[int] = 99
+    verify_ssl: Optional[int] = 1            # 0=desativa validação TLS (APIs self-signed)
 
 class ConnectorUpdate(BaseModel):
     name: Optional[str] = None
@@ -47,6 +59,7 @@ class ConnectorUpdate(BaseModel):
     timeout_ms: Optional[int] = None
     is_active: Optional[int] = None
     sort_order: Optional[int] = None
+    verify_ssl: Optional[int] = None
 
 class EndpointCreate(BaseModel):
     name: str
@@ -56,6 +69,7 @@ class EndpointCreate(BaseModel):
     category: Optional[str] = "geral"
     sample_body: Optional[str] = "{}"
     sample_headers: Optional[str] = "{}"
+    body_type: Optional[str] = "json"  # json | form_urlencoded | multipart | text | xml
 
 class EndpointUpdate(BaseModel):
     name: Optional[str] = None
@@ -66,14 +80,16 @@ class EndpointUpdate(BaseModel):
     sample_body: Optional[str] = None
     sample_headers: Optional[str] = None
     is_favorite: Optional[int] = None
+    body_type: Optional[str] = None
 
 class ProxyRequest(BaseModel):
     connector_id: str
     method: str
     path: str
-    body: Optional[dict] = None
+    body: Optional[object] = None    # dict (json/form) ou str (text/xml) ou {fields, files} (multipart)
     headers: Optional[dict] = None
     endpoint_id: Optional[str] = None
+    body_type: Optional[str] = None  # override do body_type do endpoint; default json
 
 
 class InlineTestRequest(BaseModel):
@@ -176,13 +192,15 @@ async def create_connector(data: ConnectorCreate):
         "description": data.description or "",
         "icon": data.icon or data.name[:2].upper(),
         "color": data.color or "bg-brand-500",
-        "api_key": data.api_key or "",
+        # API key sempre cifrada at-rest. encrypt_secret('') == '' (sentinel).
+        "api_key": encrypt_secret(data.api_key or ""),
         "auth_type": data.auth_type or "none",
         "auth_header": data.auth_header or "X-API-Key",
         "health_path": data.health_path or "/api/health",
         "timeout_ms": data.timeout_ms or 30000,
         "is_active": 1,
         "sort_order": data.sort_order if data.sort_order != 99 else max_order + 1,
+        "verify_ssl": 1 if (data.verify_ssl is None or data.verify_ssl) else 0,
     })
     return {"id": cid, "message": f"Conector '{data.name}' criado"}
 
@@ -196,6 +214,10 @@ async def update_connector(connector_id: str, data: ConnectorUpdate):
     upd = {k: v for k, v in data.model_dump().items() if v is not None}
     if "base_url" in upd:
         upd["base_url"] = upd["base_url"].rstrip("/")
+    # API key cifrada antes de persistir. encrypt_secret é idempotente
+    # (valor já cifrado é retornado como está). Permite re-save sem dupla cifra.
+    if "api_key" in upd:
+        upd["api_key"] = encrypt_secret(upd["api_key"])
     if not upd:
         raise HTTPException(400, "Nenhum campo para atualizar")
     await conn_repo.update(connector_id, upd)
@@ -251,6 +273,9 @@ async def create_endpoint(connector_id: str, data: EndpointCreate):
     if not c:
         raise HTTPException(404, "Conector não encontrado")
     eid = str(uuid.uuid4())
+    body_type = (data.body_type or "json").strip().lower()
+    if body_type not in BODY_TYPES:
+        raise HTTPException(422, f"body_type inválido. Use: {list(BODY_TYPES)}")
     await ep_repo.create({
         "id": eid,
         "connector_id": connector_id,
@@ -262,6 +287,7 @@ async def create_endpoint(connector_id: str, data: EndpointCreate):
         "sample_body": data.sample_body or "{}",
         "sample_headers": data.sample_headers or "{}",
         "is_favorite": 0,
+        "body_type": body_type,
     })
     return {"id": eid, "message": f"Endpoint '{data.name}' criado"}
 
@@ -313,11 +339,10 @@ async def test_connector(connector_id: str):
     base = c.get("base_url", "").rstrip("/")
     path = c.get("health_path", "/api/health")
     url = f"{base}{path}"
-    timeout = (c.get("timeout_ms", 30000) or 30000) / 1000
     headers = _build_auth_headers(c)
     start = time.time()
     try:
-        async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
+        async with httpx.AsyncClient(headers=headers, **_client_kwargs(c)) as client:
             r = await client.get(url)
         latency = round((time.time() - start) * 1000, 2)
         return {
@@ -336,6 +361,8 @@ async def test_connector(connector_id: str):
 
 @router.get("/health/all")
 async def health_all():
+    """Health check em batch — usa timeout_ms do connector (não 10s hardcoded
+    que ignorava a config) e respeita verify_ssl."""
     await _ensure_tables()
     conn_repo, _, _ = _repos()
     connectors = await conn_repo.find_all(is_active=1, limit=50)
@@ -345,7 +372,7 @@ async def health_all():
         path = c.get("health_path", "/api/health")
         headers = _build_auth_headers(c)
         try:
-            async with httpx.AsyncClient(timeout=10, headers=headers) as client:
+            async with httpx.AsyncClient(headers=headers, **_client_kwargs(c)) as client:
                 r = await client.get(f"{base}{path}")
             results[c["id"]] = {"ok": 200 <= r.status_code < 400, "status": r.status_code, "name": c["name"]}
         except Exception:
@@ -359,36 +386,57 @@ async def health_all():
 
 @router.post("/proxy")
 async def proxy_call(data: ProxyRequest):
-    conn_repo, _, log_repo = _repos()
+    """Proxy: executa chamada HTTP via connector.
+
+    body_type (override em data.body_type; default 'json'):
+      json | form_urlencoded | multipart | text | xml
+
+    Multipart espera shape: {fields: {k: v, ...}, files: [{name, content, filename, content_type}]}.
+    Text/XML espera body como string.
+    """
+    conn_repo, ep_repo, log_repo = _repos()
     c = await conn_repo.find_by_id(data.connector_id)
     if not c:
         return {"error": f"Conector '{data.connector_id}' não encontrado", "status": 0}
 
     base = c.get("base_url", "").rstrip("/")
     url = f"{base}{data.path}"
-    timeout = (c.get("timeout_ms", 30000) or 30000) / 1000
     headers = _build_auth_headers(c)
     if data.headers:
         headers.update(data.headers)
 
+    # Resolve body_type: override do request > endpoint salvo > 'json'
+    body_type = data.body_type or "json"
+    if data.endpoint_id and not data.body_type:
+        try:
+            ep = await ep_repo.find_by_id(data.endpoint_id)
+            if ep and ep.get("body_type"):
+                body_type = ep["body_type"]
+        except Exception:
+            pass  # endpoint não encontrado — usa json default
+
+    # Para JSON, mantemos Content-Type já setado pelo _build_auth_headers.
+    # Para outros tipos, prepare_request_body ajusta o Content-Type.
+    if body_type != "json":
+        headers.pop("Content-Type", None)
+    body_kwargs = prepare_request_body(body_type, data.body, extra_headers={})
+    # Mescla headers de body (Content-Type específico) com headers de auth
+    if "headers" in body_kwargs:
+        body_headers = body_kwargs.pop("headers")
+        for k, v in body_headers.items():
+            headers.setdefault(k, v)
+
     start = time.time()
     call_id = str(uuid.uuid4())
     method = data.method.upper()
+    valid_methods = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+    if method not in valid_methods:
+        return {"error": f"Método {method} não suportado", "status": 400}
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
-            if method == "GET":
-                r = await client.get(url)
-            elif method == "POST":
-                r = await client.post(url, json=data.body or {})
-            elif method == "PUT":
-                r = await client.put(url, json=data.body or {})
-            elif method == "PATCH":
-                r = await client.patch(url, json=data.body or {})
-            elif method == "DELETE":
-                r = await client.delete(url)
-            else:
-                return {"error": f"Método {method} não suportado", "status": 400}
+        async with httpx.AsyncClient(headers=headers, **_client_kwargs(c)) as client:
+            # httpx aceita GET com body via .request() — mais consistente
+            r = await client.request(method, url, **body_kwargs)
 
         latency = round((time.time() - start) * 1000, 2)
         try:
@@ -406,7 +454,7 @@ async def proxy_call(data: ProxyRequest):
             "method": method,
             "url": url,
             "request_headers": json.dumps({k: v for k, v in headers.items()}, ensure_ascii=False),
-            "request_body": json.dumps(data.body, ensure_ascii=False) if data.body else "{}",
+            "request_body": json.dumps(data.body, ensure_ascii=False, default=str)[:5000] if data.body else "{}",
             "response_body": json.dumps(resp_data, ensure_ascii=False, default=str)[:5000],
             "status_code": r.status_code,
             "latency_ms": latency,
@@ -587,13 +635,37 @@ async def extract_cookie(data: ExtractCookieRequest):
             "body_preview": body_preview,
         }
 
-    # Parse cookies: "name=value; Path=/; HttpOnly; ..."
+    # Parse cookies via http.cookies.SimpleCookie — RFC 6265 strict.
+    # Trata Max-Age, Secure, SameSite, Expires, Domain, Path, HttpOnly
+    # corretamente. Anteriormente: split por ';' manual perdia atributos.
+    from http.cookies import SimpleCookie
     parsed_cookies: list[dict] = []
     for raw in set_cookies_raw:
-        first = raw.split(";", 1)[0].strip()
-        if "=" in first:
-            name, value = first.split("=", 1)
-            parsed_cookies.append({"name": name.strip(), "value": value.strip(), "raw": raw[:400]})
+        try:
+            jar = SimpleCookie()
+            jar.load(raw)
+            for name, morsel in jar.items():
+                parsed_cookies.append({
+                    "name": name.strip(),
+                    "value": morsel.value,
+                    "attrs": {
+                        "path": morsel["path"],
+                        "domain": morsel["domain"],
+                        "secure": bool(morsel["secure"]),
+                        "httponly": bool(morsel["httponly"]),
+                        "samesite": morsel["samesite"],
+                        "max_age": morsel["max-age"],
+                        "expires": morsel["expires"],
+                    },
+                    "raw": raw[:400],
+                })
+        except Exception as _parse_err:
+            # Fallback ao parser antigo se SimpleCookie falhar com formato exótico
+            logger.warning(f"SimpleCookie falhou para '{raw[:80]}': {_parse_err}")
+            first = raw.split(";", 1)[0].strip()
+            if "=" in first:
+                name, value = first.split("=", 1)
+                parsed_cookies.append({"name": name.strip(), "value": value.strip(), "raw": raw[:400]})
 
     # Escolhe o cookie: por nome se informado, senão o primeiro
     chosen = None
@@ -972,27 +1044,75 @@ def _build_body_example(op: dict, spec: dict) -> Optional[dict]:
 # ═══════════════════════════════════════════════════════
 
 def _build_auth_headers(connector: dict) -> dict:
+    """Wrapper local: delega para app.core.http_auth.build_auth_headers (que
+    decifra a api_key e cobre os 5 tipos de auth) e adiciona Content-Type
+    default para retrocompat de chamadas que esperam JSON.
+
+    Para o caso especial de auth_type='cookie' com formato 'name=value' direto
+    no api_key (sem auth_header), mantemos a lógica antiga aqui — http_auth
+    cobre só {Cookie: <api_key>} bruto.
+    """
     headers = {"Content-Type": "application/json"}
-    auth_type = connector.get("auth_type", "none")
-    api_key = connector.get("api_key", "")
-    if not api_key:
-        return headers
-    header_name = connector.get("auth_header", "X-API-Key")
-    if auth_type == "api_key":
-        headers[header_name] = api_key
-    elif auth_type == "bearer":
-        headers["Authorization"] = f"Bearer {api_key}"
-    elif auth_type == "basic":
-        import base64
-        headers["Authorization"] = f"Basic {base64.b64encode(api_key.encode()).decode()}"
-    elif auth_type == "cookie":
-        # Cookie-based session auth. auth_header é o NOME do cookie
-        # (ex: "qi_session"). api_key é o VALOR do cookie.
-        # Aceita também o formato "name=value" colado direto no api_key.
-        cookie_name = (header_name or "").strip()
-        value = api_key.strip()
-        if "=" in value and (not cookie_name or cookie_name.lower() in ("cookie", "")):
-            headers["Cookie"] = value
-        else:
-            headers["Cookie"] = f"{cookie_name or 'session'}={value}"
+    auth_headers = _http_build_auth_headers(connector)
+    headers.update(auth_headers)
+    # Cookie com auth_header específico: ajusta para "name=value" se preciso
+    if connector.get("auth_type") == "cookie" and "Cookie" in headers:
+        cookie_name = (connector.get("auth_header") or "").strip()
+        cookie_val = headers["Cookie"]
+        if cookie_name and "=" not in cookie_val:
+            headers["Cookie"] = f"{cookie_name}={cookie_val}"
     return headers
+
+
+def _client_kwargs(connector: dict, default_timeout: Optional[float] = None) -> dict:
+    """Kwargs comuns para httpx.AsyncClient baseados no connector.
+
+    Centraliza: verify_ssl, timeout (em segundos), follow_redirects.
+    Default follow_redirects=True — exceto onde explicitamente precisamos
+    interceptar redirect (ex: extract_cookie precisa do Set-Cookie do primeiro
+    response, antes de seguir).
+    """
+    timeout_s = default_timeout
+    if timeout_s is None:
+        timeout_s = (connector.get("timeout_ms", 30000) or 30000) / 1000
+    verify = bool(connector.get("verify_ssl", 1))
+    return {
+        "timeout": timeout_s,
+        "verify": verify,
+        "follow_redirects": True,
+    }
+
+
+# ═══════════════════════════════════════════════════════
+# ADMIN — Retention de api_call_logs
+# ═══════════════════════════════════════════════════════
+
+
+@router.post("/admin/cleanup-logs")
+async def cleanup_logs(days: int = Query(30, ge=1, le=3650)):
+    """Remove rows antigas em api_call_logs.
+
+    Retention policy: operador escolhe quantos dias manter. Sem cleanup
+    automático — para previsibilidade. Logs crescem em GB/mês em produção;
+    cron mensal recomendado.
+
+    Returns: {deleted_count, kept_after, kept_before_date}.
+    """
+    from app.core.database import _get_pool
+    from datetime import datetime, timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        res = await con.execute(
+            "DELETE FROM api_call_logs WHERE created_at < $1",
+            cutoff,
+        )
+    try:
+        deleted = int(res.rsplit(" ", 1)[-1])
+    except (ValueError, IndexError):
+        deleted = 0
+    return {
+        "deleted_count": deleted,
+        "kept_after": cutoff.isoformat(),
+        "days_kept": days,
+    }
