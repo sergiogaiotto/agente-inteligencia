@@ -41,6 +41,7 @@
     </style>
     <!-- Conteúdo do Guia dos Módulos (window.MODULE_GUIDE) -->
     <script src="/static/js/module-guide.js"></script>
+    <script src="/static/js/help-content.js"></script>
     {% block head_extra %}{% endblock %}
 </head>
 <body class="h-full bg-surface-50 font-sans text-surface-500 antialiased"
@@ -426,37 +427,131 @@
     <template x-if="pageHelpOpen">
         <div class="fixed inset-0 z-[9985]">
             <div class="fixed inset-0 bg-black/40" @click="pageHelpOpen=false"></div>
-            <aside class="fixed right-0 top-0 bottom-0 w-full sm:w-[560px] bg-white shadow-2xl flex flex-col">
+            <aside class="fixed right-0 top-0 bottom-0 w-full sm:w-[640px] bg-white shadow-2xl flex flex-col">
                 <header class="flex items-center justify-between border-b border-surface-100 px-5 py-3 shrink-0 bg-gradient-to-r from-violet-50 to-brand-50">
-                    <div>
-                        <div class="text-[10px] font-semibold uppercase tracking-wider text-violet-600">💡 Ajuda desta página</div>
-                        <div class="text-[14px] font-bold text-brand-900" x-text="pageHelpData.title || 'Página'"></div>
-                        <div class="text-[10px] text-surface-500" x-text="pageHelpData.section || ''"></div>
+                    <div class="min-w-0 flex-1">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-violet-600">Ajuda desta página</div>
+                        <div class="text-[14px] font-bold text-brand-900" x-text="pageHelpV2 ? pageHelpV2.title : (pageHelpData.title || 'Página')"></div>
+                        <div class="text-[11px] text-surface-500 mt-0.5 leading-snug"
+                             x-text="pageHelpV2 ? (pageHelpV2.summary || '') : (pageHelpData.section || '')"></div>
                     </div>
-                    <button @click="pageHelpOpen=false" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
+                    <button @click="pageHelpOpen=false" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 shrink-0">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
                 </header>
-                <!-- Tabs -->
-                <div class="flex border-b border-surface-100 px-3 shrink-0">
-                    <template x-for="tab in [['what','O que é'],['foundation','Fundamento'],['usage','Como usar']]" :key="tab[0]">
-                        <button @click="pageHelpTab=tab[0]"
-                            class="px-3 py-2 text-[11px] font-medium border-b-2 -mb-px transition-colors"
-                            :class="pageHelpTab===tab[0] ? 'border-brand-500 text-brand-600' : 'border-transparent text-surface-400 hover:text-surface-600'">
-                            <span x-text="tab[1]"></span>
-                        </button>
-                    </template>
-                </div>
-                <!-- Conteúdo -->
-                <div class="flex-1 overflow-y-auto px-5 py-4 text-[12px] text-surface-600 leading-relaxed">
-                    <p x-text="pageHelpData[pageHelpTab] || 'Sem informação disponível para esta seção.'"></p>
-                </div>
+
+                <!-- Tabs v2 (schema rico) -->
+                <template x-if="pageHelpV2">
+                    <div class="flex border-b border-surface-100 px-3 shrink-0 overflow-x-auto">
+                        <template x-for="(sec, idx) in pageHelpV2.sections" :key="sec.kind + idx">
+                            <button @click="pageHelpV2Tab = idx"
+                                class="px-3 py-2 text-[11px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap"
+                                :class="pageHelpV2Tab === idx ? 'border-brand-500 text-brand-600' : 'border-transparent text-surface-400 hover:text-surface-600'">
+                                <span x-text="sec.title"></span>
+                            </button>
+                        </template>
+                    </div>
+                </template>
+
+                <!-- Tabs legacy (3 abas fixas) -->
+                <template x-if="!pageHelpV2">
+                    <div class="flex border-b border-surface-100 px-3 shrink-0">
+                        <template x-for="tab in [['what','O que é'],['foundation','Fundamento'],['usage','Como usar']]" :key="tab[0]">
+                            <button @click="pageHelpTab=tab[0]"
+                                class="px-3 py-2 text-[11px] font-medium border-b-2 -mb-px transition-colors"
+                                :class="pageHelpTab===tab[0] ? 'border-brand-500 text-brand-600' : 'border-transparent text-surface-400 hover:text-surface-600'">
+                                <span x-text="tab[1]"></span>
+                            </button>
+                        </template>
+                    </div>
+                </template>
+
+                <!-- Conteúdo v2 (renderiza section pelo kind) -->
+                <template x-if="pageHelpV2">
+                    <div class="flex-1 overflow-y-auto px-5 py-4 text-[12.5px] text-surface-700 leading-relaxed help-content-v2">
+                        <template x-for="(sec, idx) in pageHelpV2.sections" :key="'c' + idx">
+                            <div x-show="pageHelpV2Tab === idx">
+                                <!-- body HTML direto (concept, fundamentos, exemplo) -->
+                                <div x-show="sec.body" x-html="sec.body || ''"></div>
+                                <!-- items: campos -->
+                                <template x-if="sec.kind === 'campos' && sec.items">
+                                    <div class="space-y-3">
+                                        <template x-for="(it, j) in sec.items" :key="'f' + j">
+                                            <div class="rounded-lg border border-surface-200 bg-white p-3">
+                                                <div class="flex items-baseline justify-between gap-2 mb-1.5">
+                                                    <div class="flex items-baseline gap-2 min-w-0">
+                                                        <strong class="text-[12.5px] text-brand-900" x-text="it.name"></strong>
+                                                        <span x-show="it.required" class="text-[10px] text-rose-600 font-semibold uppercase tracking-wider">obrigatório</span>
+                                                    </div>
+                                                    <span x-show="it.default" class="text-[10px] text-surface-400 font-mono whitespace-nowrap" x-text="'default: ' + it.default"></span>
+                                                </div>
+                                                <div class="text-[12px] text-surface-600 leading-relaxed" x-text="it.body"></div>
+                                                <div x-show="it.options" class="mt-1.5 flex flex-wrap gap-1">
+                                                    <template x-for="opt in (it.options || [])" :key="opt">
+                                                        <span class="rounded bg-surface-100 px-1.5 py-0.5 text-[10px] text-surface-600 font-mono" x-text="opt"></span>
+                                                    </template>
+                                                </div>
+                                                <div x-show="it.example" class="mt-1.5 rounded bg-brand-50 border border-brand-100 px-2 py-1.5 text-[11px] text-brand-700 italic">
+                                                    <span class="font-semibold not-italic">Ex.: </span><span x-text="it.example"></span>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                                <!-- items: casos_de_uso -->
+                                <template x-if="sec.kind === 'casos_de_uso' && sec.items">
+                                    <div class="space-y-3">
+                                        <template x-for="(it, j) in sec.items" :key="'u' + j">
+                                            <div class="rounded-lg border-l-4 border-brand-300 bg-brand-50/40 px-3 py-2">
+                                                <div class="text-[12.5px] font-semibold text-brand-900 mb-1" x-text="it.title"></div>
+                                                <div class="text-[12px] text-surface-700 leading-relaxed" x-text="it.body"></div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                                <!-- items: pegadinhas -->
+                                <template x-if="sec.kind === 'pegadinhas' && sec.items">
+                                    <div class="space-y-2">
+                                        <template x-for="(it, j) in sec.items" :key="'p' + j">
+                                            <div class="rounded-lg border px-3 py-2"
+                                                 :class="(it.severity || 'info') === 'danger' ? 'border-rose-200 bg-rose-50' : ((it.severity || 'info') === 'warning' ? 'border-amber-200 bg-amber-50' : 'border-sky-200 bg-sky-50')">
+                                                <div class="text-[12.5px] font-semibold mb-1"
+                                                     :class="(it.severity || 'info') === 'danger' ? 'text-rose-800' : ((it.severity || 'info') === 'warning' ? 'text-amber-800' : 'text-sky-800')"
+                                                     x-text="it.title"></div>
+                                                <div class="text-[12px] leading-relaxed"
+                                                     :class="(it.severity || 'info') === 'danger' ? 'text-rose-700' : ((it.severity || 'info') === 'warning' ? 'text-amber-700' : 'text-sky-700')"
+                                                     x-text="it.body"></div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                        <!-- Related no rodapé -->
+                        <div x-show="pageHelpV2.related && pageHelpV2.related.length" class="mt-6 pt-4 border-t border-surface-100">
+                            <div class="text-[10px] uppercase tracking-wider text-surface-400 font-semibold mb-1.5">Relacionados</div>
+                            <div class="flex flex-wrap gap-1.5">
+                                <template x-for="r in (pageHelpV2.related || [])" :key="r">
+                                    <span class="rounded bg-surface-100 px-2 py-0.5 text-[11px] text-surface-600" x-text="r"></span>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- Conteúdo legacy -->
+                <template x-if="!pageHelpV2">
+                    <div class="flex-1 overflow-y-auto px-5 py-4 text-[12px] text-surface-600 leading-relaxed">
+                        <p x-text="pageHelpData[pageHelpTab] || 'Sem informação disponível para esta seção.'"></p>
+                    </div>
+                </template>
+
                 <!-- Footer com botão IA -->
                 <div class="border-t border-surface-100 px-5 py-3 shrink-0 bg-surface-50/50">
                     <button @click="openHelpChatForPage()"
                         class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-violet-500 to-brand-500 text-white px-4 py-2 text-[12px] font-semibold hover:shadow-md transition-all">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
-                        🤖 IA, me ajude com esta página!
+                        IA, me ajude com esta página!
                     </button>
                 </div>
             </aside>
@@ -715,7 +810,8 @@
 
             /* ══ Ajuda desta Página (drawer contextual) ══ */
             pageHelpOpen: false,
-            pageHelpTab: 'what',
+            pageHelpTab: 'what',          // legacy: 'what' | 'foundation' | 'usage'
+            pageHelpV2Tab: 0,             // v2: index da section ativa
             // Mapa pathname → key do helpContent
             _pagePathMap: {
                 '/': 'dashboard', '/dashboard': 'dashboard',
@@ -726,6 +822,9 @@
                 '/tools': 'tools',
                 '/evidence': 'evidence',
                 '/api-connectors': 'api_connectors', '/api_connectors': 'api_connectors',
+                '/catalog': 'catalog', '/catalog/publish': 'catalog', '/catalog/queue': 'catalog',
+                '/catalog/inventory': 'catalog', '/catalog/stewardship': 'catalog',
+                '/catalog/cost': 'catalog_cost',
                 '/harness': 'harness',
                 '/releases': 'releases',
                 '/quality': 'quality',
@@ -740,11 +839,18 @@
                 const seg = '/' + (path.split('/').filter(Boolean)[0] || '');
                 return this._pagePathMap[seg] || 'dashboard';
             },
+            // Conteúdo v2 (rico) se a página foi migrada para help-content.js;
+            // senão retorna null e o drawer cai no helpContent legacy.
+            get pageHelpV2() {
+                const bank = (typeof window !== 'undefined' && window.HELP_CONTENT) || {};
+                return bank[this.currentPageKey] || null;
+            },
             get pageHelpData() {
                 return this.helpContent[this.currentPageKey] || { title: 'Página', section: '', what: '', foundation: '', usage: '' };
             },
             openPageHelp() {
                 this.pageHelpTab = 'what';
+                this.pageHelpV2Tab = 0;
                 this.pageHelpOpen = true;
             },
 
