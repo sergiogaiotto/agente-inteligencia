@@ -1009,6 +1009,198 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   },
 
   // ═════════════════════════════════════════════════════════════════
+  // /catalog/publish — Wizard de publicação (4 steps)
+  // ═════════════════════════════════════════════════════════════════
+  // O help chat lê window.__pageHelpExtra para saber o step ativo e
+  // priorizar a seção correspondente do conteúdo abaixo.
+  catalog_publish: {
+    title: 'Publicar no Catálogo',
+    summary: 'Wizard de 4 passos para registrar um artefato no catálogo: escolha do artefato → metadata → capability disclosure → revisão.',
+
+    sections: [
+      {
+        kind: 'concept',
+        title: 'O que é',
+        body: `
+          <p>Publicar uma <strong>entry</strong> no Catálogo é o ato de cadastrar oficialmente um agente, skill, recipe ou plataforma externa para que outras pessoas da empresa possam descobrir, avaliar e invocar.</p>
+          <p>O fluxo é deliberadamente em quatro passos para garantir que a entry tenha <strong>todos os metadados de governança</strong> antes de ir para revisão Root — nome único, versão semver, disclosure das capacidades e (quando aplicável) dados de contrato/custo.</p>
+          <p>Ao final do wizard, a entry é criada em status <code>draft</code> e automaticamente submetida para a fila Root (<code>submitted</code>). Root aprova/rejeita/pede mudanças; aprovação habilita a publicação efetiva.</p>
+        `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Fluxo do wizard',
+        body: `
+          <p>Quatro passos sequenciais, cada um com validação própria:</p>
+          <ul>
+            <li><strong>Passo 1 — Artefato:</strong> escolha o tipo (plataforma externa, recipe, agente interno ou skill interna). A escolha determina quais campos aparecem nos passos seguintes.</li>
+            <li><strong>Passo 2 — Metadata:</strong> nome, versão semver (ex: 1.0.0), descrição, domínio (opcional), visibilidade (privada/empresa/departamento) e steward.</li>
+            <li><strong>Passo 3 — Capability Disclosure:</strong> 12 flags obrigatórias declarando o que a entry faz com dados (lê/escreve KB, chama APIs, processa PII/financeiro/saúde, etc.) + soberania e retenção.</li>
+            <li><strong>Passo 4 — Revisão:</strong> resumo de tudo. Clicar em "Confirmar e Submeter" dispara: <code>POST /entries</code> (cria draft) → <code>PUT /entries/{id}/capability</code> (salva disclosure) → <code>POST /entries/{id}/submit</code> (envia para fila Root).</li>
+          </ul>
+          <p>O <strong>identificador único</strong> (URN interno) é gerado a partir de tipo + nome + versão. A mesma combinação não pode existir duas vezes — para republicar, suba a versão (1.0.0 → 1.0.1).</p>
+        `
+      },
+      {
+        kind: 'campos',
+        title: 'Passo 1 — Artefato',
+        items: [
+          {
+            name: 'Registrar Plataforma Externa',
+            body: 'Catalogar uma IA terceirizada já aprovada (ChatGPT Enterprise, Cursor, Copilot Studio, Lindy, etc.). Não tem vínculo com um agente/skill interno — você declara vendor, contrato, custo mensal e restrições.',
+            example: 'ChatGPT_Plus_2023'
+          },
+          {
+            name: 'Construir Recipe',
+            body: 'Recipe é uma composição declarativa de entries existentes (chain). Você cria a entry primeiro com este wizard; os steps são adicionados depois em /catalog/{id}, aba "Recipe Steps". Execução real pelo engine de recipes (já operacional).',
+          },
+          {
+            name: 'Publicar artefato interno (agente ou skill)',
+            body: 'Lista os agentes e skills criados na plataforma. Clique no card para escolher. O tipo é detectado automaticamente do artefato selecionado.',
+          }
+        ]
+      },
+      {
+        kind: 'campos',
+        title: 'Passo 2 — Metadata',
+        items: [
+          {
+            name: 'Nome',
+            required: true,
+            body: 'Como a entry aparece nas listas do catálogo. Use nome claro e descritivo. Pode ser editado depois.',
+            example: 'Analista Fiscal — Restituição PF'
+          },
+          {
+            name: 'Versão',
+            required: true,
+            default: '1.0.0',
+            body: 'Siga o padrão semver MAJOR.MINOR.PATCH. Para republicar a mesma entry com mudanças, suba a versão (ex: 1.0.0 → 1.0.1). Cada combinação tipo + nome + versão só pode existir uma vez.',
+            example: '1.0.0'
+          },
+          {
+            name: 'Descrição',
+            required: true,
+            body: 'Resume o que a entry faz e seus casos de uso. Mínimo de 10 caracteres. Aparece em listagens — escreva pensando em quem vai descobrir e decidir se usa.',
+            example: 'Responde dúvidas sobre restituição de IRPF analisando o extrato e calculando o valor estimado.'
+          },
+          {
+            name: 'Domínio',
+            required: false,
+            body: 'Área de negócio à qual a entry pertence. Usado em buscas e relatórios por domínio.',
+            example: 'fiscal'
+          },
+          {
+            name: 'Visibilidade',
+            required: true,
+            options: ['Privada (só você + Root)', 'Empresa (todos veem após publish)', 'Departamento (só pessoas dos domínios)'],
+            default: 'Privada',
+            body: 'Controla quem enxerga a entry após ela estar published. Em draft/submitted/approved, só owner e Root veem (independente da visibilidade declarada).'
+          },
+          {
+            name: 'Steward',
+            required: false,
+            body: 'Time responsável pela manutenção e atualização desta entry. Aparece como ponto de contato.',
+            example: 'time_de_dados@empresa.com'
+          }
+        ]
+      },
+      {
+        kind: 'campos',
+        title: 'Passo 3 — Capability Disclosure',
+        items: [
+          {
+            name: 'Lê base de conhecimento do consumer',
+            body: 'Marque se a entry acessa documentos/conteúdos da KB do usuário invocador. Importante para auditoria de acesso a dados.'
+          },
+          {
+            name: 'Escreve em base do consumer',
+            body: 'Marque se a entry grava em alguma KB do usuário (criar nota, salvar resultado). Implica em writes que sobrevivem à invocação.'
+          },
+          {
+            name: 'Persiste input do consumer',
+            body: 'Se o input do usuário é armazenado além do log padrão de auditoria, marque. Combine com retention_days para indicar por quanto tempo.'
+          },
+          {
+            name: 'Chama APIs externas',
+            body: 'Marque se a entry faz HTTP outbound para qualquer serviço fora da plataforma (Google, Stripe, governo, etc.).'
+          },
+          {
+            name: 'Acessa internet aberta',
+            body: 'Distinto de chamar APIs específicas — marca acesso a páginas web arbitrárias (scraping, browse). Maior superfície de risco.'
+          },
+          {
+            name: 'Processa PII (dados pessoais)',
+            body: 'Marque se a entry recebe ou produz dados pessoais identificáveis: CPF, email, telefone, endereço, etc. Aciona governance reforçado.'
+          },
+          {
+            name: 'Processa dados financeiros',
+            body: 'Marque para dados monetários, transações, saldos, cartões. Aciona controles regulatórios adicionais.'
+          },
+          {
+            name: 'Processa dados de saúde',
+            body: 'Marque para dados clínicos, diagnósticos, exames. LGPD trata como sensível — visibility deveria ser restrita.'
+          },
+          {
+            name: 'Input vira training data',
+            body: 'Marque se o input do consumer é usado para treinar/fine-tunar modelos. Importante para consentimento.'
+          },
+          {
+            name: 'Output determinístico',
+            body: 'Marque se a entry produz output reprodutível dado o mesmo input. Não-determinístico (default em LLMs) significa que cada execução pode variar.'
+          },
+          {
+            name: 'Soberania de dados',
+            required: false,
+            options: ['Sem restrição', 'BR (Brasil)', 'EU (União Europeia)', 'US (Estados Unidos)'],
+            body: 'Onde os dados podem trafegar/residir. Crítico para entries que processam PII ou saúde sujeitas a LGPD/GDPR.'
+          },
+          {
+            name: 'Notas adicionais',
+            required: false,
+            body: 'Texto livre para informações que não cabem nas flags (ex: "PII pseudonimizada antes do storage", "rate-limited a 100 req/min").'
+          }
+        ]
+      },
+      {
+        kind: 'campos',
+        title: 'Passo 4 — Revisão',
+        items: [
+          {
+            name: 'Confirmar e Submeter para Revisão',
+            body: 'Botão final: dispara a criação da entry em draft, salva a capability disclosure, submete para fila Root e redireciona para a página da entry. O processo é atômico para o usuário; se algum passo falha, a UI mostra erro acionável.'
+          },
+          {
+            name: 'Já existe esta versão',
+            body: 'Se a combinação tipo + nome + versão já foi publicada antes, aparece uma caixa âmbar com botão "Voltar e ajustar a versão" que pré-preenche a próxima patch (1.0.0 → 1.0.1). Não tente apagar a entry anterior — versionar é o caminho correto.'
+          }
+        ]
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Casos de uso',
+        items: [
+          { title: 'Publicar um agente que eu acabei de criar', body: 'Em /agents, clique no ícone "Publicar no Catálogo" do agente. O wizard abre já com kind=agent e artifact_id pré-selecionados; você pula direto para o passo 2 (Metadata).' },
+          { title: 'Registrar uma plataforma externa contratada', body: 'No passo 1, escolha "Registrar Plataforma Externa". Os passos seguintes pedem dados de vendor, contrato e custo mensal. Útil para inventário regulatório e chargeback.' },
+          { title: 'Criar um recipe que encadeia 3 agentes', body: 'No passo 1, "Construir Recipe". Termine o wizard normalmente; depois entre em /catalog/{id} → aba "Recipe Steps" para definir a sequência de invocações.' },
+          { title: 'Republicar uma entry com novas capacidades', body: 'Suba a versão (ex: 1.0.0 → 1.1.0) e refaça o passo 3 marcando as novas flags. Versões anteriores continuam disponíveis para quem já depende delas.' }
+        ]
+      },
+      {
+        kind: 'pegadinhas',
+        title: 'Pegadinhas',
+        items: [
+          { title: 'Versão semver é obrigatória', severity: 'warning', body: 'Strings como "v1" ou "beta" não passam na validação. Use sempre o formato MAJOR.MINOR.PATCH (1.0.0, 2.3.1, etc.).' },
+          { title: 'URN duplicada', severity: 'info', body: 'A combinação tipo + nome + versão é o identificador único. Se já existe, a UI mostra caixa âmbar com botão para subir a versão automaticamente. Não delete a entry anterior — versionar é a forma correta.' },
+          { title: 'Capability disclosure não é opcional', severity: 'warning', body: 'Root precisa do disclosure preenchido para aprovar. As 12 flags + soberania são parte do contrato de governança — descreva o que a entry faz, mesmo que parcialmente.' },
+          { title: 'Visibility "Departamento" exige scope', severity: 'info', body: 'Se escolher visibility=department, declare um domínio no scope (ex: "fiscal"). Sem isso a entry fica invisível para todos os usuários que não são owner/Root.' },
+          { title: 'External Platform precisa de vendor', severity: 'warning', body: 'Para kind=external_platform, o campo "vendor" no passo 3 é obrigatório. Sem ele a entry não é criada. Outros campos da metadata externa são refináveis depois em /catalog/{id}.' }
+        ]
+      }
+    ],
+    related: ['catalog', 'agents', 'skills']
+  },
+
+  // ═════════════════════════════════════════════════════════════════
   // /catalog/cost — Custo & Consumo
   // ═════════════════════════════════════════════════════════════════
   catalog_cost: {
