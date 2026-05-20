@@ -1045,8 +1045,12 @@ async def list_submissions_for_review(
     """Lista submissões com a entry ainda existente (INNER JOIN).
 
     Submissions cuja entry foi deletada são excluídas — Root não pode
-    decidir sobre algo que não existe. Retorna (rows, total) onde total
-    também respeita o filtro de existência.
+    decidir sobre algo que não existe. Cada submission retornada inclui
+    objeto `entry` aninhado com identidade básica (id, name, kind,
+    version, urn, description, owner_user_id) para a UI mostrar o nome
+    e tipo do artefato sem precisar de N+1 lookups.
+
+    Retorna (rows, total) onde total também respeita o filtro de existência.
     """
     pool = _get_pool()
     params: list[Any] = []
@@ -1064,8 +1068,19 @@ async def list_submissions_for_review(
     params_with_pag = params + [limit, offset]
     limit_ph = f"${len(params_with_pag)-1}"
     offset_ph = f"${len(params_with_pag)}"
+    # Prefixamos as colunas da entry com _entry_ para não conflitar com s.* e
+    # depois reagrupamos em dict aninhado no Python — assim a API entrega o
+    # shape {submission..., entry: {...}} que o template já consome.
     list_sql = (
-        f"SELECT s.* FROM catalog_submissions s "
+        f"SELECT s.*, "
+        f"  e.name AS _entry_name, "
+        f"  e.kind AS _entry_kind, "
+        f"  e.version AS _entry_version, "
+        f"  e.urn AS _entry_urn, "
+        f"  e.description AS _entry_description, "
+        f"  e.owner_user_id AS _entry_owner_user_id, "
+        f"  e.status AS _entry_status "
+        f"FROM catalog_submissions s "
         f"INNER JOIN catalog_entries e ON e.id = s.entry_id {where_sql} "
         f"ORDER BY s.submitted_at DESC "
         f"LIMIT {limit_ph} OFFSET {offset_ph}"
@@ -1075,7 +1090,22 @@ async def list_submissions_for_review(
         rows = await con.fetch(list_sql, *params_with_pag)
         total = await con.fetchval(count_sql, *params) or 0
 
-    return [dict(r) for r in rows], int(total)
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        entry = {
+            "id": d.get("entry_id"),
+            "name": d.pop("_entry_name", None),
+            "kind": d.pop("_entry_kind", None),
+            "version": d.pop("_entry_version", None),
+            "urn": d.pop("_entry_urn", None),
+            "description": d.pop("_entry_description", None),
+            "owner_user_id": d.pop("_entry_owner_user_id", None),
+            "status": d.pop("_entry_status", None),
+        }
+        d["entry"] = entry
+        out.append(d)
+    return out, int(total)
 
 
 async def cleanup_orphan_submissions() -> int:
