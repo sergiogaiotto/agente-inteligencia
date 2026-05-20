@@ -176,9 +176,14 @@ async def create_entry(data: CatalogEntryCreate, user: dict = Depends(require_us
     try:
         await catalog_entries_repo.create(row)
     except Exception as e:
-        # Postgres unique violation no urn → 409
+        # Postgres unique violation no urn → 409 (mensagem orientada à ação,
+        # sem expor o jargão URN; frontend detecta 409 para sugerir "subir versão")
         if "duplicate key" in str(e).lower() or "unique" in str(e).lower():
-            raise HTTPException(409, f"URN já existe: {urn}")
+            raise HTTPException(
+                409,
+                f"Já existe uma publicação para '{data.name}' versão {data.version}. "
+                f"Use uma versão diferente (ex: 1.0.1) ou edite a publicação existente."
+            )
         raise
 
     await _audit("created", entry_id, user["id"], {"urn": urn, "kind": data.kind})
@@ -239,7 +244,11 @@ async def update_entry(
         updated = await catalog_entries_repo.update(entry_id, changes)
     except Exception as e:
         if "duplicate key" in str(e).lower() or "unique" in str(e).lower():
-            raise HTTPException(409, "URN já existe")
+            raise HTTPException(
+                409,
+                "Já existe outra publicação com a mesma combinação de tipo, nome e versão. "
+                "Altere a versão (ex: 1.0.1) para diferenciar."
+            )
         raise
 
     if updated is None:
