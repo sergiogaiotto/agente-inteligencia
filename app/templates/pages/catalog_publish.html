@@ -598,6 +598,32 @@ function publishWizard() {
                     c.trains_on_input, c.output_is_deterministic].filter(Boolean).length;
         },
 
+        // Extrai mensagem de erro de uma fetch Response sem crashar em respostas
+        // não-JSON (ex: 500 em text/html). Tenta JSON, cai para text, e finalmente
+        // para um placeholder genérico. Trunca em 240 chars para não inchar a UI.
+        async _readError(r) {
+            const raw = await r.text().catch(() => '');
+            if (!raw) return `Erro ${r.status} (sem detalhes do servidor)`;
+            try {
+                const j = JSON.parse(raw);
+                return (j.detail || j.error || j.message || raw).toString().slice(0, 240);
+            } catch {
+                return raw.replace(/\s+/g, ' ').slice(0, 240);
+            }
+        },
+
+        // Tenta deletar a entry parcial para não deixar lixo no catálogo.
+        // Best-effort: se entry já foi para status submitted (passo 3 sucesso parcial)
+        // o DELETE retorna 409 e a falha é ignorada. Caller decide o que mostrar.
+        async _rollbackEntry(entryId) {
+            try {
+                const r = await fetch(`/api/v1/catalog/entries/${entryId}`, { method: 'DELETE' });
+                return r.ok;
+            } catch {
+                return false;
+            }
+        },
+
         async finalSubmit() {
             this.submitting = true;
             this.submitError = null;
@@ -632,54 +658,69 @@ function publishWizard() {
                         this.submitting = false;
                         return;
                     }
-                    const err = await r1.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Erro inesperado ao publicar. Tente novamente.');
+                    throw new Error(await this._readError(r1));
                 }
                 const entry = await r1.json();
                 entryId = entry.id;
 
-                // 1b. Se external, salva metadata externa (vendor mínimo já validado no Step 3)
-                if (isExternal) {
-                    const extPayload = {};
-                    for (const [k, v] of Object.entries(this.form.external)) {
-                        if (v === '' || v === null || v === undefined) continue;
-                        extPayload[k] = v;
+                // Passos 1b, 2 e 3 mexem em recursos derivados — qualquer falha aqui
+                // deixaria a entry como lixo em draft. Bloco interno garante rollback
+                // automático (DELETE da entry) antes de propagar o erro pro caller.
+                try {
+                    // 1b. Se external, salva metadata externa (vendor mínimo já validado no Step 3)
+                    if (isExternal) {
+                        const extPayload = {};
+                        for (const [k, v] of Object.entries(this.form.external)) {
+                            if (v === '' || v === null || v === undefined) continue;
+                            extPayload[k] = v;
+                        }
+                        const rExt = await fetch(`/api/v1/catalog/entries/${entryId}/external-metadata`, {
+                            method: 'PUT',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(extPayload),
+                        });
+                        if (!rExt.ok) {
+                            throw new Error('Falha ao salvar dados da plataforma externa: ' + await this._readError(rExt));
+                        }
                     }
-                    const rExt = await fetch(`/api/v1/catalog/entries/${entryId}/external-metadata`, {
+
+                    // 2. Declara capability
+                    const capPayload = {...this.form.capability};
+                    capPayload.external_apis_list = this.capExternalApisText
+                        .split('\n').map(s => s.trim()).filter(Boolean);
+                    if (!capPayload.data_residency) capPayload.data_residency = null;
+                    const r2 = await fetch(`/api/v1/catalog/entries/${entryId}/capability`, {
                         method: 'PUT',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(extPayload),
+                        body: JSON.stringify(capPayload),
                     });
-                    if (!rExt.ok) {
-                        const err = await rExt.json();
-                        throw new Error('Entry criada (' + entryId + ') mas metadata externa falhou: ' + (err.detail || JSON.stringify(err)));
+                    if (!r2.ok) {
+                        throw new Error('Falha ao salvar a Capability Disclosure: ' + await this._readError(r2));
                     }
-                }
 
-                // 2. Declara capability
-                const capPayload = {...this.form.capability};
-                capPayload.external_apis_list = this.capExternalApisText
-                    .split('\n').map(s => s.trim()).filter(Boolean);
-                if (!capPayload.data_residency) capPayload.data_residency = null;
-                const r2 = await fetch(`/api/v1/catalog/entries/${entryId}/capability`, {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(capPayload),
-                });
-                if (!r2.ok) {
-                    const err = await r2.json();
-                    throw new Error('Entry criada (' + entryId + ') mas disclosure falhou: ' + (err.detail || JSON.stringify(err)));
-                }
-
-                // 3. Submete
-                const r3 = await fetch(`/api/v1/catalog/entries/${entryId}/submit`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({notes: ''}),
-                });
-                if (!r3.ok) {
-                    const err = await r3.json();
-                    throw new Error('Entry e disclosure salvas (' + entryId + ') mas submit falhou: ' + (err.detail || JSON.stringify(err)));
+                    // 3. Submete
+                    const r3 = await fetch(`/api/v1/catalog/entries/${entryId}/submit`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({notes: ''}),
+                    });
+                    if (!r3.ok) {
+                        throw new Error('Falha ao enviar para revisão Root: ' + await this._readError(r3));
+                    }
+                } catch (innerErr) {
+                    // Rollback: deleta a entry parcial pra não poluir o catálogo.
+                    // Se já foi submitted (raro: erro entre create submission e update entry),
+                    // DELETE retorna 409 — caímos no else e o usuário precisa ir em /catalog/{id}.
+                    const removed = await this._rollbackEntry(entryId);
+                    if (removed) {
+                        throw new Error(innerErr.message + ' — nada foi salvo no catálogo. Pode tentar de novo.');
+                    } else {
+                        throw new Error(
+                            innerErr.message +
+                            ` — a entry ficou em estado intermediário (ID ${entryId.slice(0, 8)}…). ` +
+                            `Acesse /catalog/${entryId} para revisar ou remover manualmente.`
+                        );
+                    }
                 }
 
                 // 4. Redireciona
@@ -687,9 +728,6 @@ function publishWizard() {
                 window.location = '/catalog/' + entryId;
             } catch (e) {
                 this.submitError = e.message;
-                if (entryId) {
-                    this.submitError += ` — entry ${entryId} ficou em estado parcial; acesse /catalog/${entryId} para corrigir.`;
-                }
             }
             this.submitting = false;
         },
