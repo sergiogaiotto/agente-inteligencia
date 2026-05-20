@@ -1678,3 +1678,40 @@ Sem anomalia, nenhum row é gravado (evita spam).
 - [x] Sandbox NÃO infla baseline/today (PR #70 não grava em catalog_costs)
 - [x] Zero breaking changes em PRs Onda 1-3 e Onda 4 #67-#70
 - [ ] Smoke manual no browser (seções 3-5) — pendente em homolog
+
+---
+
+# Smoke Test — Onda 4 / PR 6 (Fechamento / regressão)
+
+PR puramente documental. Marca o sign-off da Onda 4 com 5 PRs entregues.
+
+## 1 — Verificar docs novos/atualizados
+
+```powershell
+git diff origin/main --stat -- docs/catalog/
+```
+
+**Esperado**: ONDA4.md novo + README.md/REGRESSION.md/SMOKE_TEST.md atualizados.
+Zero arquivos `.py` mudados.
+
+## 2 — Executar regressão consolidada
+
+Seguir o [REGRESSION.md](REGRESSION.md) Fase 8 (Onda 4):
+- 8.1 — `pytest tests/` (322 passed)
+- 8.2 — schema (7 tabelas catalog, com `is_sandbox` em recipe_executions)
+- 8.3 — 32 endpoints REST registrados
+- 8.4 — comportamentos novos (chain, sandbox isolation, anomalias)
+- 8.5 — telas (tab Execuções, botão Sandbox, banner anomalias)
+- 8.6 — 15 audit actions distintas no audit_log
+- 8.7 — fluxo end-to-end (sandbox → publish → execute → cost → anomalia)
+
+## Critérios de aceitação Onda 4 / PR 6 (#72)
+
+- [x] ONDA4.md criado
+- [x] README.md reflete Onda 4 entregue (sem 🚧) + roadmap Onda 5 enxuto
+- [x] REGRESSION.md ganha Fase 8 com sign-off da Onda 4
+- [x] SMOKE_TEST.md ganha esta seção
+- [x] Zero código de produção tocado (chore puro)
+- [ ] Regressão consolidada validada em homolog
+
+**Onda 4 do Catálogo está pronta para sign-off e produção.**

@@ -1,13 +1,14 @@
 # Catálogo / Marketplace Corporativo — Ondas 1 + 2 + 3
 
-Visão geral do módulo de catálogo entregue em **20 PRs incrementais**
-(10 Onda 1 + 6 Onda 2 + 4 Onda 3). Etiqueta nutricional R6.3 obrigatória,
-governança Root, lifecycle explícito, External Platforms catalogadas,
-inventário regulatório com CSV export, stewardship descentralizado a
-stewards de área, cost & consumption com chargeback futuro,
-recipes publicáveis como manifest declarativo.
+Visão geral do módulo de catálogo entregue em **25 PRs incrementais**
+(10 Onda 1 + 6 Onda 2 + 4 Onda 3 + 5 Onda 4). Etiqueta nutricional R6.3
+obrigatória, governança Root, lifecycle explícito, External Platforms
+catalogadas, inventário regulatório com CSV export, stewardship
+descentralizado a stewards de área, cost & consumption com chargeback
+real, recipes **executáveis** (chain sequencial), sandbox, e detecção
+de anomalias de cost.
 
-> **Onda 3 já entregue** — veja [ONDA3.md](ONDA3.md) e [ONDA2.md](ONDA2.md) para o delta específico de cada uma.
+> **Onda 4 já entregue** — veja [ONDA4.md](ONDA4.md), [ONDA3.md](ONDA3.md) e [ONDA2.md](ONDA2.md) para o delta específico de cada uma.
 
 ## O que entrega
 
@@ -185,25 +186,26 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
 - **Cost & Consumption** — endpoint de registro + page com agregados + CSV export
 - **Recipes publicáveis** — kind=recipe como composição declarativa (manifest; execução fica para Onda 4)
 
-### 🚧 Onda 4 em andamento (PRs #67-#71 entregues)
+### ✅ Onda 4 entregue (PRs #67-#72)
 
-- **✅ Execução real de recipes** (PR #67) — chain sequencial via engine, async com polling, skip-after-failure, cost auto-wire básico por step. Nova tabela `catalog_recipe_executions` + 3 endpoints sob `/api/v1/catalog`.
-- **✅ UI de execução** (PR #68) — tab "Execuções" em `/catalog/{id}`, modal de disparo + modal de polling em tempo real (1.5s), histórico paginado, drill-down de execuções passadas.
-- **✅ Cost pleno** (PR #69) — `app/core/llm_pricing.py` com tabela de preços por provider/model; executor calcula `cost_usd` real (substituindo placeholder=0) usando `tokens.input × in_per_1k + tokens.output × out_per_1k`. Cobre azure, openai, anthropic, maritaca, ollama. Modelo desconhecido → 0 + warning.
-- **✅ Sandbox de invocação** (PR #70) — owner/Root rodam recipe em qualquer status (incl. draft) com LLM real, mas sem gravar em `catalog_costs`. Coluna `is_sandbox` na tabela de executions + endpoint `POST /sandbox` + botão 🧪 Sandbox + badge laranja no histórico/polling. Audit `recipe_sandbox_started`.
-- **✅ Anomalias de cost** (PR #71) — detecção de picos (hoje ≥ 3× média 7d) e limite global ($100/dia) sobre `catalog_costs`. Endpoint `GET /cost/anomalies` (auto-scope) + banner vermelho em `/catalog/cost` + audit `cost_anomaly_detected`. Thresholds hardcoded em `app/catalog/anomalies.py`.
+- **Execução real de recipes** (PR #67) — chain sequencial via engine, async com polling, skip-after-failure, cost auto-wire básico por step. Nova tabela `catalog_recipe_executions` + 3 endpoints sob `/api/v1/catalog`.
+- **UI de execução** (PR #68) — tab "Execuções" em `/catalog/{id}`, modal de disparo + modal de polling em tempo real (1.5s), histórico paginado, drill-down de execuções passadas.
+- **Cost pleno** (PR #69) — `app/core/llm_pricing.py` com tabela de preços por provider/model; executor calcula `cost_usd` real (substituindo placeholder=0) usando `tokens.input × in_per_1k + tokens.output × out_per_1k`. Cobre azure, openai, anthropic, maritaca, ollama. Modelo desconhecido → 0 + warning.
+- **Sandbox de invocação** (PR #70) — owner/Root rodam recipe em qualquer status (incl. draft) com LLM real, mas sem gravar em `catalog_costs`. Coluna `is_sandbox` na tabela de executions + endpoint `POST /sandbox` + botão 🧪 Sandbox + badge laranja no histórico/polling. Audit `recipe_sandbox_started`.
+- **Anomalias de cost** (PR #71) — detecção de picos (hoje ≥ 3× média 7d) e limite global ($100/dia) sobre `catalog_costs`. Endpoint `GET /cost/anomalies` (auto-scope) + banner vermelho em `/catalog/cost` + audit `cost_anomaly_detected`. Thresholds hardcoded em `app/catalog/anomalies.py`.
 
-### Reservado para Onda 4+
+### Reservado para Onda 5+
 
-- **A2A bidirecional** (consumir Maestros externos; expor agentes como MCP server)
+Itens do roadmap original entregues na Onda 4 saíram desta lista (execução
+real, UI, cost pleno, sandbox, anomalias). Restam para fases futuras:
+
+- **A2A bidirecional** (consumir Maestros externos; expor agentes como MCP server — design pesado)
 - **Verificação por execução** do capability disclosure (capability fingerprint)
-- **Auto-wire do cost pleno** no engine (pricing table — PR #67 deixou cost_usd=0 placeholder)
-- **Sandbox** de invocação com dados mock (R14)
 - **OPA tiered approval** (community auto, verified Root, official auditor — R3.1)
 - **Federation de URN** entre instâncias Maestro (R5.3 — schema já prevê)
 - **Trust score erosion** por drift (R5.2)
-- **Revenue-share em recipes**
-- **Audit de anomalias de cost** (alertas de pico/limite)
+- **Revenue-share em recipes** (chargeback interno)
+- **Pricing editável via UI** (migrar `llm_pricing.py` para `platform_settings`)
 
 ## Métricas de entrega
 
@@ -221,9 +223,10 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
 
 ## Referências
 
+- [ONDA4.md](ONDA4.md) — resumo da Onda 4
 - [ONDA3.md](ONDA3.md) — resumo da Onda 3
 - [ONDA2.md](ONDA2.md) — resumo da Onda 2
-- [REGRESSION.md](REGRESSION.md) — checklist consolidado de regressão
+- [REGRESSION.md](REGRESSION.md) — checklist consolidado de regressão (Fase 1-8)
 - [SMOKE_TEST.md](SMOKE_TEST.md) — roteiros manuais por PR
 - PRs Onda 1: #47 (schema), #48 (CRUD), #49 (workflow), #50 (disclosure),
   #51 (browse), #52 (detail), #53 (publish wizard), #54 (queue),
@@ -231,4 +234,6 @@ Loop básico de governança: schema + API CRUD + workflow + capability disclosur
 - PRs Onda 2: #57 (ext backend), #58 (ext UI), #59 (inventário),
   #60 (stewardship), #61 (bulk decide), #62 (fechamento)
 - PRs Onda 3: #63 (stewardship aberto), #64 (cost), #65 (recipes),
-  #66 (fechamento — este)
+  #66 (fechamento)
+- PRs Onda 4: #67 (execução), #68 (UI), #69 (cost pleno), #70 (sandbox),
+  #71 (anomalias), #72 (fechamento — este)
