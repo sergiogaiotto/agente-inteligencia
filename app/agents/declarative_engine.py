@@ -9,7 +9,6 @@ Fase 4: circuit breaker, on_failure=continue|compensate, dry_run.
 """
 
 import asyncio
-import base64
 import json
 import logging
 import re
@@ -27,6 +26,11 @@ from app.a2a.protocol import ContextDelta, apply_context_delta
 from app.core.database import (
     api_connectors_repo, api_call_logs_repo,
     interactions_repo, binding_executions_repo,
+)
+from app.core.http_auth import (
+    build_auth_headers,
+    prepare_request_body,
+    redact_headers,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,75 +149,46 @@ async def _resolve_connector(ref: str) -> dict | None:
     return None
 
 
-def _build_auth_headers(connector: dict) -> dict:
-    """Monta headers de autenticação a partir do connector registry.
-
-    Secrets NUNCA são expostos ao templating — só entram no header
-    da request aqui. Replicado de app/routes/api_connectors.py para
-    evitar import circular.
-    """
-    headers = {"Content-Type": "application/json"}
-    auth_type = connector.get("auth_type", "none")
-    api_key = connector.get("api_key", "") or ""
-    if not api_key:
-        return headers
-    header_name = connector.get("auth_header", "X-API-Key")
-    if auth_type == "api_key":
-        headers[header_name] = api_key
-    elif auth_type == "bearer":
-        headers["Authorization"] = f"Bearer {api_key}"
-    elif auth_type == "basic":
-        headers["Authorization"] = f"Basic {base64.b64encode(api_key.encode()).decode()}"
-    elif auth_type == "cookie":
-        cookie_name = (header_name or "").strip()
-        value = api_key.strip()
-        if "=" in value and (not cookie_name or cookie_name.lower() in ("cookie", "")):
-            headers["Cookie"] = value
-        else:
-            headers["Cookie"] = f"{cookie_name or 'session'}={value}"
-    return headers
-
-
-def _redact_headers(headers: dict) -> dict:
-    sensitive = {"authorization", "x-api-key", "cookie", "set-cookie", "idempotency-key"}
-    return {
-        k: ("<redacted>" if k.lower() in sensitive else v)
-        for k, v in (headers or {}).items()
-    }
-
-
 # ═══════════════════════════════════════════════════════
 # HTTP execution
 # ═══════════════════════════════════════════════════════
+
+_VALID_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
 
 async def _execute_http_call(
     connector: dict,
     method: str,
     path: str,
     headers: dict,
+    auth_headers: dict,
     query: dict,
     body: Any,
+    body_type: str,
     timeout_s: float,
 ) -> httpx.Response:
     base = connector.get("base_url", "").rstrip("/")
     url = f"{base}{path}" if path.startswith("/") else f"{base}/{path}"
-    auth = _build_auth_headers(connector)
-    final_headers = {**auth, **(headers or {})}
     method_u = method.upper()
-    async with httpx.AsyncClient(timeout=timeout_s, headers=final_headers) as client:
-        if method_u == "GET":
-            return await client.get(url, params=query or None)
-        if method_u == "POST":
-            return await client.post(url, json=body, params=query or None)
-        if method_u == "PUT":
-            return await client.put(url, json=body, params=query or None)
-        if method_u == "PATCH":
-            return await client.patch(url, json=body, params=query or None)
-        if method_u == "DELETE":
-            return await client.delete(url, params=query or None)
-        if method_u == "HEAD":
-            return await client.head(url, params=query or None)
+    if method_u not in _VALID_METHODS:
         raise ValueError(f"Método HTTP não suportado: {method}")
+
+    body_kwargs = prepare_request_body(body_type or "json", body, extra_headers=dict(auth_headers or {}))
+    body_headers = body_kwargs.pop("headers", {})
+    final_headers = {**body_headers, **(headers or {})}
+
+    verify = bool(connector.get("verify_ssl", 1))
+    async with httpx.AsyncClient(
+        timeout=timeout_s,
+        headers=final_headers,
+        verify=verify,
+        follow_redirects=True,
+    ) as client:
+        return await client.request(
+            method_u, url,
+            params=query or None,
+            **body_kwargs,
+        )
 
 
 async def _call_with_retry(
@@ -221,8 +196,10 @@ async def _call_with_retry(
     method: str,
     path: str,
     headers: dict,
+    auth_headers: dict,
     query: dict,
     body: Any,
+    body_type: str,
     timeout_s: float,
     max_retries: int,
     retry_on: set,
@@ -234,7 +211,7 @@ async def _call_with_retry(
     while attempts <= max_retries:
         attempts += 1
         try:
-            resp = await _execute_http_call(connector, method, path, headers, query, body, timeout_s)
+            resp = await _execute_http_call(connector, method, path, headers, auth_headers, query, body, body_type, timeout_s)
             retry_needed = (
                 500 <= resp.status_code < 600 and "5xx" in retry_on
                 and attempts <= max_retries
@@ -425,14 +402,19 @@ async def _plan_binding(binding: dict, scope: dict, lenient: bool = False) -> tu
         headers = dict(headers or {})
         headers.setdefault("Idempotency-Key", idempotency_key)
 
+    body_type = (binding.get("body_type") or "json").strip().lower()
+    auth_headers = build_auth_headers(connector)
+
     plan = {
         "binding_id": binding_id,
         "connector": connector,
         "method": method,
         "path": path,
         "headers": headers,
+        "auth_headers": auth_headers,
         "query": query,
         "body": body,
+        "body_type": body_type,
         "idempotency_key": idempotency_key,
         "timeout_ms": timeout_ms,
         "retry": {
@@ -515,7 +497,9 @@ async def _execute_planned_binding(
     req_start = time.time()
     resp, last_error, attempts = await _call_with_retry(
         connector, plan["method"], plan["path"],
-        plan["headers"], plan["query"], plan["body"],
+        plan["headers"], plan.get("auth_headers", {}),
+        plan["query"], plan["body"],
+        plan.get("body_type", "json"),
         plan["timeout_ms"] / 1000.0,
         plan["retry"]["max"], plan["retry"]["on"], plan["retry"]["backoff"],
     )
@@ -534,6 +518,7 @@ async def _execute_planned_binding(
         breaker.record(success)
 
     call_id = str(uuid.uuid4())
+    persisted_headers = {**plan.get("auth_headers", {}), **(plan["headers"] or {})}
     try:
         await api_call_logs_repo.create({
             "id": call_id,
@@ -543,7 +528,7 @@ async def _execute_planned_binding(
             "interaction_id": interaction_id or "",
             "method": plan["method"],
             "url": connector.get("base_url", "").rstrip("/") + plan["path"],
-            "request_headers": json.dumps(_redact_headers(plan["headers"]), ensure_ascii=False),
+            "request_headers": json.dumps(redact_headers(persisted_headers), ensure_ascii=False),
             "request_body": json.dumps(plan["body"], ensure_ascii=False, default=str)[:5000]
                              if plan["body"] is not None else "{}",
             "response_body": (json.dumps(resp_json, ensure_ascii=False, default=str)[:5000]
@@ -701,7 +686,7 @@ async def execute_declarative(
                         "level": level_idx,
                         "method": plan["method"],
                         "url": plan["connector"].get("base_url", "").rstrip("/") + plan["path"],
-                        "headers": _redact_headers(plan["headers"]),
+                        "headers": redact_headers({**plan.get("auth_headers", {}), **(plan["headers"] or {})}),
                         "query": plan["query"],
                         "body": plan["body"],
                         "timeout_ms": plan["timeout_ms"],
