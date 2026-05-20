@@ -370,3 +370,118 @@ Esperado: tabela com `entry_id` PK + FK CASCADE, `steps JSONB`, timestamps.
 - [ ] Fase 7.7 — fluxo end-to-end completo
 
 **Onda 3 do Catálogo está pronta para sign-off e produção.**
+
+---
+
+## Fase 8 — Regressão Onda 4
+
+Adicional: recipes deixam de ser apenas manifest e passam a executar de
+fato. Total agora: **322 testes** (171 Onda 1 + 50 Onda 2 + 36 Onda 3 +
+65 Onda 4).
+
+### 8.1 Automático
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+Esperado: **322 passed**. Suites Onda 4 adicionadas:
+- `test_catalog_recipe_execution.py` (33): endpoints execute/sandbox/get/list +
+  executor com chain, skip-after-failure, target inválido, cost auto-wire,
+  ordenação defensiva, e sandbox isolation
+- `test_llm_pricing.py` (17): lookup case-insensitive, calculo basico,
+  ollama=0, modelo desconhecido → 0 + warning, anthropic claude-opus,
+  maritaca sabia, estrutura consistente
+- `test_catalog_anomalies.py` (15): pico/limite com floor/threshold,
+  ambos simultâneos, scope gating do endpoint, audit on/off
+
+### 8.2 Schema novo
+
+```sql
+\d catalog_recipe_executions
+```
+
+Esperado: tabela com `id` PK, `recipe_entry_id` FK CASCADE, `consumer_user_id`,
+`input`, `steps_results JSONB`, `status` CHECK, agregados, timestamps, e
+`is_sandbox BOOLEAN DEFAULT FALSE` (via ALTER TABLE idempotente PR #70).
+
+3 índices: `(recipe_entry_id, started_at DESC)`, `(consumer_user_id, started_at DESC)`,
+`(status)`.
+
+Total de tabelas catalog: **7**.
+
+### 8.3 Endpoints novos (5 — total 32)
+
+| Rota | Método | Auth |
+|---|---|---|
+| `/entries/{id}/execute` | POST | qualquer user que vê a entry (recipe published) |
+| `/executions/{id}` | GET | root \| consumer \| owner do recipe |
+| `/entries/{id}/executions` | GET | qualquer user que vê a entry |
+| `/entries/{id}/sandbox` | POST | owner \| root (qualquer status, incl. draft) |
+| `/cost/anomalies` | GET | auto-scope (Root=all, demais=mine) |
+
+### 8.4 Comportamentos novos
+
+| Tema | Antes (Onda 3) | Depois (Onda 4) |
+|---|---|---|
+| Recipe execution | Só manifest declarativo | Chain real via engine, async com polling |
+| cost_usd | Placeholder 0 (PR #64) | `compute_cost(provider, model, in, out)` real (PR #69) |
+| Falha de step | N/A | Chain quebra; demais 'skipped'; status='partial' |
+| Crash do executor | N/A | Catch-all finaliza como 'failed' (nunca fica 'running' preso) |
+| Sandbox | N/A | `is_sandbox=true` pula record_invocation_cost |
+| Anomalia de cost | Sem detecção | Banner automático em /catalog/cost quando há pico/limite |
+| Modelo desconhecido | N/A | cost_usd=0 + WARNING log (não derruba) |
+
+### 8.5 UI
+
+| Página | Status | PR |
+|---|---|---|
+| `/catalog/{id}` — tab **Execuções** | NOVO (no template existente) | #68 |
+| `/catalog/{id}` — botão **🧪 Sandbox** + badge histórico | NOVO | #70 |
+| `/catalog/cost` — banner vermelho de anomalias | NOVO | #71 |
+
+Modais novos em `catalog_detail.html`:
+- Disparador (textarea + botão dinâmico por modo)
+- Polling (status badge + steps em tempo real, refresh 1.5s)
+
+### 8.6 Audit actions novas (4)
+
+- `recipe_execution_started` (#67) — input_length, step_count
+- `recipe_execution_finished` (#67) — status, total_cost_usd, total_latency_ms
+- `recipe_sandbox_started` (#70) — input_length, step_count, entry_status
+- `cost_anomaly_detected` (#71) — scope, anomaly_count, anomaly_types, today_usd
+
+Total: **15 actions** distintas no catálogo.
+
+### 8.7 Fluxo end-to-end Onda 4
+
+```
+[owner] cria recipe (kind=recipe, draft)
+[owner] tab "Recipe Steps" → adiciona 3 steps apontando para agents published
+[owner] tab "Execuções" → clica 🧪 Sandbox
+        ↓
+[sandbox modal] textarea de input → submit
+        ↓
+[polling modal] vê steps progredirem (LLM real chamado)
+        ↓
+[owner] confirma resultado, submete recipe → Root aprova → publica
+[owner] tab "Execuções" → clica ▶ Executar recipe (modo prod)
+        ↓
+[polling modal] mesma UX, mas:
+        ↓
+[Root] /catalog/cost → vê total agregado refletindo o custo real do recipe
+[Root] /catalog/cost → SE houve pico ou limite, banner vermelho aparece
+[Root] audit_log → recipe_execution_started + finished + cost_anomaly_detected
+```
+
+## Sign-off Onda 4
+
+- [ ] Fase 8.1 — 322 testes passam
+- [ ] Fase 8.2 — 7 tabelas catalog_* existem (6 anteriores + 1 nova) com `is_sandbox`
+- [ ] Fase 8.3 — 32 endpoints REST registrados (27 anteriores + 5 novos)
+- [ ] Fase 8.4 — comportamentos novos funcionam (chain, skip, cost real, sandbox isolation, anomalias)
+- [ ] Fase 8.5 — tab Execuções + botão Sandbox + banner anomalias renderizam
+- [ ] Fase 8.6 — audit_log popula com 15 actions distintas
+- [ ] Fase 8.7 — fluxo end-to-end completo (sandbox → publish → execute → cost → anomalia)
+
+**Onda 4 do Catálogo está pronta para sign-off e produção.**
