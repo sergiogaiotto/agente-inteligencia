@@ -741,6 +741,13 @@ _IDEMPOTENT_MIGRATIONS = [
     # gravam em catalog_costs (free tier de dev) — flag distingue para
     # filtragem em UI e queries futuras.
     "ALTER TABLE catalog_recipe_executions ADD COLUMN IF NOT EXISTS is_sandbox BOOLEAN DEFAULT FALSE",
+    # API Connectors — revisão de qualidade (2026-05):
+    #   verify_ssl: permite desabilitar verificação TLS por connector
+    #     (default ON; só desligue conscientemente para APIs com self-signed cert)
+    #   body_type:  tipo de body que o endpoint envia. 'json' (default, retrocompat),
+    #     'form_urlencoded', 'multipart', 'text', 'xml'. Sem isso só JSON era suportado.
+    "ALTER TABLE api_connectors ADD COLUMN IF NOT EXISTS verify_ssl INTEGER DEFAULT 1",
+    "ALTER TABLE api_endpoints ADD COLUMN IF NOT EXISTS body_type TEXT DEFAULT 'json'",
 ]
 
 
