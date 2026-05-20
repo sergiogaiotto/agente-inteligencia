@@ -143,11 +143,26 @@ def fake_storage(monkeypatch):
     # mockam o INNER JOIN entry↔submission em memória usando os dicts acima.
 
     async def fake_list_submissions_for_review(*, status="pending", limit=50, offset=0):
-        rows = [
-            dict(s) for s in submissions.values()
-            if (not status or s.get("review_status") == status)
-            and s.get("entry_id") in entries  # INNER JOIN — exclui órfãs
-        ]
+        rows: list[dict] = []
+        for s in submissions.values():
+            if status and s.get("review_status") != status:
+                continue
+            eid = s.get("entry_id")
+            if eid not in entries:  # INNER JOIN — exclui órfãs
+                continue
+            e = entries[eid]
+            row = dict(s)
+            row["entry"] = {
+                "id": e.get("id"),
+                "name": e.get("name"),
+                "kind": e.get("kind"),
+                "version": e.get("version"),
+                "urn": e.get("urn"),
+                "description": e.get("description"),
+                "owner_user_id": e.get("owner_user_id"),
+                "status": e.get("status"),
+            }
+            rows.append(row)
         rows.sort(
             key=lambda r: r.get("submitted_at") or "",
             reverse=True,
@@ -1932,6 +1947,22 @@ class TestSubmissionsQueue:
         r = c.get("/api/v1/catalog/submissions/queue?status=pending")
         ids = [s["id"] for s in r.json()["submissions"]]
         assert ids == ["s1"]
+
+    def test_inclui_dados_da_entry_aninhados(self, fake_storage):
+        """Cada submission devolvida tem objeto `entry` aninhado com nome, kind
+        e version — para a UI Root mostrar 'Análise de Dados (AGENT v1.0.0)'
+        em vez de '(entry deletada — XXX)' para entries que existem."""
+        _seed_pending_submission(fake_storage, sub_id="s1", entry_id="e-real")
+        # _seed_pending_submission cria entry com name="Real Entry", kind="agent"
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/submissions/queue")
+        assert r.status_code == 200
+        sub = r.json()["submissions"][0]
+        assert sub["entry"]["id"] == "e-real"
+        assert sub["entry"]["name"] == "Real Entry"
+        assert sub["entry"]["kind"] == "agent"
+        assert sub["entry"]["version"] == "1.0.0"
+        assert sub["entry"]["status"] == "submitted"
 
 
 class TestCleanupOrphanSubmissions:
