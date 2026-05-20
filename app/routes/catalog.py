@@ -324,54 +324,70 @@ async def submit_entry(
         raise HTTPException(403, "Apenas owner ou root podem submeter")
     await _require_status_transition(entry, "submitted")
 
-    # Insumos para pré-checks (disclosure tem PK = entry_id, helper especializado)
-    disclosure = await get_disclosure(entry_id)
-    owner = await users_repo.find_by_id(entry.get("owner_user_id"))
-    # External metadata e recipe só consultados quando kind aplicável (otimização)
-    external_meta = None
-    recipe_data = None
-    if entry.get("kind") == "external_platform":
-        external_meta = await get_external_metadata(entry_id)
-    elif entry.get("kind") == "recipe":
-        recipe_data = await get_recipe(entry_id)
-    report = run_prechecks(
-        entry,
-        disclosure=disclosure,
-        owner=owner,
-        external_metadata=external_meta,
-        recipe=recipe_data,
-    )
+    # Bloco crítico: I/O em vários repos + serialização JSON. Qualquer falha aqui
+    # (constraint do banco, valor inesperado, repo helper) virava 500 puro com
+    # 'Internal Server Error' em text/plain, sem registro do erro real. Agora
+    # capturamos, logamos com traceback e devolvemos detail informativo ao
+    # frontend (tipo da exceção + mensagem truncada), preservando rollback do client.
+    try:
+        # Insumos para pré-checks (disclosure tem PK = entry_id, helper especializado)
+        disclosure = await get_disclosure(entry_id)
+        owner = await users_repo.find_by_id(entry.get("owner_user_id"))
+        # External metadata e recipe só consultados quando kind aplicável (otimização)
+        external_meta = None
+        recipe_data = None
+        if entry.get("kind") == "external_platform":
+            external_meta = await get_external_metadata(entry_id)
+        elif entry.get("kind") == "recipe":
+            recipe_data = await get_recipe(entry_id)
+        report = run_prechecks(
+            entry,
+            disclosure=disclosure,
+            owner=owner,
+            external_metadata=external_meta,
+            recipe=recipe_data,
+        )
 
-    import json
-    import uuid
-    sub_id = str(uuid.uuid4())
-    submission = {
-        "id": sub_id,
-        "entry_id": entry_id,
-        "submitted_by": user["id"],
-        "snapshot": json.dumps(_entry_snapshot(entry)),
-        "precheck_report": json.dumps(report),
-        "precheck_passed": report["passed"],
-        "review_status": "pending",
-        "review_notes": (data.notes or ""),
-    }
-    await catalog_submissions_repo.create(submission)
-    await catalog_entries_repo.update(entry_id, {
-        "status": "submitted",
-        "updated_at": datetime.now(timezone.utc),
-    })
-    await _audit("submitted", entry_id, user["id"], {
-        "submission_id": sub_id,
-        "precheck_passed": report["passed"],
-        "warnings": report["warnings_count"],
-        "errors": report["errors_count"],
-    })
+        import uuid
+        sub_id = str(uuid.uuid4())
+        submission = {
+            "id": sub_id,
+            "entry_id": entry_id,
+            "submitted_by": user["id"],
+            "snapshot": json.dumps(_entry_snapshot(entry), default=str),
+            "precheck_report": json.dumps(report, default=str),
+            "precheck_passed": report["passed"],
+            "review_status": "pending",
+            "review_notes": (data.notes or ""),
+        }
+        await catalog_submissions_repo.create(submission)
+        await catalog_entries_repo.update(entry_id, {
+            "status": "submitted",
+            "updated_at": datetime.now(timezone.utc),
+        })
+        await _audit("submitted", entry_id, user["id"], {
+            "submission_id": sub_id,
+            "precheck_passed": report["passed"],
+            "warnings": report["warnings_count"],
+            "errors": report["errors_count"],
+        })
 
-    return {
-        "submission_id": sub_id,
-        "entry_status": "submitted",
-        "precheck_report": report,
-    }
+        return {
+            "submission_id": sub_id,
+            "entry_status": "submitted",
+            "precheck_report": report,
+        }
+    except HTTPException:
+        # Erros intencionais (validação, autorização) — propagam sem mascarar
+        raise
+    except Exception as e:
+        logger.exception(
+            f"submit_entry: erro inesperado em entry_id={entry_id} user={user.get('id')}"
+        )
+        raise HTTPException(
+            500,
+            f"Erro ao submeter entry: {type(e).__name__}: {str(e)[:160]}",
+        )
 
 
 @router.post("/submissions/{sub_id}/decide")
@@ -580,14 +596,25 @@ async def put_capability(
             "depreque + nova versão para alterar capabilities",
         )
 
-    payload = data.model_dump()
-    result = await upsert_disclosure(entry_id, payload)
-    await _audit("capability_declared", entry_id, user["id"], {
-        "processes_pii": data.processes_pii,
-        "calls_external_apis": data.calls_external_apis,
-        "data_residency": data.data_residency,
-    })
-    return result
+    try:
+        payload = data.model_dump()
+        result = await upsert_disclosure(entry_id, payload)
+        await _audit("capability_declared", entry_id, user["id"], {
+            "processes_pii": data.processes_pii,
+            "calls_external_apis": data.calls_external_apis,
+            "data_residency": data.data_residency,
+        })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            f"put_capability: erro inesperado em entry_id={entry_id} user={user.get('id')}"
+        )
+        raise HTTPException(
+            500,
+            f"Erro ao salvar Capability Disclosure: {type(e).__name__}: {str(e)[:160]}",
+        )
 
 
 @router.delete("/entries/{entry_id}/capability")
@@ -672,13 +699,23 @@ async def put_external(
     payload = data.model_dump(exclude_none=True)
     try:
         result = await upsert_external_metadata(entry_id, payload)
+        await _audit("external_metadata_declared", entry_id, user["id"], {
+            "vendor": data.vendor,
+            "contract_status": data.contract_status,
+        })
+        return result
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(422, str(e))
-    await _audit("external_metadata_declared", entry_id, user["id"], {
-        "vendor": data.vendor,
-        "contract_status": data.contract_status,
-    })
-    return result
+    except Exception as e:
+        logger.exception(
+            f"put_external: erro inesperado em entry_id={entry_id} user={user.get('id')}"
+        )
+        raise HTTPException(
+            500,
+            f"Erro ao salvar metadata externa: {type(e).__name__}: {str(e)[:160]}",
+        )
 
 
 # ═════════════════════════════════════════════════════════════════
