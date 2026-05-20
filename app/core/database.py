@@ -771,9 +771,15 @@ _DOLLAR_TAG_RE = re.compile(r"\$[A-Za-z_]*\$")
 def _split_sql(script: str) -> list[str]:
     """Divide um script SQL em statements individuais.
 
-    Respeita strings ('...', "..."), strings duplicadas ('') e dollar-quoting
-    ($tag$ ... $tag$). Não tenta entender comentários multilinha — aceitável
-    porque o SCHEMA aqui não usa.
+    Respeita strings ('...', "..."), strings duplicadas (''), dollar-quoting
+    ($tag$ ... $tag$) e comentários single-line (`-- ... \\n`).
+
+    Comentários single-line são preservados na saída (PG aceita) mas seu
+    conteúdo NÃO é tokenizado — `;` ou `'` dentro de `-- comment` ficam
+    inertes. Sem isso, um comentário como `-- foo; bar` cortaria o
+    statement no meio.
+
+    Comentários multilinha (/* ... */) não são suportados; o SCHEMA não usa.
     """
     out: list[str] = []
     cur: list[str] = []
@@ -805,6 +811,13 @@ def _split_sql(script: str) -> list[str]:
                 in_str = False
                 sc = None
             i += 1
+            continue
+        # Comentário single-line `-- ... \n` — copia inerte até o newline.
+        # Evita que `;` ou `'` dentro do comentário disparem split/string.
+        if c == "-" and i + 1 < n and script[i + 1] == "-":
+            while i < n and script[i] != "\n":
+                cur.append(script[i])
+                i += 1
             continue
         if c in ("'", '"'):
             in_str = True
