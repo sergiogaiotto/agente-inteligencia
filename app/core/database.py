@@ -748,6 +748,14 @@ _IDEMPOTENT_MIGRATIONS = [
     #     'form_urlencoded', 'multipart', 'text', 'xml'. Sem isso só JSON era suportado.
     "ALTER TABLE api_connectors ADD COLUMN IF NOT EXISTS verify_ssl INTEGER DEFAULT 1",
     "ALTER TABLE api_endpoints ADD COLUMN IF NOT EXISTS body_type TEXT DEFAULT 'json'",
+    # Catalog submissions — garantir FK ON DELETE CASCADE (2026-05).
+    # Tabelas que vieram de versões antigas do schema podem ter FK sem CASCADE,
+    # gerando submissions órfãs quando a entry é deletada. CREATE TABLE IF NOT
+    # EXISTS não retroativa FKs em tabelas existentes — precisa do ALTER explícito.
+    # DROP + ADD é idempotente em Postgres (IF EXISTS no DROP, e ADD recria limpo).
+    "ALTER TABLE catalog_submissions DROP CONSTRAINT IF EXISTS catalog_submissions_entry_id_fkey",
+    """ALTER TABLE catalog_submissions ADD CONSTRAINT catalog_submissions_entry_id_fkey
+       FOREIGN KEY (entry_id) REFERENCES catalog_entries(id) ON DELETE CASCADE""",
 ]
 
 
