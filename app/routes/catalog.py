@@ -45,6 +45,7 @@ from app.catalog.queries import (
     aggregate_costs,
     can_user_see,
     can_user_see_execution,
+    cleanup_orphan_submissions,
     create_execution,
     db_row_to_entry_dict,
     delete_disclosure,
@@ -58,6 +59,7 @@ from app.catalog.queries import (
     list_executions_for_entry,
     list_inventory,
     list_stewardship,
+    list_submissions_for_review,
     list_visible_entries,
     record_invocation_cost,
     upsert_disclosure,
@@ -477,15 +479,43 @@ async def submissions_queue(
 ):
     """Fila de submissões para Root revisar.
 
-    Default lista pendentes; query param permite ver decididas.
-    Apenas Root acessa.
+    Default lista pendentes; query param permite ver decididas. Apenas Root acessa.
+    Submissions órfãs (entry deletada) são **filtradas** via INNER JOIN — Root não
+    pode decidir sobre algo que não existe. O FK CASCADE deveria limpar essas rows,
+    mas o filtro é defesa em profundidade para legado histórico.
     """
     if not is_root(user):
         raise HTTPException(403, "Apenas Root pode ver a fila de revisão")
-    filters = {"review_status": status} if status else {}
-    items = await catalog_submissions_repo.find_all(limit=limit, offset=offset, **filters)
-    total = await catalog_submissions_repo.count(**filters)
+    items, total = await list_submissions_for_review(
+        status=status or None, limit=limit, offset=offset,
+    )
     return {"submissions": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.post("/admin/cleanup-orphan-submissions")
+async def cleanup_orphan_submissions_endpoint(user: dict = Depends(require_user)):
+    """Limpa submissions cuja entry foi deletada (FK órfã).
+
+    Em condições normais, o `ON DELETE CASCADE` do FK já remove submissions
+    quando a entry é deletada. Este endpoint cobre o caso de legado histórico
+    em que o CASCADE foi adicionado após a tabela ter sido criada (Postgres
+    não retroativa em FKs existentes) ou de deletes feitos fora da API.
+
+    Idempotente. Só Root pode rodar. Registra audit com o count.
+    """
+    if not is_root(user):
+        raise HTTPException(403, "Apenas Root pode rodar cleanup de submissions")
+    deleted = await cleanup_orphan_submissions()
+    if deleted > 0:
+        # cleanup é cross-entry; usamos sentinel "-" em entity_id porque o audit
+        # exige um entity_id específico mas não há uma entry alvo.
+        await _audit(
+            "cleanup_orphan_submissions",
+            "-",
+            user["id"],
+            {"deleted_count": deleted},
+        )
+    return {"deleted_count": deleted}
 
 
 @router.get("/entries/{entry_id}/submissions")

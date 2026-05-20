@@ -139,6 +139,39 @@ def fake_storage(monkeypatch):
 
     monkeypatch.setattr(audit_repo, "create", fake_audit_create)
 
+    # Helpers especializados do catalog.queries que vão direto no pool —
+    # mockam o INNER JOIN entry↔submission em memória usando os dicts acima.
+
+    async def fake_list_submissions_for_review(*, status="pending", limit=50, offset=0):
+        rows = [
+            dict(s) for s in submissions.values()
+            if (not status or s.get("review_status") == status)
+            and s.get("entry_id") in entries  # INNER JOIN — exclui órfãs
+        ]
+        rows.sort(
+            key=lambda r: r.get("submitted_at") or "",
+            reverse=True,
+        )
+        return rows[offset:offset + limit], len(rows)
+
+    async def fake_cleanup_orphan_submissions():
+        orphans = [
+            sid for sid, s in submissions.items()
+            if s.get("entry_id") not in entries
+        ]
+        for sid in orphans:
+            submissions.pop(sid, None)
+        return len(orphans)
+
+    monkeypatch.setattr(
+        "app.routes.catalog.list_submissions_for_review",
+        fake_list_submissions_for_review,
+    )
+    monkeypatch.setattr(
+        "app.routes.catalog.cleanup_orphan_submissions",
+        fake_cleanup_orphan_submissions,
+    )
+
     return {
         "entries": entries,
         "submissions": submissions,
@@ -1820,3 +1853,119 @@ class TestRecipeDelete:
         recipe_storage["entries"][rid]["status"] = "submitted"
         r = c.delete(f"/api/v1/catalog/entries/{rid}/recipe")
         assert r.status_code == 409
+
+
+# ═════════════════════════════════════════════════════════════════
+# Fila de revisão — filtragem de órfãs + cleanup admin
+# ═════════════════════════════════════════════════════════════════
+# Submissions cuja entry foi deletada são órfãs; Root não pode decidir
+# sobre algo que não existe. A fila deve filtrá-las e há endpoint admin
+# para limpar lixo histórico (FK CASCADE só pega deletes futuros).
+
+
+def _seed_pending_submission(storage, *, sub_id, entry_id, entry_exists=True):
+    """Cria submission pending. Se entry_exists=True, cria também a entry
+    com aquele id (caso normal). Se False, simula órfã (entry deletada)."""
+    storage["submissions"][sub_id] = {
+        "id": sub_id,
+        "entry_id": entry_id,
+        "submitted_by": "u1",
+        "review_status": "pending",
+        "submitted_at": f"2026-05-20T15:{len(storage['submissions']):02d}:00Z",
+        "precheck_passed": True,
+        "review_notes": "",
+    }
+    if entry_exists and entry_id not in storage["entries"]:
+        storage["entries"][entry_id] = {
+            "id": entry_id,
+            "name": "Real Entry",
+            "kind": "agent",
+            "status": "submitted",
+            "version": "1.0.0",
+            "owner_user_id": "u1",
+            "visibility": "company",
+        }
+
+
+class TestSubmissionsQueue:
+    def test_root_pode_acessar_fila(self, fake_storage):
+        _seed_pending_submission(fake_storage, sub_id="s1", entry_id="e1")
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/submissions/queue")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert body["submissions"][0]["id"] == "s1"
+
+    def test_comum_403(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/submissions/queue")
+        assert r.status_code == 403
+
+    def test_orfas_sao_filtradas(self, fake_storage):
+        """Submission com entry_id apontando para entry inexistente NÃO aparece.
+        Cobre o cenário do print original: 2 'pending' fantasmas após delete."""
+        # Uma válida (entry existe) e duas órfãs (entry não existe)
+        _seed_pending_submission(fake_storage, sub_id="real", entry_id="e-real")
+        _seed_pending_submission(fake_storage, sub_id="ghost1", entry_id="e-ghost", entry_exists=False)
+        _seed_pending_submission(fake_storage, sub_id="ghost2", entry_id="e-ghost", entry_exists=False)
+
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/submissions/queue")
+        assert r.status_code == 200
+        body = r.json()
+        # Só a válida aparece — total também reflete o JOIN, não o count raw
+        ids = [s["id"] for s in body["submissions"]]
+        assert ids == ["real"]
+        assert body["total"] == 1
+
+    def test_filtro_por_status(self, fake_storage):
+        _seed_pending_submission(fake_storage, sub_id="s1", entry_id="e1")
+        # Aprovada — não deve aparecer em ?status=pending
+        fake_storage["submissions"]["s2"] = {
+            "id": "s2", "entry_id": "e1",
+            "submitted_by": "u1", "review_status": "approved",
+            "submitted_at": "2026-05-20T10:00:00Z",
+            "precheck_passed": True, "review_notes": "",
+        }
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/submissions/queue?status=pending")
+        ids = [s["id"] for s in r.json()["submissions"]]
+        assert ids == ["s1"]
+
+
+class TestCleanupOrphanSubmissions:
+    def test_root_limpa_orfas(self, fake_storage):
+        _seed_pending_submission(fake_storage, sub_id="real", entry_id="e-real")
+        _seed_pending_submission(fake_storage, sub_id="g1", entry_id="ghost", entry_exists=False)
+        _seed_pending_submission(fake_storage, sub_id="g2", entry_id="ghost", entry_exists=False)
+
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.post("/api/v1/catalog/admin/cleanup-orphan-submissions")
+        assert r.status_code == 200
+        assert r.json()["deleted_count"] == 2
+        # Real preservada
+        assert "real" in fake_storage["submissions"]
+        assert "g1" not in fake_storage["submissions"]
+        assert "g2" not in fake_storage["submissions"]
+        # Audit registrado (com count, sem entry_id específico — cross-entry)
+        actions = [a["action"] for a in fake_storage["audit"]]
+        assert "cleanup_orphan_submissions" in actions
+        cleanup_evt = next(a for a in fake_storage["audit"] if a["action"] == "cleanup_orphan_submissions")
+        assert "2" in cleanup_evt["details"]  # deleted_count=2 dentro do JSON
+
+    def test_idempotente_zero_orfas(self, fake_storage):
+        _seed_pending_submission(fake_storage, sub_id="real", entry_id="e-real")
+        c = make_client({"id": "root1", "role": "root"})
+        r1 = c.post("/api/v1/catalog/admin/cleanup-orphan-submissions")
+        r2 = c.post("/api/v1/catalog/admin/cleanup-orphan-submissions")
+        assert r1.json()["deleted_count"] == 0
+        assert r2.json()["deleted_count"] == 0
+        # Sem audit quando não houve delete (não polui o log)
+        actions = [a["action"] for a in fake_storage["audit"]]
+        assert "cleanup_orphan_submissions" not in actions
+
+    def test_comum_403(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.post("/api/v1/catalog/admin/cleanup-orphan-submissions")
+        assert r.status_code == 403

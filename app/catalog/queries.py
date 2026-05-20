@@ -1027,3 +1027,74 @@ def _normalize_execution_row(r) -> dict:
     elif raw_steps is None:
         d["steps_results"] = []
     return d
+
+
+# ─── Fila de revisão — filtra submissions órfãs (entry deletada) ──
+# Root só pode decidir sobre submissions cuja entry ainda existe.
+# Manter órfãs na fila gera ruído e ações inválidas. O FK CASCADE
+# deveria limpar automaticamente; este filtro é defesa em profundidade
+# para legado histórico (e para o caso raro de delete fora da API).
+
+
+async def list_submissions_for_review(
+    *,
+    status: Optional[str] = "pending",
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """Lista submissões com a entry ainda existente (INNER JOIN).
+
+    Submissions cuja entry foi deletada são excluídas — Root não pode
+    decidir sobre algo que não existe. Retorna (rows, total) onde total
+    também respeita o filtro de existência.
+    """
+    pool = _get_pool()
+    params: list[Any] = []
+    where_parts: list[str] = []
+    if status:
+        params.append(status)
+        where_parts.append(f"s.review_status = ${len(params)}")
+    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    count_sql = (
+        f"SELECT COUNT(*) FROM catalog_submissions s "
+        f"INNER JOIN catalog_entries e ON e.id = s.entry_id {where_sql}"
+    )
+
+    params_with_pag = params + [limit, offset]
+    limit_ph = f"${len(params_with_pag)-1}"
+    offset_ph = f"${len(params_with_pag)}"
+    list_sql = (
+        f"SELECT s.* FROM catalog_submissions s "
+        f"INNER JOIN catalog_entries e ON e.id = s.entry_id {where_sql} "
+        f"ORDER BY s.submitted_at DESC "
+        f"LIMIT {limit_ph} OFFSET {offset_ph}"
+    )
+
+    async with pool.acquire() as con:
+        rows = await con.fetch(list_sql, *params_with_pag)
+        total = await con.fetchval(count_sql, *params) or 0
+
+    return [dict(r) for r in rows], int(total)
+
+
+async def cleanup_orphan_submissions() -> int:
+    """Deleta submissions cuja entry referenciada não existe mais.
+
+    Idempotente. Retorna a quantidade de rows deletadas. Usado pelo
+    endpoint admin de cleanup; em condições normais (FK CASCADE ativo),
+    nada deve ser deletado.
+    """
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        res = await con.execute(
+            """
+            DELETE FROM catalog_submissions
+            WHERE entry_id NOT IN (SELECT id FROM catalog_entries)
+            """
+        )
+    # asyncpg.execute retorna "DELETE <n>"
+    try:
+        return int(res.rsplit(" ", 1)[-1])
+    except (ValueError, IndexError):
+        return 0
