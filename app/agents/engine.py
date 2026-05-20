@@ -215,14 +215,84 @@ class DeepAgentHarness:
             return True
         return False
 
+    def _choose_tool_strategy(self) -> str:
+        """Decide a estratégia de tool execution para o modelo atual.
+
+        Mantém o contrato canônico: dev declara Tool Bindings em SKILL.md,
+        plataforma faz funcionar independente do modelo. Estratégias:
+
+        - 'native'   — modelo suporta `tools` parameter (OpenAI-compat).
+                       Caminho preferido. Performance e confiabilidade máximas.
+        - 'prompted' — modelo não suporta nativo mas segue instruções bem.
+                       Injeta schemas no system prompt e parseia JSON do output.
+                       ~20-30% mais tokens, ~5-10% JSON malformado tolerado.
+        - 'none'     — modelo sem nativo e sem capacidade prompted (modelos
+                       minúsculos). Agent perde tools nesta rodada + audit warning.
+
+        Sem tools registradas → 'none' direto (não precisa de strategy).
+        """
+        if not self.openai_tools:
+            return "none"
+        from app.core.llm_capabilities import supports_native_tools, supports_prompted_tools
+        provider = self.config.get("llm_provider", "")
+        model = self.config.get("model", "")
+        if supports_native_tools(provider, model):
+            return "native"
+        if supports_prompted_tools(provider, model):
+            return "prompted"
+        return "none"
+
+    async def _audit_tool_strategy_degraded(self, strategy: str, reason: str = ""):
+        """Grava em audit_log quando a estratégia de tools degrada do nativo.
+
+        Visibilidade operacional: quem opera enxerga que aquele agent está
+        rodando subótimo (prompted custa mais tokens; none perde tools).
+        Best-effort — falha não bloqueia agent.
+        """
+        try:
+            from app.core.database import audit_repo
+            await audit_repo.create({
+                "entity_type": "agent",
+                "entity_id": self.config.get("id", ""),
+                "action": "tool_strategy_degraded",
+                "details": json.dumps({
+                    "strategy": strategy,  # 'prompted' | 'none'
+                    "provider": self.config.get("llm_provider", ""),
+                    "model": self.config.get("model", ""),
+                    "tool_count": len(self.openai_tools),
+                    "reason": reason or "modelo sem function calling nativo",
+                    "interaction_id": self.interaction_id,
+                }, ensure_ascii=False),
+            })
+        except Exception as e:
+            logger.warning(f"audit tool_strategy_degraded falhou: {e}")
+
     async def reason(self, state: AgentState) -> AgentState:
-        """Nó de raciocínio com suporte a tool calling MCP."""
+        """Nó de raciocínio com suporte a tool calling MCP.
+
+        Roteia entre 3 estratégias baseado em llm_capabilities (canônico):
+        - native:   bind_tools() — caminho preferido
+        - prompted: injeta schemas no prompt, parseia JSON do output
+        - none:     sem tools (audit warning)
+        """
+        tool_strategy = self._choose_tool_strategy()
+        # Caminho prompted: trata em método dedicado (sem bind_tools)
+        if tool_strategy == "prompted":
+            return await self._reason_prompted(state)
+
         system = self._build_system_prompt()
         messages = [SystemMessage(content=system)] + list(state["messages"])
 
         llm = self.provider.get_langchain_llm()
         handler = get_langfuse_handler(trace_name=f"agent_{self.config.get('id', 'x')}")
         callbacks = [handler] if handler else []
+
+        # Audit quando estratégia 'none' e há tools registradas (degradação)
+        if tool_strategy == "none" and self.openai_tools and state.get("iteration", 0) == 0:
+            await self._audit_tool_strategy_degraded(
+                "none",
+                "modelo sem capability mínima — tools registradas serão ignoradas nesta rodada",
+            )
 
         # tool_choice="required" força invocação de QUALQUER função na
         # primeira chamada quando a SKILL mostra claramente a intenção
@@ -233,7 +303,7 @@ class DeepAgentHarness:
         iteration = state.get("iteration", 0)
         first_pass = iteration == 0
 
-        if self.openai_tools:
+        if self.openai_tools and tool_strategy == "native":
             if force_tool and first_pass:
                 if len(self.openai_tools) == 1:
                     tool_name_forced = self.openai_tools[0]["function"]["name"]
@@ -246,6 +316,7 @@ class DeepAgentHarness:
             else:
                 llm_with_tools = llm.bind_tools(self.openai_tools)
         else:
+            # strategy='none' → invocação plain sem tools
             llm_with_tools = llm
 
         try:
@@ -344,6 +415,124 @@ class DeepAgentHarness:
         md = dict(state.get("metadata") or {})
         md["reflect_recommended"] = self._needs_reflection(response, state)
         return {**state, "messages": [response], "iteration": state.get("iteration", 0) + 1, "metadata": md}
+
+    async def _reason_prompted(self, state: AgentState) -> AgentState:
+        """Loop de raciocínio com prompted_tools (modelo sem function calling nativo).
+
+        Estratégia:
+        1. Adiciona schemas das tools ao system prompt como instrução
+        2. Modelo responde texto livre com blocos <tool_call>{...}</tool_call>
+        3. Parser tolerante extrai chamadas válidas (descarta JSON malformado)
+        4. Cada chamada vira execute_tool_call() (mesma infra do nativo)
+        5. Resultado volta como HumanMessage formatada (modelo não entende role tool
+           sem suporte nativo)
+        6. Re-invoca até no max_tool_rounds OU resposta sem mais tool_calls
+
+        Limpa blocos <tool_call> do conteúdo final para não vazar ao usuário.
+        """
+        from app.agents.prompted_tools import (
+            build_prompted_tools_system,
+            parse_tool_calls,
+            strip_tool_calls,
+            format_tool_result_message,
+        )
+        from app.mcp.runtime import execute_tool_call
+        from langchain_core.messages import HumanMessage
+
+        # Audit visível: estratégia degradada do nativo
+        if state.get("iteration", 0) == 0:
+            await self._audit_tool_strategy_degraded(
+                "prompted",
+                "modelo sem function calling nativo — usando schemas em system prompt + parse JSON",
+            )
+
+        # System prompt: o original + instrução com schemas das tools
+        system_base = self._build_system_prompt()
+        system_full = system_base + "\n\n" + build_prompted_tools_system(self.openai_tools)
+        messages = [SystemMessage(content=system_full)] + list(state["messages"])
+
+        llm = self.provider.get_langchain_llm()
+        handler = get_langfuse_handler(trace_name=f"agent_{self.config.get('id', 'x')}")
+        callbacks = [handler] if handler else []
+
+        # Invocação plain (sem bind_tools — modelo não suporta)
+        response = await llm.ainvoke(messages, config={"callbacks": callbacks})
+
+        current_messages = messages + [response]
+        max_tool_rounds = 5
+        any_tool_executed = False
+
+        for round_n in range(max_tool_rounds):
+            content = getattr(response, "content", "") or ""
+            tool_calls = parse_tool_calls(content)
+            if not tool_calls:
+                break
+
+            for tc in tool_calls:
+                tool_name = tc["name"]
+                tool_args = tc["arguments"]
+                logger.info(
+                    f"PROMPTED Tool Call [round={round_n}]: {tool_name}"
+                    f"({json.dumps(tool_args, ensure_ascii=False)[:200]})"
+                )
+
+                _tc_start = time.time()
+                _tc_status = "completed"
+                try:
+                    result_text = await execute_tool_call(
+                        tool_name, tool_args, self.mcp_tools, timeout=30,
+                    )
+                except Exception as _tc_err:
+                    _tc_status = "failed"
+                    result_text = f"[tool error] {_tc_err}"
+                    logger.warning(f"PROMPTED Tool Call failed [{tool_name}]: {_tc_err}")
+                _tc_latency_ms = round((time.time() - _tc_start) * 1000, 2)
+                any_tool_executed = True
+
+                # Persiste invocação (mesma infra do nativo)
+                try:
+                    from app.core.database import tool_calls_repo
+                    _matched = next(
+                        (t for t in self.mcp_tools if t.get("name") == tool_name), None,
+                    )
+                    await tool_calls_repo.create({
+                        "id": str(uuid.uuid4()),
+                        "tool_name": tool_name,
+                        "input_data": json.dumps(tool_args, ensure_ascii=False)[:5000],
+                        "output_data": (result_text or "")[:5000],
+                        "latency_ms": _tc_latency_ms,
+                        "cost_usd": 0.0,
+                        "interaction_id": self.interaction_id or "",
+                        "tool_id": (_matched or {}).get("id", "") or "",
+                        "status": _tc_status,
+                        "agent_id": self.config.get("id", ""),
+                    })
+                except Exception as _persist_err:
+                    logger.warning(f"persist tool_call (prompted) falhou: {_persist_err}")
+
+                # Resultado volta como HumanMessage (modelo não entende role=tool sem nativo)
+                current_messages.append(HumanMessage(
+                    content=format_tool_result_message(tool_name, result_text),
+                ))
+
+            # Re-invoca para próxima rodada de raciocínio
+            response = await llm.ainvoke(current_messages, config={"callbacks": callbacks})
+            current_messages.append(response)
+
+        # Limpa blocos <tool_call> da resposta final para não vazar ao usuário
+        if any_tool_executed:
+            final_text = strip_tool_calls(getattr(response, "content", "") or "")
+            response = type(response)(content=final_text) if final_text else response
+
+        md = dict(state.get("metadata") or {})
+        md["reflect_recommended"] = self._needs_reflection(response, state)
+        md["tool_strategy"] = "prompted"
+        return {
+            **state,
+            "messages": [response],
+            "iteration": state.get("iteration", 0) + 1,
+            "metadata": md,
+        }
 
     async def reflect(self, state: AgentState) -> AgentState:
         """Nó de reflexão — avalia e refina."""
