@@ -1,7 +1,7 @@
 {% extends "layouts/base.html" %}
 
 {% block content %}
-<div x-data="publishWizard()" x-init="load()" class="p-4 lg:p-6 max-w-3xl mx-auto">
+<div x-data="publishWizard()" x-init="load(); updateHelpExtra(); $watch('step', () => updateHelpExtra())" class="p-4 lg:p-6 max-w-3xl mx-auto">
 
     <!-- Header -->
     <div class="mb-4">
@@ -429,6 +429,33 @@ function publishWizard() {
         submitError: null,
         submitConflict: false,  // true quando POST /entries retorna 409 (versão já publicada)
         selectedArtifact: null,
+
+        // Mantém window.__pageHelpExtra sincronizado com o step ativo + tipo escolhido.
+        // O "IA, me ajude!" lê essa string e prepende como "ESTADO ATUAL DA TELA"
+        // no prompt do LLM, garantindo que respostas reflitam onde o usuário está.
+        updateHelpExtra() {
+            const stepName = this.stepLabels[this.step - 1] || '?';
+            const parts = [`Usuário está no passo ${this.step} de 4: "${stepName}".`];
+            if (this.form.kind) {
+                const kindLabel = {
+                    'agent': 'agente interno',
+                    'skill': 'skill interna',
+                    'recipe': 'recipe (composição de entries)',
+                    'external_platform': 'plataforma externa (ex: ChatGPT, Cursor)',
+                }[this.form.kind] || this.form.kind;
+                parts.push(`Tipo de artefato escolhido: ${kindLabel}.`);
+            }
+            if (this.step === 1) {
+                parts.push('Foco: escolher entre Plataforma Externa, Recipe ou um agente/skill interno listado.');
+            } else if (this.step === 2) {
+                parts.push('Foco: campos de identificação (nome, versão semver, descrição, domínio, visibilidade, steward).');
+            } else if (this.step === 3) {
+                parts.push('Foco: Capability Disclosure — 12 flags sobre dados do consumer, integrações externas, dados regulados e modelo, + soberania de dados e retenção. Obrigatório para Root aprovar.');
+            } else if (this.step === 4) {
+                parts.push('Foco: revisão final antes de submeter. Botão "Confirmar e Submeter para Revisão" cria a entry em draft e envia para a fila Root.');
+            }
+            window.__pageHelpExtra = parts.join(' ');
+        },
 
         // Sugere a próxima versão patch a partir da atual (1.0.0 → 1.0.1).
         // Se não bate o padrão semver, devolve a atual + "-2" como fallback.

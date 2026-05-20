@@ -159,6 +159,9 @@ class HelpAskContextRequest(BaseModel):
     usage: str = Field(default="", max_length=4000)
     question: str = Field(..., min_length=1, max_length=2000)
     history: list[dict] | None = None
+    # Estado efêmero da página (step ativo do wizard, filtro corrente, etc).
+    # Enviado pelo frontend para o LLM saber "onde" o usuário está agora.
+    extra_context: str | None = Field(default=None, max_length=1000)
 
 
 # ─── V2: contexto rico do help-content.js (PR 5 — Guia Interativo) ─────
@@ -197,6 +200,10 @@ class HelpAskContextV2Request(BaseModel):
     related: list[str] | None = None
     question: str = Field(..., min_length=1, max_length=2000)
     history: list[dict] | None = None
+    # Estado efêmero da página (step ativo do wizard, filtro corrente, etc).
+    # Enviado pelo frontend para o LLM saber "onde" o usuário está agora —
+    # crucial em telas multi-step como /catalog/publish (1.Artefato → 4.Revisão).
+    extra_context: str | None = Field(default=None, max_length=1000)
 
 
 class HelpAskResponse(BaseModel):
@@ -312,6 +319,8 @@ async def ask_help_context(req: HelpAskContextRequest) -> HelpAskResponse:
             f"FUNDAMENTO (especificação):\n{foundation_t}\n\n"
             f"COMO USAR:\n{usage_t}"
         )
+        if req.extra_context:
+            ctx_text += f"\n\n=== ESTADO ATUAL DA TELA ===\n{req.extra_context.strip()}"
 
         messages: list[dict] = [
             {"role": "system", "content": _PAGE_SYSTEM_PROMPT},
@@ -430,6 +439,11 @@ async def ask_help_context_v2(req: HelpAskContextV2Request) -> HelpAskResponse:
         span.set_attribute("question.length", len(req.question))
 
         ctx_text = _render_v2_context(req)
+        if req.extra_context:
+            # Estado efêmero (step ativo, filtro, etc) — prepende para que o LLM
+            # priorize a posição atual do usuário ao responder.
+            ctx_text += f"\n\n=== ESTADO ATUAL DA TELA ===\n{req.extra_context.strip()}"
+            span.set_attribute("page.extra_context.length", len(req.extra_context))
 
         messages: list[dict] = [
             {"role": "system", "content": _PAGE_V2_SYSTEM_PROMPT},
