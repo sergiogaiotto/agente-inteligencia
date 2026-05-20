@@ -149,15 +149,52 @@ class HelpAskRequest(BaseModel):
 
 
 class HelpAskContextRequest(BaseModel):
-    """Versão alternativa: recebe o contexto direto do front em vez de buscar
-    pelo module_id no module-guide.js. Usado pela "Ajuda desta página"
-    (page-specific) que tem dados próprios em helpContent (base.html).
+    """Versão legacy (Onda 0): recebe contexto plano via {what, foundation, usage}.
+    Mantida para retrocompat de páginas ainda não migradas para o schema V2.
     """
     title: str = Field(..., max_length=200)
     section: str = Field(..., max_length=200)
     what: str = Field(default="", max_length=4000)
     foundation: str = Field(default="", max_length=4000)
     usage: str = Field(default="", max_length=4000)
+    question: str = Field(..., min_length=1, max_length=2000)
+    history: list[dict] | None = None
+
+
+# ─── V2: contexto rico do help-content.js (PR 5 — Guia Interativo) ─────
+
+
+class HelpSectionItem(BaseModel):
+    """Item dentro de uma section (campo, caso de uso ou pegadinha)."""
+    name: str | None = None
+    title: str | None = None
+    body: str = ""
+    severity: str | None = None  # info | warning | danger (só pegadinhas)
+    required: bool | None = None
+    default: str | None = None
+    options: list[str] | None = None
+    example: str | None = None
+
+
+class HelpSection(BaseModel):
+    """Section tipada — espelha o schema do app/static/js/help-content.js."""
+    kind: str  # concept | fundamentos | campos | casos_de_uso | exemplo | pegadinhas
+    title: str
+    body: str | None = None
+    items: list[HelpSectionItem] | None = None
+
+
+class HelpAskContextV2Request(BaseModel):
+    """Versão V2 — recebe o schema rico do help-content.js (sections tipadas).
+
+    Permite que o LLM use contexto granular: 'O usuário está perguntando
+    sobre o campo X' → o assistente acha o campo X em sections[campos].items[]
+    e responde com base no body+example daquele campo específico.
+    """
+    title: str = Field(..., max_length=200)
+    summary: str = Field(default="", max_length=500)
+    sections: list[HelpSection] = Field(default_factory=list)
+    related: list[str] | None = None
     question: str = Field(..., min_length=1, max_length=2000)
     history: list[dict] | None = None
 
@@ -298,4 +335,122 @@ async def ask_help_context(req: HelpAskContextRequest) -> HelpAskResponse:
             )
         except Exception as e:
             logger.warning(f"help.ask_context falhou: {type(e).__name__}: {e}")
+            raise HTTPException(503, f"Assistente IA indisponível: {type(e).__name__}: {str(e)[:160]}")
+
+
+# ─── V2 endpoint — contexto rico do help-content.js ────────────────────
+
+
+_PAGE_V2_SYSTEM_PROMPT = (
+    "Você é um assistente técnico do Maestro — uma plataforma multi-agente. "
+    "O usuário está navegando em uma página específica e tem uma dúvida. "
+    "Use o CONTEXTO DA PÁGINA abaixo como verdade canônica.\n\n"
+    "O contexto vem estruturado em seções tipadas:\n"
+    "- CONCEITO — analogia de alto nível, o que é\n"
+    "- FUNDAMENTOS — como funciona por baixo\n"
+    "- CAMPOS — cada campo da tela, com explicação + exemplo + default\n"
+    "- CASOS DE USO — cenários práticos\n"
+    "- EXEMPLO — passo-a-passo concreto\n"
+    "- PEGADINHAS — armadilhas comuns (info/warning/danger)\n\n"
+    "REGRAS:\n"
+    "- Se a pergunta for sobre um campo específico, vá direto em CAMPOS e cite o nome do campo.\n"
+    "- Se for sobre 'quando uso isso', combine CONCEITO + CASOS DE USO.\n"
+    "- Se for 'como fazer X', combine EXEMPLO + CAMPOS relevantes.\n"
+    "- Se for 'cuidado com Y', cite PEGADINHAS.\n"
+    "- Se a pergunta sair do escopo da página, redirecione gentilmente.\n"
+    "- Tom profissional friendly, em português do Brasil, sem emojis.\n"
+    "- Limite ~250 palavras. Use blocos ```bash``` para comandos.\n"
+    "- Cite exatamente o nome dos campos/casos quando relevante (ajuda o usuário a encontrar na tela)."
+)
+
+
+def _render_v2_context(req: "HelpAskContextV2Request") -> str:
+    """Serializa o contexto V2 em texto plano otimizado para LLM.
+
+    Cada section vira um bloco com cabeçalho claro. Itens (campos, casos,
+    pegadinhas) viram sub-blocos com metadados (required, default, severity).
+    Strip de HTML em qualquer body porque às vezes o front manda com tags.
+    """
+    parts: list[str] = [f"=== PÁGINA: {req.title} ==="]
+    if req.summary:
+        parts.append(f"\nRESUMO: {req.summary}")
+    if req.related:
+        parts.append(f"PÁGINAS RELACIONADAS: {', '.join(req.related)}")
+
+    for sec in req.sections:
+        header = _SECTION_LABEL.get(sec.kind, sec.kind.upper())
+        parts.append(f"\n--- {header}: {sec.title} ---")
+        if sec.body:
+            parts.append(_strip_html(sec.body))
+        if sec.items:
+            for it in sec.items:
+                name = it.name or it.title or ""
+                meta_bits: list[str] = []
+                if it.required:
+                    meta_bits.append("OBRIGATÓRIO")
+                if it.default:
+                    meta_bits.append(f"default={it.default}")
+                if it.severity:
+                    meta_bits.append(f"sev={it.severity}")
+                if it.options:
+                    meta_bits.append(f"opções: {', '.join(it.options)}")
+                meta = f" [{' | '.join(meta_bits)}]" if meta_bits else ""
+                parts.append(f"• {name}{meta}")
+                body_clean = _strip_html(it.body)
+                if body_clean:
+                    parts.append(f"  {body_clean}")
+                if it.example:
+                    parts.append(f"  Ex.: {it.example}")
+    return "\n".join(parts)
+
+
+_SECTION_LABEL = {
+    "concept":      "CONCEITO",
+    "fundamentos":  "FUNDAMENTOS",
+    "campos":       "CAMPOS DA TELA",
+    "casos_de_uso": "CASOS DE USO",
+    "exemplo":      "EXEMPLO PRÁTICO",
+    "pegadinhas":   "PEGADINHAS",
+}
+
+
+@router.post("/ask-context-v2", response_model=HelpAskResponse)
+async def ask_help_context_v2(req: HelpAskContextV2Request) -> HelpAskResponse:
+    """V2 do help contextual — recebe schema rico em vez de plain text.
+
+    Permite respostas muito mais precisas: 'qual o default do campo Temperatura?'
+    é respondido lendo direto sections[campos].items[Temperatura].default.
+
+    Frontend usa este endpoint quando `pageHelpV2` está populado (schema novo);
+    senão cai no /ask-context legacy.
+    """
+    with _tracer.start_as_current_span("help.ask_context_v2") as span:
+        span.set_attribute("page.title", req.title)
+        span.set_attribute("page.sections", len(req.sections))
+        span.set_attribute("question.length", len(req.question))
+
+        ctx_text = _render_v2_context(req)
+
+        messages: list[dict] = [
+            {"role": "system", "content": _PAGE_V2_SYSTEM_PROMPT},
+            {"role": "user", "content": ctx_text + "\n\n=== PERGUNTA DO USUÁRIO ===\n" + req.question},
+        ]
+        if req.history:
+            tail = req.history[-MAX_HISTORY:]
+            messages = [messages[0]] + tail + [messages[-1]]
+
+        try:
+            provider = get_provider("azure")
+            resp = await provider.generate(messages, max_tokens=MAX_TOKENS)
+            answer = (resp.get("content") or "").strip()
+            if not answer:
+                answer = "(O modelo não retornou resposta. Tente reformular a pergunta.)"
+            span.set_attribute("response.length", len(answer))
+            return HelpAskResponse(
+                answer=answer,
+                model=resp.get("model", "azure"),
+                usage=resp.get("usage", {}) or {},
+            )
+        except Exception as e:
+            logger.warning(f"help.ask_context_v2 falhou: {type(e).__name__}: {e}")
             raise HTTPException(503, f"Assistente IA indisponível: {type(e).__name__}: {str(e)[:160]}")
