@@ -6,6 +6,9 @@
     <title>{{ title }} — {{ app_name }}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- Markdown rendering para mensagens do chat "IA, me ajude!" (sanitizado via DOMPurify) -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <script>
@@ -38,6 +41,36 @@
         /* Help button */
         .help-btn{opacity:0;transition:opacity .15s}
         *:hover>.help-btn{opacity:1}
+        /* "IA, me ajude!" — markdown renderizado nas respostas do assistant.
+           Tom: limpo, espacejado, hierárquico. Cores alinhadas ao brand. */
+        .prose-chat{font-size:12px;line-height:1.6;color:#003766}
+        .prose-chat>*+*{margin-top:.65rem}
+        .prose-chat p{margin:0}
+        .prose-chat strong{font-weight:700;color:#003766}
+        .prose-chat em{font-style:italic;color:#0062b8}
+        .prose-chat a{color:#0b7dda;text-decoration:underline;text-underline-offset:2px}
+        .prose-chat a:hover{color:#0062b8}
+        .prose-chat code{background:#f1f4f6;color:#003766;padding:1px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:500;border:1px solid #e4e9ed}
+        .prose-chat pre{background:#003766;color:#f0f7ff;padding:10px 12px;border-radius:8px;overflow-x:auto;font-size:11px;line-height:1.5;margin:.65rem 0}
+        .prose-chat pre code{background:transparent;color:inherit;padding:0;border:none;font-size:inherit}
+        .prose-chat hr{border:0;height:1px;background:linear-gradient(to right,transparent,#cdd5dc,transparent);margin:.85rem 0}
+        .prose-chat ul,.prose-chat ol{padding-left:1.25rem;margin:0}
+        .prose-chat ul{list-style:none}
+        .prose-chat ul>li{position:relative;margin:.3rem 0;padding-left:.15rem}
+        .prose-chat ul>li::before{content:"";position:absolute;left:-.85rem;top:.55rem;width:5px;height:5px;border-radius:50%;background:#3aa0ff}
+        .prose-chat ol{list-style:decimal;color:#6b7a8a}
+        .prose-chat ol>li{margin:.35rem 0;padding-left:.25rem}
+        .prose-chat ol>li::marker{font-weight:700;color:#0b7dda}
+        .prose-chat li>p{display:inline}
+        .prose-chat li>ul,.prose-chat li>ol{margin-top:.3rem}
+        .prose-chat h1,.prose-chat h2,.prose-chat h3{color:#003766;font-weight:700;margin:1rem 0 .35rem;line-height:1.3}
+        .prose-chat h1{font-size:14px}
+        .prose-chat h2{font-size:13px}
+        .prose-chat h3{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:#0062b8}
+        .prose-chat blockquote{border-left:3px solid #b8dcff;padding:.1rem 0 .1rem .7rem;color:#6b7a8a;font-style:italic;margin:.65rem 0}
+        .prose-chat table{border-collapse:collapse;width:100%;font-size:11px;margin:.65rem 0}
+        .prose-chat th,.prose-chat td{border:1px solid #e4e9ed;padding:5px 8px;text-align:left}
+        .prose-chat th{background:#f1f4f6;font-weight:600;color:#003766}
     </style>
     <!-- Conteúdo do Guia dos Módulos (window.MODULE_GUIDE) -->
     <script src="/static/js/module-guide.js"></script>
@@ -590,9 +623,16 @@
                     </template>
                     <template x-for="(msg, i) in helpMessages" :key="i">
                         <div :class="msg.role==='user' ? 'flex justify-end' : 'flex justify-start'">
-                            <div class="max-w-[85%] rounded-xl px-3 py-2 text-[12px] leading-relaxed whitespace-pre-wrap"
-                                :class="msg.role==='user' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-brand-900'"
-                                x-text="msg.content"></div>
+                            <!-- User: texto puro (x-text é seguro contra HTML injection) -->
+                            <template x-if="msg.role==='user'">
+                                <div class="max-w-[85%] rounded-xl px-3 py-2 text-[12px] leading-relaxed whitespace-pre-wrap bg-brand-500 text-white"
+                                    x-text="msg.content"></div>
+                            </template>
+                            <!-- Assistant: markdown renderizado e sanitizado -->
+                            <template x-if="msg.role!=='user'">
+                                <div class="max-w-[85%] rounded-xl px-3.5 py-2.5 bg-surface-50 border border-surface-200 prose-chat"
+                                    x-html="renderMarkdown(msg.content)"></div>
+                            </template>
                         </div>
                     </template>
                     <div x-show="helpLoading" class="flex justify-start">
@@ -969,6 +1009,33 @@
                 this.helpInput = '';
                 this.pageHelpOpen = false;
                 this.helpChatOpen = true;
+            },
+            renderMarkdown(text) {
+                // Renderiza markdown → HTML sanitizado. Usado só em msg.role==='assistant'.
+                // Se as libs não carregaram (offline/CDN down), fallback graceful para texto cru
+                // com quebras preservadas — pior caso é parecer o estado anterior.
+                if (!text) return '';
+                if (typeof window.marked === 'undefined' || typeof window.DOMPurify === 'undefined') {
+                    const esc = String(text).replace(/[&<>"']/g, ch => ({
+                        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+                    }[ch]));
+                    return esc.replace(/\n/g, '<br>');
+                }
+                try {
+                    const html = window.marked.parse(String(text), {
+                        breaks: true,      // single newline vira <br> (chat tem quebras informais)
+                        gfm: true,         // tabelas, strikethrough, listas tasks
+                    });
+                    return window.DOMPurify.sanitize(html, {
+                        ALLOWED_TAGS: ['p','br','hr','strong','em','code','pre','ul','ol','li',
+                                       'h1','h2','h3','h4','blockquote','a','table','thead',
+                                       'tbody','tr','th','td','del','ins'],
+                        ALLOWED_ATTR: ['href','title','target','rel'],
+                        ADD_ATTR: ['target'],
+                    });
+                } catch (e) {
+                    return String(text).replace(/\n/g, '<br>');
+                }
             },
             async sendHelpMessage() {
                 const q = (this.helpInput || '').trim();
