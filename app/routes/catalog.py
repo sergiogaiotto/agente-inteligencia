@@ -83,6 +83,18 @@ router = APIRouter(prefix="/api/v1/catalog", tags=["catalog"])
 # ─── Helpers ─────────────────────────────────────────────────────
 
 
+def _naive_utc_now() -> datetime:
+    """Retorna o UTC corrente como datetime tz-naive.
+
+    As colunas de timestamp do schema usam TIMESTAMP (não TIMESTAMP WITH TIME
+    ZONE), e asyncpg recusa datetime tz-aware nesses casos com
+    'can't subtract offset-naive and offset-aware datetimes'. Este helper
+    preserva o instante UTC mas remove o tzinfo, que é o que asyncpg espera.
+    Use em qualquer write de coluna TIMESTAMP do projeto.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 async def _audit(action: str, entry_id: str, actor_id: str, details: Optional[dict] = None):
     """Registra evento no audit_log. Best-effort — falha não bloqueia."""
     try:
@@ -236,11 +248,7 @@ async def update_entry(
         except ValueError as e:
             raise HTTPException(422, f"URN inválido: {e}")
 
-    changes["updated_at"] = "now()"  # Postgres function literal não funciona aqui — usar timezone-aware
-    # asyncpg vai tratar 'now()' como string. Removemos e deixamos o DEFAULT trigger
-    # do schema fazer; alternativa seria importar datetime.utcnow() — mais explícito.
-    from datetime import datetime, timezone
-    changes["updated_at"] = datetime.now(timezone.utc)
+    changes["updated_at"] = _naive_utc_now()
 
     try:
         updated = await catalog_entries_repo.update(entry_id, changes)
@@ -363,7 +371,7 @@ async def submit_entry(
         await catalog_submissions_repo.create(submission)
         await catalog_entries_repo.update(entry_id, {
             "status": "submitted",
-            "updated_at": datetime.now(timezone.utc),
+            "updated_at": _naive_utc_now(),
         })
         await _audit("submitted", entry_id, user["id"], {
             "submission_id": sub_id,
@@ -423,7 +431,7 @@ async def decide_submission(
             f"Entry em status '{entry.get('status')}' não pode transitar para '{new_entry_status}'",
         )
 
-    now = datetime.now(timezone.utc)
+    now = _naive_utc_now()
     await catalog_submissions_repo.update(sub_id, {
         "review_status": data.decision,
         "reviewed_by": user["id"],
@@ -455,7 +463,7 @@ async def publish_entry(entry_id: str, user: dict = Depends(require_user)):
         raise HTTPException(403, "Apenas owner ou root podem publicar")
     await _require_status_transition(entry, "published")
 
-    now = datetime.now(timezone.utc)
+    now = _naive_utc_now()
     updated = await catalog_entries_repo.update(entry_id, {
         "status": "published",
         "published_at": now,
@@ -476,7 +484,7 @@ async def deprecate_entry(entry_id: str, user: dict = Depends(require_user)):
         raise HTTPException(403, "Apenas owner ou root podem depreciar")
     await _require_status_transition(entry, "deprecated")
 
-    now = datetime.now(timezone.utc)
+    now = _naive_utc_now()
     updated = await catalog_entries_repo.update(entry_id, {
         "status": "deprecated",
         "deprecated_at": now,
@@ -956,7 +964,7 @@ async def reassign_entry(
             "to": data.new_steward_team or None,
         }
 
-    updates["updated_at"] = datetime.now(timezone.utc)
+    updates["updated_at"] = _naive_utc_now()
     updated = await catalog_entries_repo.update(entry_id, updates)
     await _audit("stewardship_reassigned", entry_id, user["id"], audit_details)
     return db_row_to_entry_dict(updated) if updated else {"message": "realocada"}
@@ -1260,7 +1268,7 @@ async def bulk_decide(
         raise HTTPException(403, "Apenas Root pode decidir submissões")
 
     new_entry_status = "approved" if data.decision == "approved" else "draft"
-    now = datetime.now(timezone.utc)
+    now = _naive_utc_now()
 
     succeeded: list[str] = []
     failed: list[dict] = []
