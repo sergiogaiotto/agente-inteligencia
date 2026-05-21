@@ -73,17 +73,18 @@ class Settings(BaseSettings):
 
     # ── Modelo Primário (fallback global) ──
     # Usado quando agent não tem task_type (Roteamento LLM da Onda 7) NEM
-    # snapshot próprio de llm_provider/model. Quando definido, substitui
-    # o hardcoded azure/gpt-4o do default histórico.
+    # snapshot próprio de llm_provider/model. Quando definido, substitui o
+    # default histórico — agents legacy sem primary caem em gpt-oss-120b.
     primary_provider: str = ""  # ex: "gpt-oss-120b" | "azure" | "maritaca" | "ollama"
     primary_model: str = ""     # ex: "openai/gpt-oss-120b" | "gpt-4o" | "sabia-4"
 
-    # ── Embedding provider (Azure | Qwen3) ──
-    # Qwen3 reusa URL/key do OSS source escolhido (oss20b ou oss120b), só
-    # muda o path (default 'qwen3/v1'). Veja docs/catalog/SMOKE_TEST.md.
-    embedding_provider: str = "azure"  # 'azure' | 'qwen3'
+    # ── Embedding provider (Qwen3 | Azure) ──
+    # Default: Qwen3 (open-weight via hub interno). Reusa URL/key do OSS source
+    # escolhido (oss20b ou oss120b), só muda o path. Endpoint efetivo:
+    # <scheme>://<host_do_OSS>/<qwen3_path>  →  ex: https://hub-gpus.claro.com.br/embed06b/v1
+    embedding_provider: str = "qwen3"  # 'qwen3' | 'azure'
     qwen3_source: str = "oss120b"      # 'oss120b' | 'oss20b'
-    qwen3_path: str = "qwen3/v1"
+    qwen3_path: str = "embed06b/v1"
     qwen3_model: str = "Qwen/Qwen3-Embedding-0.6B"
 
     # ── Observabilidade ──
