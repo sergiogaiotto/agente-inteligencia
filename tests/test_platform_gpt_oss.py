@@ -157,6 +157,32 @@ class TestQwen3BaseURL:
         # Sem scheme
         assert _qwen3_base_url("not-a-url", "qwen3/v1") == ""
 
+    def test_qwen3_path_absoluto_usa_direto(self):
+        """Se qwen3_path já é URL absoluta (operador colou a URL completa do
+        hub), usa direto e ignora oss_url. Cobre o caso real reportado em prod:
+        operador colava 'https://hub-gpus.claro.com.br/embed06b/v1' no campo
+        Path e o backend montava 'https://<oss_host>/https://hub.../...'."""
+        # Mesmo com oss_url presente, URL absoluta prevalece
+        url = _qwen3_base_url(
+            "https://hub-gpus.claro.com.br/gpt120/v1",
+            "https://hub-gpus.claro.com.br/embed06b/v1",
+        )
+        assert url == "https://hub-gpus.claro.com.br/embed06b/v1"
+
+    def test_qwen3_path_absoluto_funciona_sem_oss_url(self):
+        """Path absoluto não depende do oss_url estar configurado."""
+        url = _qwen3_base_url("", "https://hub-gpus.claro.com.br/embed06b/v1")
+        assert url == "https://hub-gpus.claro.com.br/embed06b/v1"
+
+    def test_qwen3_path_absoluto_normaliza_trailing_slash(self):
+        url = _qwen3_base_url("", "https://hub.com/embed06b/v1/")
+        assert url == "https://hub.com/embed06b/v1"
+
+    def test_qwen3_path_http_tambem_aceito(self):
+        """http:// também é aceito (não só https)."""
+        url = _qwen3_base_url("", "http://internal-hub/embed/v1")
+        assert url == "http://internal-hub/embed/v1"
+
 
 class TestBuildQwen3Embedder:
     def test_oss_source_vazio_retorna_none(self, fresh_settings, monkeypatch):
