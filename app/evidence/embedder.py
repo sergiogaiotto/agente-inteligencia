@@ -11,7 +11,7 @@ caller decide degradar (ingest aborta com 503; retriever cai em BM25-only).
 from __future__ import annotations
 
 import logging
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -74,13 +74,32 @@ class Qwen3Embedder:
 
     Mantém a interface esperada pelo restante do projeto: `aembed_documents`
     (batch) e `aembed_query` (single).
+
+    `dimensions` (opcional): trunca o vetor de saída no servidor — só funciona
+    em modelos Matryoshka como Qwen3-Embedding. Quando None ou 0, o parâmetro
+    não vai no payload e o modelo usa sua dim nativa (1024 para 0.6B).
     """
 
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: int = 60):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: int = 60,
+        dimensions: Optional[int] = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or "not-needed"
         self.model = model
         self.timeout = timeout
+        # Normaliza: 0 e valores inválidos viram None (não envia parâmetro)
+        self.dimensions = dimensions if (isinstance(dimensions, int) and dimensions > 0) else None
+
+    def _build_payload(self, input_: Any) -> dict:
+        payload: dict = {"model": self.model, "input": input_}
+        if self.dimensions:
+            payload["dimensions"] = self.dimensions
+        return payload
 
     async def _post(self, payload: dict) -> dict:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -99,14 +118,14 @@ class Qwen3Embedder:
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        data = await self._post({"model": self.model, "input": texts})
+        data = await self._post(self._build_payload(texts))
         items = data.get("data") or []
         # Ordena por index pra garantir alinhamento com `texts`
         items.sort(key=lambda x: x.get("index", 0))
         return [it["embedding"] for it in items]
 
     async def aembed_query(self, text: str) -> list[float]:
-        data = await self._post({"model": self.model, "input": text})
+        data = await self._post(self._build_payload(text))
         items = data.get("data") or []
         if not items:
             raise RuntimeError("qwen3: resposta sem 'data'")
@@ -155,6 +174,7 @@ def _build_qwen3_embedder():
         api_key=api_key or "not-needed",
         model=settings.qwen3_model,
         timeout=settings.llm_timeout_seconds,
+        dimensions=int(settings.qwen3_dimensions or 0) or None,
     )
 
 
