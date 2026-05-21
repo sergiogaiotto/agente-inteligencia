@@ -159,9 +159,23 @@ def fake_storage(monkeypatch):
                 "version": e.get("version"),
                 "urn": e.get("urn"),
                 "description": e.get("description"),
+                "domain": e.get("domain"),
+                "visibility": e.get("visibility"),
+                "visibility_scope": e.get("visibility_scope"),
+                "steward_team": e.get("steward_team"),
                 "owner_user_id": e.get("owner_user_id"),
                 "status": e.get("status"),
             }
+            # LEFT JOIN com disclosure — None se entry não tem disclosure
+            row["disclosure"] = dict(disclosures[eid]) if eid in disclosures else None
+            # LEFT JOIN com users — None se submitter foi deletado
+            sub_id = s.get("submitted_by")
+            u = users.get(sub_id) if sub_id else None
+            row["submitter"] = {
+                "id": sub_id,
+                "email": u.get("email") if u else None,
+                "role": u.get("role") if u else None,
+            } if u else None
             rows.append(row)
         rows.sort(
             key=lambda r: r.get("submitted_at") or "",
@@ -1963,6 +1977,58 @@ class TestSubmissionsQueue:
         assert sub["entry"]["kind"] == "agent"
         assert sub["entry"]["version"] == "1.0.0"
         assert sub["entry"]["status"] == "submitted"
+
+    def test_inclui_disclosure_e_submitter_para_contexto_root(self, fake_storage):
+        """Fila vem com disclosure (LEFT JOIN — None se ausente) e submitter
+        com email/role (não só UUID). Root decide com contexto rico."""
+        _seed_pending_submission(fake_storage, sub_id="s1", entry_id="e-real")
+        # Adiciona disclosure para a entry
+        fake_storage["disclosures"]["e-real"] = {
+            "entry_id": "e-real",
+            "processes_pii": True,
+            "calls_external_apis": False,
+            "data_residency": "BR",
+            "reads_user_kb": True,
+        }
+        # Submitter resolvido com nome real (não só UUID)
+        fake_storage["users"]["u1"] = {"id": "u1", "email": "alice@empresa.com", "role": "comum"}
+
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/submissions/queue")
+        assert r.status_code == 200
+        sub = r.json()["submissions"][0]
+        # Disclosure presente
+        assert sub["disclosure"] is not None
+        assert sub["disclosure"]["processes_pii"] is True
+        assert sub["disclosure"]["data_residency"] == "BR"
+        # Submitter resolvido
+        assert sub["submitter"]["email"] == "alice@empresa.com"
+        assert sub["submitter"]["role"] == "comum"
+
+    def test_disclosure_none_quando_entry_sem_disclosure(self, fake_storage):
+        """LEFT JOIN: entry sem disclosure declarada → sub.disclosure == None
+        (UI mostra estado 'sem flags ativas declaradas')."""
+        _seed_pending_submission(fake_storage, sub_id="s1", entry_id="e-bare")
+        c = make_client({"id": "root1", "role": "root"})
+        sub = c.get("/api/v1/catalog/submissions/queue").json()["submissions"][0]
+        assert sub["disclosure"] is None
+
+    def test_entry_meta_completa(self, fake_storage):
+        """Entry aninhada inclui domain/visibility/steward (não só id+name).
+        Root precisa pra decidir se a entry tá pronta operacionalmente."""
+        _seed_pending_submission(fake_storage, sub_id="s1", entry_id="e-meta")
+        fake_storage["entries"]["e-meta"].update({
+            "domain": "fiscal",
+            "visibility": "department",
+            "visibility_scope": "contabilidade",
+            "steward_team": "time-fiscal@empresa",
+        })
+        c = make_client({"id": "root1", "role": "root"})
+        sub = c.get("/api/v1/catalog/submissions/queue").json()["submissions"][0]
+        assert sub["entry"]["domain"] == "fiscal"
+        assert sub["entry"]["visibility"] == "department"
+        assert sub["entry"]["visibility_scope"] == "contabilidade"
+        assert sub["entry"]["steward_team"] == "time-fiscal@empresa"
 
 
 class TestCleanupOrphanSubmissions:

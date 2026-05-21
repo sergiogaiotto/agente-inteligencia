@@ -131,18 +131,52 @@
                                    @change="toggleSelect(item.id)"
                                    class="mt-1 rounded border-surface-300 shrink-0">
                             <div class="flex-1 min-w-0">
+                                <!-- Linha 1: nome + tipo + versão + status da entry -->
                                 <div class="flex items-center gap-2 mb-1 flex-wrap">
                                     <a :href="'/catalog/' + item.entry_id" class="text-[14px] font-semibold text-brand-900 hover:text-brand-600 truncate"
                                        x-text="item.entry?.name || '(entry deletada — ' + item.entry_id.substring(0,8) + ')'"></a>
                                     <span x-show="item.entry?.kind" class="rounded-full px-2 py-0.5 text-[9px] font-bold uppercase shrink-0"
                                           :class="kindBadgeClass(item.entry?.kind)" x-text="item.entry?.kind"></span>
                                     <span x-show="item.entry?.version" class="rounded-full bg-surface-100 px-2 py-0.5 text-[9px] font-mono text-surface-500 shrink-0" x-text="'v' + item.entry?.version"></span>
+                                    <span x-show="item.entry?.status && item.entry?.status !== 'submitted'"
+                                          class="rounded-full bg-surface-100 px-2 py-0.5 text-[9px] font-bold uppercase shrink-0 text-surface-500"
+                                          x-text="item.entry?.status"></span>
                                 </div>
-                                <p class="text-[11px] text-surface-500">
-                                    Submetida por <span class="font-mono text-brand-700" x-text="item.submitted_by"></span>
+
+                                <!-- Linha 2: descrição truncada (quando há) — ajuda Root a entender propósito sem clicar -->
+                                <p x-show="item.entry?.description" class="text-[11px] text-surface-700 mt-0.5 line-clamp-2"
+                                   x-text="item.entry?.description"></p>
+
+                                <!-- Linha 3: chips de meta (domain / visibility / steward) -->
+                                <div class="flex items-center gap-1.5 flex-wrap mt-1.5 text-[10px]">
+                                    <span x-show="item.entry?.domain"
+                                          class="rounded-full bg-surface-50 border border-surface-200 px-2 py-0.5 text-surface-600">
+                                        <span class="text-surface-400">domínio:</span> <span x-text="item.entry?.domain"></span>
+                                    </span>
+                                    <span x-show="item.entry?.visibility"
+                                          class="rounded-full bg-surface-50 border border-surface-200 px-2 py-0.5 text-surface-600">
+                                        <span class="text-surface-400">visibilidade:</span>
+                                        <span x-text="visibilityLabel(item.entry)"></span>
+                                    </span>
+                                    <span x-show="item.entry?.steward_team"
+                                          class="rounded-full bg-surface-50 border border-surface-200 px-2 py-0.5 text-surface-600">
+                                        <span class="text-surface-400">steward:</span> <span x-text="item.entry?.steward_team"></span>
+                                    </span>
+                                </div>
+
+                                <!-- Linha 4: submitter + tempo (relativo + absoluto) -->
+                                <p class="text-[11px] text-surface-500 mt-2">
+                                    Submetida por
+                                    <span x-show="item.submitter?.email" class="font-semibold text-brand-700" x-text="item.submitter?.email"></span>
+                                    <span x-show="item.submitter?.role" class="text-surface-400" x-text="'(' + item.submitter?.role + ')'"></span>
+                                    <span x-show="!item.submitter" class="font-mono text-surface-400" x-text="item.submitted_by"></span>
                                     <span class="text-surface-300 mx-1">•</span>
-                                    <span x-text="formatDate(item.submitted_at)"></span>
+                                    <span x-text="relativeTime(item.submitted_at)"
+                                          :class="urgencyClass(item.submitted_at, item.review_status)"
+                                          class="font-medium"></span>
+                                    <span class="text-surface-400 ml-1" x-text="'(' + formatDate(item.submitted_at) + ')'"></span>
                                 </p>
+
                                 <p x-show="item.review_notes" class="text-[11px] italic text-surface-600 mt-1" x-text="'« ' + item.review_notes + ' »'"></p>
                             </div>
 
@@ -533,6 +567,55 @@ function queuePage() {
             if (!ds) return '—';
             try { return new Date(ds).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}); }
             catch { return ds; }
+        },
+
+        // Visibilidade humanizada — quando 'department', concatena o scope
+        // (departamento específico). Quando outro valor, mapeia para label PT.
+        visibilityLabel(entry) {
+            if (!entry?.visibility) return '—';
+            const map = {
+                'private': 'Privada (só owner + Root)',
+                'company': 'Empresa toda',
+                'department': 'Departamento',
+            };
+            const base = map[entry.visibility] || entry.visibility;
+            if (entry.visibility === 'department' && entry.visibility_scope) {
+                return `${base}: ${entry.visibility_scope}`;
+            }
+            return base;
+        },
+
+        // Tempo relativo em PT-BR ("há 3 horas", "há 2 dias"). Usado em
+        // conjunto com formatDate (que mostra timestamp absoluto entre parênteses).
+        // Esconde data > 60d como "há mais de 60 dias" — usuário olha o absoluto.
+        relativeTime(ds) {
+            if (!ds) return '';
+            const t = new Date(ds).getTime();
+            if (!t || isNaN(t)) return '';
+            const diffMs = Date.now() - t;
+            const sec = Math.floor(diffMs / 1000);
+            if (sec < 60) return 'agora';
+            const min = Math.floor(sec / 60);
+            if (min < 60) return `há ${min} min`;
+            const hr = Math.floor(min / 60);
+            if (hr < 24) return `há ${hr} hora${hr === 1 ? '' : 's'}`;
+            const day = Math.floor(hr / 24);
+            if (day < 60) return `há ${day} dia${day === 1 ? '' : 's'}`;
+            return 'há mais de 60 dias';
+        },
+
+        // Cor da label de tempo escala com urgência — só para submissions pending.
+        // Decididas (approved/rejected/changes_requested) ficam neutras.
+        // Verde até 1d, âmbar até 3d, vermelho depois — alinhado com SLA típico
+        // de revisão Root (decisão idealmente até 1 dia útil).
+        urgencyClass(submitted_at, review_status) {
+            if (review_status !== 'pending') return 'text-surface-500';
+            const t = new Date(submitted_at).getTime();
+            if (!t || isNaN(t)) return 'text-surface-500';
+            const hr = (Date.now() - t) / 3_600_000;
+            if (hr < 24) return 'text-emerald-700';
+            if (hr < 72) return 'text-amber-700';
+            return 'text-rose-700';
         },
     }
 }
