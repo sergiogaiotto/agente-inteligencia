@@ -34,17 +34,39 @@ class _EmbedderProtocol(Protocol):
 
 
 def _qwen3_base_url(oss_url: str, qwen3_path: str) -> str:
-    """Reusa scheme://host do OSS_URL e concatena com qwen3_path.
+    """Constrói o base_url do Qwen3 a partir do path (ou URL absoluta) configurado.
 
-    Ex: oss_url='https://hub-gpus.claro.com.br/gpt120/v1', qwen3_path='qwen3/v1'
-        → 'https://hub-gpus.claro.com.br/qwen3/v1'
+    Dois modos:
+    1. **Path relativo** (padrão histórico): reusa scheme://host do OSS_URL e
+       concatena com qwen3_path. Útil quando o hub serve Qwen3 no mesmo host
+       do OSS.
+       Ex: oss_url='https://hub-gpus.claro.com.br/gpt120/v1',
+           qwen3_path='embed06b/v1'
+         → 'https://hub-gpus.claro.com.br/embed06b/v1'
+
+    2. **URL absoluta**: se qwen3_path já é uma URL completa (começa com http://
+       ou https://), usa direto ignorando o oss_url. Cobre o caso em que o
+       operador cola a URL do hub inteira no campo (intuitivo, vinha gerando
+       URL malformada do tipo https://host/https://...).
+       Ex: qwen3_path='https://hub-gpus.claro.com.br/embed06b/v1'
+         → 'https://hub-gpus.claro.com.br/embed06b/v1'
+
+    Retorna "" se a entrada é incompleta (sem oss_url e sem URL absoluta).
     """
+    qpath = (qwen3_path or "").strip()
+
+    # Modo 2: qwen3_path já é absoluto — usa direto, ignora oss_url.
+    parsed_q = urlparse(qpath)
+    if parsed_q.scheme in ("http", "https") and parsed_q.netloc:
+        return qpath.rstrip("/")
+
+    # Modo 1: precisa do OSS source para reusar scheme://host
     if not oss_url:
         return ""
     parsed = urlparse(oss_url)
     if not parsed.scheme or not parsed.netloc:
         return ""
-    return f"{parsed.scheme}://{parsed.netloc}/{qwen3_path.strip('/')}"
+    return f"{parsed.scheme}://{parsed.netloc}/{qpath.strip('/')}"
 
 
 class Qwen3Embedder:
