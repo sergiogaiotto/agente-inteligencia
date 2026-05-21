@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     qwen3_source: str = "oss120b"      # 'oss120b' | 'oss20b'
     qwen3_path: str = "embed06b/v1"
     qwen3_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    # Densidade do vetor (Matryoshka): truncamento server-side da dim do output.
+    # 0 = não envia o parâmetro (usa default do modelo: 1024 para Qwen3-Embedding-0.6B).
+    # Mudar exige re-embedar a collection do Qdrant — a dim precisa bater entre
+    # write e read. Trocar em produção sem plano quebra a busca.
+    qwen3_dimensions: int = 0
 
     # ── Observabilidade ──
     langfuse_public_key: str = ""
@@ -277,6 +282,7 @@ _UI_TO_ENV_MAP = {
     "qwen3_source":       "QWEN3_SOURCE",
     "qwen3_path":         "QWEN3_PATH",
     "qwen3_model":        "QWEN3_MODEL",
+    "qwen3_dimensions":   "QWEN3_DIMENSIONS",
     # LangFuse (observabilidade SaaS opcional)
     "langfuse_public":"LANGFUSE_PUBLIC_KEY",
     "langfuse_secret":"LANGFUSE_SECRET_KEY",

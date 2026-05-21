@@ -220,6 +220,30 @@ class TestBuildQwen3Embedder:
         assert emb.base_url == "https://hub.com/qwen3/v1"
         assert emb.api_key == "key-20"
 
+    def test_dimensions_propaga_do_settings(self, fresh_settings, monkeypatch):
+        """qwen3_dimensions do settings chega como dimensions no Qwen3Embedder."""
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "qwen3")
+        monkeypatch.setenv("QWEN3_SOURCE", "oss120b")
+        monkeypatch.setenv("OSS120B_URL", "https://hub.com/gpt120/v1")
+        monkeypatch.setenv("QWEN3_PATH", "qwen3/v1")
+        monkeypatch.setenv("QWEN3_DIMENSIONS", "768")
+        from app.evidence.embedder import _build_qwen3_embedder
+        emb = _build_qwen3_embedder()
+        assert emb is not None
+        assert emb.dimensions == 768
+
+    def test_dimensions_zero_vira_none(self, fresh_settings, monkeypatch):
+        """qwen3_dimensions=0 (default) é normalizado para None — não envia parâmetro."""
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "qwen3")
+        monkeypatch.setenv("QWEN3_SOURCE", "oss120b")
+        monkeypatch.setenv("OSS120B_URL", "https://hub.com/gpt120/v1")
+        monkeypatch.setenv("QWEN3_PATH", "qwen3/v1")
+        # Sem QWEN3_DIMENSIONS no env → usa default 0
+        from app.evidence.embedder import _build_qwen3_embedder
+        emb = _build_qwen3_embedder()
+        assert emb is not None
+        assert emb.dimensions is None
+
 
 class TestSelectEmbedder:
     def test_default_seleciona_azure(self, fresh_settings, monkeypatch):
@@ -279,7 +303,71 @@ class TestQwen3EmbedderHTTP:
         assert captured["json"]["model"] == "Qwen/Qwen3-Embedding-0.6B"
         assert captured["json"]["input"] == ["foo", "bar"]
         assert captured["headers"]["Authorization"] == "Bearer not-needed"
+        # Sem dimensions explícito → parâmetro NÃO vai no payload (usa default do modelo)
+        assert "dimensions" not in captured["json"]
         assert out == [[0.1, 0.2], [0.3, 0.4]]
+
+    @pytest.mark.asyncio
+    async def test_dimensions_setado_vai_no_payload(self, monkeypatch):
+        """Quando o operador escolhe densidade no UI (config.qwen3_dimensions > 0),
+        o Qwen3Embedder inclui 'dimensions' no payload do POST /embeddings, ativando
+        o truncamento server-side (Matryoshka)."""
+        captured = {}
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {"data": [{"embedding": [0.1] * 768, "index": 0}]}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def post(self, url, **kw):
+                captured["json"] = kw.get("json")
+                return FakeResp()
+
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+        emb = Qwen3Embedder(
+            base_url="https://hub.com/qwen3/v1",
+            api_key="not-needed",
+            model="Qwen/Qwen3-Embedding-0.6B",
+            dimensions=768,
+        )
+        await emb.aembed_query("ping")
+        assert captured["json"]["dimensions"] == 768
+
+    @pytest.mark.asyncio
+    async def test_dimensions_zero_nao_vai_no_payload(self, monkeypatch):
+        """dimensions=0 (sentinel 'usa default do modelo') NUNCA aparece no payload.
+        Defesa: hub pode rejeitar dimensions=0 com 400."""
+        captured = {}
+
+        class FakeResp:
+            status_code = 200
+            def json(self): return {"data": [{"embedding": [0.1], "index": 0}]}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def post(self, url, **kw):
+                captured["json"] = kw.get("json")
+                return FakeResp()
+
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+        emb = Qwen3Embedder(
+            base_url="https://hub.com/qwen3/v1",
+            api_key="not-needed",
+            model="Qwen/Qwen3-Embedding-0.6B",
+            dimensions=0,
+        )
+        await emb.aembed_query("ping")
+        assert "dimensions" not in captured["json"]
 
     @pytest.mark.asyncio
     async def test_aembed_query_single(self, monkeypatch):

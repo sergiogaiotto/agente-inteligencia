@@ -395,6 +395,31 @@
                             <code class="font-mono bg-surface-100 px-1 rounded">https://hub-gpus.claro.com.br/embed06b/v1</code> (URL absoluta).
                             Não inclua <code class="font-mono bg-surface-100 px-1 rounded">/embeddings</code> — esse sufixo é adicionado pelo client.
                         </p>
+
+                        <!-- Densidade do vetor (Matryoshka — Qwen3 suporta truncamento server-side) -->
+                        <div class="pt-2 border-t border-surface-100">
+                            <label class="block text-[10px] font-semibold text-surface-500 mb-1">Densidade do vetor</label>
+                            <div class="grid grid-cols-2 gap-2">
+                                <select x-model="qwen3DimensionsPreset" @change="onDimensionsPresetChange()"
+                                        class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-1.5 text-[12px] outline-none">
+                                    <option value="0">Padrão do modelo (1024)</option>
+                                    <option value="1536">1536 — maior fidelidade semântica</option>
+                                    <option value="1024">1024 — máxima fidelidade do 0.6B</option>
+                                    <option value="768">768 — -25% memória, mínima perda</option>
+                                    <option value="512">512 — -50% memória, perda perceptível</option>
+                                    <option value="256">256 — footprint mínimo (dev/poc)</option>
+                                    <option value="128">128 — footprint mínimo (dev/poc)</option>
+                                    <option value="custom">Customizada (campo livre)</option>
+                                </select>
+                                <input x-show="qwen3DimensionsPreset === 'custom'" type="number"
+                                       x-model.number="config.qwen3_dimensions" min="1" max="4096" placeholder="ex: 1024"
+                                       class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-1.5 text-[12px] font-mono outline-none">
+                            </div>
+                            <p class="text-[10px] text-amber-700 mt-1">
+                                ⚠ Mudar a densidade requer <strong>re-embedar a collection do Qdrant</strong> (agente_evidence).
+                                Se trocar com dados em produção, a busca semântica para de funcionar até o reindex completar.
+                            </p>
+                        </div>
                         <template x-if="testResults.qwen3">
                             <div class="rounded-lg px-2 py-1.5 text-[11px]" :class="testResults.qwen3.ok ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'">
                                 <span x-text="testResults.qwen3.ok ? '✓' : '✗'" class="font-bold mr-1"></span>
@@ -872,6 +897,9 @@ function settingsPage() {
         testing: {azure:false, openai:false, maritaca:false, ollama:false, 'gpt-oss-20b':false, 'gpt-oss-120b':false, qwen3:false},
         testResults: {azure:null, openai:null, maritaca:null, ollama:null, 'gpt-oss-20b':null, 'gpt-oss-120b':null, qwen3:null},
         saving: false, lastSaved: '', dirty: false, _snapshot: '',
+        // Select de presets do dropdown de densidade Matryoshka (string p/ value do <select>).
+        // Espelha config.qwen3_dimensions; sincronizado no load() e via onDimensionsPresetChange().
+        qwen3DimensionsPreset: '0',
         config: {
             azure_key:'',azure_endpoint:'',azure_api_version:'2024-02-15-preview',
             azure_chat_deployment:'gpt-4o',azure_embeddings_deployment:'text-embedding-3-small',
@@ -888,6 +916,8 @@ function settingsPage() {
             llm_timeout_seconds:300,
             // Embedding — default Qwen3 (open-weight via hub interno) com path embed06b/v1
             embedding_provider:'qwen3', qwen3_source:'oss120b', qwen3_path:'embed06b/v1', qwen3_model:'Qwen/Qwen3-Embedding-0.6B',
+            // Densidade Matryoshka — 0 = padrão do modelo (não envia parâmetro)
+            qwen3_dimensions:0,
         },
         /* ── Prompts ── */
         prompts: [],
@@ -993,13 +1023,29 @@ function settingsPage() {
             const urlTab = new URLSearchParams(window.location.search).get('tab');
             if (urlTab && ['platform','prompts','users','routing','apikeys'].includes(urlTab)) this.tab = urlTab;
             try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship',multimodal:true}],maritaca:[{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship',multimodal:false}],ollama:[{id:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4Bi',context:'128K',tier:'efficient',multimodal:false}]};}
-            try{const d=await api.get('/api/v1/settings');const s=d.settings||{};for(const[k,v]of Object.entries(s)){if(k in this.config)this.config[k]=(k==='max_iterations'||k==='timeout')?parseInt(v)||this.config[k]:v;}}catch{}
+            try{const d=await api.get('/api/v1/settings');const s=d.settings||{};for(const[k,v]of Object.entries(s)){if(k in this.config)this.config[k]=(k==='max_iterations'||k==='timeout'||k==='qwen3_dimensions')?parseInt(v)||this.config[k]:v;}}catch{}
+            // Sincroniza o dropdown de densidade com o valor persistido: se bate
+            // num preset conhecido, seleciona; senão cai em "Customizada".
+            const _dimPresets = ['0','1536','1024','768','512','256','128'];
+            const _curDim = String(this.config.qwen3_dimensions || 0);
+            this.qwen3DimensionsPreset = _dimPresets.includes(_curDim) ? _curDim : 'custom';
             this._snapshot=JSON.stringify(this.config);
             this.$watch('config',()=>{this.dirty=JSON.stringify(this.config)!==this._snapshot},{deep:true});
             if (this.tab === 'users') await this.loadUsers();
             if (this.tab === 'prompts') await this.loadPrompts();
             if (this.tab === 'routing') await this.loadRouting();
             if (this.tab === 'apikeys') await this.loadAPIKeys();
+        },
+
+        // Aplicado pelo @change do dropdown de densidade. Quando preset numérico,
+        // atualiza config.qwen3_dimensions direto; quando "custom", sugere 1024
+        // se ainda não houver valor (operador pode editar o input numérico que aparece).
+        onDimensionsPresetChange() {
+            if (this.qwen3DimensionsPreset === 'custom') {
+                if (!this.config.qwen3_dimensions) this.config.qwen3_dimensions = 1024;
+            } else {
+                this.config.qwen3_dimensions = parseInt(this.qwen3DimensionsPreset, 10) || 0;
+            }
         },
 
         // ─── Roteamento LLM (Onda 7) ─────────────────────────────
@@ -1109,7 +1155,7 @@ function settingsPage() {
                 ollama:          {model: this.config.ollama_model,   api_key: '',                       base_url: this.config.ollama_url},
                 'gpt-oss-120b':  {model: this.config.oss120b_model,  api_key: this.config.oss120b_api_key || 'not-needed', base_url: this.config.oss120b_url},
                 'gpt-oss-20b':   {model: this.config.oss20b_model,   api_key: this.config.oss20b_api_key  || 'not-needed', base_url: this.config.oss20b_url},
-                qwen3:           {model: this.config.qwen3_model,    api_key: name === 'qwen3' ? qwen3Key : 'not-needed', base_url: qwen3Base},
+                qwen3:           {model: this.config.qwen3_model,    api_key: name === 'qwen3' ? qwen3Key : 'not-needed', base_url: qwen3Base, dimensions: parseInt(this.config.qwen3_dimensions || 0, 10) || 0},
             };
             const cfg = map[name]; if(!cfg){return}
             if(!cfg.model){showToast(name==='azure' ? 'Preencha o Chat Deployment' : 'Selecione um modelo','error');return}

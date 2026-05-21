@@ -1594,10 +1594,13 @@ class SettingsSave(BaseModel):
     oss20b_api_key: Optional[str] = "not-needed"
     llm_timeout_seconds: Optional[int] = 300
     # Embedding (Azure | Qwen3) — Qwen3 reusa URL/key do OSS source
-    embedding_provider: Optional[str] = "azure"
+    embedding_provider: Optional[str] = "qwen3"
     qwen3_source: Optional[str] = "oss120b"
-    qwen3_path: Optional[str] = "qwen3/v1"
+    qwen3_path: Optional[str] = "embed06b/v1"
     qwen3_model: Optional[str] = "Qwen/Qwen3-Embedding-0.6B"
+    # Densidade do vetor (Matryoshka). 0 = padrão do modelo. Mudar exige
+    # re-embedar a collection do Qdrant.
+    qwen3_dimensions: Optional[int] = 0
 
 @router.get("/settings")
 async def get_settings():
@@ -1631,11 +1634,13 @@ async def save_settings(data: SettingsSave):
 
 
 class ProviderTestRequest(BaseModel):
-    provider: str  # azure | openai | maritaca | ollama
+    provider: str  # azure | openai | maritaca | ollama | qwen3 | gpt-oss-*
     model: str
     api_key: Optional[str] = ""
     base_url: Optional[str] = ""
     api_version: Optional[str] = ""  # Azure-only — ex: "2024-02-15-preview"
+    # Densidade do vetor (qwen3 Matryoshka). 0/None = usa default do modelo.
+    dimensions: Optional[int] = 0
 
 
 @router.post("/settings/test-provider")
@@ -1705,6 +1710,10 @@ async def test_provider(data: ProviderTestRequest):
     # Qwen3 testa /embeddings — payload diferente
     if provider == "qwen3":
         payload = {"model": data.model, "input": "ping"}
+        # Se operador escolheu densidade no UI, propaga p/ que o teste reflita
+        # a configuração real. Sem isso, o sample 'dim=' sempre mostra o default.
+        if data.dimensions and int(data.dimensions) > 0:
+            payload["dimensions"] = int(data.dimensions)
     else:
         payload = {
             "messages": [
