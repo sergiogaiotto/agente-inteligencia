@@ -1046,9 +1046,17 @@ async def list_submissions_for_review(
 
     Submissions cuja entry foi deletada são excluídas — Root não pode
     decidir sobre algo que não existe. Cada submission retornada inclui
-    objeto `entry` aninhado com identidade básica (id, name, kind,
-    version, urn, description, owner_user_id) para a UI mostrar o nome
-    e tipo do artefato sem precisar de N+1 lookups.
+    três blocos aninhados para a UI Root decidir com contexto rico sem
+    fazer N+1 lookups:
+
+    - `entry`     — identidade + metadata da entry (name, kind, version,
+                    urn, description, domain, visibility, scope, steward,
+                    owner, status)
+    - `disclosure`— capability disclosure (LEFT JOIN — pode ser None se
+                    a entry submeteu sem declarar). Inclui flags + residency
+                    + retention para a UI mostrar chips de risco
+    - `submitter` — {id, email, role} do usuário que submeteu, ou None
+                    se o user foi deletado depois
 
     Retorna (rows, total) onde total também respeita o filtro de existência.
     """
@@ -1068,20 +1076,42 @@ async def list_submissions_for_review(
     params_with_pag = params + [limit, offset]
     limit_ph = f"${len(params_with_pag)-1}"
     offset_ph = f"${len(params_with_pag)}"
-    # Prefixamos as colunas da entry com _entry_ para não conflitar com s.* e
-    # depois reagrupamos em dict aninhado no Python — assim a API entrega o
-    # shape {submission..., entry: {...}} que o template já consome.
+    # Prefixos _entry_/_disc_/_user_ evitam colisão e permitem reagrupar
+    # em dicts aninhados no Python. LEFT JOIN porque nem toda submission
+    # tem disclosure (rejeições antigas) ou submitter ainda existente.
     list_sql = (
         f"SELECT s.*, "
-        f"  e.name AS _entry_name, "
-        f"  e.kind AS _entry_kind, "
-        f"  e.version AS _entry_version, "
-        f"  e.urn AS _entry_urn, "
-        f"  e.description AS _entry_description, "
-        f"  e.owner_user_id AS _entry_owner_user_id, "
-        f"  e.status AS _entry_status "
+        f"  e.name              AS _entry_name, "
+        f"  e.kind              AS _entry_kind, "
+        f"  e.version           AS _entry_version, "
+        f"  e.urn               AS _entry_urn, "
+        f"  e.description       AS _entry_description, "
+        f"  e.domain            AS _entry_domain, "
+        f"  e.visibility        AS _entry_visibility, "
+        f"  e.visibility_scope  AS _entry_visibility_scope, "
+        f"  e.steward_team      AS _entry_steward_team, "
+        f"  e.owner_user_id     AS _entry_owner_user_id, "
+        f"  e.status            AS _entry_status, "
+        f"  d.reads_user_kb     AS _disc_reads_user_kb, "
+        f"  d.writes_user_kb    AS _disc_writes_user_kb, "
+        f"  d.calls_external_apis AS _disc_calls_external_apis, "
+        f"  d.accesses_internet AS _disc_accesses_internet, "
+        f"  d.stores_input      AS _disc_stores_input, "
+        f"  d.storage_retention_days AS _disc_storage_retention_days, "
+        f"  d.processes_pii     AS _disc_processes_pii, "
+        f"  d.processes_financial AS _disc_processes_financial, "
+        f"  d.processes_health  AS _disc_processes_health, "
+        f"  d.trains_on_input   AS _disc_trains_on_input, "
+        f"  d.output_is_deterministic AS _disc_output_is_deterministic, "
+        f"  d.data_residency    AS _disc_data_residency, "
+        f"  d.additional_notes  AS _disc_additional_notes, "
+        f"  u.email             AS _user_email, "
+        f"  u.role              AS _user_role "
         f"FROM catalog_submissions s "
-        f"INNER JOIN catalog_entries e ON e.id = s.entry_id {where_sql} "
+        f"INNER JOIN catalog_entries e ON e.id = s.entry_id "
+        f"LEFT JOIN catalog_capability_disclosure d ON d.entry_id = s.entry_id "
+        f"LEFT JOIN users u ON u.id = s.submitted_by "
+        f"{where_sql} "
         f"ORDER BY s.submitted_at DESC "
         f"LIMIT {limit_ph} OFFSET {offset_ph}"
     )
@@ -1100,10 +1130,35 @@ async def list_submissions_for_review(
             "version": d.pop("_entry_version", None),
             "urn": d.pop("_entry_urn", None),
             "description": d.pop("_entry_description", None),
+            "domain": d.pop("_entry_domain", None),
+            "visibility": d.pop("_entry_visibility", None),
+            "visibility_scope": d.pop("_entry_visibility_scope", None),
+            "steward_team": d.pop("_entry_steward_team", None),
             "owner_user_id": d.pop("_entry_owner_user_id", None),
             "status": d.pop("_entry_status", None),
         }
+        # Disclosure: se TODOS os campos vieram None (sem row no JOIN), retorna None.
+        # Senão monta o dict — UI usa isto para os chips de capability.
+        disc_keys = [
+            "reads_user_kb", "writes_user_kb", "calls_external_apis", "accesses_internet",
+            "stores_input", "storage_retention_days", "processes_pii", "processes_financial",
+            "processes_health", "trains_on_input", "output_is_deterministic",
+            "data_residency", "additional_notes",
+        ]
+        disc_values = {k: d.pop(f"_disc_{k}", None) for k in disc_keys}
+        disclosure = disc_values if any(v is not None for v in disc_values.values()) else None
+
+        submitter_email = d.pop("_user_email", None)
+        submitter_role = d.pop("_user_role", None)
+        submitter = {
+            "id": d.get("submitted_by"),
+            "email": submitter_email,
+            "role": submitter_role,
+        } if submitter_email is not None else None
+
         d["entry"] = entry
+        d["disclosure"] = disclosure
+        d["submitter"] = submitter
         out.append(d)
     return out, int(total)
 
