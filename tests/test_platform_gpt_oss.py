@@ -185,6 +185,9 @@ class TestBuildQwen3Embedder:
         monkeypatch.setenv("QWEN3_SOURCE", "oss20b")
         monkeypatch.setenv("OSS20B_URL", "https://hub.com/gpt20/v1")
         monkeypatch.setenv("OSS20B_API_KEY", "key-20")
+        # Path explícito — não depender do default global (que mudou para
+        # 'embed06b/v1'). Mantém o teste estável a futuras mudanças de default.
+        monkeypatch.setenv("QWEN3_PATH", "qwen3/v1")
         from app.evidence.embedder import _build_qwen3_embedder
         emb = _build_qwen3_embedder()
         assert emb is not None
