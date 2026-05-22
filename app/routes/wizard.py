@@ -185,10 +185,20 @@ async def list_available_models():
             {"id": "sabia-2-small", "name": "Sabiá-2 Small", "context": "8K", "tier": "small", "multimodal": False},
         ],
         "ollama": [
-            {"id": "hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest", "name": "Gaia 4b", "context": "128K", "tier": "flagship"},
-            {"id": "gemma4:e4b", "name": "Gemma 4 4B", "context": "128K", "tier": "flagship"},
-            {"id": "gemma3:4b", "name": "Gemma 3 4B", "context": "128K", "tier": "efficient"},
-            {"id": "gemma3:1b", "name": "Gemma 3 1B", "context": "32K", "tier": "small"},
-            {"id": "gemma3:12b", "name": "Gemma 3 12B", "context": "128K", "tier": "flagship"},
+            {"id": "hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest", "name": "Gaia 4b", "context": "128K", "tier": "flagship", "multimodal": False},
+            {"id": "gemma4:e4b", "name": "Gemma 4 4B", "context": "128K", "tier": "flagship", "multimodal": False},
+            {"id": "gemma3:4b", "name": "Gemma 3 4B", "context": "128K", "tier": "efficient", "multimodal": False},
+            {"id": "gemma3:1b", "name": "Gemma 3 1B", "context": "32K", "tier": "small", "multimodal": False},
+            {"id": "gemma3:12b", "name": "Gemma 3 12B", "context": "128K", "tier": "flagship", "multimodal": False},
+        ],
+        # GPT-OSS — open-weight via hub interno. IDs alinhados ao formato aceito
+        # pelo hub (OpenAI-compatible /v1/chat/completions). Multimodal=False
+        # (open-weight atual não tem suporte oficial a image input). Reasoning=False
+        # — usar reasoning específico cai nos modelos azure/o*.
+        "gpt-oss-120b": [
+            {"id": "openai/gpt-oss-120b", "name": "GPT-OSS-120B (open-weight)", "context": "128K", "tier": "open-weight", "multimodal": False},
+        ],
+        "gpt-oss-20b": [
+            {"id": "openai/gpt-oss-20b", "name": "GPT-OSS-20B (open-weight)", "context": "128K", "tier": "open-weight", "multimodal": False},
         ],
     }

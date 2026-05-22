@@ -1022,7 +1022,7 @@ function settingsPage() {
         async load() {
             const urlTab = new URLSearchParams(window.location.search).get('tab');
             if (urlTab && ['platform','prompts','users','routing','apikeys'].includes(urlTab)) this.tab = urlTab;
-            try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship',multimodal:true}],maritaca:[{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship',multimodal:false}],ollama:[{id:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4Bi',context:'128K',tier:'efficient',multimodal:false}]};}
+            try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship',multimodal:true}],maritaca:[{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship',multimodal:false}],ollama:[{id:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4Bi',context:'128K',tier:'efficient',multimodal:false}],'gpt-oss-120b':[{id:'openai/gpt-oss-120b',name:'GPT-OSS-120B (open-weight)',context:'128K',tier:'open-weight',multimodal:false}],'gpt-oss-20b':[{id:'openai/gpt-oss-20b',name:'GPT-OSS-20B (open-weight)',context:'128K',tier:'open-weight',multimodal:false}]};}
             try{const d=await api.get('/api/v1/settings');const s=d.settings||{};for(const[k,v]of Object.entries(s)){if(k in this.config)this.config[k]=(k==='max_iterations'||k==='timeout'||k==='qwen3_dimensions')?parseInt(v)||this.config[k]:v;}}catch{}
             // Sincroniza o dropdown de densidade com o valor persistido: se bate
             // num preset conhecido, seleciona; senão cai em "Customizada".
@@ -1051,9 +1051,17 @@ function settingsPage() {
         // ─── Roteamento LLM (Onda 7) ─────────────────────────────
         get routingOptions() {
             // Achata o catálogo (this.models) em [{value:"provider/id", label, multimodal}]
+            // Ordem dos providers reflete prioridade de descoberta na UI: hospedados
+            // primeiro (Azure/Maritaca), depois open-weight (Ollama, GPT-OSS).
             const out = [];
-            const providers = ['openai', 'maritaca', 'ollama'];
-            const providerLabel = {openai:'OpenAI/Azure', maritaca:'Maritaca', ollama:'Ollama'};
+            const providers = ['openai', 'maritaca', 'ollama', 'gpt-oss-120b', 'gpt-oss-20b'];
+            const providerLabel = {
+                openai: 'OpenAI/Azure',
+                maritaca: 'Maritaca',
+                ollama: 'Ollama',
+                'gpt-oss-120b': 'GPT-OSS-120B',
+                'gpt-oss-20b': 'GPT-OSS-20B',
+            };
             for (const prov of providers) {
                 for (const m of (this.models?.[prov] || [])) {
                     // No paradigma novo, "openai" semantic = Azure OpenAI no engine.
