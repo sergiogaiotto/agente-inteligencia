@@ -885,6 +885,116 @@ async def export_inventory_csv(
     )
 
 
+@router.get("/inventory/{entry_id}/details")
+async def get_inventory_entry_details(
+    entry_id: str,
+    user: dict = Depends(require_user),
+):
+    """Dossiê regulatório completo de UMA entry — payload do drawer lateral.
+
+    Agrega em 1 chamada (sem N+1 no client): entry + disclosure + external +
+    recipe + 5 últimas submissions + risk score + compliance matchers (LGPD,
+    GDPR, HIPAA, Marco Civil) + alertas automáticos + nomes resolvidos de owner
+    e dos reviewers. Root only.
+
+    Retorna 404 se entry não existe — sem distinção entre "não existe" e "sem
+    permissão" porque a tela inteira já é restrita a Root.
+    """
+    if not is_root(user):
+        raise HTTPException(403, "Inventário regulatório é acessível apenas para Root")
+
+    from app.catalog.risk_score import (
+        compute_alerts,
+        compute_compliance,
+        compute_risk_score,
+    )
+
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+
+    disclosure = await get_disclosure(entry_id)
+    external_meta = None
+    recipe_data = None
+    if entry.get("kind") == "external_platform":
+        external_meta = await get_external_metadata(entry_id)
+    elif entry.get("kind") == "recipe":
+        recipe_data = await get_recipe(entry_id)
+
+    # Trilha de aprovação: 5 últimas submissões (mais recentes primeiro).
+    # Find_all retorna por created_at DESC; o subset cobre histórico recente
+    # de changes_requested → re-submitted → approved sem pesar o payload.
+    submissions = await catalog_submissions_repo.find_all(entry_id=entry_id, limit=5)
+
+    # Resolve nomes de users: owner + submitters + reviewers (deduplicado).
+    user_ids = {entry.get("owner_user_id")}
+    for s in submissions:
+        if s.get("submitted_by"):
+            user_ids.add(s["submitted_by"])
+        if s.get("reviewed_by"):
+            user_ids.add(s["reviewed_by"])
+    user_ids.discard(None)
+    users_map: dict[str, dict] = {}
+    for uid in user_ids:
+        try:
+            u = await users_repo.find_by_id(uid)
+            if u:
+                users_map[uid] = {"id": uid, "email": u.get("email"), "role": u.get("role")}
+        except Exception:
+            pass  # users_repo.find_by_id pode falhar pra IDs órfãos; segue
+
+    def _user_or_id(uid):
+        if not uid:
+            return None
+        return users_map.get(uid) or {"id": uid, "email": None, "role": None}
+
+    # Enriquece submissões com nomes resolvidos
+    submissions_view = []
+    for s in submissions:
+        s_view = dict(s)
+        s_view["submitter"] = _user_or_id(s.get("submitted_by"))
+        s_view["reviewer"] = _user_or_id(s.get("reviewed_by")) if s.get("reviewed_by") else None
+        # precheck_report vem como TEXT JSON — parse pra dict (caller pode renderizar)
+        if isinstance(s_view.get("precheck_report"), str):
+            try:
+                s_view["precheck_report"] = json.loads(s_view["precheck_report"])
+            except Exception:
+                pass
+        submissions_view.append(s_view)
+
+    # Risk score / compliance / alerts — helpers puros, determinísticos.
+    # Passamos trust_last_invoked_at no entry para o alerta stale_entry funcionar.
+    entry_for_alerts = dict(entry)
+    entry_for_alerts["last_invoked_at"] = entry.get("trust_last_invoked_at")
+    risk = compute_risk_score(disclosure)
+    compliance = compute_compliance(disclosure)
+    alerts = compute_alerts(entry_for_alerts, disclosure, external_metadata=external_meta)
+
+    # Métricas operacionais — vêm de catalog_entries.trust_* (atualizado pelo
+    # engine após cada invocação real). Sem cálculo de janela aqui — payload
+    # leve. Drill-down vai pra /catalog/cost se quiser ver série temporal.
+    metrics = {
+        "invocation_count": entry.get("trust_invocation_count") or 0,
+        "avg_cost_usd": entry.get("trust_avg_cost_usd") or 0,
+        "last_invoked_at": entry.get("trust_last_invoked_at"),
+        "success_rate": entry.get("trust_score"),
+    }
+
+    return {
+        "entry": entry,
+        "owner": _user_or_id(entry.get("owner_user_id")),
+        "disclosure": disclosure,
+        "external_metadata": external_meta,
+        "recipe": recipe_data,
+        "submissions": submissions_view,
+        "risk": risk,
+        "compliance": compliance,
+        "alerts": alerts,
+        "metrics": metrics,
+    }
+
+
 # ═════════════════════════════════════════════════════════════════
 # Stewardship Dashboard (Onda 2 — R11)
 # ═════════════════════════════════════════════════════════════════

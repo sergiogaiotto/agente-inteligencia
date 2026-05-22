@@ -1205,6 +1205,171 @@ class TestInventory:
 
 
 # ═════════════════════════════════════════════════════════════════
+# Inventory entry details — payload do drawer regulatório
+# ═════════════════════════════════════════════════════════════════
+# Endpoint agrega entry + disclosure + external + submissions + risk score +
+# compliance + alerts num único JSON. Helpers puros (risk_score.py) já têm
+# cobertura unit dedicada — aqui validamos só a orquestração e shape final.
+
+
+class TestInventoryDetails:
+    def _seed_entry(self, fake_storage, monkeypatch, *,
+                    entry_id="e1", kind="agent", with_disclosure=True,
+                    disclosure_overrides=None, external=None, recipe=None,
+                    submissions=None, owner_email="alice@empresa.com"):
+        from app.routes.catalog import get_recipe as _real_get_recipe
+        # Entry
+        fake_storage["entries"][entry_id] = {
+            "id": entry_id,
+            "name": "Agente PII",
+            "kind": kind,
+            "status": "published",
+            "version": "1.0.0",
+            "urn": f"urn:maestro:default:{kind}:agente-pii:1.0.0",
+            "description": "Processa cadastros",
+            "domain": "rh",
+            "visibility": "company",
+            "visibility_scope": None,
+            "steward_team": "time-rh@empresa",
+            "owner_user_id": "u-owner",
+            "tags": "[]",
+            "adapter_config": "{}",
+            "trust_invocation_count": 10,
+            "trust_avg_cost_usd": 0.05,
+            "trust_last_invoked_at": "2026-04-01T00:00:00",
+            "trust_score": 0.95,
+        }
+        # Owner
+        if owner_email:
+            fake_storage["users"]["u-owner"] = {
+                "id": "u-owner", "email": owner_email, "role": "comum",
+            }
+        # Disclosure
+        if with_disclosure:
+            base_disc = {
+                "entry_id": entry_id,
+                "processes_pii": True, "processes_financial": False, "processes_health": False,
+                "calls_external_apis": False, "accesses_internet": False,
+                "stores_input": False, "storage_retention_days": None,
+                "writes_user_kb": False, "reads_user_kb": False,
+                "trains_on_input": False, "output_is_deterministic": False,
+                "data_residency": "BR", "additional_notes": "",
+                "external_apis_list": "[]",
+            }
+            if disclosure_overrides:
+                base_disc.update(disclosure_overrides)
+            fake_storage["disclosures"][entry_id] = base_disc
+        # External metadata
+        if external is not None:
+            fake_storage["externals"][entry_id] = external
+        # Recipe (precisa de mock dedicado já que recipe_storage é fixture separada)
+        async def fake_get_recipe(eid):
+            return recipe if eid == entry_id else None
+        monkeypatch.setattr("app.routes.catalog.get_recipe", fake_get_recipe)
+        # Submissions
+        for s in (submissions or []):
+            fake_storage["submissions"][s["id"]] = s
+        return entry_id
+
+    def test_root_required(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/inventory/qualquer/details")
+        assert r.status_code == 403
+
+    def test_404_entry_inexistente(self, fake_storage, monkeypatch):
+        # mock get_recipe pra não derrubar — endpoint só chama quando kind=recipe,
+        # mas o monkeypatch ajuda evitar AttributeError caso chegue lá
+        async def fake_get_recipe(eid): return None
+        monkeypatch.setattr("app.routes.catalog.get_recipe", fake_get_recipe)
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/inventory/ghost-id/details")
+        assert r.status_code == 404
+
+    def test_caminho_feliz_payload_completo(self, fake_storage, monkeypatch):
+        self._seed_entry(fake_storage, monkeypatch)
+        c = make_client({"id": "root1", "role": "root"})
+        r = c.get("/api/v1/catalog/inventory/e1/details")
+        assert r.status_code == 200
+        body = r.json()
+        # Estrutura mínima esperada
+        for key in ("entry", "owner", "disclosure", "external_metadata", "recipe",
+                    "submissions", "risk", "compliance", "alerts", "metrics"):
+            assert key in body
+        assert body["entry"]["id"] == "e1"
+        assert body["entry"]["name"] == "Agente PII"
+        assert body["owner"]["email"] == "alice@empresa.com"
+        # Disclosure presente → risk score > 0 (PII pesa 20)
+        assert body["risk"]["score"] >= 20
+        assert body["risk"]["band"] in ("low", "medium", "high")
+        # Compliance LGPD aplica (PII=true)
+        assert body["compliance"]["lgpd"]["applies"] is True
+        # Métricas vindas dos campos trust_*
+        assert body["metrics"]["invocation_count"] == 10
+        assert body["metrics"]["last_invoked_at"] == "2026-04-01T00:00:00"
+
+    def test_inclui_alertas_quando_pii_sem_residency(self, fake_storage, monkeypatch):
+        self._seed_entry(fake_storage, monkeypatch, disclosure_overrides={
+            "processes_pii": True, "data_residency": None,
+        })
+        c = make_client({"id": "root1", "role": "root"})
+        body = c.get("/api/v1/catalog/inventory/e1/details").json()
+        codes = [a["code"] for a in body["alerts"]]
+        assert "pii_without_residency" in codes
+
+    def test_external_platform_inclui_external_metadata(self, fake_storage, monkeypatch):
+        self._seed_entry(
+            fake_storage, monkeypatch, kind="external_platform",
+            external={"entry_id": "e1", "vendor": "ChatGPT Enterprise", "monthly_cost_usd": 200},
+        )
+        c = make_client({"id": "root1", "role": "root"})
+        body = c.get("/api/v1/catalog/inventory/e1/details").json()
+        assert body["external_metadata"]["vendor"] == "ChatGPT Enterprise"
+
+    def test_recipe_inclui_steps(self, fake_storage, monkeypatch):
+        self._seed_entry(
+            fake_storage, monkeypatch, kind="recipe",
+            recipe={"entry_id": "e1", "steps": [
+                {"order": 1, "target_entry_id": "agent-a"},
+                {"order": 2, "target_entry_id": "agent-b"},
+            ]},
+        )
+        c = make_client({"id": "root1", "role": "root"})
+        body = c.get("/api/v1/catalog/inventory/e1/details").json()
+        assert body["recipe"] is not None
+        assert len(body["recipe"]["steps"]) == 2
+
+    def test_disclosure_ausente_score_zero(self, fake_storage, monkeypatch):
+        self._seed_entry(fake_storage, monkeypatch, with_disclosure=False)
+        c = make_client({"id": "root1", "role": "root"})
+        body = c.get("/api/v1/catalog/inventory/e1/details").json()
+        assert body["disclosure"] is None
+        assert body["risk"]["score"] == 0
+        # Alerta de disclosure ausente aparece
+        assert any(a["code"] == "disclosure_missing" for a in body["alerts"])
+
+    def test_inclui_submissoes_com_reviewer_resolvido(self, fake_storage, monkeypatch):
+        # Submitter e reviewer com nomes resolvidos pra contexto rico
+        fake_storage["users"]["u-sub"] = {"id": "u-sub", "email": "bob@empresa.com", "role": "comum"}
+        fake_storage["users"]["u-root"] = {"id": "u-root", "email": "root@empresa.com", "role": "root"}
+        self._seed_entry(
+            fake_storage, monkeypatch,
+            submissions=[{
+                "id": "s1", "entry_id": "e1",
+                "submitted_by": "u-sub", "review_status": "approved",
+                "reviewed_by": "u-root", "reviewed_at": "2026-03-01T00:00:00",
+                "submitted_at": "2026-02-28T00:00:00",
+                "precheck_passed": True, "review_notes": "ok",
+            }],
+        )
+        c = make_client({"id": "root1", "role": "root"})
+        body = c.get("/api/v1/catalog/inventory/e1/details").json()
+        assert len(body["submissions"]) == 1
+        sub = body["submissions"][0]
+        assert sub["submitter"]["email"] == "bob@empresa.com"
+        assert sub["reviewer"]["email"] == "root@empresa.com"
+
+
+# ═════════════════════════════════════════════════════════════════
 # Stewardship Dashboard (Onda 2 / PR 4)
 # ═════════════════════════════════════════════════════════════════
 
