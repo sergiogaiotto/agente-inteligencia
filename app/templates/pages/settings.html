@@ -81,11 +81,27 @@
                 </div>
                 <select x-model="routingForm.multimodal_fallback" @change="routingDirty = true"
                         class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400">
-                    <template x-for="opt in routingOptions.filter(o => o.multimodal)" :key="opt.value">
-                        <option :value="opt.value" x-text="opt.label + ' 🖼'"></option>
-                    </template>
+                    <!-- Optgroup 1: modelos com suporte oficial a image input (🖼).
+                         Use estes como fallback canônico. -->
+                    <optgroup label="Multimodais (suportam imagem)">
+                        <template x-for="opt in multimodalNativeOptions" :key="opt.value">
+                            <option :value="opt.value" x-text="opt.label + ' 🖼'"></option>
+                        </template>
+                    </optgroup>
+                    <!-- Optgroup 2: modelos text-only. Aparecem para override manual
+                         (operador que aceita a degradação consciente — image input é
+                         descartado antes da chamada). Útil pra GPT-OSS / Ollama em
+                         ambientes onde imagem é raridade ou processada em outra cadeia. -->
+                    <optgroup label="Text-only (override manual — imagem é descartada)">
+                        <template x-for="opt in textOnlyOptions" :key="opt.value">
+                            <option :value="opt.value" x-text="opt.label + ' (text-only)'"></option>
+                        </template>
+                    </optgroup>
                 </select>
-                <p class="text-[10px] text-violet-700 mt-1.5">Apenas modelos com suporte a imagem aparecem aqui.</p>
+                <p class="text-[10px] text-violet-700 mt-1.5">
+                    <strong>Recomendado:</strong> escolher um modelo com 🖼 (suporte oficial a image input).
+                    Modelos text-only aparecem para uso avançado — o input com imagem é descartado antes da chamada, o que pode degradar a resposta.
+                </p>
             </div>
         </div>
     </div>
@@ -1049,6 +1065,18 @@ function settingsPage() {
         },
 
         // ─── Roteamento LLM (Onda 7) ─────────────────────────────
+
+        // Particiona routingOptions em dois optgroups do Multimodal Fallback:
+        // - multimodalNative: modelos com suporte OFICIAL a image input (🖼)
+        // - textOnly:         demais modelos, para override manual consciente
+        //                     (operador aceita que image input será descartado)
+        get multimodalNativeOptions() {
+            return this.routingOptions.filter(o => o.multimodal);
+        },
+        get textOnlyOptions() {
+            return this.routingOptions.filter(o => !o.multimodal);
+        },
+
         get routingOptions() {
             // Achata o catálogo (this.models) em [{value:"provider/id", label, multimodal}]
             // Ordem dos providers reflete prioridade de descoberta na UI: hospedados
