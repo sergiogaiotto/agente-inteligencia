@@ -131,9 +131,13 @@
                         </thead>
                         <tbody class="divide-y divide-surface-100">
                             <template x-for="e in entries" :key="e.id">
-                                <tr class="hover:bg-surface-50/50">
+                                <tr class="hover:bg-brand-50/40 cursor-pointer transition-colors"
+                                    :class="selectedEntryId === e.id ? 'bg-brand-50/60' : ''"
+                                    @click="openDrawer(e.id)">
                                     <td class="px-3 py-2">
-                                        <a :href="'/catalog/' + e.id" class="font-semibold text-brand-900 hover:text-brand-600" x-text="e.name"></a>
+                                        <!-- @click.stop pra não dispar duas vezes (linha já abre drawer) -->
+                                        <a :href="'/catalog/' + e.id" @click.stop
+                                           class="font-semibold text-brand-900 hover:text-brand-600" x-text="e.name"></a>
                                         <p class="text-[9px] text-surface-400 font-mono truncate max-w-[200px]" x-text="'v' + e.version"></p>
                                     </td>
                                     <td class="px-3 py-2">
@@ -176,6 +180,311 @@
             </div>
         </div>
     </template>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- DRAWER REGULATÓRIO — dossiê da entry selecionada              -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Padrão da plataforma: aside fixed right-0 com slide-in. ESC, click
+         outside e botão de fechar funcionam. Atalhos: W=Workspace, C=Catálogo,
+         P=Imprimir/PDF. Deeplink via ?entry=<id> na URL. -->
+    <template x-if="drawerOpen">
+        <div class="fixed inset-0 z-[9990] inventory-drawer-root" @keydown.escape.window="closeDrawer()">
+            <div class="fixed inset-0 bg-black/30 inventory-drawer-overlay" @click="closeDrawer()"></div>
+            <aside class="fixed right-0 top-0 bottom-0 w-full sm:w-[560px] bg-white shadow-2xl flex flex-col inventory-drawer-panel"
+                   role="dialog" aria-label="Detalhes regulatórios da entry">
+
+                <!-- Loading state -->
+                <template x-if="drawerLoading">
+                    <div class="flex-1 flex items-center justify-center">
+                        <p class="text-[12px] text-surface-400">Carregando dossiê...</p>
+                    </div>
+                </template>
+
+                <!-- Error state -->
+                <template x-if="!drawerLoading && drawerError">
+                    <div class="flex-1 flex flex-col items-center justify-center p-6 text-center">
+                        <p class="text-[13px] font-semibold text-rose-700 mb-1">Não foi possível carregar</p>
+                        <p class="text-[11px] text-surface-500 mb-3" x-text="drawerError"></p>
+                        <button @click="closeDrawer()" class="text-[11px] text-brand-600 hover:underline">Fechar</button>
+                    </div>
+                </template>
+
+                <!-- Conteúdo do dossiê -->
+                <template x-if="!drawerLoading && !drawerError && drawerData">
+                    <div class="flex-1 flex flex-col min-h-0">
+
+                        <!-- ─── Header com risk score ─── -->
+                        <header class="border-b border-surface-100 p-5 shrink-0 bg-gradient-to-br from-brand-50/40 to-white">
+                            <div class="flex items-start justify-between gap-3 mb-3">
+                                <div class="min-w-0 flex-1">
+                                    <p class="text-[10px] font-semibold uppercase tracking-wider text-brand-600">Dossiê regulatório</p>
+                                    <h2 class="text-[18px] font-bold text-brand-900 truncate" x-text="drawerData.entry.name"></h2>
+                                    <div class="flex items-center gap-1.5 flex-wrap mt-1">
+                                        <span class="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase"
+                                              :class="kindBadgeClass(drawerData.entry.kind)" x-text="drawerData.entry.kind"></span>
+                                        <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-600"
+                                              x-text="'v' + drawerData.entry.version"></span>
+                                        <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-surface-600"
+                                              x-text="drawerData.entry.status"></span>
+                                    </div>
+                                    <p class="text-[10px] font-mono text-surface-400 mt-1 break-all" x-text="drawerData.entry.urn"></p>
+                                </div>
+                                <button @click="closeDrawer()" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 shrink-0" aria-label="Fechar">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                                </button>
+                            </div>
+
+                            <!-- Risk Score visual — dial colorido + drivers narrados -->
+                            <div class="flex items-center gap-3 rounded-xl border border-surface-200 bg-white px-4 py-3">
+                                <div class="relative shrink-0">
+                                    <div class="w-16 h-16 rounded-full flex items-center justify-center text-[18px] font-bold"
+                                         :class="riskBandClass(drawerData.risk.band)">
+                                        <span x-text="drawerData.risk.score"></span>
+                                    </div>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-[10px] font-semibold uppercase tracking-wider"
+                                       :class="riskBandTextClass(drawerData.risk.band)"
+                                       x-text="riskBandLabel(drawerData.risk.band)"></p>
+                                    <p class="text-[11px] text-surface-700 mt-0.5" x-text="riskNarrative(drawerData)"></p>
+                                </div>
+                            </div>
+                        </header>
+
+                        <!-- ─── Quick actions ─── -->
+                        <div class="border-b border-surface-100 px-5 py-3 shrink-0 flex items-center gap-2 flex-wrap no-print">
+                            <a x-show="drawerData.entry.artifact_id && drawerData.entry.kind === 'agent'"
+                               :href="'/workspace?agent_id=' + drawerData.entry.artifact_id"
+                               class="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-brand-600">
+                                Testar no Workspace
+                                <kbd class="ml-1 rounded bg-brand-600 px-1 py-0.5 text-[9px]">W</kbd>
+                            </a>
+                            <a :href="'/catalog/' + drawerData.entry.id"
+                               class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-brand-700 hover:bg-surface-50">
+                                Ver no Catálogo
+                                <kbd class="ml-1 rounded bg-surface-100 px-1 py-0.5 text-[9px] text-surface-500">C</kbd>
+                            </a>
+                            <button @click="exportDrawerPDF()" type="button"
+                                    class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-brand-700 hover:bg-surface-50">
+                                Imprimir / PDF
+                                <kbd class="ml-1 rounded bg-surface-100 px-1 py-0.5 text-[9px] text-surface-500">P</kbd>
+                            </button>
+                        </div>
+
+                        <!-- ─── Conteúdo scrollable ─── -->
+                        <div class="flex-1 overflow-y-auto px-5 py-4 space-y-4 scrollbar-thin">
+
+                            <!-- Alertas (se houver) — topo, pois exigem atenção -->
+                            <template x-if="drawerData.alerts && drawerData.alerts.length > 0">
+                                <div class="space-y-2">
+                                    <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700">Alertas automáticos</h3>
+                                    <template x-for="a in drawerData.alerts" :key="a.code">
+                                        <div class="rounded-lg border px-3 py-2 text-[11px] leading-relaxed"
+                                             :class="alertClass(a.severity)">
+                                            <span class="font-bold" x-text="alertIcon(a.severity)"></span>
+                                            <span x-text="a.message"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+
+                            <!-- Identidade & governance -->
+                            <section class="rounded-xl border border-surface-200 bg-white p-4">
+                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Identidade &amp; governance</h3>
+                                <dl class="space-y-1.5 text-[11px]">
+                                    <div class="flex justify-between gap-2"><dt class="text-surface-500">Owner</dt><dd class="text-brand-900 truncate"
+                                        x-text="drawerData.owner?.email || drawerData.owner?.id || '—'"></dd></div>
+                                    <div class="flex justify-between gap-2"><dt class="text-surface-500">Steward</dt><dd class="text-brand-900 truncate"
+                                        x-text="drawerData.entry.steward_team || '—'"></dd></div>
+                                    <div class="flex justify-between gap-2"><dt class="text-surface-500">Domínio</dt><dd class="text-brand-900"
+                                        x-text="drawerData.entry.domain || '—'"></dd></div>
+                                    <div class="flex justify-between gap-2"><dt class="text-surface-500">Visibilidade</dt><dd class="text-brand-900"
+                                        x-text="visibilityText(drawerData.entry)"></dd></div>
+                                    <div x-show="drawerData.entry.description" class="pt-2 border-t border-surface-100">
+                                        <dt class="text-surface-500 mb-1">Descrição</dt>
+                                        <dd class="text-surface-700" x-text="drawerData.entry.description"></dd>
+                                    </div>
+                                </dl>
+                            </section>
+
+                            <!-- Risk surface (capability disclosure organizada) -->
+                            <section class="rounded-xl border border-surface-200 bg-white p-4">
+                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Risk surface</h3>
+                                <template x-if="!drawerData.disclosure">
+                                    <p class="text-[11px] italic text-surface-400">Capability Disclosure não declarada — comitê não consegue avaliar.</p>
+                                </template>
+                                <template x-if="drawerData.disclosure">
+                                    <div class="space-y-3">
+                                        <!-- Grupo: Dados regulados -->
+                                        <div>
+                                            <p class="text-[10px] font-semibold text-rose-700 mb-1">Dados regulados</p>
+                                            <div class="flex flex-wrap gap-1.5">
+                                                <span x-show="drawerData.disclosure.processes_pii" class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[10px] font-semibold">PII</span>
+                                                <span x-show="drawerData.disclosure.processes_financial" class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[10px] font-semibold">Financeiro</span>
+                                                <span x-show="drawerData.disclosure.processes_health" class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[10px] font-semibold">Saúde</span>
+                                                <span x-show="!drawerData.disclosure.processes_pii && !drawerData.disclosure.processes_financial && !drawerData.disclosure.processes_health"
+                                                      class="text-[10px] italic text-surface-400">Nenhum</span>
+                                            </div>
+                                        </div>
+                                        <!-- Grupo: Integrações externas -->
+                                        <div>
+                                            <p class="text-[10px] font-semibold text-amber-700 mb-1">Integrações externas</p>
+                                            <div class="flex flex-wrap gap-1.5">
+                                                <span x-show="drawerData.disclosure.calls_external_apis" class="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[10px] font-semibold">APIs externas</span>
+                                                <span x-show="drawerData.disclosure.accesses_internet" class="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[10px] font-semibold">Internet aberta</span>
+                                                <span x-show="!drawerData.disclosure.calls_external_apis && !drawerData.disclosure.accesses_internet" class="text-[10px] italic text-surface-400">Nenhuma</span>
+                                            </div>
+                                            <p x-show="drawerData.disclosure.calls_external_apis && drawerData.disclosure.external_apis_list?.length" class="text-[10px] text-surface-500 mt-1">
+                                                URLs: <span class="font-mono" x-text="(drawerData.disclosure.external_apis_list || []).join(', ')"></span>
+                                            </p>
+                                        </div>
+                                        <!-- Grupo: Persistência -->
+                                        <div>
+                                            <p class="text-[10px] font-semibold text-yellow-700 mb-1">Persistência</p>
+                                            <div class="flex flex-wrap gap-1.5">
+                                                <span x-show="drawerData.disclosure.stores_input" class="rounded-full bg-yellow-100 text-yellow-700 px-2 py-0.5 text-[10px] font-semibold">Persiste input</span>
+                                                <span x-show="drawerData.disclosure.writes_user_kb" class="rounded-full bg-yellow-100 text-yellow-700 px-2 py-0.5 text-[10px] font-semibold">Escreve KB</span>
+                                                <span x-show="drawerData.disclosure.reads_user_kb" class="rounded-full bg-yellow-100 text-yellow-700 px-2 py-0.5 text-[10px] font-semibold">Lê KB</span>
+                                                <span x-show="!drawerData.disclosure.stores_input && !drawerData.disclosure.writes_user_kb && !drawerData.disclosure.reads_user_kb" class="text-[10px] italic text-surface-400">Nenhuma</span>
+                                            </div>
+                                            <p x-show="drawerData.disclosure.stores_input" class="text-[10px] text-surface-500 mt-1">
+                                                Retenção: <span class="font-mono" x-text="drawerData.disclosure.storage_retention_days ? drawerData.disclosure.storage_retention_days + ' dias' : 'não declarada'"></span>
+                                            </p>
+                                        </div>
+                                        <!-- Grupo: Modelo -->
+                                        <div>
+                                            <p class="text-[10px] font-semibold text-emerald-700 mb-1">Modelo</p>
+                                            <div class="flex flex-wrap gap-1.5">
+                                                <span x-show="drawerData.disclosure.trains_on_input" class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[10px] font-semibold">Input vira training data</span>
+                                                <span x-show="drawerData.disclosure.output_is_deterministic" class="rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-[10px] font-semibold">Output determinístico</span>
+                                                <span x-show="!drawerData.disclosure.trains_on_input && !drawerData.disclosure.output_is_deterministic" class="text-[10px] italic text-surface-400">Sem flags ativas</span>
+                                            </div>
+                                        </div>
+                                        <!-- Soberania -->
+                                        <div class="pt-2 border-t border-surface-100">
+                                            <p class="text-[10px] text-surface-500">Soberania de dados:
+                                                <span x-show="drawerData.disclosure.data_residency" class="font-mono text-brand-700" x-text="drawerData.disclosure.data_residency"></span>
+                                                <span x-show="!drawerData.disclosure.data_residency" class="italic text-surface-400">não declarada</span>
+                                            </p>
+                                        </div>
+                                        <p x-show="drawerData.disclosure.additional_notes" class="text-[10px] text-surface-500 italic pt-1 border-t border-surface-100"
+                                           x-text="'Notas: ' + drawerData.disclosure.additional_notes"></p>
+                                    </div>
+                                </template>
+                            </section>
+
+                            <!-- Compliance matchers (LGPD / GDPR / HIPAA / Marco Civil) -->
+                            <section class="rounded-xl border border-surface-200 bg-white p-4">
+                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Aplicabilidade regulatória</h3>
+                                <p class="text-[10px] text-surface-400 mb-2 italic">Checklist objetivo baseado nas flags — não substitui parecer jurídico</p>
+                                <div class="space-y-1.5 text-[11px]">
+                                    <template x-for="reg in complianceList(drawerData.compliance)" :key="reg.key">
+                                        <div class="flex items-start gap-2">
+                                            <span class="shrink-0 mt-0.5" x-text="reg.applies ? '✓' : '○'"
+                                                  :class="reg.applies ? 'text-rose-600 font-bold' : 'text-surface-300'"></span>
+                                            <div class="flex-1 min-w-0">
+                                                <span class="font-semibold" :class="reg.applies ? 'text-brand-900' : 'text-surface-400'" x-text="reg.label"></span>
+                                                <p class="text-[10px]" :class="reg.applies ? 'text-surface-600' : 'text-surface-400'" x-text="reg.reason"></p>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </section>
+
+                            <!-- Métricas operacionais -->
+                            <section class="rounded-xl border border-surface-200 bg-white p-4">
+                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Operação</h3>
+                                <div class="grid grid-cols-2 gap-3 text-[11px]">
+                                    <div>
+                                        <p class="text-[10px] text-surface-500">Invocações totais</p>
+                                        <p class="text-[14px] font-bold text-brand-900" x-text="(drawerData.metrics.invocation_count || 0).toLocaleString()"></p>
+                                    </div>
+                                    <div>
+                                        <p class="text-[10px] text-surface-500">Custo médio/chamada</p>
+                                        <p class="text-[14px] font-bold text-brand-900" x-text="'$' + (drawerData.metrics.avg_cost_usd || 0).toFixed(4)"></p>
+                                    </div>
+                                    <div>
+                                        <p class="text-[10px] text-surface-500">Última invocação</p>
+                                        <p class="text-[11px] text-brand-900" x-text="relativeTime(drawerData.metrics.last_invoked_at)"></p>
+                                    </div>
+                                    <div x-show="drawerData.metrics.success_rate !== null && drawerData.metrics.success_rate !== undefined">
+                                        <p class="text-[10px] text-surface-500">Reliability</p>
+                                        <p class="text-[11px] text-brand-900" x-text="((drawerData.metrics.success_rate || 0) * 100).toFixed(0) + '%'"></p>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <!-- External metadata (só para kind=external_platform) -->
+                            <section x-show="drawerData.external_metadata" class="rounded-xl border border-rose-200 bg-rose-50/30 p-4">
+                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-rose-700 mb-2">Plataforma externa</h3>
+                                <dl class="space-y-1 text-[11px]">
+                                    <div class="flex justify-between"><dt class="text-surface-500">Vendor</dt><dd class="font-semibold text-brand-900" x-text="drawerData.external_metadata?.vendor || '—'"></dd></div>
+                                    <div class="flex justify-between"><dt class="text-surface-500">Contrato</dt><dd class="text-brand-900" x-text="drawerData.external_metadata?.contract_status || '—'"></dd></div>
+                                    <div class="flex justify-between"><dt class="text-surface-500">Custo mensal</dt><dd class="font-mono text-emerald-700" x-text="drawerData.external_metadata?.monthly_cost_usd ? '$' + drawerData.external_metadata.monthly_cost_usd.toLocaleString() : '—'"></dd></div>
+                                    <div x-show="drawerData.external_metadata?.restrictions" class="pt-2 border-t border-rose-100">
+                                        <dt class="text-surface-500 mb-1">Restrições</dt>
+                                        <dd class="text-rose-700" x-text="drawerData.external_metadata?.restrictions"></dd>
+                                    </div>
+                                </dl>
+                            </section>
+
+                            <!-- Recipe steps (só para kind=recipe) -->
+                            <section x-show="drawerData.recipe && drawerData.recipe.steps?.length" class="rounded-xl border border-brand-200 bg-brand-50/30 p-4">
+                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Recipe steps</h3>
+                                <ol class="space-y-1 text-[11px]">
+                                    <template x-for="(step, i) in (drawerData.recipe?.steps || [])" :key="i">
+                                        <li class="flex items-start gap-2">
+                                            <span class="rounded-full bg-brand-100 text-brand-700 px-1.5 py-0.5 text-[9px] font-bold shrink-0" x-text="step.order || (i+1)"></span>
+                                            <span class="text-brand-900 font-mono text-[10px]" x-text="step.target_name || step.target_entry_id"></span>
+                                        </li>
+                                    </template>
+                                </ol>
+                            </section>
+
+                            <!-- Trilha de aprovação -->
+                            <section x-show="drawerData.submissions?.length" class="rounded-xl border border-surface-200 bg-white p-4">
+                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Trilha de aprovação</h3>
+                                <ol class="space-y-2 text-[11px]">
+                                    <template x-for="s in drawerData.submissions" :key="s.id">
+                                        <li class="flex items-start gap-2">
+                                            <span class="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase shrink-0"
+                                                  :class="reviewBadgeClass(s.review_status)" x-text="s.review_status"></span>
+                                            <div class="flex-1 min-w-0">
+                                                <p class="text-surface-700">
+                                                    por
+                                                    <span class="font-medium text-brand-700" x-text="s.submitter?.email || s.submitted_by"></span>
+                                                    em <span x-text="formatDate(s.submitted_at)"></span>
+                                                </p>
+                                                <p x-show="s.reviewed_by" class="text-[10px] text-surface-500">
+                                                    Decidida por
+                                                    <span class="font-medium text-brand-700" x-text="s.reviewer?.email || s.reviewed_by"></span>
+                                                    em <span x-text="formatDate(s.reviewed_at)"></span>
+                                                </p>
+                                                <p x-show="s.review_notes" class="text-[10px] italic text-surface-600 mt-0.5" x-text="'« ' + s.review_notes + ' »'"></p>
+                                            </div>
+                                        </li>
+                                    </template>
+                                </ol>
+                            </section>
+
+                        </div>
+                    </div>
+                </template>
+            </aside>
+        </div>
+    </template>
+
+    <!-- Print styles — quando usuário clica "Imprimir / PDF" do drawer, esconde
+         nav/header/sidebar e mostra o drawer em A4 paginado. Brand mínimo. -->
+    <style media="print">
+        @page { size: A4; margin: 12mm; }
+        body * { visibility: hidden !important; }
+        .inventory-drawer-root, .inventory-drawer-root * { visibility: visible !important; }
+        .inventory-drawer-overlay { display: none !important; }
+        .inventory-drawer-panel { position: static !important; width: 100% !important; box-shadow: none !important; }
+        .no-print { display: none !important; }
+    </style>
+
 </div>
 {% endblock %}
 
@@ -185,6 +494,16 @@ function inventoryPage() {
     return {
         loading: true, forbidden: false,
         entries: [], total: 0,
+
+        // ─── Drawer regulatório (dossiê por entry) ─────────────────────
+        // selectedEntryId destaca a linha; drawerOpen controla o slide-in;
+        // drawerData recebe o payload do GET /inventory/{id}/details.
+        // Atalhos: ESC fecha, W → Workspace, C → Catálogo, P → Print.
+        drawerOpen: false,
+        drawerLoading: false,
+        drawerError: '',
+        drawerData: null,
+        selectedEntryId: null,
         filters: {
             processes_pii: '', processes_financial: '', processes_health: '',
             calls_external_apis: '', accesses_internet: '', stores_input: '',
@@ -229,6 +548,17 @@ function inventoryPage() {
                 showToast('Erro ao carregar inventário', 'error');
             }
             this.loading = false;
+
+            // Deeplink: ?entry=<id> abre direto no drawer após carregar a lista.
+            // Útil para compartilhar URL com colega ("olha este caso").
+            const qsEntry = new URLSearchParams(window.location.search).get('entry');
+            if (qsEntry) this.openDrawer(qsEntry);
+
+            // Atalhos de teclado globais — só registra uma vez (init flag).
+            if (!this._keyboardBound) {
+                this._keyboardBound = true;
+                window.addEventListener('keydown', (e) => this._handleKeyboard(e));
+            }
         },
 
         buildQuery() {
@@ -274,6 +604,201 @@ function inventoryPage() {
         kindBadgeClass(k) {
             return ({agent:'bg-violet-50 text-violet-700', skill:'bg-teal-50 text-teal-700', recipe:'bg-brand-50 text-brand-700',
                      application:'bg-amber-50 text-amber-700', external_platform:'bg-rose-50 text-rose-700'})[k] || 'bg-surface-100 text-surface-600';
+        },
+
+        // ════════════════════════════════════════════════════════════
+        // Drawer regulatório — abrir / fechar / carregar / atalhos
+        // ════════════════════════════════════════════════════════════
+
+        async openDrawer(entryId) {
+            this.selectedEntryId = entryId;
+            this.drawerOpen = true;
+            this.drawerLoading = true;
+            this.drawerError = '';
+            this.drawerData = null;
+
+            // Atualiza URL pra deeplink (sem reload). Compartilhar = copiar URL.
+            try {
+                const url = new URL(window.location.href);
+                url.searchParams.set('entry', entryId);
+                window.history.replaceState({}, '', url);
+            } catch {}
+
+            try {
+                const r = await fetch(`/api/v1/catalog/inventory/${encodeURIComponent(entryId)}/details`);
+                if (!r.ok) {
+                    if (r.status === 404) {
+                        this.drawerError = 'Entry não encontrada.';
+                    } else if (r.status === 403) {
+                        this.drawerError = 'Acesso restrito.';
+                    } else {
+                        // Tenta extrair detail JSON, cai pra text como fallback
+                        let detail = `HTTP ${r.status}`;
+                        try {
+                            const j = await r.json();
+                            detail = j.detail || detail;
+                        } catch {}
+                        this.drawerError = detail;
+                    }
+                } else {
+                    this.drawerData = await r.json();
+                }
+            } catch (e) {
+                this.drawerError = 'Falha de rede: ' + (e.message || 'erro desconhecido');
+            }
+            this.drawerLoading = false;
+        },
+
+        closeDrawer() {
+            this.drawerOpen = false;
+            this.drawerData = null;
+            this.drawerError = '';
+            this.selectedEntryId = null;
+            // Limpa ?entry da URL — mantém demais params (filtros, etc.)
+            try {
+                const url = new URL(window.location.href);
+                if (url.searchParams.has('entry')) {
+                    url.searchParams.delete('entry');
+                    window.history.replaceState({}, '', url);
+                }
+            } catch {}
+        },
+
+        // Atalhos: ESC fecha (também tratado no @keydown.escape.window),
+        // W=Workspace, C=Catálogo, P=Print. Só ativam quando drawerOpen e
+        // não está editando input. Defesa: typeof check pra evitar erros
+        // em browsers exóticos onde document.activeElement vem null.
+        _handleKeyboard(e) {
+            if (!this.drawerOpen || !this.drawerData) return;
+            const active = document.activeElement;
+            const tag = active?.tagName?.toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+            const k = (e.key || '').toLowerCase();
+            if (k === 'w') {
+                const agent = this.drawerData.entry?.artifact_id;
+                if (agent && this.drawerData.entry?.kind === 'agent') {
+                    window.location = '/workspace?agent_id=' + encodeURIComponent(agent);
+                }
+            } else if (k === 'c') {
+                window.location = '/catalog/' + this.drawerData.entry.id;
+            } else if (k === 'p') {
+                this.exportDrawerPDF();
+            }
+        },
+
+        exportDrawerPDF() {
+            // Print stylesheet (no <style media="print">) esconde tudo
+            // exceto o drawer. Operador escolhe "Salvar como PDF" no diálogo.
+            // window.print() é síncrono — bloqueia até o usuário decidir.
+            window.print();
+        },
+
+        // ────── Helpers visuais do drawer ──────
+
+        // Cor do círculo do risk score (depende da banda calculada server-side)
+        riskBandClass(band) {
+            return ({
+                low: 'bg-emerald-100 text-emerald-700 border-2 border-emerald-300',
+                medium: 'bg-amber-100 text-amber-700 border-2 border-amber-300',
+                high: 'bg-rose-100 text-rose-700 border-2 border-rose-300',
+            })[band] || 'bg-surface-100 text-surface-600 border-2 border-surface-300';
+        },
+        riskBandTextClass(band) {
+            return ({low:'text-emerald-700', medium:'text-amber-700', high:'text-rose-700'})[band] || 'text-surface-600';
+        },
+        riskBandLabel(band) {
+            return ({low:'Risco baixo', medium:'Risco médio', high:'Risco alto'})[band] || 'Sem classificação';
+        },
+        // Narrativa curta: "Alto risco: processa PII, dados de saúde, chama APIs externas"
+        riskNarrative(data) {
+            if (!data?.disclosure) return 'Capability não declarada — comitê precisa revisar manualmente.';
+            const driverLabels = {
+                processes_pii: 'PII',
+                processes_financial: 'dados financeiros',
+                processes_health: 'dados de saúde',
+                calls_external_apis: 'APIs externas',
+                accesses_internet: 'internet aberta',
+                trains_on_input: 'treina com input',
+                stores_input: 'persiste input',
+                writes_user_kb: 'escreve KB do consumer',
+                reads_user_kb: 'lê KB do consumer',
+            };
+            const drivers = (data.risk?.drivers || []).map(k => driverLabels[k] || k);
+            if (drivers.length === 0) return 'Nenhuma flag de risco ativa declarada.';
+            return `${this.riskBandLabel(data.risk.band)}: ${drivers.join(', ')}.`;
+        },
+
+        // Visibilidade humanizada (mesma lógica do catalog_queue, replicada para
+        // independência — drawer e fila podem evoluir separadamente)
+        visibilityText(entry) {
+            if (!entry?.visibility) return '—';
+            const base = ({private:'Privada (só owner + Root)', company:'Empresa toda', department:'Departamento'})[entry.visibility] || entry.visibility;
+            if (entry.visibility === 'department' && entry.visibility_scope) return `${base}: ${entry.visibility_scope}`;
+            return base;
+        },
+
+        // Alertas: ícone + cor por severidade
+        alertClass(sev) {
+            return ({
+                danger: 'border-rose-300 bg-rose-50 text-rose-800',
+                warning: 'border-amber-300 bg-amber-50 text-amber-800',
+                info: 'border-brand-200 bg-brand-50 text-brand-800',
+            })[sev] || 'border-surface-200 bg-surface-50 text-surface-700';
+        },
+        alertIcon(sev) {
+            return ({danger:'⛔ ', warning:'⚠ ', info:'ℹ '})[sev] || '';
+        },
+
+        // Lista ordenada de regulações para o template renderizar (mantém ordem
+        // estável: LGPD primeiro porque é a do operador brasileiro padrão)
+        complianceList(c) {
+            if (!c) return [];
+            const order = [
+                {key: 'lgpd',           label: 'LGPD (Brasil)'},
+                {key: 'lgpd_sensitive', label: 'LGPD art. 11 — dados sensíveis'},
+                {key: 'gdpr',           label: 'GDPR (UE)'},
+                {key: 'hipaa',          label: 'HIPAA (EUA — saúde)'},
+                {key: 'marco_civil',    label: 'Marco Civil (Brasil — internet)'},
+            ];
+            return order.map(o => ({
+                key: o.key,
+                label: o.label,
+                applies: c[o.key]?.applies === true,
+                reason: c[o.key]?.reason || '',
+            }));
+        },
+
+        // Tempo relativo PT-BR (replica de catalog_queue p/ independência)
+        relativeTime(ds) {
+            if (!ds) return 'nunca';
+            const t = new Date(ds).getTime();
+            if (!t || isNaN(t)) return '—';
+            const diffMs = Date.now() - t;
+            const sec = Math.floor(diffMs / 1000);
+            if (sec < 60) return 'agora';
+            const min = Math.floor(sec / 60);
+            if (min < 60) return `há ${min} min`;
+            const hr = Math.floor(min / 60);
+            if (hr < 24) return `há ${hr} hora${hr === 1 ? '' : 's'}`;
+            const day = Math.floor(hr / 24);
+            if (day < 60) return `há ${day} dia${day === 1 ? '' : 's'}`;
+            return 'há mais de 60 dias';
+        },
+
+        // Cor por status de submission (espelha catalog_queue)
+        reviewBadgeClass(s) {
+            return ({
+                pending: 'bg-amber-50 text-amber-700',
+                approved: 'bg-emerald-50 text-emerald-700',
+                rejected: 'bg-rose-50 text-rose-700',
+                changes_requested: 'bg-amber-50 text-amber-700',
+            })[s] || 'bg-surface-100 text-surface-500';
+        },
+
+        formatDate(ds) {
+            if (!ds) return '—';
+            try { return new Date(ds).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}); }
+            catch { return ds; }
         },
     }
 }
