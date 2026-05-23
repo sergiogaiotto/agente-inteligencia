@@ -533,38 +533,86 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // /evidence — RAG (Base de Conhecimento)
   // ═════════════════════════════════════════════════════════════════
   evidence: {
-    title: 'RAG (Base de Conhecimento)',
-    summary: 'Onde você cadastra os documentos que o agent vai consultar para responder com fonte — manuais, regulamentos, FAQs, contratos.',
+    title: 'Bases de Conhecimento (RAG + Tabelas)',
+    summary: 'Onde você cadastra o que o agent precisa SABER para responder. Duas técnicas complementares: RAG (busca em textos) e Tabelas (consulta SQL em dados estruturados).',
     sections: [
       {
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p><strong>RAG</strong> (Retrieval-Augmented Generation) é a camada que dá "conhecimento de mundo" para o agent. Em vez de o LLM "inventar" do treinamento, ele recebe trechos relevantes de documentos que você cadastrou — e responde com base neles.</p>
-          <p>Aqui você cadastra <strong>bases de conhecimento</strong> (manuais, políticas, FAQs), faz a ingestão (chunca + indexa), e o agent passa a poder consultar.</p>
-          <p>Importante: <strong>RAG só BUSCA</strong>. Quem julga se a resposta usou bem as fontes é o Verifier (§14.2 — veja /quality).</p>
+          <p>A "Base de Conhecimento" é onde você dá ao agent o que ele precisa <em>saber</em> para responder bem. Sem isso, ele usa só o que aprendeu no treinamento do LLM — e pode "inventar" (alucinar) detalhes da sua empresa que ele nunca viu.</p>
+
+          <p>A plataforma oferece <strong>DUAS TÉCNICAS COMPLEMENTARES</strong> de busca, que coexistem na mesma base. Saber a diferença ajuda a escolher a certa para cada caso:</p>
+
+          <p><strong>1. RAG (Retrieval-Augmented Generation)</strong> — para <em>textos não-estruturados</em>: manuais, políticas, contratos, FAQs, atas de reunião. Funciona como uma "busca inteligente": a plataforma divide o documento em pedaços (chunks), indexa por significado e palavras-chave, e quando o agent precisa, devolve os trechos mais relevantes para o LLM ler. O LLM compõe a resposta citando esses trechos.</p>
+
+          <p><strong>2. Tabelas (text-to-SQL via DuckDB)</strong> — para <em>dados estruturados</em>: planilhas CSV/XLSX com colunas e linhas (vendas, clientes, métricas, inventário). Cada planilha vira uma tabela consultável. A Skill executa uma consulta <em>exata</em> (tipo "todos os clientes com renda > 5000") — sem chutar, sem alucinar números, sem perder linhas.</p>
+
+          <p><strong>Por que dois jeitos?</strong> Porque texto e tabela têm naturezas diferentes:</p>
+          <ul>
+            <li>Texto livre se beneficia de <strong>busca semântica</strong> ("prazo de pagamento" deve achar trecho sobre "cobrança").</li>
+            <li>Tabela exige <strong>filtros e agregações precisas</strong> ("qual a média de X agrupada por Y") — algo que busca semântica faz muito mal.</li>
+          </ul>
+
+          <p><strong>Importante:</strong> as duas técnicas BUSCAM, não JULGAM. Quem verifica se a resposta usou bem as fontes é o Verifier (§14.2 — veja /quality).</p>
         `
       },
       {
         kind: 'fundamentos',
         title: 'Fundamentos',
         body: `
-          <p>Busca <strong>híbrida</strong> que combina dois mundos:</p>
+          <p>Como cada técnica funciona por dentro — útil quando algo não está vindo como esperado.</p>
+
+          <p><strong>RAG — busca híbrida em textos</strong></p>
+          <p>Quando o agent precisa de uma informação textual, a plataforma combina <em>dois jeitos de buscar</em>:</p>
           <ul>
-            <li><strong>BM25</strong> — busca textual clássica (palavras-chave, exatidão lexical). Usa <code>tsvector</code> + GIN do Postgres.</li>
-            <li><strong>Vetorial</strong> — busca semântica (significado, paráfrases). Usa Qdrant + embeddings (Azure ou Qwen3).</li>
+            <li><strong>BM25</strong> — busca clássica por palavras-chave (exatidão lexical). Se o user pergunta "qual o prazo de cobrança", encontra trechos com essas palavras exatas. Usa <code>tsvector</code> + índice GIN do Postgres.</li>
+            <li><strong>Vetorial</strong> — busca semântica (por significado). "prazo de pagamento" também acharia trechos sobre "cobrança" porque os vetores ficam próximos. Usa Qdrant + embeddings (Azure ou Qwen3).</li>
           </ul>
-          <p>Os dois rankings são fundidos via <strong>Reciprocal Rank Fusion</strong> (k=60). Opcionalmente, um <strong>Reranker LLM</strong> reordena por relevância contextual. As top-N evidências vão para o LLM gerador.</p>
-          <p>O processo: <strong>ingestão</strong> (você sobe doc) → <strong>chunking</strong> (quebra em pedaços) → <strong>embedding</strong> (gera vetores) → <strong>indexação</strong> (BM25 + Qdrant) → consultável em tempo real.</p>
+          <p>Os dois rankings são fundidos via <strong>Reciprocal Rank Fusion</strong> (k=60) — uma fórmula que respeita o melhor dos dois sem ter que escolher. Opcional: um <strong>Reranker LLM</strong> faz uma re-ordenação final por relevância contextual. As top-N evidências vão para o LLM gerador montar a resposta.</p>
+          <p>Pipeline RAG: <strong>ingestão</strong> (você sobe doc) → <strong>chunking</strong> (quebra em pedaços de ~500 tokens) → <strong>embedding</strong> (gera vetores) → <strong>indexação</strong> (BM25 + Qdrant) → consultável em tempo real.</p>
+
+          <p><strong>Tabelas — consulta SQL em dados estruturados</strong></p>
+          <p>Quando você sobe um CSV ou XLSX, a plataforma <em>analisa</em> automaticamente. Se detecta uma planilha estruturada (colunas com tipos, headers limpos), abre um modal próprio oferecendo "Promover para tabela consultável".</p>
+          <ul>
+            <li>Os dados vão para um arquivo <strong>DuckDB</strong> embarcado (1 arquivo por tabela, em <code>data/tabular/&lt;ks_id&gt;/&lt;table_id&gt;.duckdb</code>). DuckDB é como um SQLite "turbinado para análise" — rápido em filtros e agregações.</li>
+            <li>No editor de Skills, o botão <strong>"Inserir Tabela"</strong> lista as tabelas disponíveis. Você escolhe uma, define os <em>filtros</em> (coluna + operador + valor que vem do input do user), as <em>colunas a retornar</em> e o <em>limite</em>. A skill recebe um YAML estruturado dentro da seção <code>## Data Tables</code>.</li>
+            <li>Quando a skill executa, ela monta uma query parametrizada (<code>SELECT col1, col2 FROM data WHERE col3 = ? LIMIT N</code>) com <strong>bind variables seguras</strong> e roda em modo <em>read-only</em>. <strong>NÃO é o LLM que escreve SQL</strong> — é uma consulta predefinida com parâmetros que o LLM apenas preenche.</li>
+          </ul>
+          <p>Pipeline Tabelas: <strong>upload</strong> (CSV/XLSX) → <strong>análise</strong> (detecta colunas, tipos, abas, header mergeado) → <strong>promoção</strong> (cria <code>.duckdb</code>) → <strong>uso na skill</strong> via "Inserir Tabela" → consulta parametrizada na invocação.</p>
+
+          <p><strong>As duas técnicas coexistem na MESMA base</strong>. Quando você sobe um CSV/XLSX, ele entra como chunks textuais (RAG) E você pode promover para tabela. A skill escolhe qual usar — ou ambos.</p>
         `
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Quando usar cada técnica',
+        items: [
+          {
+            title: 'Use RAG quando a pergunta é "o que diz X?"',
+            body: 'Perguntas como "qual a política de devolução?", "como é o procedimento de onboarding?", "o que o contrato fala sobre rescisão?". A resposta está em algum trecho de texto — o LLM lê e responde.'
+          },
+          {
+            title: 'Use Tabelas quando a pergunta exige filtros, agregações ou números precisos',
+            body: 'Perguntas como "quantos clientes têm renda > 5000?", "top 10 produtos por vendas em Q4", "média de tempo de resposta por agente", "lista de pedidos do cliente X". A resposta vem de tabela — não de prosa.'
+          },
+          {
+            title: 'Use AMBAS quando o CSV tem texto + dados',
+            body: 'Planilha de feedback de cliente com 1 coluna de texto livre ("comentário") e várias colunas estruturadas (data, NPS, segmento). Texto vira chunk RAG (busca por significado: "reclamações sobre entrega"); colunas estruturadas viram tabela (filtragem: "NPS < 6 em janeiro").'
+          },
+          {
+            title: 'Sintoma de escolha errada',
+            body: 'Se sua skill RAG está "inventando" números ou comparando errado, provavelmente devia ser tabela. Se sua skill Tabela está perdendo nuance qualitativa (não consegue resumir o sentimento das observações), provavelmente devia ser RAG.'
+          }
+        ]
       },
       {
         kind: 'campos',
         title: 'Campos do registro de base',
         items: [
-          { name: 'Nome', required: true, body: 'Nome legível da base. Aparece nas configurações dos agents.' },
+          { name: 'Nome', required: true, body: 'Nome legível da base. Aparece nas configurações dos agents e no dropdown "Inserir Tabela" do editor de Skills.' },
           { name: 'Tipo', required: true, options: ['manual', 'regulatório', 'contratual', 'FAQ'], body: 'Categoria do conteúdo. Útil para filtragem e gating por agent.' },
-          { name: 'Confidencialidade', required: true, options: ['publica', 'interna', 'confidencial'], body: 'Nível de acesso. Bases confidenciais só podem ser consultadas por agents autorizados.' },
+          { name: 'Confidencialidade', required: true, options: ['publica', 'interna', 'confidencial', 'restricted'], body: 'Nível de acesso. As Tabelas promovidas dessa base HERDAM essa configuração — uma tabela só é visível para os mesmos users que podem ver a KS de origem.' },
           { name: 'Domínio', required: false, body: 'Tag de área (fiscal, jurídico, RH). Agents do mesmo domínio têm preferência.' }
         ]
       },
@@ -572,13 +620,18 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
-          { title: 'Ingestão lenta = base grande', severity: 'info', body: 'Documentos grandes (>100 páginas) levam tempo para chunkar + embedar. Não cancele no meio. Acompanhe o progresso.' },
+          { title: 'Ingestão lenta = base grande', severity: 'info', body: 'Documentos grandes (>100 páginas) levam tempo para chunkar + embedar. Não cancele no meio. Acompanhe o progresso na barra.' },
           { title: 'RAG sem Verifier = sem rede de proteção', severity: 'warning', body: 'Se você ativa RAG mas não usa Verifier (§14.2), o agent pode citar trecho errado e ninguém percebe. Ative ambos juntos.' },
-          { title: 'Embedding model precisa ser consistente', severity: 'danger', body: 'Se você ingere com Azure embeddings e depois muda para Qwen3, as queries não vão casar com os vetores antigos. Re-ingira tudo ao trocar o embedder.' }
+          { title: 'Embedding model precisa ser consistente', severity: 'danger', body: 'Se você ingere com Azure embeddings e depois muda para Qwen3, as queries novas não casam com os vetores antigos. Re-ingira tudo ao trocar de embedder.' },
+          { title: 'CSV/XLSX só como RAG = números viram texto pouco útil', severity: 'warning', body: 'Subir uma planilha SEM promover para tabela transforma os dados em chunks de texto. O agent vai citar trechos como "linha 47 tem valor 5000" — não consegue filtrar nem agregar nem comparar. SEMPRE promova planilhas estruturadas para tabela quando precisar de consulta numérica.' },
+          { title: 'XLSX com título mergeado na linha 1 — auto-detect', severity: 'info', body: 'Se a linha 1 do XLSX tem só um título mergeado (ex: "TB_VENDAS" em A1:G1) e os headers reais estão na linha 2, a plataforma DETECTA automaticamente e usa a linha 2 como header. Você verá um aviso "↻ Auto-detect: linha 1 parecia título" no modal de promoção. Não precisa editar o arquivo.' },
+          { title: 'XLSX multi-aba = N tabelas separadas', severity: 'info', body: 'Cada aba do XLSX vira UMA TABELA independente. O modal mostra todas as abas detectadas; você pode promover só uma, ou clicar "Promover todas as N abas" para criar uma tabela por aba. Cada uma fica referenciável pelo nome no editor de Skill.' },
+          { title: 'Tabelas são read-only por execução', severity: 'info', body: 'A skill só pode CONSULTAR (SELECT). Não há como INSERT/UPDATE/DELETE/DROP nas tabelas — defesa técnica contra qualquer tentativa do LLM de modificar dados. Para atualizar a tabela, re-suba o arquivo (gera uma nova versão).' },
+          { title: 'Não é o LLM que escreve o SQL', severity: 'info', body: 'A consulta SQL da tabela é DECLARADA antecipadamente no editor de Skill (filtros, colunas, limite). O LLM apenas preenche os parâmetros vindos da pergunta do user. Isso evita SQL injection e queries malucas — é mais perto de "form com parâmetros" do que "LLM falando SQL livre".' }
         ]
       }
     ],
-    related: ['agents', 'quality', 'workspace', 'settings']
+    related: ['agents', 'skills', 'quality', 'workspace', 'settings']
   },
 
   // ═════════════════════════════════════════════════════════════════
