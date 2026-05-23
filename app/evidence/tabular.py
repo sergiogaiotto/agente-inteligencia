@@ -30,6 +30,7 @@ Decisões:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import tempfile
@@ -839,7 +840,9 @@ async def promote_to_table(
         "urn": urn,
         "name": display_name,
         "description": description,
-        "schema_json": schema,
+        # JSONB: asyncpg exige string JSON (não list/dict Python) ao passar via
+        # placeholder $N. Repository genérico não faz encoding — fazemos aqui.
+        "schema_json": json.dumps(schema, ensure_ascii=False),
         "row_count": target_sheet.get("rows", 0),
         "column_count": target_sheet.get("columns", len(schema)),
         "size_bytes": size_bytes,
@@ -946,7 +949,17 @@ async def execute_query(
     if limit < 1:
         limit = 1
 
-    schema = table.get("schema_json") or []
+    # Em produção, asyncpg decoda JSONB → list nativo. Em testes (mocks que
+    # guardam o que foi passado pra create), pode vir como string JSON.
+    # Decode defensivo cobre os 2 caminhos.
+    raw_schema = table.get("schema_json") or []
+    if isinstance(raw_schema, str):
+        try:
+            schema = json.loads(raw_schema)
+        except (json.JSONDecodeError, TypeError):
+            schema = []
+    else:
+        schema = raw_schema
     schema_col_names = [c["name"] for c in schema]
 
     # SELECT clause
@@ -1060,7 +1073,8 @@ async def execute_query(
                 "agent_id": agent_id,
                 "executed_by": executed_by or "",
                 "sql_rendered": sql,
-                "inputs_json": inputs,  # JSONB
+                # JSONB: encoding explícito (mesma razão do schema_json em promote)
+                "inputs_json": json.dumps(inputs, ensure_ascii=False, default=str),
                 "row_count": row_count,
                 "duration_ms": duration_ms,
                 "status": status,
