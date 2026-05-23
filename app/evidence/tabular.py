@@ -149,10 +149,9 @@ def _col_letter(idx: int) -> str:
 
 
 def _xlsx_range_for_header(file_path: str, sheet_name: str, header_row: int) -> Optional[str]:
-    """Constrói range válido para DuckDB read_xlsx pular linhas iniciais.
-
-    header_row=1 (default) → None (lê tudo do default).
-    header_row=2 → consulta dims da aba e gera `A2:{lastcol}{lastrow}`.
+    """LEGACY: range para DuckDB `read_xlsx` (não mais usado — XLSX vai via
+    openpyxl→CSV em `_xlsx_sheet_to_csv`). Mantido por retro-compatibilidade
+    com testes existentes.
     """
     if header_row <= 1:
         return None
@@ -167,6 +166,77 @@ def _xlsx_range_for_header(file_path: str, sheet_name: str, header_row: int) -> 
     return f"A{header_row}:{_col_letter(max_col)}{max_row}"
 
 
+def _xlsx_sheet_to_csv(
+    xlsx_path: str,
+    sheet_name: Optional[str],
+    header_row: int,
+    out_csv_path: str,
+) -> None:
+    """Converte UMA aba do XLSX para CSV via openpyxl.
+
+    Por que: a extension `excel` do DuckDB requer download em runtime
+    (`INSTALL excel; LOAD excel`) — quebra em ambientes corporativos sem
+    internet ou sem permissão de instalar extensions. openpyxl já está
+    presente (dep transitiva de `markitdown[all]`) e gera CSV que DuckDB
+    lê nativamente via `read_csv_auto` (built-in, zero deps).
+
+    Pula `header_row - 1` linhas iniciais. Ex: header_row=2 → descarta
+    a linha 1 (provavelmente título mergeado) e usa linha 2 como header
+    do CSV.
+
+    Args:
+        xlsx_path: caminho do XLSX origem.
+        sheet_name: nome da aba. None = primeira aba (wb.active).
+        header_row: linha (1-based) que vira a primeira linha do CSV.
+        out_csv_path: caminho do CSV destino (sobrescreve).
+
+    Raises:
+        TabularError: openpyxl indisponível, XLSX corrompido, ou aba ausente.
+    """
+    try:
+        import openpyxl  # type: ignore
+    except ImportError as e:
+        raise TabularError(
+            "openpyxl indisponível — necessário para ler XLSX. "
+            "Execute `pip install openpyxl` (ou `pip install -r requirements.txt`).",
+            status_code=503,
+        ) from e
+
+    import csv
+    try:
+        wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    except Exception as e:
+        raise TabularError(
+            f"Falha ao abrir XLSX: {e}. Arquivo pode estar corrompido ou "
+            f"protegido por senha.",
+            status_code=400,
+        ) from e
+    try:
+        if sheet_name:
+            if sheet_name not in wb.sheetnames:
+                raise TabularError(
+                    f"Aba '{sheet_name}' não encontrada. Disponíveis: {wb.sheetnames}",
+                    status_code=400,
+                )
+            ws = wb[sheet_name]
+        else:
+            ws = wb.active
+
+        # Escreve CSV. newline='' segue convenção do módulo csv (evita
+        # linhas duplicadas no Windows). encoding utf-8 para acentos.
+        # None → '' (CSV não tem null; DuckDB infere NULL pra string vazia
+        # em colunas numéricas).
+        with open(out_csv_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            skip = max(0, header_row - 1)
+            for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                if i <= skip:
+                    continue
+                writer.writerow(["" if v is None else v for v in row])
+    finally:
+        wb.close()
+
+
 def _read_into_duckdb(
     con,
     file_path: str,
@@ -174,7 +244,12 @@ def _read_into_duckdb(
     sheet_name: Optional[str] = None,
     header_row: int = 1,
 ) -> None:
-    """Cria `data` table a partir do arquivo. Trata XLSX via extension `excel`.
+    """Cria `data` table a partir do arquivo.
+
+    CSV: usa `read_csv_auto` (built-in DuckDB, infere tipos + delimiter).
+    XLSX: converte aba via `_xlsx_sheet_to_csv` (openpyxl) → CSV temp →
+    `read_csv_auto`. NÃO depende da extension `excel` do DuckDB (que
+    exige download em runtime e quebra em ambientes offline/corporativos).
 
     Args:
         con: conexão DuckDB ativa.
@@ -186,9 +261,9 @@ def _read_into_duckdb(
     """
     if ext == "csv":
         # read_csv_auto: HEADER detect, type inference, delimiter sniffer.
-        # IGNORE_ERRORS=false para falhar em CSV malformado (preferimos erro claro).
+        # SKIP=N pula N linhas iniciais (header fica na linha N+1).
         safe = file_path.replace("'", "''")
-        skip = max(0, header_row - 1)  # CSV: skip N rows antes do header
+        skip = max(0, header_row - 1)
         skip_clause = f", SKIP={skip}" if skip > 0 else ""
         con.execute(
             f"CREATE TABLE {_DUCKDB_TABLE} AS "
@@ -196,30 +271,28 @@ def _read_into_duckdb(
         )
         return
     if ext == "xlsx":
-        # Extension 'excel' (DuckDB 1.0+) traz read_xlsx. Auto-install + load.
-        try:
-            con.execute("INSTALL excel")
-            con.execute("LOAD excel")
-        except Exception as e:
-            raise TabularError(
-                "Extensão 'excel' do DuckDB indisponível "
-                "(offline ou sem permissão de instalar). "
-                "Solução: converter para CSV antes do upload.",
-                status_code=503,
-            ) from e
-        safe = file_path.replace("'", "''")
-        opts: list[str] = []
-        if sheet_name:
-            safe_sheet = sheet_name.replace("'", "''")
-            opts.append(f"sheet='{safe_sheet}'")
-        rng = _xlsx_range_for_header(file_path, sheet_name or "", header_row)
-        if rng:
-            opts.append(f"range='{rng}'")
-        opts_str = (", " + ", ".join(opts)) if opts else ""
-        con.execute(
-            f"CREATE TABLE {_DUCKDB_TABLE} AS "
-            f"SELECT * FROM read_xlsx('{safe}'{opts_str})"
+        # Pipeline: openpyxl lê XLSX → escreve CSV temp → DuckDB read_csv_auto.
+        # header_row já é tratado no momento da conversão (skip de linhas).
+        # Sem dependência da extension 'excel' do DuckDB.
+        tmp_handle = tempfile.NamedTemporaryFile(
+            suffix=".csv", delete=False, mode="w", encoding="utf-8", newline=""
         )
+        tmp_csv_path = tmp_handle.name
+        tmp_handle.close()
+        try:
+            _xlsx_sheet_to_csv(file_path, sheet_name, header_row, tmp_csv_path)
+            safe = tmp_csv_path.replace("'", "''")
+            # CSV já vem com header na primeira linha (skip de linhas foi feito
+            # no _xlsx_sheet_to_csv), então não precisa SKIP aqui.
+            con.execute(
+                f"CREATE TABLE {_DUCKDB_TABLE} AS "
+                f"SELECT * FROM read_csv_auto('{safe}', HEADER=TRUE)"
+            )
+        finally:
+            try:
+                os.unlink(tmp_csv_path)
+            except OSError:
+                pass
         return
     raise TabularError(
         f"Formato não suportado: {ext}. Aceitos: csv, xlsx.",
@@ -441,16 +514,28 @@ def _analyze_one_sheet_with_retry(
     """
     attempt1 = _analyze_one_sheet(duckdb, tmp_path, ext, sheet_name, header_row=1)
 
-    # Patológico = score zerado pela heurística específica de "1 col VARCHAR única"
-    # OU pela detecção de "TB_*" no nome da coluna.
+    # Patológico — qualquer um destes sinais dispara auto-retry com header_row=2:
+    #   1. Alguma coluna tem nome típico de TABELA (TB_/FATO_/DIM_/...) —
+    #      sinal forte e independente de score (cobre o caso real do user
+    #      onde só a coluna 0 tem nome de tabela e o score fica em 0.3,
+    #      não bate o threshold antigo de score<0.3 mas é claramente patológico).
+    #   2. Warning específico de "1 col VARCHAR única" (caso extremo).
+    #   3. Score baixo (< threshold) E warning de título mergeado.
+    has_title_like_col = any(
+        _looks_like_table_title(c["name"]) for c in attempt1.get("schema", [])
+    )
+    has_single_varchar_warning = any(
+        "1 coluna VARCHAR única" in w for w in attempt1["warnings"]
+    )
+    has_merged_title_warning = any(
+        "título mergeado" in w or "linha 1 do XLSX" in w
+        for w in attempt1["warnings"]
+    )
+    from app.data_tables.types import TABULAR_READY_THRESHOLD
     looks_patho = (
-        attempt1["score"] < 0.3
-        and any(
-            "título mergeado" in w
-            or "nome de tabela" in w
-            or "linha 1 do XLSX" in w
-            for w in attempt1["warnings"]
-        )
+        has_title_like_col
+        or has_single_varchar_warning
+        or (attempt1["score"] < TABULAR_READY_THRESHOLD and has_merged_title_warning)
     )
     if not looks_patho:
         attempt1["header_row_auto_detected"] = False
