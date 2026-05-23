@@ -1,16 +1,16 @@
 # Handoff — Próxima Sessão
 
-> **Última atualização**: 2026-05-23, Onda Tabular completa (4 fases) — pendente commit/PR.
+> **Última atualização**: 2026-05-23, Onda Tabular completa e mergeada em main (PRs #110, #114, #115, #116).
 > **Como usar**: leia este documento primeiro na próxima sessão, depois decida por onde começar.
 
 ---
 
 ## Estado atual da plataforma
 
-- **85 PRs em main** (após merge de #86), zero PRs abertos
-- **668 testes verdes** (`pytest tests/`) — +74 da Onda Tabular vs handoff anterior
-- **Trabalho NÃO commitado no branch `feat/evidence-inspect-drawer-and-row-click`**: Onda Tabular completa (CSV/XLSX → DuckDB consultável via skills declarativas). 4 fases entregues, aguardando empacotamento em PRs.
-- **Última atividade commitada**: A1 do API Connectors concluído (PR #86) — engine migrado para `app.core.http_auth`, suporte a 5 body types, auth headers redactados em `api_call_logs.request_headers`
+- **~92 PRs em main** (após mergeação de #109 + #110 + #114 + #115 + #116; #111/#112/#113 ficaram em base obsoleta — substituídos por #115/#116/#114)
+- **679 testes verdes** (`pytest tests/`) — +11 da Onda Tabular vs handoff anterior
+- **Última atividade**: Onda Tabular entregue em main 2026-05-23 — CSV/XLSX promovido a tabela DuckDB consultável via Skills declarativas (nova seção canônica `## Data Tables` no SKILL.md). UI completa (modal de promoção + tab Tabelas em /rag; 4º botão "Inserir Tabela" + Query Builder visual em /skills/new).
+- **Smoke manual em homolog pendente** — ver Onda Tabular abaixo.
 
 ### Onde olhar para contexto rápido
 
@@ -107,32 +107,28 @@ Esses 4 itens foram **reconhecidos no PR #84** mas deixados fora do escopo para 
 
 ---
 
-### A0 (NOVO 2026-05-23). Onda Tabular — empacotamento em PRs
+### A0 (2026-05-23). Onda Tabular — ENTREGUE em main
 
-**Status**: backend + engine + parser + frontend KB + frontend Skills implementados e testados. Suite 668 verde. **NÃO commitado**.
+**Status**: ✅ TODOS os 4 PRs mergeados em main. Suite 679 verde.
 
-Branch `feat/evidence-inspect-drawer-and-row-click` tem além do que originalmente prometeu (drawer de Inspeção + linha clicável). Decisão pendente: empacotar a Onda Tabular como:
+**PRs entregues**:
+- [#110](https://github.com/sergiogaiotto/agente-inteligencia/pull/110) — `feat(tabular): backend DuckDB + endpoints (PR 1/4)` — `app/data_tables/`, `app/evidence/tabular.py`, `app/routes/data_tables.py`, DDL + repos, 55 testes
+- [#115](https://github.com/sergiogaiotto/agente-inteligencia/pull/115) — `feat(tabular): parser ## Data Tables + engine (re-PR 2/4)` — `app/skill_parser/parser.py`, `app/agents/declarative_engine.py`, 19 testes (originais #111 ficou em base obsoleta)
+- [#116](https://github.com/sergiogaiotto/agente-inteligencia/pull/116) — `feat(tabular): frontend KB — promote + tab Tabelas (re-PR 3/4)` — `app/templates/pages/evidence.html` (originais #112 ficou em base obsoleta)
+- [#114](https://github.com/sergiogaiotto/agente-inteligencia/pull/114) — `feat(tabular): frontend Skills — Query Builder (PR 4/4)` — `app/templates/pages/skill_form.html` (recriado automaticamente pelo GitHub após #113 ficar em base obsoleta)
 
-**Opção A — 4 PRs sequenciais (mais rastreável)**:
-1. `feat(tabular): backend DuckDB + endpoints REST (Onda Tabular, PR 1/4)` — `app/data_tables/`, `app/evidence/tabular.py`, `app/routes/data_tables.py`, DDL + repos, 55 testes
-2. `feat(tabular): parser ## Data Tables + engine declarativo (Onda Tabular, PR 2/4)` — `app/skill_parser/parser.py`, `app/agents/declarative_engine.py`, 19 testes
-3. `feat(tabular): frontend KB — modal promote + tab Tabelas (Onda Tabular, PR 3/4)` — `app/templates/pages/evidence.html`
-4. `feat(tabular): frontend Skills — botão Inserir Tabela + Query Builder (Onda Tabular, PR 4/4)` — `app/templates/pages/skill_form.html`
+**Lição aprendida**: stacked PRs (`--base feat/X` em vez de `--base main`) + auto-merge ativo é armadilha. Quando o PR pai mergeou em main, os filhos ficaram MERGED na branch base (deletada) sem propagar para main. Próxima vez: criar todos os PRs com `--base main` ou desligar auto-merge antes de criar a chain. SEMPRE validar com `git log main --oneline | grep <feature>` antes de declarar entregue.
 
-**Opção B — 1 PR único** "Onda Tabular completa" — mais simples, perde granularidade de review.
-
-**Arquivos novos**: `app/data_tables/__init__.py`, `types.py`, `queries.py`; `app/evidence/tabular.py`; `app/routes/data_tables.py`; `tests/test_data_tables.py`; `tests/test_data_tables_engine.py`.
-**Arquivos modificados**: `app/core/database.py`, `app/main.py`, `requirements.txt`, `app/skill_parser/parser.py`, `app/agents/declarative_engine.py`, `app/templates/pages/evidence.html`, `app/templates/pages/skill_form.html`.
-
-**Smoke test manual pendente** (em homolog após merge):
-1. Upload CSV em /rag → modal "Promover para tabela" aparece → cria tabela
+**Smoke test manual pendente** (em homolog):
+1. Upload CSV em /rag → painel "Promover para tabela" aparece pós-ingest com score + schema → cria tabela
 2. Tab "Tabelas" no drawer Inspecionar lista a tabela com schema correto
-3. /skills/new → 4º botão "Inserir Tabela" mostra dropdown com a tabela criada
-4. Query Builder → preview retorna linhas reais → "Inserir" gera bloco YAML válido em ## Data Tables
-5. Criar skill declarative com ## Data Tables, executar agente, verificar resultado no context.tables.<id>
+3. /skills/new → 4º botão "Inserir Tabela" (amber) mostra dropdown com a tabela criada
+4. Query Builder → adicionar filtros (testar IS NULL, BETWEEN, IN) + preview retorna linhas reais → "Inserir" gera bloco YAML em ## Data Tables
+5. Criar skill declarative com ## Data Tables, executar agente, verificar resultado em `context.tables.<id>` ou no alias customizado
+6. User não-root NÃO consegue ver tabelas de KS com `confidentiality_label='restricted'`
 
 **Decisões fixadas (não revisar sem motivo)**:
-- DuckDB embarcado (1 arquivo .duckdb por tabela em `data/tabular/<ks_id>/<table_id>.duckdb`)
+- DuckDB embarcado (1 arquivo `.duckdb` por tabela em `data/tabular/<ks_id>/<table_id>.duckdb`)
 - Read-only por execução (safety técnica, não só prompt)
 - Bind vars `?` (nunca string interpolation — defesa contra SQL injection)
 - Dual-mode (RAG + tabela coexistem na mesma KS)
@@ -212,14 +208,14 @@ Decisões aprendidas em 84 PRs que devem ser respeitadas em PRs futuros — extr
 
 Copie-cole isto na primeira mensagem da próxima sessão:
 
-> Continue de onde paramos. Leia `docs/HANDOFF_NEXT_SESSION.md` para contexto. Estado atual: 85 PRs em main, 516 testes verdes. A1 (declarative_engine integration tests) já saiu. Quero seguir com o próximo gap do API Connectors — recomendação atual é **A2 (SimpleCookie fallback)** porque é baixa complexidade e fecha mais um item da seção A. Concorda ou prefere A3 (charsets) / A4 (circuit breaker)?
+> Continue de onde paramos. Leia `docs/HANDOFF_NEXT_SESSION.md` para contexto. Estado atual: ~92 PRs em main, 679 testes verdes. Onda Tabular completa em main 2026-05-23 (#110, #114, #115, #116) — falta smoke manual em homolog. Próximos candidatos: (a) smoke da Onda Tabular, (b) Onda Tabular 2+ (JOIN cross-table / AND-OR grouping / dashboard de queries), (c) A2 SimpleCookie fallback do API Connectors, (d) Roadmap Onda 5+ do Catálogo (Pricing editável via UI = leve). Qual prioridade?
 
 A primeira sessão saberá:
 - Estado atual sem precisar reconstruir
-- 3 gaps restantes do API Connectors com plano técnico de cada (A1 está concluído)
+- Onda Tabular entregue + smoke test pendente
+- 3 gaps restantes do API Connectors (A2/A3/A4) com plano técnico
 - 8 itens da Onda 5+ se quiser pivotar
-- Convenções a manter
-- Por onde começar (sugestão A2)
+- Convenções a manter (incluindo nova: cuidado com stacked PRs + auto-merge)
 
 ---
 
