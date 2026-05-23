@@ -280,10 +280,47 @@
                             <template x-if="ingestProgress.result.partial">
                                 <span class="block mt-1 text-amber-800">⚠ Qdrant divergente — Postgres tem todos os chunks; vetores podem estar incompletos. Re-execute quando Qdrant estiver OK.</span>
                             </template>
-                            <!-- Hint: análise tabular acontece em modal separado (sobrevive ao fechamento deste) -->
-                            <template x-if="tabularAnalysis.loading || tabularPromoteOpen">
-                                <div class="mt-2 text-[10px] text-amber-700 italic">
-                                    Análise da planilha em andamento — abriremos um modal próprio para você decidir promover.
+                            <!-- Onda Tabular: feedback explícito sobre análise (estado: loading / ok / error / idle) -->
+                            <template x-if="ingestForm.file && _isTabularFile(ingestForm.file)">
+                                <div class="mt-3 pt-3 border-t border-emerald-200">
+                                    <template x-if="tabularAnalysis.loading">
+                                        <div class="flex items-center gap-2 text-[11px] text-amber-700">
+                                            <svg class="animate-spin w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" opacity="0.25"/><path d="M22 12c0-5.523-4.477-10-10-10"/></svg>
+                                            <span>Analisando planilha em background — modal abrirá automaticamente se for promovível.</span>
+                                        </div>
+                                    </template>
+                                    <template x-if="tabularAnalysis.error">
+                                        <div class="flex items-center justify-between gap-2 text-[11px]">
+                                            <span class="text-rose-700">⚠ Análise tabular falhou: <span x-text="tabularAnalysis.error"></span></span>
+                                            <button @click="_runTabularAnalyze()" type="button"
+                                                    class="rounded border border-amber-300 bg-amber-50 hover:bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-800">
+                                                ↻ Tentar de novo
+                                            </button>
+                                        </div>
+                                    </template>
+                                    <template x-if="!tabularAnalysis.loading && !tabularAnalysis.error && tabularAnalysis.result">
+                                        <div class="flex items-center justify-between gap-2 text-[11px]">
+                                            <span class="text-amber-800">
+                                                Análise concluída:
+                                                <strong x-text="tabularAnalysis.result.sheet_count || 1"></strong> aba(s),
+                                                score primário <strong x-text="(tabularAnalysis.result.score || 0).toFixed(2)"></strong>.
+                                                <span x-show="!tabularPromoteOpen" class="text-surface-500">Modal de promote fechado.</span>
+                                            </span>
+                                            <button @click="tabularPromoteOpen = true" x-show="!tabularPromoteOpen" type="button"
+                                                    class="rounded bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 text-[10px] font-semibold">
+                                                Abrir modal de promote
+                                            </button>
+                                        </div>
+                                    </template>
+                                    <template x-if="!tabularAnalysis.loading && !tabularAnalysis.error && !tabularAnalysis.result">
+                                        <div class="flex items-center justify-between gap-2 text-[11px]">
+                                            <span class="text-surface-600">Planilha detectada (.csv/.xlsx). Análise tabular não rodou ainda.</span>
+                                            <button @click="_runTabularAnalyze()" type="button"
+                                                    class="rounded bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 text-[10px] font-semibold">
+                                                ▶ Analisar planilha agora
+                                            </button>
+                                        </div>
+                                    </template>
                                 </div>
                             </template>
                         </div>
@@ -921,7 +958,11 @@ function evidencePage() {
 
         async _runTabularAnalyze() {
             const sid = this.ingestSourceId;
-            if (!sid || !this.ingestForm.file) return;
+            if (!sid || !this.ingestForm.file) {
+                console.warn('[tabular] _runTabularAnalyze: sem sid ou file', { sid, hasFile: !!this.ingestForm.file });
+                return;
+            }
+            console.log('[tabular] iniciando análise:', this.ingestForm.file.name);
             this.tabularAnalysis = { loading: true, error: null, result: null };
             try {
                 const fd = new FormData();
@@ -935,26 +976,43 @@ function evidencePage() {
                     throw new Error(msg);
                 }
                 const result = await resp.json();
+                console.log('[tabular] análise OK:', {
+                    ext: result.ext,
+                    sheet_count: result.sheet_count,
+                    primary: result.primary_sheet,
+                    top_score: result.score,
+                    top_ready: result.tabular_ready,
+                    sheets: (result.sheets || []).map(s => ({
+                        name: s.name, ready: s.tabular_ready, score: s.score,
+                        rows: s.rows, cols: s.columns, header_row: s.header_row,
+                    })),
+                });
                 this.tabularAnalysis = { loading: false, error: null, result };
 
                 // Abre modal SE alguma aba (ou o CSV) está apta a virar tabela.
-                // Para multi-aba, basta 1 aba ready. Pra CSV/aba única, usa top-level.
-                const anyReady = (result.sheets && result.sheets.length)
-                    ? result.sheets.some(s => s.tabular_ready)
+                // Compat: backend antigo pode não enviar `sheets[]` — cai no top-level.
+                const sheetsArr = Array.isArray(result.sheets) ? result.sheets : [];
+                const anyReady = sheetsArr.length > 0
+                    ? sheetsArr.some(s => s.tabular_ready)
                     : !!result.tabular_ready;
+
                 if (anyReady) {
                     // Default selecionada = aba primária (ou primeira ready)
                     this.selectedSheetName = result.primary_sheet
-                        || (result.sheets && result.sheets.find(s => s.tabular_ready)?.name)
+                        || (sheetsArr.find(s => s.tabular_ready)?.name)
                         || null;
                     this.tabularPromoteOpen = true;
-                } else if (result.sheet_count > 0) {
-                    // XLSX/CSV foi analisado mas nada está ready — toast informativo
-                    showToast('Planilha detectada mas sem aba apta a virar tabela. Veja warnings na análise.', 'error');
+                    showToast('Planilha estruturada detectada — escolha como promover no modal.', 'success');
+                } else {
+                    // Análise rodou mas nada está apto. Toast neutro pra user saber.
+                    const detail = sheetsArr.length > 0
+                        ? `${sheetsArr.length} aba(s) analisada(s), nenhuma apta.`
+                        : 'Arquivo não parece estruturado.';
+                    showToast('Análise concluída: ' + detail + ' Veja "Tentar de novo" no painel.', 'error');
                 }
             } catch(e) {
+                console.error('[tabular] análise FALHOU:', e);
                 this.tabularAnalysis = { loading: false, error: e.message || 'falha na análise', result: null };
-                // Toast persistente: erro de analyze é importante mesmo se modal de ingest fechou
                 showToast('Análise tabular falhou: ' + (e.message || 'erro desconhecido'), 'error');
             }
         },
