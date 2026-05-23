@@ -189,6 +189,131 @@ async def _check_redis() -> dict:
         }
 
 
+async def _check_duckdb() -> dict:
+    """DuckDB é lib embarcada (não serviço de rede). Latência = import + connect
+    em `:memory:`. Saudável se conseguir abrir conexão e executar SELECT 1.
+
+    Não tem UI nativa. Diretório raiz das tabelas é `data/tabular/`.
+    Description menciona Onda Tabular para alinhar com outros services.
+    """
+    from pathlib import Path
+    t0 = time.perf_counter()
+    description = "Engine SQL embarcado para tabelas tabulares (Onda Tabular)"
+    try:
+        import duckdb  # type: ignore
+        con = duckdb.connect(":memory:")
+        try:
+            con.execute("SELECT 1").fetchone()
+        finally:
+            con.close()
+        return {
+            "name": "duckdb",
+            "ok": True,
+            "not_started": False,
+            "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+            "description": description,
+            "ui_url": None,
+            "health_url": None,
+            "status_code": None,
+            "error": None,
+            "hint": None,
+        }
+    except ImportError:
+        # Lib não instalada: trata como "não iniciado" (similar a profile_full
+        # quando o container não está up) — feature está disponível mas inativa.
+        return {
+            "name": "duckdb",
+            "ok": False,
+            "not_started": True,
+            "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+            "description": description,
+            "ui_url": None,
+            "health_url": None,
+            "status_code": None,
+            "error": None,
+            "hint": "Lib não instalada — rode `pip install duckdb>=1.0.0` (ou `pip install -r requirements.txt`)",
+        }
+    except Exception as e:
+        return {
+            "name": "duckdb",
+            "ok": False,
+            "not_started": False,
+            "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+            "description": description,
+            "ui_url": None,
+            "health_url": None,
+            "status_code": None,
+            "error": f"{type(e).__name__}: {str(e)[:80]}",
+            "hint": None,
+        }
+
+
+async def _duckdb_details() -> dict:
+    """Contadores operacionais do DuckDB: versão da lib, total de tabelas
+    promovidas, linhas totais, espaço em disco dos arquivos .duckdb.
+
+    NÃO faz queries em todas as tabelas (custo proibitivo) — confia nos
+    contadores cacheados em `data_tables.row_count` e `size_bytes`, que
+    são atualizados no momento da ingestão (promote_to_table).
+    """
+    from pathlib import Path
+    out = {
+        "ok": False,
+        "version": None,
+        "tables_ready": 0,
+        "tables_error": 0,
+        "rows_total": 0,
+        "size_bytes_total": 0,
+        "size_bytes_on_disk": 0,
+        "files_on_disk": 0,
+        "tabular_root": "data/tabular",
+    }
+    try:
+        import duckdb  # type: ignore
+        out["version"] = duckdb.__version__
+    except ImportError:
+        out["error"] = "duckdb não instalado"
+        return out
+
+    # Contadores do Postgres (data_tables.row_count + size_bytes já populados)
+    try:
+        from app.core.database import _get_pool
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            rows = await con.fetch("""
+                SELECT
+                    COUNT(*) FILTER (WHERE status = 'ready')::bigint AS ready,
+                    COUNT(*) FILTER (WHERE status = 'error')::bigint AS errored,
+                    COALESCE(SUM(row_count) FILTER (WHERE status = 'ready'), 0)::bigint AS rows_total,
+                    COALESCE(SUM(size_bytes) FILTER (WHERE status = 'ready'), 0)::bigint AS bytes_total
+                FROM data_tables
+            """)
+            r = rows[0]
+            out["tables_ready"] = int(r["ready"])
+            out["tables_error"] = int(r["errored"])
+            out["rows_total"] = int(r["rows_total"])
+            out["size_bytes_total"] = int(r["bytes_total"])
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {str(e)[:80]}"
+        return out
+
+    # Sanidade física: caminha em data/tabular/ e mede o que está em disco.
+    # Pode divergir do total cacheado se houver arquivos órfãos (tabela
+    # deletada do DB mas .duckdb não removido) ou vice-versa.
+    try:
+        root = Path("data") / "tabular"
+        if root.exists():
+            files = list(root.rglob("*.duckdb"))
+            out["files_on_disk"] = len(files)
+            out["size_bytes_on_disk"] = sum(f.stat().st_size for f in files)
+    except Exception:
+        # disk walk best-effort — não falha o response
+        pass
+
+    out["ok"] = True
+    return out
+
+
 async def _qdrant_details() -> dict:
     """Lista coleções Qdrant com points_count + dimensão dos vetores."""
     qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333").rstrip("/")
@@ -304,12 +429,13 @@ async def infra_details():
     Diferente de /status (binário ok/error), /details traz contadores e
     configuração que mudam ao longo do uso.
     """
-    qdrant, redis, pg = await asyncio.gather(
+    qdrant, redis, pg, duck = await asyncio.gather(
         _qdrant_details(),
         _redis_details(),
         _postgres_details(),
+        _duckdb_details(),
     )
-    return {"qdrant": qdrant, "redis": redis, "postgres": pg}
+    return {"qdrant": qdrant, "redis": redis, "postgres": pg, "duckdb": duck}
 
 
 @router.get("/status")
@@ -336,6 +462,7 @@ async def infra_status():
             description="Vector DB para RAG (Onda 3)",
             ui_url=ui_qdrant,
         ),
+        _check_duckdb(),
         _check_http(
             "opa",
             f"{opa_url}/health",
