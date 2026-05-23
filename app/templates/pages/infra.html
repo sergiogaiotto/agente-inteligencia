@@ -146,6 +146,59 @@
         </div>
     </div>
 
+    <!-- Tabelas Operacionais — DuckDB (Onda Tabular) -->
+    <div class="mt-3 rounded-xl border border-surface-200 bg-white">
+        <div class="flex items-center justify-between border-b border-surface-100 px-4 py-3">
+            <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 7.5h18M3 12h18M3 16.5h18M7.5 3v18M16.5 3v18"/></svg>
+                <h2 class="text-[13px] font-semibold text-brand-900">Tabelas Operacionais — DuckDB</h2>
+            </div>
+            <div class="text-[10px] text-surface-400" x-show="details.duckdb?.ok">
+                <span x-text="details.duckdb?.tables_ready ?? 0"></span> tabela(s) ready
+                <span x-show="details.duckdb?.tables_error" class="text-rose-500 ml-1">
+                    · <span x-text="details.duckdb?.tables_error"></span> com erro
+                </span>
+            </div>
+        </div>
+        <div class="px-4 py-3">
+            <div x-show="!details.duckdb?.ok" class="text-[11px] text-rose-600" x-text="details.duckdb?.error || 'erro'"></div>
+            <div x-show="details.duckdb?.ok && (details.duckdb?.tables_ready || 0) === 0" class="text-[11px] text-surface-400">
+                Nenhuma tabela promovida ainda. Faça upload de um CSV/XLSX em
+                <a href="/rag" class="text-brand-500 underline">RAG</a> e clique em
+                <strong class="text-amber-700">Promover para tabela consultável</strong>.
+            </div>
+            <div x-show="details.duckdb?.ok" class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                <div class="rounded-lg bg-surface-50 px-2.5 py-2">
+                    <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Tabelas ready</div>
+                    <div class="text-[14px] font-bold text-brand-900 font-mono" x-text="(details.duckdb?.tables_ready || 0).toLocaleString()"></div>
+                </div>
+                <div class="rounded-lg bg-surface-50 px-2.5 py-2">
+                    <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Linhas totais</div>
+                    <div class="text-[14px] font-bold text-brand-900 font-mono" x-text="(details.duckdb?.rows_total || 0).toLocaleString()"></div>
+                </div>
+                <div class="rounded-lg bg-surface-50 px-2.5 py-2">
+                    <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Tamanho (DB)</div>
+                    <div class="text-[14px] font-bold text-brand-900 font-mono" x-text="_bytesHuman(details.duckdb?.size_bytes_total)"></div>
+                </div>
+                <div class="rounded-lg bg-surface-50 px-2.5 py-2">
+                    <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Em disco</div>
+                    <div class="text-[14px] font-bold font-mono"
+                         :class="_diskMatches(details.duckdb) ? 'text-brand-900' : 'text-amber-700'"
+                         x-text="_bytesHuman(details.duckdb?.size_bytes_on_disk) + ' / ' + (details.duckdb?.files_on_disk || 0) + 'f'"></div>
+                </div>
+            </div>
+            <div x-show="details.duckdb?.ok" class="mt-2 text-[10px] text-surface-400 flex items-center justify-between">
+                <span>
+                    DuckDB <span class="font-mono" x-text="details.duckdb?.version || '?'"></span>
+                    · arquivos em <code class="text-[10px] bg-surface-100 px-1 rounded" x-text="details.duckdb?.tabular_root"></code>
+                </span>
+                <span x-show="!_diskMatches(details.duckdb)" class="text-amber-700">
+                    ⚠ tamanho DB ≠ disco — pode haver arquivos órfãos
+                </span>
+            </div>
+        </div>
+    </div>
+
     <!-- Cache & Rate-Limit (Redis) + Postgres counts em grid 2 col -->
     <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
 
@@ -263,7 +316,7 @@ function infraPage() {
         services: [],
         summary: { total: 0, healthy: 0, unhealthy: 0 },
         loading: false,
-        details: { qdrant: null, redis: null, postgres: null },
+        details: { qdrant: null, redis: null, postgres: null, duckdb: null },
         grafanaEmbed: false,
 
         // True só quando Grafana respondeu OK no último /status. Se profile full
@@ -296,6 +349,27 @@ function infraPage() {
 
         async copyHealthUrl(s) {
             if (await copyText(s.health_url) && window.showToast) showToast('Health URL copiada');
+        },
+
+        // ─── Helpers do painel DuckDB (Onda Tabular) ────────────────
+        _bytesHuman(n) {
+            if (n == null || isNaN(n)) return '—';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let v = Number(n);
+            let i = 0;
+            while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+            return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i];
+        },
+        // Tamanho declarado no DB bate com o que está em disco?
+        // Tolera diferença de até 10% (overhead de página DuckDB, metadata).
+        _diskMatches(duck) {
+            if (!duck || !duck.ok) return true;
+            const db = Number(duck.size_bytes_total || 0);
+            const disk = Number(duck.size_bytes_on_disk || 0);
+            if (db === 0 && disk === 0) return true;
+            const diff = Math.abs(db - disk);
+            const base = Math.max(db, disk);
+            return base === 0 ? true : (diff / base) <= 0.10;
         },
     };
 }
