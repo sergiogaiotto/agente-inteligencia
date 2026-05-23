@@ -100,22 +100,103 @@ def _ext_from_filename(filename: str) -> str:
     return "unsupported"
 
 
-def _read_into_duckdb(con, file_path: str, ext: str) -> None:
-    """Cria `data` table a partir do arquivo. Trata XLSX via extension `excel`."""
+def _list_xlsx_sheets(file_path: str) -> list[str]:
+    """Lista nomes das abas via openpyxl (já presente como dep de markitdown[all]).
+
+    Retorna `[]` se openpyxl indisponível ou arquivo corrompido — caller
+    cai no fluxo de "1 aba" como fallback.
+    """
+    try:
+        import openpyxl  # type: ignore
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            return list(wb.sheetnames)
+        finally:
+            wb.close()
+    except Exception as e:
+        logger.debug("openpyxl list sheets falhou: %s", e)
+        return []
+
+
+def _xlsx_sheet_dimensions(file_path: str, sheet_name: str) -> Optional[tuple[int, int]]:
+    """Retorna (max_row, max_col) da aba via openpyxl. None se falhar.
+
+    Necessário para construir `range=` válido para DuckDB — o read_xlsx exige
+    range no formato `A{r1}:{col_letter}{r2}` (não aceita `A2`, nem `ZZZ`).
+    """
+    try:
+        import openpyxl  # type: ignore
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            if sheet_name not in wb.sheetnames:
+                return None
+            ws = wb[sheet_name]
+            return (ws.max_row or 0, ws.max_column or 0)
+        finally:
+            wb.close()
+    except Exception as e:
+        logger.debug("openpyxl dimensions falhou: %s", e)
+        return None
+
+
+def _col_letter(idx: int) -> str:
+    """Converte índice 1-based em letra de coluna Excel (1='A', 27='AA')."""
+    s = ""
+    while idx > 0:
+        idx, rem = divmod(idx - 1, 26)
+        s = chr(65 + rem) + s
+    return s or "A"
+
+
+def _xlsx_range_for_header(file_path: str, sheet_name: str, header_row: int) -> Optional[str]:
+    """Constrói range válido para DuckDB read_xlsx pular linhas iniciais.
+
+    header_row=1 (default) → None (lê tudo do default).
+    header_row=2 → consulta dims da aba e gera `A2:{lastcol}{lastrow}`.
+    """
+    if header_row <= 1:
+        return None
+    if not sheet_name:
+        return None
+    dims = _xlsx_sheet_dimensions(file_path, sheet_name)
+    if not dims:
+        return None
+    max_row, max_col = dims
+    if max_row < header_row or max_col < 1:
+        return None
+    return f"A{header_row}:{_col_letter(max_col)}{max_row}"
+
+
+def _read_into_duckdb(
+    con,
+    file_path: str,
+    ext: str,
+    sheet_name: Optional[str] = None,
+    header_row: int = 1,
+) -> None:
+    """Cria `data` table a partir do arquivo. Trata XLSX via extension `excel`.
+
+    Args:
+        con: conexão DuckDB ativa.
+        file_path: caminho local do arquivo.
+        ext: 'csv' ou 'xlsx'.
+        sheet_name: nome da aba do XLSX. None = primeira aba.
+        header_row: linha (1-based) que contém os headers. Default 1.
+            Útil quando XLSX tem título mergeado na linha 1 e headers na 2.
+    """
     if ext == "csv":
         # read_csv_auto: HEADER detect, type inference, delimiter sniffer.
         # IGNORE_ERRORS=false para falhar em CSV malformado (preferimos erro claro).
-        # Path precisa ser escapado (replace '). Caminho vem de tempfile/Path,
-        # não de input do usuário — risco baixo, mas bom hábito.
         safe = file_path.replace("'", "''")
+        skip = max(0, header_row - 1)  # CSV: skip N rows antes do header
+        skip_clause = f", SKIP={skip}" if skip > 0 else ""
         con.execute(
             f"CREATE TABLE {_DUCKDB_TABLE} AS "
-            f"SELECT * FROM read_csv_auto('{safe}', HEADER=TRUE)"
+            f"SELECT * FROM read_csv_auto('{safe}', HEADER=TRUE{skip_clause})"
         )
         return
     if ext == "xlsx":
         # Extension 'excel' (DuckDB 1.0+) traz read_xlsx. Auto-install + load.
-        # Em ambiente offline pode falhar; mensagem clara.
         try:
             con.execute("INSTALL excel")
             con.execute("LOAD excel")
@@ -127,9 +208,17 @@ def _read_into_duckdb(con, file_path: str, ext: str) -> None:
                 status_code=503,
             ) from e
         safe = file_path.replace("'", "''")
+        opts: list[str] = []
+        if sheet_name:
+            safe_sheet = sheet_name.replace("'", "''")
+            opts.append(f"sheet='{safe_sheet}'")
+        rng = _xlsx_range_for_header(file_path, sheet_name or "", header_row)
+        if rng:
+            opts.append(f"range='{rng}'")
+        opts_str = (", " + ", ".join(opts)) if opts else ""
         con.execute(
             f"CREATE TABLE {_DUCKDB_TABLE} AS "
-            f"SELECT * FROM read_xlsx('{safe}')"
+            f"SELECT * FROM read_xlsx('{safe}'{opts_str})"
         )
         return
     raise TabularError(
@@ -152,14 +241,37 @@ def _describe_schema(con) -> list[dict]:
     return schema
 
 
+def _looks_like_table_title(name: str) -> bool:
+    """Heurística: nome de coluna que mais parece nome de tabela que header.
+
+    Exemplos: TB_ANALISE_CREDITO, TAB_VENDAS, FATO_PEDIDOS, DIM_CLIENTE.
+    Padrões UPPER_SNAKE_CASE com prefixo TB_ / TAB_ / FATO_ / DIM_ /
+    STAGE_ ou cobrindo a coluna inteira em maiúsculo com underscores.
+    """
+    n = str(name or "").strip()
+    if not n:
+        return False
+    if "_" not in n:
+        return False
+    upper_only = n.replace("_", "").isupper() and any(c.isalpha() for c in n)
+    if not upper_only:
+        return False
+    prefixes = ("TB_", "TAB_", "FATO_", "FACT_", "DIM_", "STAGE_", "STG_")
+    return any(n.startswith(p) for p in prefixes) or len(n) >= 10
+
+
 def _compute_quality_score(con, schema: list[dict], row_count: int) -> tuple[float, list[str], Optional[str]]:
     """Score (0.0-1.0) heurístico + warnings + PK sugerida.
 
     Penalidades:
-    - % de colunas 100% nulas: -0.3
-    - % de colunas com >50% nulos: -0.2
-    - Coluna sem nome (DuckDB nomeia "column0", "column1" se sem header): -0.2
+    - Schema vazio: 0
+    - Caso patológico "1 col VARCHAR + rows>5 + 100% única": -0.7 (forte)
+      Sinal de XLSX com título mergeado na linha 1 mal-interpretado como header.
+    - Nome da coluna parece título de tabela (TB_X, UPPER_SNAKE): -0.5
     - row_count < 2: -0.5 (provavelmente só header)
+    - Colunas 100% nulas: -0.3
+    - Colunas >50% nulos: -0.2
+    - Colunas sem nome (column0, column1...): -0.2
 
     PK candidata: primeira coluna com COUNT(DISTINCT col) == COUNT(*) AND
     COUNT(*) WHERE col IS NULL == 0.
@@ -167,12 +279,50 @@ def _compute_quality_score(con, schema: list[dict], row_count: int) -> tuple[flo
     score = 1.0
     warnings: list[str] = []
 
+    if not schema:
+        return 0.0, ["Schema vazio."], None
+
+    # Detecção do caso patológico ANTES das checagens normais —
+    # tipicamente XLSX com header em merged cell na linha 1.
+    if len(schema) == 1 and row_count > 5:
+        only = schema[0]
+        only_type = str(only.get("type") or "").upper()
+        if "VARCHAR" in only_type or "TEXT" in only_type or only_type == "":
+            try:
+                qcol = '"' + only["name"].replace('"', '""') + '"'
+                r = con.execute(
+                    f"SELECT COUNT(*), COUNT(DISTINCT {qcol}) FROM {_DUCKDB_TABLE}"
+                ).fetchone()
+                total, distinct_v = r[0], r[1]
+                # 100% único = cada linha é um valor diferente → não parece dado tabular
+                if total > 0 and distinct_v == total:
+                    score = 0.0
+                    warning = (
+                        f"Detectada 1 coluna VARCHAR única ('{only['name']}') com {row_count} "
+                        f"valores distintos. Provavelmente a linha 1 do XLSX é um título "
+                        f"mergeado e não o cabeçalho real. Tente promover de novo selecionando "
+                        f"a linha 2 como header."
+                    )
+                    if _looks_like_table_title(only["name"]):
+                        warning += f" O nome '{only['name']}' parece nome de tabela, reforçando essa hipótese."
+                    warnings.append(warning)
+                    # Retorna cedo: outras penalidades não ajudam, já está zero.
+                    return round(score, 3), warnings, None
+            except Exception:
+                pass
+
+    # Nome da coluna parece nome de tabela (TB_*, etc) — mesmo com várias cols
+    title_like_cols = [c["name"] for c in schema if _looks_like_table_title(c["name"])]
+    if title_like_cols:
+        score -= 0.5
+        warnings.append(
+            f"Coluna(s) com nome de tabela (ex: {title_like_cols[0]}). "
+            f"Provavelmente a linha 1 do XLSX é título — tente promover usando linha 2 como header."
+        )
+
     if row_count < 2:
         score -= 0.5
         warnings.append(f"Apenas {row_count} linha(s) — planilha quase vazia.")
-
-    if not schema:
-        return 0.0, ["Schema vazio."], None
 
     # Colunas sem nome real (DuckDB usa "column0" etc quando não há header)
     generic_cols = [c for c in schema if str(c["name"]).startswith("column") and str(c["name"])[6:].isdigit()]
@@ -236,23 +386,122 @@ def _validate_size(data: bytes) -> None:
 # ─── 1. ANALYZE ──────────────────────────────────────────────────
 
 
+def _analyze_one_sheet(
+    duckdb,
+    tmp_path: str,
+    ext: str,
+    sheet_name: Optional[str],
+    header_row: int,
+) -> dict:
+    """Analisa UMA aba (ou o CSV inteiro). Retorna dict de uma sheet entry.
+
+    NÃO faz auto-retry — só uma tentativa com os params dados. O caller
+    decide se quer chamar de novo com header_row diferente.
+    """
+    con = duckdb.connect(":memory:")
+    try:
+        _read_into_duckdb(con, tmp_path, ext, sheet_name=sheet_name, header_row=header_row)
+        schema = _describe_schema(con)
+        if len(schema) > MAX_COLUMNS:
+            raise TabularError(
+                f"Planilha {('aba ' + sheet_name) if sheet_name else ''} tem {len(schema)} "
+                f"colunas, excede limite de {MAX_COLUMNS}. Reduza/divida o arquivo.",
+                status_code=413,
+            )
+        row_count = con.execute(f"SELECT COUNT(*) FROM {_DUCKDB_TABLE}").fetchone()[0]
+        score, warnings, pk = _compute_quality_score(con, schema, row_count)
+        from app.data_tables.types import TABULAR_READY_THRESHOLD
+        return {
+            "name": sheet_name or "_csv_",
+            "header_row": header_row,
+            "rows": row_count,
+            "columns": len(schema),
+            "schema": schema,
+            "score": score,
+            "tabular_ready": score >= TABULAR_READY_THRESHOLD,
+            "warnings": warnings,
+            "suggested_pk": pk,
+        }
+    finally:
+        con.close()
+
+
+def _analyze_one_sheet_with_retry(
+    duckdb,
+    tmp_path: str,
+    ext: str,
+    sheet_name: Optional[str],
+) -> dict:
+    """Auto-detect do header_row: tenta header_row=1 (padrão). Se resultado
+    é patológico (score=0 indicando '1 col VARCHAR única', sinal típico de
+    XLSX com título mergeado na linha 1), tenta header_row=2 e mantém o melhor.
+
+    Propaga TabularError e exceções de leitura — `analyze_tabular` decide
+    se trata como "arquivo corrupto" (1 aba) ou "1 aba quebrada de N" (multi).
+    """
+    attempt1 = _analyze_one_sheet(duckdb, tmp_path, ext, sheet_name, header_row=1)
+
+    # Patológico = score zerado pela heurística específica de "1 col VARCHAR única"
+    # OU pela detecção de "TB_*" no nome da coluna.
+    looks_patho = (
+        attempt1["score"] < 0.3
+        and any(
+            "título mergeado" in w
+            or "nome de tabela" in w
+            or "linha 1 do XLSX" in w
+            for w in attempt1["warnings"]
+        )
+    )
+    if not looks_patho:
+        attempt1["header_row_auto_detected"] = False
+        return attempt1
+
+    # Retry com header_row=2 (best-effort: se falhar, devolve attempt1)
+    try:
+        attempt2 = _analyze_one_sheet(duckdb, tmp_path, ext, sheet_name, header_row=2)
+    except Exception:
+        attempt1["header_row_auto_detected"] = False
+        return attempt1
+
+    if attempt2["score"] > attempt1["score"]:
+        attempt2["header_row_auto_detected"] = True
+        attempt2["warnings"].insert(
+            0,
+            "Auto-detect: linha 1 parecia título mergeado, header foi recalculado a partir da linha 2."
+        )
+        return attempt2
+    attempt1["header_row_auto_detected"] = False
+    return attempt1
+
+
 async def analyze_tabular(data: bytes, filename: str, mime_type: Optional[str] = None) -> dict:
     """Dry-run: carrega em DuckDB :memory:, infere schema, calcula score.
 
-    NÃO persiste arquivo nem grava em Postgres. Usado pelo modal de promoção
-    para o usuário decidir se vale a pena criar a tabela.
+    Para XLSX multi-aba, analisa CADA aba individualmente com auto-detect
+    do header_row. Retorna a "melhor aba" no top-level (compat com legacy)
+    + lista completa em `sheets[]`.
+
+    NÃO persiste arquivo nem grava em Postgres.
 
     Returns:
         {
-          "tabular_ready": bool,    # score >= TABULAR_READY_THRESHOLD
-          "score": float,           # 0.0-1.0
           "ext": "csv" | "xlsx",
+          "size_bytes": int,
+          "sheet_count": int,          # 1 para CSV; N para XLSX
+          # Atalhos da aba "primária" (maior score):
+          "tabular_ready": bool,
+          "score": float,
           "rows": int,
           "columns": int,
           "schema": [{name, type, nullable}],
           "warnings": [str, ...],
           "suggested_pk": str | None,
-          "size_bytes": int,
+          "primary_sheet": str | None,  # nome da aba primária, None para CSV
+          # XLSX: detalhe de cada aba:
+          "sheets": [
+            {name, header_row, header_row_auto_detected, rows, columns,
+             schema, score, tabular_ready, warnings, suggested_pk}
+          ],
         }
     """
     _validate_size(data)
@@ -265,40 +514,40 @@ async def analyze_tabular(data: bytes, filename: str, mime_type: Optional[str] =
 
     duckdb = _import_duckdb()
 
-    # CPU-bound: roda em thread pool para não bloquear event loop
     def _run() -> dict:
-        with tempfile.NamedTemporaryFile(
-            suffix=f".{ext}", delete=False
-        ) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
             tmp.write(data)
             tmp_path = tmp.name
         try:
-            con = duckdb.connect(":memory:")
-            try:
-                _read_into_duckdb(con, tmp_path, ext)
-                schema = _describe_schema(con)
-                if len(schema) > MAX_COLUMNS:
-                    raise TabularError(
-                        f"Planilha com {len(schema)} colunas excede limite de {MAX_COLUMNS}. "
-                        f"Reduza/divida o arquivo.",
-                        status_code=413,
-                    )
-                row_count = con.execute(f"SELECT COUNT(*) FROM {_DUCKDB_TABLE}").fetchone()[0]
-                score, warnings, pk = _compute_quality_score(con, schema, row_count)
-                from app.data_tables.types import TABULAR_READY_THRESHOLD
-                return {
-                    "tabular_ready": score >= TABULAR_READY_THRESHOLD,
-                    "score": score,
-                    "ext": ext,
-                    "rows": row_count,
-                    "columns": len(schema),
-                    "schema": schema,
-                    "warnings": warnings,
-                    "suggested_pk": pk,
-                    "size_bytes": len(data),
-                }
-            finally:
-                con.close()
+            if ext == "csv":
+                # CSV: 1 só "aba" virtual
+                sheet = _analyze_one_sheet_with_retry(duckdb, tmp_path, ext, sheet_name=None)
+                return _build_response(ext, len(data), [sheet], primary_sheet=None)
+
+            # XLSX: lista abas e analisa cada uma
+            sheets = _list_xlsx_sheets(tmp_path)
+            if not sheets:
+                # Fallback: openpyxl não conseguiu → trata como aba única default
+                sheet = _analyze_one_sheet_with_retry(duckdb, tmp_path, ext, sheet_name=None)
+                return _build_response(ext, len(data), [sheet], primary_sheet=None)
+
+            analyses = []
+            for name in sheets:
+                try:
+                    s = _analyze_one_sheet_with_retry(duckdb, tmp_path, ext, sheet_name=name)
+                except TabularError as e:
+                    # 1 aba quebrada não derruba a análise inteira
+                    s = {
+                        "name": name, "header_row": 1, "rows": 0, "columns": 0,
+                        "schema": [], "score": 0.0, "tabular_ready": False,
+                        "warnings": [str(e)], "suggested_pk": None,
+                        "header_row_auto_detected": False, "error": True,
+                    }
+                analyses.append(s)
+
+            # Aba primária = maior score (desempate: mais colunas)
+            primary = max(analyses, key=lambda s: (s["score"], s["columns"]))
+            return _build_response(ext, len(data), analyses, primary_sheet=primary["name"])
         except TabularError:
             raise
         except Exception as e:
@@ -316,6 +565,44 @@ async def analyze_tabular(data: bytes, filename: str, mime_type: Optional[str] =
     return await asyncio.to_thread(_run)
 
 
+def _build_response(
+    ext: str,
+    size_bytes: int,
+    sheets: list[dict],
+    primary_sheet: Optional[str],
+) -> dict:
+    """Monta dict de resposta a partir das análises de cada aba.
+
+    Top-level reflete a "aba primária" (maior score, com desempate por colunas).
+    Para CSV, há sempre 1 aba virtual e `primary_sheet=None`.
+    """
+    if not sheets:
+        return {
+            "ext": ext, "size_bytes": size_bytes, "sheet_count": 0,
+            "tabular_ready": False, "score": 0.0, "rows": 0, "columns": 0,
+            "schema": [], "warnings": ["Nenhuma aba legível encontrada."],
+            "suggested_pk": None, "primary_sheet": None, "sheets": [],
+        }
+    if primary_sheet is None:
+        primary = sheets[0]
+    else:
+        primary = next((s for s in sheets if s["name"] == primary_sheet), sheets[0])
+    return {
+        "ext": ext,
+        "size_bytes": size_bytes,
+        "sheet_count": len(sheets),
+        "tabular_ready": primary["tabular_ready"],
+        "score": primary["score"],
+        "rows": primary["rows"],
+        "columns": primary["columns"],
+        "schema": primary["schema"],
+        "warnings": primary["warnings"],
+        "suggested_pk": primary["suggested_pk"],
+        "primary_sheet": primary_sheet,
+        "sheets": sheets,
+    }
+
+
 # ─── 2. PROMOTE ──────────────────────────────────────────────────
 
 
@@ -326,6 +613,8 @@ async def promote_to_table(
     name: Optional[str] = None,
     description: str = "",
     created_by: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    header_row: Optional[int] = None,
 ) -> dict:
     """Cria arquivo .duckdb persistente e registra em data_tables.
 
@@ -336,6 +625,12 @@ async def promote_to_table(
         name: nome amigável da tabela. Default = filename sem extensão.
         description: descrição livre.
         created_by: user id (para audit).
+        sheet_name: nome da aba do XLSX a promover. None = aba primária
+            (a com maior score na análise). Para promover N abas, faça
+            N chamadas com sheet_name diferente em cada.
+        header_row: linha (1-based) com os headers. None = usar o que a
+            análise auto-detectou para essa aba. Forçar útil se o user
+            quiser override manual.
 
     Returns:
         Dict da tabela criada (com `id`, `urn`, `schema_json`, etc.)
@@ -349,14 +644,61 @@ async def promote_to_table(
     if not ks:
         raise TabularError(f"knowledge_source '{ks_id}' não encontrada.", status_code=404)
 
-    # Reusa análise para validar + capturar schema/score
+    # Reusa análise para validar + capturar schema/score por aba
     analysis = await analyze_tabular(data, filename)
     ext = analysis["ext"]
-    schema = analysis["schema"]
 
-    # Slug + versão
-    base_name = name or os.path.splitext(os.path.basename(filename))[0] or "tabela"
-    slug = slugify(base_name)
+    # Resolve qual aba + header_row efetivos:
+    # - se user pediu sheet_name explícito, busca essa aba na análise
+    # - senão usa a "primária" (top-level já reflete ela)
+    target_sheet: dict
+    if sheet_name and ext == "xlsx":
+        match = next((s for s in analysis.get("sheets", []) if s["name"] == sheet_name), None)
+        if not match:
+            available = [s["name"] for s in analysis.get("sheets", [])]
+            raise TabularError(
+                f"Aba '{sheet_name}' não encontrada. Disponíveis: {available}",
+                status_code=400,
+            )
+        target_sheet = match
+    else:
+        # CSV ou XLSX sem sheet_name: usa a primária
+        if ext == "xlsx" and analysis.get("sheets"):
+            primary_name = analysis.get("primary_sheet")
+            target_sheet = next(
+                (s for s in analysis["sheets"] if s["name"] == primary_name),
+                analysis["sheets"][0],
+            )
+            sheet_name = target_sheet["name"]
+        else:
+            target_sheet = {
+                "schema": analysis["schema"],
+                "rows": analysis["rows"],
+                "columns": analysis["columns"],
+                "header_row": 1,
+                "suggested_pk": analysis.get("suggested_pk"),
+                "score": analysis["score"],
+            }
+
+    effective_header_row = header_row if header_row is not None else target_sheet.get("header_row", 1)
+    schema = target_sheet["schema"]
+
+    # Nome amigável: user explícito > "filename — sheet" (multi-aba) > filename
+    base_filename = os.path.splitext(os.path.basename(filename))[0] or "tabela"
+    is_multi_sheet = ext == "xlsx" and analysis.get("sheet_count", 1) > 1
+    if name:
+        display_name = name
+    elif is_multi_sheet and sheet_name:
+        display_name = f"{base_filename} — {sheet_name}"
+    else:
+        display_name = base_filename
+
+    # Slug + versão. Para XLSX multi-aba, sufixa com sheet_name no slug
+    # para diferenciar a URN entre as N abas do mesmo arquivo.
+    if is_multi_sheet and sheet_name:
+        slug = slugify(f"{name or base_filename}__{sheet_name}")
+    else:
+        slug = slugify(name or base_filename)
     version = await next_version_for_slug(ks_id, slug)
     urn = build_urn(ks_id, slug, version)
 
@@ -371,16 +713,17 @@ async def promote_to_table(
     def _write() -> int:
         """Cria o .duckdb e ingere os dados. Retorna size_bytes do arquivo final."""
         ks_dir.mkdir(parents=True, exist_ok=True)
-        # tempfile para alimentar read_csv_auto/read_xlsx
-        with tempfile.NamedTemporaryFile(
-            suffix=f".{ext}", delete=False
-        ) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
             tmp.write(data)
             tmp_path = tmp.name
         try:
             con = duckdb.connect(str(duckdb_path))
             try:
-                _read_into_duckdb(con, tmp_path, ext)
+                _read_into_duckdb(
+                    con, tmp_path, ext,
+                    sheet_name=sheet_name if ext == "xlsx" else None,
+                    header_row=effective_header_row,
+                )
             finally:
                 con.close()
         finally:
@@ -402,23 +745,25 @@ async def promote_to_table(
             pass
         raise TabularError(f"Falha ao gravar DuckDB: {e}", status_code=500) from e
 
-    # Persiste metadata em Postgres
+    # Persiste metadata em Postgres. Usa dados da target_sheet (não top-level
+    # da análise) — se o user escolheu uma aba diferente da primária, esses
+    # valores divergem.
     row = {
         "id": table_id,
         "knowledge_source_id": ks_id,
         "urn": urn,
-        "name": base_name,
+        "name": display_name,
         "description": description,
-        "schema_json": schema,  # asyncpg/JSONB aceita list[dict] diretamente
-        "row_count": analysis["rows"],
-        "column_count": analysis["columns"],
+        "schema_json": schema,
+        "row_count": target_sheet.get("rows", 0),
+        "column_count": target_sheet.get("columns", len(schema)),
         "size_bytes": size_bytes,
         "duckdb_path": relative_path,
         "duckdb_table_name": _DUCKDB_TABLE,
         "version": str(version),
         "status": "ready",
-        "quality_score": analysis["score"],
-        "suggested_pk": analysis.get("suggested_pk"),
+        "quality_score": target_sheet.get("score", 0.0),
+        "suggested_pk": target_sheet.get("suggested_pk"),
         "created_by": created_by or "",
     }
     try:

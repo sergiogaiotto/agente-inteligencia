@@ -250,6 +250,102 @@ class TestAnalyzeTabular:
 
 
 # ═══════════════════════════════════════════════════════════════
+# 3b. analyze_tabular — XLSX multi-aba + header mergeado
+# ═══════════════════════════════════════════════════════════════
+
+
+def _build_patho_xlsx(path):
+    """Cria XLSX com 2 abas, cada uma com título mergeado na linha 1
+    e headers reais na linha 2. Simula o caso real reportado pelo user.
+    """
+    openpyxl = pytest.importorskip("openpyxl")
+    from openpyxl.styles import Font
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "TB_ANALISE_CREDITO"
+    ws1.merge_cells("A1:D1")
+    ws1["A1"] = "TB_ANALISE_CREDITO"
+    ws1["A1"].font = Font(bold=True)
+    headers1 = ["cd_cliente", "nr_idade", "vr_renda", "vr_limite"]
+    for i, h in enumerate(headers1, 1):
+        ws1.cell(row=2, column=i, value=h)
+    for r in range(3, 13):
+        ws1.cell(row=r, column=1, value=r - 2)
+        ws1.cell(row=r, column=2, value=20 + r)
+        ws1.cell(row=r, column=3, value=1000.0 * r)
+        ws1.cell(row=r, column=4, value=5000 + r * 100)
+
+    ws2 = wb.create_sheet("TB_PREDICOES")
+    ws2.merge_cells("A1:C1")
+    ws2["A1"] = "TB_PREDICOES"
+    headers2 = ["cd_cliente", "score", "decisao"]
+    for i, h in enumerate(headers2, 1):
+        ws2.cell(row=2, column=i, value=h)
+    for r in range(3, 13):
+        ws2.cell(row=r, column=1, value=r - 2)
+        ws2.cell(row=r, column=2, value=0.1 * r)
+        ws2.cell(row=r, column=3, value="aprovado" if r % 2 == 0 else "rejeitado")
+    wb.save(path)
+
+
+class TestAnalyzeXlsxMultiSheet:
+    def test_xlsx_with_merged_header_auto_recovers(self, tmp_path):
+        """XLSX com título mergeado na linha 1 deve auto-detectar header_row=2
+        e retornar schema correto (não 1 coluna VARCHAR única)."""
+        xlsx = tmp_path / "dados.xlsx"
+        _build_patho_xlsx(xlsx)
+        result = asyncio.run(analyze_tabular(xlsx.read_bytes(), "dados.xlsx"))
+
+        assert result["sheet_count"] == 2
+        assert result["primary_sheet"] in ("TB_ANALISE_CREDITO", "TB_PREDICOES")
+        # Top-level reflete aba primária, score deve ser alto após auto-detect
+        assert result["score"] >= 0.7, f"score baixo: {result}"
+        assert result["tabular_ready"] is True
+
+        # Cada aba deve ter sido recuperada (não 1 coluna patológica)
+        for s in result["sheets"]:
+            assert s["columns"] >= 3, f"aba {s['name']} ficou com {s['columns']} cols"
+            assert s["header_row"] == 2, f"esperava header_row=2 em {s['name']}"
+            assert s["header_row_auto_detected"] is True
+            assert s["tabular_ready"] is True
+            # PK auto-detectada
+            assert s["suggested_pk"] == "cd_cliente"
+
+    def test_xlsx_lists_all_sheets(self, tmp_path):
+        """sheets[] deve listar TODAS as abas, na ordem do arquivo."""
+        xlsx = tmp_path / "dados.xlsx"
+        _build_patho_xlsx(xlsx)
+        result = asyncio.run(analyze_tabular(xlsx.read_bytes(), "dados.xlsx"))
+        names = [s["name"] for s in result["sheets"]]
+        assert names == ["TB_ANALISE_CREDITO", "TB_PREDICOES"]
+
+    def test_csv_keeps_legacy_format(self):
+        """CSV mantém top-level com schema (backward compat) + sheets=[1 entry]."""
+        result = asyncio.run(analyze_tabular(CSV_OK, "test.csv"))
+        # sheet_count=1 (CSV é 1 aba virtual)
+        assert result["sheet_count"] == 1
+        # primary_sheet é None pra CSV (não tem nome de aba)
+        assert result.get("primary_sheet") is None
+        # Top-level continua disponível
+        assert result["rows"] == 4
+        assert result["columns"] == 4
+
+
+class TestPatologicHeuristic:
+    """Casos onde a heurística DEVE penalizar (sem usar XLSX real)."""
+
+    def test_title_like_column_name_penalized(self):
+        """Coluna nomeada como UPPER_SNAKE_CASE longo deve disparar penalidade
+        mesmo sem ser caso patológico extremo."""
+        from app.evidence.tabular import _looks_like_table_title
+        assert _looks_like_table_title("TB_ANALISE_CREDITO") is True
+        assert _looks_like_table_title("FATO_VENDAS_MENSAL") is True
+        assert _looks_like_table_title("DIM_CLIENTE") is True
+        assert _looks_like_table_title("nome_coluna_normal") is False
+        assert _looks_like_table_title("ID") is False  # curto, sem _
+
+
+# ═══════════════════════════════════════════════════════════════
 # 4. promote_to_table — DuckDB real + Postgres mockado
 # ═══════════════════════════════════════════════════════════════
 
@@ -358,6 +454,46 @@ class TestPromoteToTable:
         assert r1["urn"] != r2["urn"]
         assert ":1" in r1["urn"]
         assert ":2" in r2["urn"]
+
+    def test_promote_xlsx_specific_sheet_creates_one_table(self, isolated_storage, tmp_path):
+        """XLSX com 2 abas + sheet_name='TB_PREDICOES' → cria 1 tabela só
+        daquela aba, com display name diferenciado."""
+        xlsx = tmp_path / "dados.xlsx"
+        _build_patho_xlsx(xlsx)
+        result = asyncio.run(promote_to_table(
+            ks_id="ks-1", data=xlsx.read_bytes(), filename="dados.xlsx",
+            sheet_name="TB_PREDICOES",
+        ))
+        assert result["status"] == "ready"
+        # Display name contém o sheet_name pra diferenciar
+        assert "TB_PREDICOES" in result["name"]
+        # URN incorpora o sheet_name (slug com __ separador)
+        assert "predicoes" in result["urn"].lower()
+        # Schema correto (3 colunas — cd_cliente, score, decisao)
+        assert result["column_count"] == 3
+        assert result["row_count"] == 10
+
+    def test_promote_xlsx_unknown_sheet_raises_400(self, isolated_storage, tmp_path):
+        xlsx = tmp_path / "dados.xlsx"
+        _build_patho_xlsx(xlsx)
+        with pytest.raises(TabularError) as exc:
+            asyncio.run(promote_to_table(
+                ks_id="ks-1", data=xlsx.read_bytes(), filename="dados.xlsx",
+                sheet_name="ABA_INEXISTENTE",
+            ))
+        assert exc.value.status_code == 400
+        assert "ABA_INEXISTENTE" in str(exc.value)
+
+    def test_promote_xlsx_default_sheet_uses_primary(self, isolated_storage, tmp_path):
+        """Sem sheet_name, usa a aba primária da análise (top-level)."""
+        xlsx = tmp_path / "dados.xlsx"
+        _build_patho_xlsx(xlsx)
+        result = asyncio.run(promote_to_table(
+            ks_id="ks-1", data=xlsx.read_bytes(), filename="dados.xlsx",
+        ))
+        assert result["status"] == "ready"
+        # 4 ou 3 cols (depende de qual aba teve maior score — TB_ANALISE tem 4)
+        assert result["column_count"] in (3, 4)
 
 
 # ═══════════════════════════════════════════════════════════════

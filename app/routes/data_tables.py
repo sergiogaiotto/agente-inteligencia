@@ -131,12 +131,22 @@ async def promote_to_table_endpoint(
     file: UploadFile = File(...),
     name: Optional[str] = Form(None),
     description: str = Form(""),
+    sheet_name: Optional[str] = Form(None),
+    header_row: Optional[int] = Form(None),
     user: dict = Depends(require_user),
 ):
     """Cria .duckdb persistente + registra em data_tables.
 
     Idempotente via versionamento: re-promover o mesmo CSV gera v2, v3...
     URN é único.
+
+    XLSX multi-aba: `sheet_name` escolhe qual aba promover. Sem ele, usa
+    a "primária" (maior score na análise). Para promover N abas, chame N
+    vezes com sheet_name diferente — cada uma gera 1 data_table.
+
+    `header_row` (1-based) força a linha do header. None = usar a que a
+    análise auto-detectou (default = 1, ou 2 se a heurística achou que
+    a linha 1 era título mergeado).
     """
     try:
         data = await file.read()
@@ -147,6 +157,8 @@ async def promote_to_table_endpoint(
             name=name,
             description=description,
             created_by=user.get("id"),
+            sheet_name=sheet_name,
+            header_row=header_row,
         )
         await _audit(
             action="data_table.promote",
