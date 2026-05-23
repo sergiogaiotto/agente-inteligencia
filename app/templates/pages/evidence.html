@@ -9,10 +9,14 @@
         </button>
     </div>
 
-    <!-- Cards -->
+    <!-- Cards — linha inteira clicável (abre drawer Inspecionar com 'overview').
+         Ações internas (Ingerir/Editar/Deletar) usam @click.stop pra não disparar
+         duplo. Bases sem chunks ainda abrem o drawer — usuário aprende ali. -->
     <div class="space-y-3">
         <template x-for="s in sources" :key="s.id">
-            <div class="group rounded-xl border border-surface-200 bg-white p-5 hover:shadow-sm hover:border-brand-200 transition-all">
+            <div @click="openInspect(s)"
+                 class="group rounded-xl border bg-white p-5 hover:shadow-sm transition-all cursor-pointer"
+                 :class="inspectOpen && inspectSource?.id === s.id ? 'border-brand-400 ring-2 ring-brand-100' : 'border-surface-200 hover:border-brand-200'">
                 <div class="flex items-start justify-between">
                     <div class="flex items-start gap-3 flex-1 min-w-0">
                         <div class="flex h-10 w-10 items-center justify-center rounded-xl shrink-0"
@@ -53,28 +57,26 @@
                             </div>
                         </div>
                     </div>
+                    <!-- Ações: cada botão usa @click.stop pra não disparar
+                         openInspect do container. Botão "Inspecionar" foi removido
+                         desta linha — agora é o próprio click na linha (UX limpa,
+                         menos ruído visual). -->
                     <div class="flex gap-1 ml-4 shrink-0">
-                        <button @click="openIngest(s)" title="Ingerir conteúdo (texto/arquivo/URL)"
+                        <button @click.stop="openIngest(s)" title="Ingerir conteúdo (texto/arquivo/URL)"
                                 class="inline-flex items-center gap-1 rounded-md bg-brand-50 px-2 py-1 text-[11px] font-semibold text-brand-700 hover:bg-brand-100">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
                             Ingerir
                         </button>
                         <button x-show="statsBy[s.id]?.chunks_count > 0"
-                                @click="openInspect(s)" title="Inspecionar — chunks indexados + busca de teste"
-                                class="inline-flex items-center gap-1 rounded-md bg-violet-50 px-2 py-1 text-[11px] font-semibold text-violet-700 hover:bg-violet-100">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                            Inspecionar
-                        </button>
-                        <button x-show="statsBy[s.id]?.chunks_count > 0"
-                                @click="clearChunks(s)" title="Limpar conteúdo (mantém a fonte registrada)"
+                                @click.stop="clearChunks(s)" title="Limpar conteúdo (mantém a fonte registrada)"
                                 class="p-1.5 rounded-md hover:bg-amber-50 text-surface-400 hover:text-amber-700 opacity-0 group-hover:opacity-100 transition-opacity">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 00-3.7-3.7 48.678 48.678 0 00-7.324 0 4.006 4.006 0 00-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3l-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 003.7 3.7 48.656 48.656 0 007.324 0 4.006 4.006 0 003.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3l-3 3"/></svg>
                         </button>
-                        <button @click="openEditor(s)" title="Editar metadados"
+                        <button @click.stop="openEditor(s)" title="Editar metadados"
                                 class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600 opacity-0 group-hover:opacity-100 transition-opacity">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
                         </button>
-                        <button @click="deleteSource(s.id, s.name)" title="Excluir fonte"
+                        <button @click.stop="deleteSource(s.id, s.name)" title="Excluir fonte"
                                 class="p-1.5 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
                         </button>
@@ -297,18 +299,23 @@
         </div>
     </template>
 
-    <!-- ══ MODAL: Inspecionar KB (overview + chunks + test query) ══ -->
+    <!-- ══ DRAWER: Inspecionar KB (overview + chunks + test query) ══
+         Slide-in lateral à direita — padrão da plataforma para conteúdo
+         contextual sobre item selecionado da lista. Mesmo formato do drawer
+         regulatório do inventário (PR #101). -->
     <template x-if="inspectOpen">
-        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
-            <div class="fixed inset-0 bg-black/40" @click="inspectOpen = false"></div>
-            <div class="relative z-10 w-full max-w-4xl rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden flex flex-col" style="max-height: 90vh">
-                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4 shrink-0">
-                    <div>
-                        <h3 class="text-[15px] font-bold text-brand-900">Inspecionar Base</h3>
-                        <p class="text-[11px] text-surface-400 truncate" x-text="'KB: ' + (inspectSource?.name || '—')"></p>
+        <div class="fixed inset-0 z-[9990]" @keydown.escape.window="inspectOpen = false">
+            <div class="fixed inset-0 bg-black/30" @click="inspectOpen = false"></div>
+            <aside class="fixed right-0 top-0 bottom-0 w-full sm:w-[640px] bg-white shadow-2xl border-l border-surface-200 flex flex-col"
+                   role="dialog" aria-label="Inspecionar Base de Conhecimento" style="max-height: 100vh">
+                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4 shrink-0 bg-gradient-to-br from-brand-50/40 to-white">
+                    <div class="min-w-0 flex-1">
+                        <p class="text-[10px] font-semibold uppercase tracking-wider text-violet-600">Inspecionar Base</p>
+                        <h3 class="text-[15px] font-bold text-brand-900 truncate" x-text="inspectSource?.name || '—'"></h3>
+                        <p x-show="inspectSource?.id" class="text-[9px] font-mono text-surface-400 truncate" x-text="inspectSource?.id || ''"></p>
                     </div>
-                    <button @click="inspectOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    <button @click="inspectOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 shrink-0" aria-label="Fechar">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
                 </div>
 
@@ -455,7 +462,7 @@
                     </div>
 
                 </div>
-            </div>
+            </aside>
         </div>
     </template>
 
