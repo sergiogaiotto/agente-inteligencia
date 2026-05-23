@@ -818,6 +818,12 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE catalog_submissions DROP CONSTRAINT IF EXISTS catalog_submissions_entry_id_fkey",
     """ALTER TABLE catalog_submissions ADD CONSTRAINT catalog_submissions_entry_id_fkey
        FOREIGN KEY (entry_id) REFERENCES catalog_entries(id) ON DELETE CASCADE""",
+    # Onda Tabular: kb_mode declara o tipo de conteúdo da KS.
+    # - 'text': só RAG (textos, FAQs, contratos). Upload de planilha vira chunks markdown.
+    # - 'tabular': só Tabelas DuckDB. Rejeita formatos não-estruturados. ZERO chunks no Qdrant/Postgres.
+    # - 'hybrid' (default): comportamento legacy — aceita tudo, oferece promote a tabela.
+    # Backfill = hybrid para KS existentes (preserva comportamento).
+    "ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS kb_mode TEXT DEFAULT 'hybrid'",
 ]
 
 

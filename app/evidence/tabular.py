@@ -889,6 +889,191 @@ def _validate_columns(requested: list[str], schema: list[dict]) -> None:
         )
 
 
+# ─── 2b. APPEND (incremento em tabela existente) ─────────────────
+
+
+async def append_to_table(
+    target_table_id: str,
+    data: bytes,
+    filename: str,
+    sheet_name: Optional[str] = None,
+    header_row: Optional[int] = None,
+) -> dict:
+    """Adiciona linhas a uma data_table EXISTENTE (incremento).
+
+    Diferente de `promote_to_table` (que cria nova versão), esta função
+    abre o arquivo .duckdb da tabela em modo WRITE e faz INSERT de novas
+    linhas vindas de outro CSV/XLSX. Schema NÃO muda — colunas extras no
+    arquivo novo são ignoradas; colunas faltantes ficam NULL.
+
+    Args:
+        target_table_id: id da data_table que receberá os dados novos.
+        data: bytes do CSV/XLSX com novas linhas.
+        filename: nome original (para detectar ext).
+        sheet_name: aba do XLSX (None = primeira). Ignorado pra CSV.
+        header_row: 1-based, linha do header. None = auto-detect padrão
+            (header_row=1, sem retry — espera-se que tenha mesma estrutura
+            da tabela existente).
+
+    Returns:
+        {
+          "table_id": <id>,
+          "rows_added": N,
+          "row_count_before": N,
+          "row_count_after": N,
+          "duration_ms": int,
+        }
+
+    Raises:
+        TabularError: tabela não existe (404), arquivo inválido (400),
+                      schema incompatível (400), DuckDB write falha (500).
+    """
+    target = await find_by_id_with_ks(target_table_id)
+    if not target:
+        raise TabularError(
+            f"data_table '{target_table_id}' não encontrada.",
+            status_code=404,
+        )
+    if target.get("status") != "ready":
+        raise TabularError(
+            f"Tabela '{target_table_id}' não está pronta (status={target.get('status')}).",
+            status_code=409,
+        )
+
+    _validate_size(data)
+    ext = _ext_from_filename(filename)
+    if ext == "unsupported":
+        raise TabularError(
+            f"Extensão não reconhecida em '{filename}'. Aceitos: .csv, .xlsx.",
+            status_code=400,
+        )
+
+    duckdb_path = target.get("duckdb_path")
+    if not duckdb_path or not Path(duckdb_path).exists():
+        raise TabularError(
+            f"Arquivo DuckDB ausente para tabela '{target_table_id}': {duckdb_path}",
+            status_code=500,
+        )
+
+    # Schema da tabela target — colunas a preservar
+    raw_schema = target.get("schema_json") or []
+    if isinstance(raw_schema, str):
+        try:
+            target_schema = json.loads(raw_schema)
+        except (json.JSONDecodeError, TypeError):
+            target_schema = []
+    else:
+        target_schema = raw_schema
+    target_cols = [c["name"] for c in target_schema]
+    if not target_cols:
+        raise TabularError(
+            f"Schema da tabela '{target_table_id}' está vazio — não dá pra appendar.",
+            status_code=500,
+        )
+
+    duckdb = _import_duckdb()
+    eff_header_row = header_row if header_row is not None else 1
+
+    # Estratégia: criar staging TEMPORARY (não conflita com 'data'), copiar
+    # SOMENTE as colunas em comum (intersecção de schema) para 'data'.
+    # Colunas extras no arquivo novo são ignoradas; faltantes ficam NULL.
+    def _do_append() -> tuple[int, int]:
+        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        try:
+            # Para XLSX: converter para CSV primeiro (pipeline padrão)
+            csv_to_import: str
+            if ext == "xlsx":
+                csv_handle = tempfile.NamedTemporaryFile(
+                    suffix=".csv", delete=False, mode="w",
+                    encoding="utf-8", newline="",
+                )
+                csv_to_import = csv_handle.name
+                csv_handle.close()
+                _xlsx_sheet_to_csv(tmp_path, sheet_name, eff_header_row, csv_to_import)
+                skip_clause = ""  # CSV gerado já tem header na linha 1
+            else:
+                csv_to_import = tmp_path
+                skip = max(0, eff_header_row - 1)
+                skip_clause = f", SKIP={skip}" if skip > 0 else ""
+
+            con = duckdb.connect(duckdb_path)
+            try:
+                count_before = con.execute(
+                    f"SELECT COUNT(*) FROM {_DUCKDB_TABLE}"
+                ).fetchone()[0]
+
+                safe = csv_to_import.replace("'", "''")
+                # Cria staging table com nome único
+                con.execute(
+                    f"CREATE OR REPLACE TEMPORARY TABLE _staging AS "
+                    f"SELECT * FROM read_csv_auto('{safe}', HEADER=TRUE{skip_clause})"
+                )
+                # Pega colunas que existem em AMBAS (intersecção)
+                staging_cols = [r[0] for r in con.execute(
+                    "DESCRIBE _staging"
+                ).fetchall()]
+                common = [c for c in target_cols if c in staging_cols]
+                if not common:
+                    raise TabularError(
+                        f"Schema incompatível: nenhuma coluna em comum. "
+                        f"Tabela espera: {target_cols}. Arquivo tem: {staging_cols}.",
+                        status_code=400,
+                    )
+                quoted = ", ".join(_quote_ident(c) for c in common)
+                con.execute(
+                    f"INSERT INTO {_DUCKDB_TABLE} ({quoted}) "
+                    f"SELECT {quoted} FROM _staging"
+                )
+                count_after = con.execute(
+                    f"SELECT COUNT(*) FROM {_DUCKDB_TABLE}"
+                ).fetchone()[0]
+                con.execute("DROP TABLE IF EXISTS _staging")
+                return count_before, count_after
+            finally:
+                con.close()
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            if ext == "xlsx" and csv_to_import != tmp_path:
+                try:
+                    os.unlink(csv_to_import)
+                except OSError:
+                    pass
+
+    t0 = time.perf_counter()
+    try:
+        count_before, count_after = await asyncio.to_thread(_do_append)
+    except TabularError:
+        raise
+    except Exception as e:
+        raise TabularError(f"Falha ao appendar: {e}", status_code=500) from e
+    duration_ms = int((time.perf_counter() - t0) * 1000)
+    rows_added = count_after - count_before
+
+    # Atualiza row_count e size_bytes na metadata
+    try:
+        new_size = Path(duckdb_path).stat().st_size
+        await data_tables_repo.update(target_table_id, {
+            "row_count": count_after,
+            "size_bytes": new_size,
+            "updated_at": __import__("datetime").datetime.utcnow(),
+        })
+    except Exception as e:
+        logger.warning("append_to_table: failed to update metadata: %s", e)
+
+    return {
+        "table_id": target_table_id,
+        "rows_added": rows_added,
+        "row_count_before": count_before,
+        "row_count_after": count_after,
+        "duration_ms": duration_ms,
+    }
+
+
 async def execute_query(
     table_id: str,
     inputs: Optional[dict] = None,
