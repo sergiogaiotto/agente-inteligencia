@@ -1,16 +1,16 @@
 # Handoff — Próxima Sessão
 
-> **Última atualização**: 2026-05-23, Onda Tabular completa e mergeada em main (PRs #110, #114, #115, #116).
+> **Última atualização**: 2026-05-23, Onda Tabular + 7 PRs de polimento (UX, help contextual, fix XLSX multi-aba, infra DuckDB).
 > **Como usar**: leia este documento primeiro na próxima sessão, depois decida por onde começar.
 
 ---
 
 ## Estado atual da plataforma
 
-- **~92 PRs em main** (após mergeação de #109 + #110 + #114 + #115 + #116; #111/#112/#113 ficaram em base obsoleta — substituídos por #115/#116/#114)
-- **679 testes verdes** (`pytest tests/`) — +11 da Onda Tabular vs handoff anterior
-- **Última atividade**: Onda Tabular entregue em main 2026-05-23 — CSV/XLSX promovido a tabela DuckDB consultável via Skills declarativas (nova seção canônica `## Data Tables` no SKILL.md). UI completa (modal de promoção + tab Tabelas em /rag; 4º botão "Inserir Tabela" + Query Builder visual em /skills/new).
-- **Smoke manual em homolog pendente** — ver Onda Tabular abaixo.
+- **~99 PRs em main** (após Onda Tabular base #110/#114/#115/#116 + #118 infra + #119 help submenu + #120/#121 fix XLSX multi-aba + #122/#123 help RAG+Tabelas + #124 UX defensiva)
+- **686 testes verdes** (`pytest tests/`) — +18 desde o handoff anterior
+- **Última atividade**: hardening da Onda Tabular após bug reportado pelo user (XLSX 2 abas + header mergeado não funcionava). Backend ganhou auto-detect de header_row + listagem de abas via openpyxl; frontend ganhou modal persistente fora do modal de ingest, seletor de aba, toast sempre presente, botão manual "Analisar planilha agora" como fallback. Ajuda contextual `/rag` reescrita para explicar RAG E Tabelas como técnicas distintas/complementares (#122/#123). Tela `/infra` ganha card+painel DuckDB (#118). Submenu Catálogo: cada sub-item tem help dedicado (#119).
+- **Smoke manual em homolog pendente** — re-testar upload de XLSX multi-aba com header mergeado (deveria abrir modal próprio com 2 abas + auto-detect ativo).
 
 ### Onde olhar para contexto rápido
 
@@ -107,25 +107,39 @@ Esses 4 itens foram **reconhecidos no PR #84** mas deixados fora do escopo para 
 
 ---
 
-### A0 (2026-05-23). Onda Tabular — ENTREGUE em main
+### A0 (2026-05-23). Onda Tabular — ENTREGUE em main + 7 PRs de polimento
 
-**Status**: ✅ TODOS os 4 PRs mergeados em main. Suite 679 verde.
+**Status**: ✅ Backbone + frontend + 7 PRs de hardening em main. Suite 686 verde.
 
-**PRs entregues**:
+**PRs base (Onda Tabular original)**:
 - [#110](https://github.com/sergiogaiotto/agente-inteligencia/pull/110) — `feat(tabular): backend DuckDB + endpoints (PR 1/4)` — `app/data_tables/`, `app/evidence/tabular.py`, `app/routes/data_tables.py`, DDL + repos, 55 testes
 - [#115](https://github.com/sergiogaiotto/agente-inteligencia/pull/115) — `feat(tabular): parser ## Data Tables + engine (re-PR 2/4)` — `app/skill_parser/parser.py`, `app/agents/declarative_engine.py`, 19 testes (originais #111 ficou em base obsoleta)
 - [#116](https://github.com/sergiogaiotto/agente-inteligencia/pull/116) — `feat(tabular): frontend KB — promote + tab Tabelas (re-PR 3/4)` — `app/templates/pages/evidence.html` (originais #112 ficou em base obsoleta)
 - [#114](https://github.com/sergiogaiotto/agente-inteligencia/pull/114) — `feat(tabular): frontend Skills — Query Builder (PR 4/4)` — `app/templates/pages/skill_form.html` (recriado automaticamente pelo GitHub após #113 ficar em base obsoleta)
 
-**Lição aprendida**: stacked PRs (`--base feat/X` em vez de `--base main`) + auto-merge ativo é armadilha. Quando o PR pai mergeou em main, os filhos ficaram MERGED na branch base (deletada) sem propagar para main. Próxima vez: criar todos os PRs com `--base main` ou desligar auto-merge antes de criar a chain. SEMPRE validar com `git log main --oneline | grep <feature>` antes de declarar entregue.
+**PRs de polimento pós-entrega**:
+- [#118](https://github.com/sergiogaiotto/agente-inteligencia/pull/118) — `feat(infra): DuckDB visível na tela Infraestrutura` — card+painel com versão, tabelas ready, linhas totais, tamanho DB vs disco
+- [#119](https://github.com/sergiogaiotto/agente-inteligencia/pull/119) — `fix(help): ajuda específica para Fila Root / Inventário / Stewardship` — 3 chaves help dedicadas (antes todos abriam ajuda genérica de Catálogo)
+- [#120](https://github.com/sergiogaiotto/agente-inteligencia/pull/120) e [#121](https://github.com/sergiogaiotto/agente-inteligencia/pull/121) — `fix(tabular): XLSX multi-aba + auto-detect header mergeado + modal persistente` — backend ganha `_list_xlsx_sheets()` via openpyxl + `_xlsx_sheet_dimensions()` para range válido, auto-retry com header_row=2 quando linha 1 parecia título mergeado (TB_*); frontend ganha modal próprio independente do modal de ingest (sobrevive ao fechar) com seletor de aba; +7 testes
+- [#122](https://github.com/sergiogaiotto/agente-inteligencia/pull/122) e [#123](https://github.com/sergiogaiotto/agente-inteligencia/pull/123) — `docs(help): ajuda RAG agora explica RAG E Tabelas (text-to-SQL)` — chave evidence reescrita (5x mais conteúdo), nova seção "Quando usar cada técnica", 5 pegadinhas específicas de Tabelas
+- [#124](https://github.com/sergiogaiotto/agente-inteligencia/pull/124) — `fix(tabular-ux): feedback explícito + botão manual de análise + logs` — painel inline pós-ingest sempre visível (loading/error/ok/idle states), botão "Analisar planilha agora" como fallback, console.log para debug
+
+**Lições aprendidas (cf. memory feedback_stacked_prs_automerge.md)**:
+1. Stacked PRs (`--base feat/X`) + auto-merge ativo = armadilha. Próxima vez: criar com `--base main` sempre. Validar com `git log main --oneline | grep <feature>` antes de declarar entregue.
+2. DuckDB `read_xlsx` exige range no formato `A2:Cx` (limite explícito de coluna). `A2`, `ZZZ` ou range só com origem retornam Binder Error. Sempre usar openpyxl pra descobrir `max_column` da aba.
+3. Auto-trigger de análise tabular em background sem feedback visível ≠ "deu certo silenciosamente". UX precisa SEMPRE mostrar estado (loading/ok/error/idle) + botão manual de retry.
 
 **Smoke test manual pendente** (em homolog):
-1. Upload CSV em /rag → painel "Promover para tabela" aparece pós-ingest com score + schema → cria tabela
-2. Tab "Tabelas" no drawer Inspecionar lista a tabela com schema correto
-3. /skills/new → 4º botão "Inserir Tabela" (amber) mostra dropdown com a tabela criada
-4. Query Builder → adicionar filtros (testar IS NULL, BETWEEN, IN) + preview retorna linhas reais → "Inserir" gera bloco YAML em ## Data Tables
-5. Criar skill declarative com ## Data Tables, executar agente, verificar resultado em `context.tables.<id>` ou no alias customizado
-6. User não-root NÃO consegue ver tabelas de KS com `confidentiality_label='restricted'`
+1. Upload XLSX com 2 abas + título mergeado em /rag → modal próprio abre com 2 abas + auto-detect ativo
+2. "Promover todas as 2 abas" → cria 2 data_tables com URNs diferenciadas
+3. Tab "Tabelas" no drawer Inspecionar lista as 2 com schema correto
+4. /skills/new → 4º botão "Inserir Tabela" mostra as 2 com KS de origem
+5. Query Builder → preview real com inputs templated → insere YAML válido em ## Data Tables
+6. Criar skill declarative, executar agente, verificar resultado em `context.tables.<id>`
+7. User não-root NÃO vê tabelas de KS com `confidentiality_label='restricted'`
+8. /infra mostra DuckDB como 9º serviço + painel "Tabelas Operacionais"
+9. `?` em Fila Root / Inventário / Stewardship abre ajuda específica de cada
+10. `?` em /rag abre ajuda nova com 5 tabs (RAG + Tabelas)
 
 **Decisões fixadas (não revisar sem motivo)**:
 - DuckDB embarcado (1 arquivo `.duckdb` por tabela em `data/tabular/<ks_id>/<table_id>.duckdb`)
@@ -135,6 +149,8 @@ Esses 4 itens foram **reconhecidos no PR #84** mas deixados fora do escopo para 
 - 13 operadores SQL no MVP (= != > >= < <= LIKE ILIKE IN NOT IN BETWEEN IS NULL IS NOT NULL)
 - Hardcoded: MAX_ROWS_RETURNED=1000, MAX_TABLE_SIZE_MB=50, MAX_COLUMNS=100 (convenção #9)
 - Visibility herdada da KS (`confidentiality_label`)
+- XLSX multi-aba: 1 data_table por aba (display name "arquivo — aba", slug com sufixo)
+- XLSX header_row=2 auto-detect quando linha 1 parecer título mergeado
 
 **Onda Tabular 2+ (não escopo)**: JOIN cross-table, AND/OR grouping em filtros, case-sensitivity explícita em LIKE, dashboard de queries mais usadas, GROUP BY + agregações.
 
@@ -208,7 +224,7 @@ Decisões aprendidas em 84 PRs que devem ser respeitadas em PRs futuros — extr
 
 Copie-cole isto na primeira mensagem da próxima sessão:
 
-> Continue de onde paramos. Leia `docs/HANDOFF_NEXT_SESSION.md` para contexto. Estado atual: ~92 PRs em main, 679 testes verdes. Onda Tabular completa em main 2026-05-23 (#110, #114, #115, #116) — falta smoke manual em homolog. Próximos candidatos: (a) smoke da Onda Tabular, (b) Onda Tabular 2+ (JOIN cross-table / AND-OR grouping / dashboard de queries), (c) A2 SimpleCookie fallback do API Connectors, (d) Roadmap Onda 5+ do Catálogo (Pricing editável via UI = leve). Qual prioridade?
+> Continue de onde paramos. Leia `docs/HANDOFF_NEXT_SESSION.md` para contexto. Estado atual: ~99 PRs em main, 686 testes verdes. Onda Tabular entregue 2026-05-23 (#110/#114/#115/#116) + 7 PRs de polimento (#118-#124). Smoke manual em homolog ainda pendente (10 passos listados na seção A0). Próximos candidatos: (a) smoke da Onda Tabular, (b) Onda Tabular 2+ (JOIN cross-table / AND-OR grouping / dashboard de queries), (c) A2 SimpleCookie fallback do API Connectors, (d) Roadmap Onda 5+ do Catálogo (Pricing editável via UI = leve). Qual prioridade?
 
 A primeira sessão saberá:
 - Estado atual sem precisar reconstruir
@@ -226,6 +242,10 @@ A primeira sessão saberá:
 - **Ao finalizar uma Onda**: replicar pattern de `docs/catalog/ONDA4.md` e atualizar o ROADMAP.
 
 ### Histórico de handoffs (mais recente primeiro)
+
+| Data | Sessão | PRs entregues | Próximo |
+|---|---|---|---|
+| 2026-05-23 (noite) | Polimento da Onda Tabular pós-bug report | #118-#124 (7 PRs, +18 testes) | Smoke manual em homolog |
 
 | Data | Sessão | PRs entregues | Próximo |
 |---|---|---|---|
