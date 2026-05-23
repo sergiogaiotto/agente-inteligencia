@@ -1203,6 +1203,149 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   // /catalog/cost — Custo & Consumo
   // ═════════════════════════════════════════════════════════════════
+  // ═════════════════════════════════════════════════════════════════
+  // /catalog/queue — Fila de revisão Root
+  // ═════════════════════════════════════════════════════════════════
+  catalog_queue: {
+    title: 'Fila Root',
+    summary: 'Onde Root revisa submissões do Catálogo antes de publicar. Pré-checks rodam automático no submit; aqui você vê o relatório e decide.',
+    sections: [
+      {
+        kind: 'concept',
+        title: 'O que é',
+        body: `
+          <p>Toda entry submetida ao Catálogo (agent, skill, recipe, plataforma externa) cai aqui antes de ficar disponível. <strong>Só usuários com papel <code>root</code></strong> têm acesso. A fila é o ponto único de governança — sem aprovação aqui, nada vira <code>published</code>.</p>
+          <p>Pré-checks automáticos rodam no momento do submit (cobertura de disclosure, formatação de URN, vendor obrigatório para externas). Eles são <em>informativos</em>: você pode aprovar mesmo com warning, ou rejeitar mesmo com tudo verde.</p>
+        `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Fundamentos',
+        body: `
+          <p>Cada submissão grava uma row em <code>catalog_submissions</code> com FK para <code>catalog_entries.id</code>. Lifecycle: <code>pending</code> → <code>approved</code> / <code>rejected</code> / <code>changes_requested</code>. A decisão atualiza a entry (status vira <code>approved</code> ou volta para <code>draft</code>) e dispara audit log.</p>
+          <p>Submissões órfãs (entry deletada após submit) são filtradas via INNER JOIN — não poluem a fila.</p>
+          <p>Filtros disponíveis: por status, por kind (agent/skill/recipe/external_platform), por submitter (user_id). Contador de pendentes no topo de cada aba.</p>
+        `
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Casos de uso',
+        items: [
+          { title: 'Aprovar um agent simples', body: 'Click na submissão → leia o disclosure + pré-checks → "Aprovar". Entry vai para published e fica visível conforme visibility (private/department/company).' },
+          { title: 'Pedir mudanças sem rejeitar', body: 'Use "Pedir mudanças" com comentário objetivo (ex: "Falta marcar processa_pii"). Submitter recebe a entry de volta em draft para corrigir e re-submeter.' },
+          { title: 'Triagem em lote por kind', body: 'Filtre por kind=recipe quando o time de FinOps pedir revisão de recipes específicos. Aprova/rejeita em sequência sem perder contexto.' }
+        ]
+      },
+      {
+        kind: 'pegadinhas',
+        title: 'Pegadinhas',
+        items: [
+          { title: 'Pré-checks não bloqueiam', severity: 'info', body: 'Warnings em pré-checks são informativos. Root decide se aprovar mesmo assim — o pré-check é input, não veto.' },
+          { title: 'Rejeitar não deleta', severity: 'info', body: 'Status volta para draft e fica visível ao owner. Para apagar de verdade, vá em /catalog/{id} → DELETE (só draft/archived).' },
+          { title: 'Visível só para Root', severity: 'warning', body: 'Usuários comuns recebem 403 ao tentar acessar /catalog/queue. Se você está vendo "Acesso restrito", peça promoção de papel ou use Stewardship.' }
+        ]
+      }
+    ],
+    related: ['catalog', 'catalog_inventory', 'catalog_stewardship']
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // /catalog/inventory — Inventário regulatório
+  // ═════════════════════════════════════════════════════════════════
+  catalog_inventory: {
+    title: 'Inventário Regulatório',
+    summary: 'Cross-entries com capability disclosure. Para comitê de privacidade/segurança: quais entries processam PII, dados sensíveis, chamam APIs externas, têm soberania específica.',
+    sections: [
+      {
+        kind: 'concept',
+        title: 'O que é',
+        body: `
+          <p>Painel de <strong>compliance da IA na empresa</strong>. Cruza todas as entries publicadas com as flags do capability disclosure (PII, saúde, biométrico, output não-determinístico, dados de treino, soberania, etc).</p>
+          <p>Resposta para perguntas que aparecem em auditoria: "quais agents processam dados clínicos?", "que entries chamam APIs externas para US?", "temos algo com input virando training data?". <strong>Só Root acessa</strong> — não é dashboard operacional, é instrumento de auditoria.</p>
+        `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Fundamentos',
+        body: `
+          <p>Source de verdade: tabela <code>catalog_capability_disclosures</code> (1:1 com <code>catalog_entries</code>). Inventário lê só entries em status <code>published</code> ou <code>deprecated</code> — draft/archived não entram (não está em uso).</p>
+          <p><strong>Filtros tristate</strong>: cada flag tem 3 estados — "não filtra" (vazio), "marca como true", "marca como false". Permite drill-down combinatório (ex: processa_pii=true E soberania=BR).</p>
+          <p>Filtros adicionais: kind (agent/skill/recipe/external_platform), status, residência (texto livre — BR/EU/US/global).</p>
+        `
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Casos de uso',
+        items: [
+          { title: 'Resposta para LGPD/GDPR', body: 'Filtre processa_pii=true → exporte CSV → entregue ao DPO. Cada linha lista a entry, owner, soberania declarada e visibility.' },
+          { title: 'Auditoria de saúde (CFM/ANS)', body: 'Filtre processa_saude=true → revisão de cada entry para verificar bases legais + retenção. Aproveite para conferir se a visibility está restrita.' },
+          { title: 'Mapeamento de fornecedores externos', body: 'Filtre kind=external_platform → lista de ChatGPT, Cursor, Claude, etc contratados. Útil para renegociar contratos ou consolidar.' },
+          { title: 'Quem usa modelos não-determinísticos', body: 'Filtre output_deterministico=false → entries que podem variar entre execuções. Pode ser sinal para revisar contratos SLA.' }
+        ]
+      },
+      {
+        kind: 'pegadinhas',
+        title: 'Pegadinhas',
+        items: [
+          { title: 'Tristate confunde', severity: 'warning', body: '"Vazio" não é o mesmo que "false". Vazio = não filtra; false = filtra explicitamente quem marcou false. Cuidado para não excluir entries por engano.' },
+          { title: 'Disclosure incompleto vira ausência', severity: 'info', body: 'Entries antigas sem disclosure preenchido NÃO aparecem em filtros de flag. Para incluí-las, peça ao owner para reabrir submissão e preencher.' },
+          { title: 'Residency é string livre', severity: 'info', body: 'O campo aceita texto (BR, EU, US, global, "BR e EU"). Não há validação de enum — bom para flexibilidade, ruim para queries agregadas. Padronize com seu time.' }
+        ]
+      }
+    ],
+    related: ['catalog', 'catalog_queue', 'catalog_stewardship']
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // /catalog/stewardship — Painel de stewards de área
+  // ═════════════════════════════════════════════════════════════════
+  catalog_stewardship: {
+    title: 'Stewardship',
+    summary: 'Entries agrupadas por área responsável. Detecta órfãs (owner inativo), paradas (30+ dias sem uso) e baixa confiabilidade. Aberto a quem tem domains, não só Root.',
+    sections: [
+      {
+        kind: 'concept',
+        title: 'O que é',
+        body: `
+          <p>Visão por <strong>área de negócio</strong> (fiscal, RH, jurídico, etc) das entries publicadas. Cada steward vê só os domínios aos quais ele está associado (campo <code>users.domains</code>); Root vê tudo.</p>
+          <p>Foco em <em>saúde operacional</em>, não em compliance: o que está esquecido, sem dono, parado ou pouco confiável.</p>
+        `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Fundamentos',
+        body: `
+          <p>Agrupa entries por <code>domain</code> declarado na entry. Para cada grupo, calcula 3 sinais visuais:</p>
+          <ul>
+            <li><strong>Órfãs</strong>: <code>owner_user_id</code> aponta para usuário inativo (deletado ou sem login recente). Sinal de processo de offboarding mal-feito.</li>
+            <li><strong>Paradas</strong> (stale): published há 30+ dias sem registro de invocação em <code>catalog_recipe_executions</code> ou <code>interactions</code>. Pode estar obsoleta.</li>
+            <li><strong>Baixa confiabilidade</strong>: trust score (calculado em background) abaixo do threshold. Olha rejeições, anomalias e drift.</li>
+          </ul>
+          <p>Cards de stat no topo viram <strong>filtros clicáveis</strong> (toggle on/off) — útil para focar só no que precisa de atenção.</p>
+        `
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Casos de uso',
+        items: [
+          { title: 'Limpeza trimestral de área', body: 'Clique no card "Paradas" → lista entries sem uso há 30+ dias. Decide: deprecar, arquivar ou contatar o owner pra confirmar uso real.' },
+          { title: 'Reatribuir órfãs', body: 'Clique em "Órfãs" → para cada entry, abra detail e use "Reatribuir owner" (Root) ou peça ao Root para fazer. Sem owner ativo, a entry não tem responsável claro.' },
+          { title: 'Onboarding de steward novo', body: 'Root associa o usuário aos domínios via /users → /catalog/stewardship vira a vista padrão da pessoa. Sabe o que precisa cuidar sem ter que decorar nada.' }
+        ]
+      },
+      {
+        kind: 'pegadinhas',
+        title: 'Pegadinhas',
+        items: [
+          { title: 'Sem domains = tela vazia', severity: 'warning', body: 'Usuário comum sem nenhum domínio cadastrado vê mensagem "associe-se a domínios". Não é bug — é design (steward sem domínio não tem o que stewardar).' },
+          { title: 'Sandbox conta como uso', severity: 'info', body: 'Execuções sandbox (botão 🧪) entram no cálculo de "parada". Se um agent só roda em testes, ele não vai aparecer como stale mesmo que ninguém o use em produção.' },
+          { title: 'Trust score atualiza em background', severity: 'info', body: 'A coluna "confiabilidade" pode demorar até 1 hora para refletir mudanças (rejeições, anomalias). Se acabou de aprovar a entry, espere o ciclo do job rodar.' }
+        ]
+      }
+    ],
+    related: ['catalog', 'catalog_queue', 'catalog_inventory']
+  },
+
   catalog_cost: {
     title: 'Custo & Consumo',
     summary: 'Painel de custo real por invocação — agregado por entry, consumer, departamento ou dia, com alertas automáticos de anomalia.',
