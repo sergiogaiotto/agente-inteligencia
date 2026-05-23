@@ -952,17 +952,59 @@ async def ingest_file_into_source(
     """Ingere arquivo (PDF/DOCX/PPTX/XLSX/HTML/MD/TXT/CSV/JSON/XML/EPUB/MSG/
     ZIP/imagem/áudio) via markitdown → markdown → chunk → embed → store.
 
+    Onda Tabular — respeita kb_mode da KS:
+    - 'text' (legacy ou explícito): processa normalmente via markitdown.
+    - 'tabular': REJEITA formatos não-estruturados (PDF/DOC/áudio/etc) com 400.
+      Aceita só CSV/XLSX e devolve {skipped: true} — não cria chunks. O cliente
+      deve chamar /promote-to-table em seguida pra criar a data_table.
+    - 'hybrid' (default backward-compat): processa via markitdown E cliente
+      pode opcionalmente promover a tabela depois.
+
     Limite de tamanho não imposto aqui (FastAPI upload size depende do
     middleware/proxy). Para arquivos grandes use replace=true e ingestão em
     lotes; markitdown processa em memória.
     """
     from app.evidence.ingest import ingest_file, IngestError
+
+    # Resolve kb_mode da KS para decidir se aceita o formato
+    ks = await knowledge_repo.find_by_id(ks_id)
+    if not ks:
+        raise HTTPException(404, f"knowledge_source '{ks_id}' não encontrada.")
+    kb_mode = (ks.get("kb_mode") or "hybrid").lower()
+    filename = file.filename or "upload.bin"
+    is_tabular_file = filename.lower().endswith((".csv", ".xlsx", ".xls"))
+
+    if kb_mode == "tabular":
+        if not is_tabular_file:
+            raise HTTPException(
+                400,
+                f"Esta base é do tipo 'tabular' (só aceita planilhas estruturadas). "
+                f"Arquivo '{filename}' não é CSV/XLSX. Para outros formatos, "
+                f"crie uma base do tipo 'texto' ou 'misto'.",
+            )
+        # Aceita o upload mas NÃO processa via markitdown — caller deve chamar
+        # /promote-to-table. Devolve resposta que sinaliza skip + filename pra
+        # frontend reutilizar.
+        return {
+            "skipped_rag": True,
+            "kb_mode": "tabular",
+            "filename": filename,
+            "size_bytes": file.size or 0,
+            "message": (
+                "KS tabular: arquivo aceito mas não chunkado/embedado. "
+                "Chame /promote-to-table para criar a data_table."
+            ),
+            "chunks_created": 0,
+            "tokens_total": 0,
+            "duration_ms": 0,
+        }
+
     try:
         data = await file.read()
         return await ingest_file(
             source_id=ks_id,
             data=data,
-            filename=file.filename or "upload.bin",
+            filename=filename,
             mime_type=file.content_type,
             replace=replace,
             chunk_size=chunk_size,

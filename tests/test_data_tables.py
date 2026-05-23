@@ -497,6 +497,67 @@ class TestPromoteToTable:
 
 
 # ═══════════════════════════════════════════════════════════════
+# 5. append_to_table — incremento em tabela existente
+# ═══════════════════════════════════════════════════════════════
+
+
+CSV_ORIG = b"id,nome,valor\n1,Alice,100\n2,Bob,200\n"
+CSV_MORE = b"id,nome,valor\n3,Carol,300\n4,Dan,400\n5,Eve,500\n"
+CSV_INCOMPATIBLE = b"foo,bar,baz\n1,2,3\n"  # zero cols em comum
+
+
+class TestAppendToTable:
+    @pytest.fixture
+    def existing_table(self, isolated_storage):
+        """Cria uma data_table de 2 linhas via promote_to_table."""
+        from app.evidence.tabular import promote_to_table
+        return asyncio.run(promote_to_table(
+            ks_id="ks-1", data=CSV_ORIG, filename="orig.csv", name="Test",
+        ))
+
+    def test_append_csv_adds_rows(self, existing_table):
+        from app.evidence.tabular import append_to_table
+        r = asyncio.run(append_to_table(
+            target_table_id=existing_table["id"],
+            data=CSV_MORE, filename="more.csv",
+        ))
+        assert r["rows_added"] == 3
+        assert r["row_count_before"] == 2
+        assert r["row_count_after"] == 5
+
+    def test_append_unknown_table_raises_404(self, isolated_storage):
+        from app.evidence.tabular import append_to_table
+        with pytest.raises(TabularError) as exc:
+            asyncio.run(append_to_table(
+                target_table_id="nope-uuid", data=CSV_MORE, filename="x.csv",
+            ))
+        assert exc.value.status_code == 404
+
+    def test_append_incompatible_schema_raises_400(self, existing_table):
+        """Arquivo sem nenhuma coluna em comum → 400."""
+        from app.evidence.tabular import append_to_table
+        with pytest.raises(TabularError) as exc:
+            asyncio.run(append_to_table(
+                target_table_id=existing_table["id"],
+                data=CSV_INCOMPATIBLE, filename="incompat.csv",
+            ))
+        assert exc.value.status_code == 400
+        assert "incompat" in str(exc.value).lower() or "comum" in str(exc.value).lower()
+
+    def test_append_preserves_data_via_select(self, existing_table):
+        """Após append, query deve retornar todas as linhas (origem + novas)."""
+        from app.evidence.tabular import append_to_table, execute_query
+        asyncio.run(append_to_table(
+            target_table_id=existing_table["id"],
+            data=CSV_MORE, filename="more.csv",
+        ))
+        r = asyncio.run(execute_query(table_id=existing_table["id"]))
+        assert r["row_count"] == 5
+        ids = sorted([row["id"] for row in r["rows"]])
+        assert ids == [1, 2, 3, 4, 5]
+
+
+# ═══════════════════════════════════════════════════════════════
 # 5. execute_query — DuckDB real, bind vars, read-only
 # ═══════════════════════════════════════════════════════════════
 

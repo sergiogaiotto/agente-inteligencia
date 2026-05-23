@@ -124,6 +124,9 @@ class KnowledgeSourceCreate(BaseModel):
     name: str; description: Optional[str] = None
     source_type: Optional[str] = "manual"
     confidentiality_label: str = "internal"
+    # Onda Tabular: kb_mode declara tipo de conteúdo.
+    # text = só RAG; tabular = só DuckDB (sem chunks); hybrid = ambos (default).
+    kb_mode: str = "hybrid"
 
 class ToolCreate(BaseModel):
     name: str

@@ -46,6 +46,7 @@ from app.data_tables.queries import (
 from app.evidence.tabular import (
     TabularError,
     analyze_tabular,
+    append_to_table,
     execute_query,
     promote_to_table,
 )
@@ -170,6 +171,54 @@ async def promote_to_table_endpoint(
                 "rows": result.get("row_count"),
                 "columns": result.get("column_count"),
                 "score": result.get("quality_score"),
+            },
+        )
+        return result
+    except TabularError as e:
+        raise _raise_tabular(e)
+
+
+@router.post("/data-tables/{table_id}/append")
+async def append_to_table_endpoint(
+    table_id: str,
+    file: UploadFile = File(...),
+    sheet_name: Optional[str] = Form(None),
+    header_row: Optional[int] = Form(None),
+    user: dict = Depends(require_user),
+):
+    """Adiciona linhas a uma data_table EXISTENTE (incremento).
+
+    Diferente de `/promote-to-table` (que cria nova versão), este endpoint
+    abre o arquivo .duckdb da tabela em modo WRITE e faz INSERT das novas
+    linhas. Schema NÃO muda — colunas extras no arquivo novo são ignoradas;
+    faltantes ficam NULL.
+
+    Útil para KS tipo 'tabular' onde re-upload é semanticamente "adicionar
+    linhas" e não "criar nova versão".
+    """
+    row = await find_by_id_with_ks(table_id)
+    if not row:
+        raise HTTPException(404, f"data_table '{table_id}' não encontrada.")
+    if not can_user_see(user, row):
+        raise HTTPException(403, "Sem permissão para appendar nesta tabela.")
+
+    try:
+        data = await file.read()
+        result = await append_to_table(
+            target_table_id=table_id,
+            data=data,
+            filename=file.filename or "upload.bin",
+            sheet_name=sheet_name,
+            header_row=header_row,
+        )
+        await _audit(
+            action="data_table.append",
+            table_id=table_id,
+            actor_id=user.get("id", ""),
+            details={
+                "rows_added": result.get("rows_added"),
+                "row_count_after": result.get("row_count_after"),
+                "sheet_name": sheet_name,
             },
         )
         return result
