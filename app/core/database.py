@@ -680,6 +680,68 @@ CREATE INDEX IF NOT EXISTS idx_catalog_recipe_exec_consumer
     ON catalog_recipe_executions(consumer_user_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_catalog_recipe_exec_status
     ON catalog_recipe_executions(status);
+
+-- ═══════════════════════════════════════════════════════════════
+-- Onda Tabular — promoção de CSV/XLSX a tabela consultável via SQL.
+-- Metadata em Postgres; dados ficam em DuckDB embarcado (data/tabular/).
+-- Skills consomem via seção `## Data Tables` no SKILL.md (declarative,
+-- sem LLM gerando SQL — query parametrizada com bind vars seguras).
+-- Visibility e confidentiality_label são herdadas da KS de origem.
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS data_tables (
+    id TEXT PRIMARY KEY,
+    knowledge_source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+    -- urn:table:<ks_short>:<slug>:<version> — referência estável em SKILL.md
+    urn TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    -- Schema inferido: [{"name": "col", "type": "INTEGER|VARCHAR|DOUBLE|DATE|...", "nullable": true}, ...]
+    schema_json JSONB NOT NULL DEFAULT '[]',
+    row_count INTEGER DEFAULT 0,
+    column_count INTEGER DEFAULT 0,
+    size_bytes INTEGER DEFAULT 0,
+    -- Caminho relativo do arquivo .duckdb (ex: "data/tabular/<ks_id>/<table_id>.duckdb")
+    duckdb_path TEXT NOT NULL,
+    -- Nome da tabela DENTRO do DuckDB (sempre "data" no MVP — 1 tabela por arquivo)
+    duckdb_table_name TEXT DEFAULT 'data',
+    version TEXT DEFAULT '1',
+    -- Lifecycle: ingesting → ready → error → deleted
+    status TEXT NOT NULL DEFAULT 'ingesting' CHECK(status IN ('ingesting','ready','error','deleted')),
+    error_message TEXT,
+    -- Score de "tabular_ready" calculado na análise (0.0-1.0). Auditável.
+    quality_score REAL DEFAULT 0,
+    -- PK inferida (única + não nula). NULL se não detectada.
+    suggested_pk TEXT,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_data_tables_ks ON data_tables(knowledge_source_id);
+CREATE INDEX IF NOT EXISTS idx_data_tables_status ON data_tables(status);
+
+-- Auditoria 1 row por execução de query (paridade com api_call_logs).
+-- Permite "qual skill consultou qual tabela", "queries que falharam",
+-- "tempo médio por tabela". sql_rendered NÃO contém bind values
+-- (evita PII em log); inputs_json sim, mas pode ser truncado/redactado.
+CREATE TABLE IF NOT EXISTS data_table_query_logs (
+    id TEXT PRIMARY KEY,
+    data_table_id TEXT NOT NULL REFERENCES data_tables(id) ON DELETE CASCADE,
+    -- Liga a invocação (paridade com api_call_logs.interaction_id)
+    interaction_id TEXT,
+    agent_id TEXT DEFAULT '',
+    executed_by TEXT,
+    -- SQL parametrizado SEM os bind values inline
+    sql_rendered TEXT NOT NULL,
+    -- Inputs do usuário (pode conter PII — tratar como dados sensíveis)
+    inputs_json JSONB DEFAULT '{}',
+    row_count INTEGER DEFAULT 0,
+    duration_ms INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'ok' CHECK(status IN ('ok','error','blocked')),
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_data_table_query_logs_table ON data_table_query_logs(data_table_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_data_table_query_logs_interaction ON data_table_query_logs(interaction_id);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -1019,6 +1081,8 @@ turns_repo = Repository("turns")
 knowledge_repo = Repository("knowledge_sources")
 evidences_repo = Repository("evidences")
 evidence_chunks_repo = Repository("evidence_chunks")  # Onda 3 — chunks de docs ingeridos
+data_tables_repo = Repository("data_tables")  # Onda Tabular — metadata de tabelas DuckDB
+data_table_query_logs_repo = Repository("data_table_query_logs")  # Onda Tabular — auditoria de queries
 verifications_repo = Repository("verifications")  # §14.2 — resultado do Verifier multi-dim
 tools_repo = Repository("tools")
 tool_calls_repo = Repository("tool_calls")
