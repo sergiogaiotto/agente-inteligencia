@@ -17,7 +17,7 @@ from typing import Optional
 
 
 REQUIRED_SECTIONS = ["Purpose", "Activation Criteria", "Inputs", "Workflow", "Tool Bindings", "Output Contract", "Failure Modes"]
-OPTIONAL_SECTIONS = ["Delegations", "Compensation", "Guardrails", "Budget", "Examples", "Telemetry", "Data Dependencies", "Model Constraints", "Evidence Policy", "Gold Refs", "Execution Profile", "API Bindings"]
+OPTIONAL_SECTIONS = ["Delegations", "Compensation", "Guardrails", "Budget", "Examples", "Telemetry", "Data Dependencies", "Model Constraints", "Evidence Policy", "Gold Refs", "Execution Profile", "API Bindings", "Data Tables"]
 VALID_KINDS = {"orchestrator", "router", "subagent"}
 VALID_STABILITY = {"alpha", "beta", "stable", "deprecated"}
 VALID_EXEC_MODES = {"fast", "standard", "rigorous", "declarative"}
@@ -63,6 +63,14 @@ class ParsedSkill:
     # opcionais {sources, min_relevance, max_age_days, cite_sources, raw}.
     # Sem fence ou parse-fail: {raw: <texto cru>} — comportamento legacy.
     evidence_policy_parsed: dict = field(default_factory=dict)
+    # Onda Tabular: ## Data Tables permite skill consultar tabelas DuckDB
+    # promovidas a partir de CSV/XLSX em Bases de Conhecimento. Bloco YAML
+    # com lista de tables[]: {id, table_ref (urn), inputs[], query{select,
+    # filters[], order_by, limit}, output_mapping?, on_error?}. Engine
+    # executa query parametrizada (sem LLM gerando SQL) — paridade com
+    # ## API Bindings em termos de modelo declarativo.
+    data_tables: str = ""          # raw text (markdown or YAML)
+    data_tables_parsed: list = field(default_factory=list)  # list of dicts
     raw_content: str = ""
     content_hash: str = ""
     validation_errors: list = field(default_factory=list)
@@ -150,15 +158,31 @@ def parse_skill_md(content: str) -> ParsedSkill:
     # ── API Bindings — parse YAML para lista de dicts ──
     if result.api_bindings.strip():
         result.api_bindings_parsed = _parse_api_bindings(result.api_bindings)
-    if result.execution_mode == "declarative" and not result.api_bindings_parsed:
-        result.validation_errors.append(
-            "execution_mode=declarative exige ## API Bindings com pelo menos 1 binding válido"
-        )
+    # Validação declarativa adiada: pode ser satisfeita por ## API Bindings
+    # OU ## Data Tables (ver bloco abaixo). Aguarda parse de data_tables
+    # antes de decidir.
 
     # ── Evidence Policy — parse YAML estruturado (Onda 6 Wave 2) ──
     # Quando há bloco fenced YAML em ## Evidence Policy, extrai sources/limits/
     # flags. Sem fence: continua como texto cru (sem governance ativa = legacy).
     result.evidence_policy_parsed = _parse_evidence_policy(result.evidence_policy)
+
+    # ── Data Tables — parse YAML estruturado (Onda Tabular) ──
+    # Espelha pattern de api_bindings_parsed: aceita fence ```yaml ... ``` ou
+    # YAML inline começando com `tables:` ou `- id:`. Validação estrutural
+    # mínima — engine valida coluna/operador contra schema real da tabela.
+    if result.data_tables.strip():
+        result.data_tables_parsed = _parse_data_tables(result.data_tables)
+
+    # Validação declarative: pelo menos UMA fonte declarativa precisa existir
+    # (API Bindings OU Data Tables). Skills puras MCP/RAG não usam declarative.
+    if result.execution_mode == "declarative" and not (
+        result.api_bindings_parsed or result.data_tables_parsed
+    ):
+        result.validation_errors.append(
+            "execution_mode=declarative exige ## API Bindings OU ## Data Tables "
+            "com pelo menos 1 entrada válida"
+        )
 
     result.is_valid = len(result.validation_errors) == 0
     return result
@@ -193,6 +217,64 @@ def _parse_api_bindings(section_text: str) -> list[dict]:
     if isinstance(data, list):
         return [_normalize_yaml11_bool_keys(b) for b in data if isinstance(b, dict) and b.get("id")]
     return []
+
+
+def _parse_data_tables(section_text: str) -> list[dict]:
+    """Parse a seção ## Data Tables como lista YAML (Onda Tabular).
+
+    Aceita 3 formas equivalentes:
+      1. Fence YAML com chave `tables:` no topo:
+         ```yaml
+         tables:
+           - id: vendas_q4
+             table_ref: urn:table:abcd1234:vendas-q4:1
+             ...
+         ```
+      2. Fence YAML com lista direta (sem `tables:`):
+         ```yaml
+         - id: vendas_q4
+           table_ref: urn:table:abcd1234:vendas-q4:1
+           ...
+         ```
+      3. Conteúdo inline sem fence começando com `tables:` ou `- id:`.
+
+    Cada item DEVE ter `id` (único na skill) e `table_ref` (URN da data_table).
+    Itens sem esses campos são descartados silenciosamente — validação dura
+    fica no engine para mostrar erro contextual ao executar.
+
+    Retorna lista (eventualmente vazia) — nunca levanta exceção.
+    """
+    if not section_text:
+        return []
+
+    fence_open = re.search(r"```(?:yaml|yml)?\s*\n", section_text)
+    if fence_open:
+        body = section_text[fence_open.end():]
+        body = re.sub(r"\n```\s*$", "", body)
+    else:
+        body = section_text
+
+    try:
+        data = yaml.safe_load(body)
+    except yaml.YAMLError:
+        return []
+
+    # Aceita dict {tables: [...]} OU list direta
+    if isinstance(data, dict) and isinstance(data.get("tables"), list):
+        items = data["tables"]
+    elif isinstance(data, list):
+        items = data
+    else:
+        return []
+
+    parsed = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if not item.get("id") or not item.get("table_ref"):
+            continue
+        parsed.append(_normalize_yaml11_bool_keys(item))
+    return parsed
 
 
 def _parse_evidence_policy(section_text: str) -> dict:
@@ -402,6 +484,7 @@ def skill_to_db_dict(parsed: ParsedSkill) -> dict:
         "model_constraints": parsed.model_constraints,
         "evidence_policy": parsed.evidence_policy,
         "gold_refs": parsed.gold_refs,
+        "data_tables": parsed.data_tables,
         "raw_content": parsed.raw_content,
         "content_hash": parsed.content_hash,
     }

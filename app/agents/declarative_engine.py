@@ -137,6 +137,197 @@ def _apply_output_mapping(
 
 
 # ═══════════════════════════════════════════════════════
+# Data Tables (Onda Tabular) — fase pré-DAG
+# Roda ANTES dos API Bindings, sequencialmente. Resultados ficam
+# no context.scope e podem ser referenciados por bindings via
+# `{{ context.<chave> }}`. Cada item invoca o service tabular
+# (que já valida coluna/operador/limit e audita em data_table_query_logs).
+# ═══════════════════════════════════════════════════════
+
+
+async def _execute_data_tables_phase(
+    data_tables: list[dict],
+    agent: dict,
+    scope: dict,
+    context: dict,
+    skill_parsed: Any,
+    interaction_id: str,
+) -> tuple[list[dict], list[str]]:
+    """Executa a fase de Data Tables (Onda Tabular). Mutates `context`/`scope`.
+
+    Para cada item em `data_tables`:
+    - Resolve templates Jinja2 dos filters/inputs (com scope: inputs, context).
+    - Chama tabular.execute_query() — bind vars seguras, read-only, audited.
+    - Aplica output_mapping (jsonpath sobre `{rows, row_count, columns}`).
+    - Merge das additions no context (deep-merge, paridade com bindings).
+    - Erros respeitam on_error: fail (interrompe) | continue (segue).
+    - Registra em binding_executions com binding_id="table:<id>".
+
+    Returns:
+        (executed, errors): lista de execuções (igual aos bindings, com
+        kind='table') + lista de erros agregados.
+    """
+    # Import lazy: feature pode estar inativa em deploys sem duckdb
+    try:
+        from app.evidence.tabular import execute_query as tabular_execute_query, TabularError
+    except ImportError:
+        return [], ["Engine tabular indisponível (DuckDB não instalado)"]
+
+    executed: list[dict] = []
+    errors: list[str] = []
+
+    for item in data_tables or []:
+        item_id = str(item.get("id") or "")
+        table_ref = str(item.get("table_ref") or "")
+        if not item_id or not table_ref:
+            errors.append(f"data_table inválido (id/table_ref ausente): {item}")
+            continue
+
+        on_error = (item.get("on_error") or "fail").strip().lower()
+        query_spec = item.get("query") or {}
+
+        # Resolve table_id a partir de URN ou aceita id direto
+        try:
+            from app.data_tables.queries import find_by_urn_with_ks, find_by_id_with_ks
+        except ImportError:
+            errors.append("Engine tabular indisponível (módulo data_tables)")
+            return executed, errors
+
+        try:
+            table_row = await find_by_urn_with_ks(table_ref) if table_ref.startswith("urn:table:") else await find_by_id_with_ks(table_ref)
+        except Exception as e:
+            errors.append(f"[table {item_id}] erro ao resolver '{table_ref}': {e}")
+            if on_error == "fail":
+                return executed, errors
+            continue
+
+        if not table_row:
+            errors.append(f"[table {item_id}] tabela '{table_ref}' não encontrada")
+            if on_error == "fail":
+                return executed, errors
+            continue
+
+        # Render Jinja2 dos filters (value pode ter "{{ inputs.X }}")
+        try:
+            filters_raw = query_spec.get("filters") or []
+            rendered_filters = _render_deep(filters_raw, scope, lenient=False)
+            select = query_spec.get("select") or []
+            order_by = query_spec.get("order_by") or []
+            limit = int(query_spec.get("limit") or 100)
+        except Exception as e:
+            errors.append(f"[table {item_id}] falha ao renderizar templates: {e}")
+            if on_error == "fail":
+                return executed, errors
+            continue
+
+        # Inputs do scope.inputs viram inputs do service (para if_present
+        # e templates simples internos)
+        service_inputs = dict(scope.get("inputs") or {})
+
+        t0 = time.time()
+        status_int = 0
+        error_str: str | None = None
+        result: dict | None = None
+        try:
+            result = await tabular_execute_query(
+                table_id=table_row["id"],
+                inputs=service_inputs,
+                select=select,
+                filters=rendered_filters,
+                order_by=order_by,
+                limit=limit,
+                executed_by=agent.get("id", ""),
+                interaction_id=interaction_id,
+                agent_id=agent.get("id", ""),
+            )
+            status_int = 200
+        except TabularError as e:
+            error_str = f"[table {item_id}] {e}"
+            status_int = int(e.status_code)
+        except Exception as e:
+            error_str = f"[table {item_id}] {e}"
+            status_int = 500
+
+        latency_ms = round((time.time() - t0) * 1000, 2)
+
+        # Registra execução (paridade com binding_executions, kind='table')
+        call_id = str(uuid.uuid4())
+        try:
+            await binding_executions_repo.create({
+                "id": str(uuid.uuid4()),
+                "interaction_id": interaction_id,
+                "agent_id": agent.get("id", ""),
+                "binding_id": f"table:{item_id}",
+                "call_id": call_id,
+                "status_code": status_int,
+                "latency_ms": latency_ms,
+                "attempts": 1,
+                "error": error_str,
+                "skipped_by_breaker": False,
+                "is_compensation": False,
+            })
+        except Exception as e:
+            logger.warning("Declarativo[table]: audit failed for %s: %s", item_id, e)
+
+        exec_record = {
+            "binding_id": f"table:{item_id}",
+            "call_id": call_id,
+            "status": status_int,
+            "latency_ms": latency_ms,
+            "attempts": 1,
+            "level": -1,  # pré-DAG
+            "kind": "table",
+        }
+
+        if error_str:
+            errors.append(error_str)
+            executed.append(exec_record)
+            if on_error == "fail":
+                return executed, errors
+            continue
+
+        # Aplica output_mapping (paridade com bindings: jsonpath sobre payload)
+        # Payload exposto: dict result completo (rows, row_count, columns).
+        # Default se output_mapping ausente: salva tudo em context["tables"][<id>]
+        output_mapping = item.get("output_mapping")
+        if output_mapping:
+            # Aceita 2 formatos:
+            #  (a) list [{from, to, max_bytes?}]  — igual aos bindings
+            #  (b) dict {alias: "$.jsonpath"}     — açúcar sintático
+            if isinstance(output_mapping, dict):
+                mapping_list = [
+                    {"to": k, "from": v if isinstance(v, str) else "$"}
+                    for k, v in output_mapping.items()
+                ]
+            else:
+                mapping_list = output_mapping
+            additions, map_errors = _apply_output_mapping(
+                result, mapping_list, bytes_budget=_MAX_CONTEXT_BYTES
+            )
+            for me in map_errors:
+                errors.append(f"[table {item_id}] {me}")
+        else:
+            additions = {"tables": {item_id: result}}
+
+        if additions:
+            merged = {k: _deep_merge(context.get(k), v) for k, v in additions.items()}
+            delta = ContextDelta(
+                agent_id=agent.get("id", ""),
+                skill_ref=getattr(skill_parsed.frontmatter, "id", "") if skill_parsed else "",
+                additions=merged,
+            )
+            new_ctx = apply_context_delta(context, delta)
+            context.clear()
+            context.update(new_ctx)
+            scope["context"] = context
+
+        exec_record["response_data"] = result
+        executed.append(exec_record)
+
+    return executed, errors
+
+
+# ═══════════════════════════════════════════════════════
 # Connector & auth
 # ═══════════════════════════════════════════════════════
 
@@ -632,10 +823,39 @@ async def execute_declarative(
     }
 
     bindings = list(getattr(skill_parsed, "api_bindings_parsed", []) or [])
-    if not bindings:
+    data_tables = list(getattr(skill_parsed, "data_tables_parsed", []) or [])
+
+    # Skill declarativa pode usar SÓ Data Tables, SÓ API Bindings, ou ambos.
+    if not bindings and not data_tables:
         await _finalize_declarative_interaction(trace_id, "failed")
         return _build_empty_result(trace_id, agent, context, start,
-                                    ["Nenhum API Binding encontrado no SKILL.md"])
+                                    ["Nenhum API Binding ou Data Table encontrado no SKILL.md"])
+
+    executed: list[dict] = []
+    errors: list[str] = []
+    compensations_fired: list[str] = []
+    dry_run_plans: list[dict] = []
+    first_success_response_data: Any = None
+    fatal = False
+
+    # ── Fase pré-DAG: Data Tables (Onda Tabular) ─────────────────
+    # Executa sequencialmente antes dos API Bindings. Resultados ficam
+    # no context — bindings subsequentes podem consumir via {{ context.X }}.
+    if data_tables and not dry_run:
+        table_executed, table_errors = await _execute_data_tables_phase(
+            data_tables=data_tables,
+            agent=agent,
+            scope=scope,
+            context=context,
+            skill_parsed=skill_parsed,
+            interaction_id=trace_id,
+        )
+        executed.extend(table_executed)
+        errors.extend(table_errors)
+        # Se alguma table com on_error=fail estourou, table_errors tem entries
+        # mas execute_data_tables_phase já retornou cedo. Não bloqueia loop
+        # de bindings — eles podem rodar mesmo sem tables (decisão do user).
+        # Para skill SÓ com tables, não há bindings → loop simplesmente skip.
 
     bindings_by_id = {b["id"]: b for b in bindings}
 
@@ -654,12 +874,6 @@ async def execute_declarative(
     if dag_errors:
         await _finalize_declarative_interaction(trace_id, "failed")
         return _build_empty_result(trace_id, agent, context, start, dag_errors)
-    executed: list[dict] = []
-    errors: list[str] = []
-    compensations_fired: list[str] = []
-    dry_run_plans: list[dict] = []
-    first_success_response_data: Any = None
-    fatal = False
 
     for level_idx, level in enumerate(levels):
         if fatal:
