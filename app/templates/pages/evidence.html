@@ -280,6 +280,89 @@
                             <template x-if="ingestProgress.result.partial">
                                 <span class="block mt-1 text-amber-800">⚠ Qdrant divergente — Postgres tem todos os chunks; vetores podem estar incompletos. Re-execute quando Qdrant estiver OK.</span>
                             </template>
+
+                            <!-- ─── Onda Tabular: análise + promoção a tabela DuckDB ─── -->
+                            <template x-if="tabularAnalysis.loading">
+                                <div class="mt-3 pt-3 border-t border-emerald-200 flex items-center gap-2 text-amber-800">
+                                    <svg class="animate-spin w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" opacity="0.25"/><path d="M22 12c0-5.523-4.477-10-10-10"/></svg>
+                                    <span class="text-[11px]">Analisando estrutura da planilha...</span>
+                                </div>
+                            </template>
+                            <template x-if="tabularAnalysis.error">
+                                <div class="mt-3 pt-3 border-t border-emerald-200 text-[11px] text-amber-800">
+                                    Análise tabular indisponível: <span x-text="tabularAnalysis.error"></span>
+                                </div>
+                            </template>
+                            <template x-if="tabularAnalysis.result">
+                                <div class="mt-3 pt-3 border-t border-emerald-200">
+                                    <div class="flex items-center justify-between gap-2 mb-2">
+                                        <div class="flex items-center gap-2">
+                                            <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 7.5h18M3 12h18M3 16.5h18M7.5 3v18M16.5 3v18"/></svg>
+                                            <strong class="text-amber-900">Planilha estruturada detectada</strong>
+                                        </div>
+                                        <span class="px-2 py-0.5 rounded-full text-[10px] font-mono"
+                                              :class="tabularAnalysis.result.tabular_ready ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'"
+                                              x-text="'score ' + tabularAnalysis.result.score.toFixed(2)"></span>
+                                    </div>
+                                    <p class="text-[11px] text-surface-700 mb-2"
+                                       x-text="tabularAnalysis.result.rows + ' linha(s) · ' + tabularAnalysis.result.columns + ' coluna(s)' + (tabularAnalysis.result.suggested_pk ? ' · chave sugerida: ' + tabularAnalysis.result.suggested_pk : '')"></p>
+                                    <template x-if="tabularAnalysis.result.warnings && tabularAnalysis.result.warnings.length">
+                                        <ul class="text-[10px] text-amber-700 mb-2 list-disc ml-4">
+                                            <template x-for="w in tabularAnalysis.result.warnings" :key="w">
+                                                <li x-text="w"></li>
+                                            </template>
+                                        </ul>
+                                    </template>
+                                    <!-- Preview do schema (até 6 colunas) -->
+                                    <div class="rounded border border-surface-200 bg-white p-2 mb-2 max-h-32 overflow-auto">
+                                        <table class="text-[10px] w-full">
+                                            <thead class="text-surface-500">
+                                                <tr><th class="text-left py-0.5">coluna</th><th class="text-left py-0.5">tipo</th><th class="text-left py-0.5">nulos?</th></tr>
+                                            </thead>
+                                            <tbody class="font-mono">
+                                                <template x-for="c in tabularAnalysis.result.schema.slice(0, 6)" :key="c.name">
+                                                    <tr>
+                                                        <td class="py-0.5" x-text="c.name"></td>
+                                                        <td class="py-0.5 text-brand-700" x-text="c.type"></td>
+                                                        <td class="py-0.5 text-surface-500" x-text="c.nullable ? 'sim' : 'não'"></td>
+                                                    </tr>
+                                                </template>
+                                                <template x-if="tabularAnalysis.result.schema.length > 6">
+                                                    <tr><td colspan="3" class="text-surface-400 italic py-0.5"
+                                                            x-text="'... +' + (tabularAnalysis.result.schema.length - 6) + ' coluna(s)'"></td></tr>
+                                                </template>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <!-- Ação: promover ou dispensar -->
+                                    <template x-if="!tabularPromote.result">
+                                        <div class="flex items-center gap-2">
+                                            <button @click="promoteToTable()"
+                                                    :disabled="tabularPromote.loading"
+                                                    class="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold disabled:opacity-50">
+                                                <span x-show="!tabularPromote.loading">Promover para tabela consultável</span>
+                                                <span x-show="tabularPromote.loading">Criando tabela...</span>
+                                            </button>
+                                            <button @click="tabularAnalysis = { loading: false, error: null, result: null }"
+                                                    type="button"
+                                                    class="text-[11px] text-surface-500 hover:text-surface-700">
+                                                Manter só como RAG
+                                            </button>
+                                        </div>
+                                    </template>
+                                    <template x-if="tabularPromote.error">
+                                        <div class="mt-2 text-[11px] text-rose-700">Erro ao promover: <span x-text="tabularPromote.error"></span></div>
+                                    </template>
+                                    <template x-if="tabularPromote.result">
+                                        <div class="mt-2 rounded border border-emerald-300 bg-emerald-100 px-2 py-1.5 text-[11px] text-emerald-800">
+                                            ✓ Tabela <strong x-text="tabularPromote.result.name"></strong> criada
+                                            (<span x-text="tabularPromote.result.row_count"></span> linhas,
+                                            URN <code class="font-mono text-[10px]" x-text="tabularPromote.result.urn"></code>).
+                                            Já disponível para uso em Skills via "Inserir Tabela".
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
                         </div>
                     </template>
                 </div>
@@ -321,8 +404,8 @@
 
                 <!-- Tabs -->
                 <div class="flex border-b border-surface-100 px-6 shrink-0">
-                    <template x-for="t in [{k:'overview',label:'Visão Geral'},{k:'chunks',label:'Chunks'},{k:'query',label:'Test Query'}]" :key="t.k">
-                        <button @click="inspectTab = t.k"
+                    <template x-for="t in [{k:'overview',label:'Visão Geral'},{k:'chunks',label:'Chunks'},{k:'tables',label:'Tabelas'},{k:'query',label:'Test Query'}]" :key="t.k">
+                        <button @click="inspectTab = t.k; if (t.k === 'tables') loadTablesForSource(inspectSource?.id)"
                                 :class="inspectTab === t.k ? 'border-brand-500 text-brand-700' : 'border-transparent text-surface-500 hover:text-brand-600'"
                                 class="px-4 py-3 border-b-2 text-[12px] font-semibold transition-colors">
                             <span x-text="t.label"></span>
@@ -412,6 +495,75 @@
                                     class="rounded-lg border border-surface-200 px-4 py-1.5 text-[11px] font-medium text-surface-600 hover:bg-surface-50">
                                 Carregar mais
                             </button>
+                        </div>
+                    </div>
+
+                    <!-- TAB: Tabelas (Onda Tabular) -->
+                    <div x-show="inspectTab === 'tables'" class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <p class="text-[11px] text-surface-500">
+                                Tabelas DuckDB promovidas desta KB. Skills consomem via "Inserir Tabela" no editor SKILL.md.
+                            </p>
+                            <button @click="loadTablesForSource(inspectSource?.id)" class="rounded-lg border border-surface-200 px-3 py-1.5 text-[11px] text-surface-600 hover:bg-surface-50">
+                                ↻ Recarregar
+                            </button>
+                        </div>
+                        <div x-show="inspectTablesLoading" class="text-center py-8 text-[12px] text-surface-400">Carregando tabelas...</div>
+                        <div x-show="!inspectTablesLoading && inspectTables.length === 0" class="text-center py-8 text-[12px] text-surface-400">
+                            Nenhuma tabela promovida ainda. Faça upload de um CSV/XLSX e use "Promover para tabela consultável".
+                        </div>
+                        <div class="space-y-2">
+                            <template x-for="t in inspectTables" :key="t.id">
+                                <div class="rounded-lg border border-surface-200 bg-white">
+                                    <div class="flex items-center justify-between px-3 py-2 border-b border-surface-100 bg-amber-50/40 cursor-pointer"
+                                         @click="t._expanded = !t._expanded">
+                                        <div class="min-w-0 flex-1">
+                                            <div class="flex items-center gap-2">
+                                                <svg class="w-3.5 h-3.5 text-amber-600 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 7.5h18M3 12h18M3 16.5h18M7.5 3v18M16.5 3v18"/></svg>
+                                                <span class="text-[12px] font-semibold text-brand-900 truncate" x-text="t.name"></span>
+                                                <span class="rounded-full text-[9px] px-1.5 py-0.5 font-mono"
+                                                      :class="t.status === 'ready' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'"
+                                                      x-text="t.status"></span>
+                                            </div>
+                                            <div class="text-[10px] font-mono text-surface-400 truncate mt-0.5" x-text="t.urn"></div>
+                                        </div>
+                                        <div class="flex items-center gap-3 shrink-0">
+                                            <div class="text-right text-[10px] text-surface-500">
+                                                <div><strong class="text-brand-900 font-mono" x-text="(t.row_count||0).toLocaleString()"></strong> linhas</div>
+                                                <div><strong class="text-brand-900 font-mono" x-text="t.column_count"></strong> colunas</div>
+                                            </div>
+                                            <span class="rounded-full text-[10px] px-2 py-0.5 font-mono"
+                                                  :class="(t.quality_score||0) >= 0.7 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'"
+                                                  x-text="'score ' + (t.quality_score||0).toFixed(2)"></span>
+                                            <svg class="w-3.5 h-3.5 text-surface-400 transition-transform" :class="t._expanded ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+                                        </div>
+                                    </div>
+                                    <div x-show="t._expanded" x-transition class="px-3 py-3 space-y-2">
+                                        <div class="text-[11px] text-surface-600 grid grid-cols-2 gap-2">
+                                            <div><span class="text-surface-400">Versão:</span> <span class="font-mono" x-text="t.version"></span></div>
+                                            <div><span class="text-surface-400">PK sugerida:</span> <span class="font-mono" x-text="t.suggested_pk || '—'"></span></div>
+                                            <div><span class="text-surface-400">Tamanho:</span> <span class="font-mono" x-text="((t.size_bytes||0)/1024).toFixed(1) + ' KB'"></span></div>
+                                            <div><span class="text-surface-400">Criada:</span> <span x-text="ago(t.created_at)"></span></div>
+                                        </div>
+                                        <div class="rounded border border-surface-200 bg-surface-50/30 p-2 max-h-48 overflow-auto">
+                                            <table class="text-[10px] w-full">
+                                                <thead class="text-surface-500 sticky top-0 bg-surface-50">
+                                                    <tr><th class="text-left py-1 px-1">coluna</th><th class="text-left py-1 px-1">tipo</th><th class="text-left py-1 px-1">nulos?</th></tr>
+                                                </thead>
+                                                <tbody class="font-mono">
+                                                    <template x-for="c in (t.schema_json || [])" :key="c.name">
+                                                        <tr class="border-t border-surface-100">
+                                                            <td class="py-0.5 px-1 text-brand-900" x-text="c.name"></td>
+                                                            <td class="py-0.5 px-1 text-amber-700" x-text="c.type"></td>
+                                                            <td class="py-0.5 px-1 text-surface-500" x-text="c.nullable ? 'sim' : 'não'"></td>
+                                                        </tr>
+                                                    </template>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </template>
                         </div>
                     </div>
 
@@ -613,6 +765,9 @@ function evidencePage() {
             this.ingestTab = 'text';
             this.ingestForm = { text: '', file: null, url: '', replace: true, chunk_size: '', chunk_overlap: '' };
             this.ingestProgress = { loading: false, error: null, result: null };
+            // Onda Tabular — estado de análise/promoção de planilha (CSV/XLSX)
+            this.tabularAnalysis = { loading: false, error: null, result: null };
+            this.tabularPromote = { loading: false, error: null, result: null };
             this.ingestAdvancedOpen = false;
             this.ingestOpen = true;
         },
@@ -663,6 +818,12 @@ function evidencePage() {
                 showToast(`Ingestão concluída: ${result.chunks_created} chunks`);
                 // Recarrega stats da source pra atualizar o badge no card
                 await this.loadAllStats();
+                // Onda Tabular: se foi CSV/XLSX, oferece promoção para tabela consultável
+                this.tabularAnalysis = { loading: false, error: null, result: null };
+                this.tabularPromote = { loading: false, error: null, result: null };
+                if (this.ingestTab === 'file' && this.ingestForm.file && this._isTabularFile(this.ingestForm.file)) {
+                    await this._runTabularAnalyze();
+                }
             } catch(e) {
                 this.ingestProgress = {
                     loading: false,
@@ -672,7 +833,64 @@ function evidencePage() {
             }
         },
 
-        // ─── Inspeção (overview / chunks / test query) ──────────────
+        // ─── Onda Tabular: análise + promoção de CSV/XLSX a tabela DuckDB ─
+        _isTabularFile(file) {
+            if (!file || !file.name) return false;
+            const n = file.name.toLowerCase();
+            return n.endsWith('.csv') || n.endsWith('.xlsx') || n.endsWith('.xls');
+        },
+
+        async _runTabularAnalyze() {
+            const sid = this.ingestSourceId;
+            if (!sid || !this.ingestForm.file) return;
+            this.tabularAnalysis = { loading: true, error: null, result: null };
+            try {
+                const fd = new FormData();
+                fd.append('file', this.ingestForm.file);
+                const resp = await fetch('/api/v1/knowledge-sources/' + sid + '/analyze-tabular', {
+                    method: 'POST', body: fd, credentials: 'include',
+                });
+                if (!resp.ok) {
+                    let msg = `HTTP ${resp.status}`;
+                    try { const j = await resp.json(); msg = j.detail || msg; } catch {}
+                    throw new Error(msg);
+                }
+                this.tabularAnalysis = { loading: false, error: null, result: await resp.json() };
+            } catch(e) {
+                this.tabularAnalysis = { loading: false, error: e.message || 'falha na análise', result: null };
+            }
+        },
+
+        async promoteToTable() {
+            const sid = this.ingestSourceId;
+            if (!sid || !this.ingestForm.file || this.tabularPromote.loading) return;
+            this.tabularPromote = { loading: true, error: null, result: null };
+            try {
+                const fd = new FormData();
+                fd.append('file', this.ingestForm.file);
+                // Nome derivado do arquivo (sem extensão); user pode renomear depois
+                const base = this.ingestForm.file.name.replace(/\.[^.]+$/, '');
+                fd.append('name', base);
+                fd.append('description', '');
+                const resp = await fetch('/api/v1/knowledge-sources/' + sid + '/promote-to-table', {
+                    method: 'POST', body: fd, credentials: 'include',
+                });
+                if (!resp.ok) {
+                    let msg = `HTTP ${resp.status}`;
+                    try { const j = await resp.json(); msg = j.detail || msg; } catch {}
+                    throw new Error(msg);
+                }
+                const result = await resp.json();
+                this.tabularPromote = { loading: false, error: null, result };
+                showToast(`Tabela "${result.name}" criada (${result.row_count} linhas)`);
+                // Recarrega lista de tabelas da source pra UI mostrar
+                if (this.loadTablesForSource) await this.loadTablesForSource(sid);
+            } catch(e) {
+                this.tabularPromote = { loading: false, error: e.message || 'falha na promoção', result: null };
+            }
+        },
+
+        // ─── Inspeção (overview / chunks / tabelas / test query) ────
         openInspect(s) {
             this.inspectSource = s;
             this.inspectTab = 'overview';
@@ -682,9 +900,31 @@ function evidencePage() {
             this.inspectQueryResults = [];
             this.inspectQueryError = '';
             this.inspectQueryRan = false;
+            // Onda Tabular — listagem de tabelas da KB
+            this.inspectTables = [];
+            this.inspectTablesLoading = false;
             this.inspectOpen = true;
             // Pré-carrega chunks pra a aba "Chunks" não ter delay quando trocar
             this.loadInspectChunks(true);
+        },
+
+        // ─── Onda Tabular: lista tabelas de uma KS ──────────────────
+        async loadTablesForSource(sid) {
+            if (!sid) return;
+            this.inspectTablesLoading = true;
+            try {
+                const resp = await fetch('/api/v1/data-tables?ks_id=' + encodeURIComponent(sid), {
+                    credentials: 'include',
+                });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const body = await resp.json();
+                this.inspectTables = (body.data_tables || []).map(t => ({ ...t, _expanded: false }));
+            } catch(e) {
+                this.inspectTables = [];
+                showToast('Erro ao carregar tabelas: ' + (e.message || ''), 'error');
+            } finally {
+                this.inspectTablesLoading = false;
+            }
         },
 
         async loadInspectChunks(replace = true, offset = 0) {
