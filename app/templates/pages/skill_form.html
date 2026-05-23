@@ -265,6 +265,63 @@
                         </div>
                     </div>
 
+                    <!-- ═════ Inserir Tabela (Onda Tabular — DuckDB) ═════ -->
+                    <!-- Lista data_tables visíveis ao user; click abre Query Builder
+                         e ao final insere bloco YAML em ## Data Tables no SKILL.md. -->
+                    <div class="relative" x-data="{tableDropdown:false}">
+                        <button @click="tableDropdown = !tableDropdown; if (tableDropdown && availableTables.length === 0) loadAvailableTables()"
+                                type="button"
+                                :title="availableTables.length === 0 ? 'Nenhuma tabela disponível — promova um CSV/XLSX em Bases de Conhecimento' : availableTables.length + ' tabela(s) disponível(eis)'"
+                                class="inline-flex items-center gap-1 rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-100 transition-colors">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 7.5h18M3 12h18M3 16.5h18M7.5 3v18M16.5 3v18"/></svg>
+                            Inserir Tabela
+                            <span x-show="availableTables.length > 0" class="rounded-full bg-amber-200 px-1.5 py-0.5 text-[9px] font-bold" x-text="availableTables.length"></span>
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        </button>
+                        <div x-show="tableDropdown" @click.away="tableDropdown=false" x-transition
+                             class="absolute right-0 top-full mt-1 w-96 rounded-xl bg-white border border-amber-200 shadow-lg z-50 py-1 max-h-80 overflow-y-auto">
+                            <div class="px-3 py-1.5 text-[9px] font-bold text-amber-500 uppercase tracking-wider">Selecione uma tabela</div>
+                            <div class="px-3 py-1 text-[10px] text-surface-500 border-b border-surface-100 bg-amber-50/50">
+                                Adiciona <code class="text-amber-700">## Data Tables</code> + executa query parametrizada (sem LLM gerando SQL)
+                            </div>
+                            <template x-for="t in availableTables" :key="t.id">
+                                <button @click="openTableQueryBuilder(t); tableDropdown=false" type="button" class="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-amber-50 transition-colors">
+                                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-700 shrink-0">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 7.5h18M3 12h18M3 16.5h18M7.5 3v18M16.5 3v18"/></svg>
+                                    </div>
+                                    <div class="min-w-0 flex-1">
+                                        <div class="text-[11px] font-semibold text-brand-900 truncate" x-text="t.name"></div>
+                                        <div class="text-[9px] text-surface-400 truncate">
+                                            <span class="font-mono" x-text="(t.row_count||0).toLocaleString() + ' linhas · ' + t.column_count + ' col'"></span>
+                                            <span x-show="t.ks_name" class="text-amber-600 ml-1" x-text="'· ' + t.ks_name"></span>
+                                        </div>
+                                        <div class="text-[9px] font-mono text-surface-300 truncate" x-text="t.urn"></div>
+                                    </div>
+                                    <span class="rounded-full text-[9px] px-1.5 py-0.5 font-mono shrink-0"
+                                          :class="(t.quality_score||0) >= 0.7 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'"
+                                          x-text="(t.quality_score||0).toFixed(2)"></span>
+                                </button>
+                            </template>
+                            <div x-show="availableTables.length === 0" class="px-4 py-4 space-y-2">
+                                <div class="flex items-start gap-2">
+                                    <svg class="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                                    <div class="text-[11px] text-surface-700 leading-relaxed">
+                                        <strong class="block text-brand-900 mb-0.5">Nenhuma tabela disponível</strong>
+                                        Faça upload de um CSV/XLSX em uma Base de Conhecimento e clique em <strong>Promover para tabela</strong>.
+                                    </div>
+                                </div>
+                                <a href="/rag" target="_blank"
+                                   class="block w-full text-center rounded-lg bg-amber-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-amber-700">
+                                    Ir para Bases de Conhecimento →
+                                </a>
+                                <button @click="loadAvailableTables(); tableDropdown=false" type="button"
+                                        class="block w-full text-center rounded-lg border border-amber-200 px-3 py-1 text-[10px] font-medium text-amber-700 hover:bg-amber-50">
+                                    ↻ Recarregar lista
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- ═════ Inserir MCP (tools clássicos) ═════ -->
                     <div class="relative" x-data="{mcpDropdown:false}">
                         <button @click="mcpDropdown = !mcpDropdown" x-show="mcpTools.length > 0" type="button"
@@ -345,6 +402,252 @@
         </template>
         <template x-if="!parseResult"><div class="text-center py-12 text-[13px] text-surface-400">Clique em "Preview / Validação" para validar o SKILL.md</div></template>
     </div>
+
+    <!-- ════════════════════════════════════════════════════════════
+         Onda Tabular — Query Builder Modal (Fase 3.2)
+         Composição visual de SELECT + WHERE + ORDER BY + LIMIT
+         contra uma data_table. Preview executa query real; "Inserir"
+         gera bloco YAML em ## Data Tables.
+         ════════════════════════════════════════════════════════════ -->
+    <div x-show="tableBuilderOpen" x-transition.opacity
+         x-cloak
+         @keydown.escape.window="if (tableBuilderOpen) closeTableBuilder()"
+         class="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4">
+        <div @click.away="closeTableBuilder()"
+             class="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col">
+            <template x-if="tableBuilder">
+                <div class="flex flex-col flex-1 min-h-0">
+                    <!-- Header -->
+                    <div class="flex items-start justify-between gap-3 px-6 py-4 border-b border-surface-100 shrink-0">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-2">
+                                <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 7.5h18M3 12h18M3 16.5h18M7.5 3v18M16.5 3v18"/></svg>
+                                <p class="text-[10px] font-semibold uppercase tracking-wider text-amber-600">Query Builder</p>
+                            </div>
+                            <h3 class="text-[16px] font-bold text-brand-900 truncate" x-text="tableBuilder.table.name"></h3>
+                            <p class="text-[10px] font-mono text-surface-400 truncate" x-text="tableBuilder.table.urn"></p>
+                        </div>
+                        <button @click="closeTableBuilder()" type="button" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 shrink-0" aria-label="Fechar">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+
+                    <!-- Body -->
+                    <div class="flex-1 overflow-y-auto px-6 py-4 space-y-5">
+
+                        <!-- Alias da skill -->
+                        <div>
+                            <label class="block text-[11px] font-semibold text-brand-900 mb-1">ID dentro da Skill <span class="text-rose-500">*</span></label>
+                            <input type="text" x-model="tableBuilder.alias"
+                                   class="w-full rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[12px] font-mono outline-none focus:border-amber-400">
+                            <p class="text-[10px] text-surface-400 mt-1">Identificador único do binding nesta skill (slug). Reuso = sobrescreve.</p>
+                        </div>
+
+                        <!-- SELECT: colunas -->
+                        <div>
+                            <label class="block text-[11px] font-semibold text-brand-900 mb-1">Campos a retornar (SELECT)</label>
+                            <div class="flex flex-wrap gap-1.5 p-2 rounded-lg border border-surface-200 bg-surface-50/50">
+                                <template x-for="c in (tableBuilder.table.schema_json || [])" :key="c.name">
+                                    <label class="inline-flex items-center gap-1.5 px-2 py-1 rounded border bg-white cursor-pointer text-[11px]"
+                                           :class="tableBuilder.selectCols.includes(c.name) ? 'border-amber-400 bg-amber-50 text-amber-800' : 'border-surface-200 text-surface-500'">
+                                        <input type="checkbox"
+                                               :checked="tableBuilder.selectCols.includes(c.name)"
+                                               @change="$event.target.checked
+                                                   ? tableBuilder.selectCols.push(c.name)
+                                                   : tableBuilder.selectCols.splice(tableBuilder.selectCols.indexOf(c.name), 1)"
+                                               class="rounded">
+                                        <span class="font-mono" x-text="c.name"></span>
+                                        <span class="text-[9px] text-surface-400" x-text="c.type"></span>
+                                    </label>
+                                </template>
+                            </div>
+                            <div class="flex items-center gap-3 mt-1 text-[10px]">
+                                <button @click="tableBuilder.selectCols = (tableBuilder.table.schema_json || []).map(c => c.name)" type="button" class="text-amber-600 hover:text-amber-700">Todas</button>
+                                <button @click="tableBuilder.selectCols = []" type="button" class="text-surface-500 hover:text-rose-600">Nenhuma</button>
+                                <span class="text-surface-400" x-text="tableBuilder.selectCols.length + ' selecionada(s)'"></span>
+                            </div>
+                        </div>
+
+                        <!-- WHERE: filtros -->
+                        <div>
+                            <div class="flex items-center justify-between mb-1">
+                                <label class="block text-[11px] font-semibold text-brand-900">Filtros (WHERE)</label>
+                                <button @click="addBuilderFilter()" type="button" class="text-[11px] text-amber-600 hover:text-amber-700 font-medium">+ Adicionar filtro</button>
+                            </div>
+                            <div x-show="tableBuilder.filters.length === 0" class="text-center py-3 text-[11px] text-surface-400 border border-dashed border-surface-200 rounded-lg">
+                                Sem filtros — retorna todas as linhas (até o LIMIT).
+                            </div>
+                            <div class="space-y-2">
+                                <template x-for="(f, idx) in tableBuilder.filters" :key="idx">
+                                    <div class="rounded-lg border border-surface-200 bg-white p-2 space-y-2">
+                                        <div class="flex flex-wrap items-center gap-2">
+                                            <!-- Coluna -->
+                                            <select x-model="f.col" class="rounded border border-surface-200 px-2 py-1 text-[11px] font-mono">
+                                                <template x-for="c in (tableBuilder.table.schema_json || [])" :key="c.name">
+                                                    <option :value="c.name" x-text="c.name + ' (' + c.type + ')'"></option>
+                                                </template>
+                                            </select>
+                                            <!-- Operador -->
+                                            <select x-model="f.op" class="rounded border border-surface-200 px-2 py-1 text-[11px] font-mono">
+                                                <template x-for="o in builderOperators" :key="o.v">
+                                                    <option :value="o.v" x-text="o.label"></option>
+                                                </template>
+                                            </select>
+                                            <!-- Valor (só se operador precisa) -->
+                                            <template x-if="_builderOpNeedsValue(f.op)">
+                                                <div class="flex-1 min-w-[180px]">
+                                                    <template x-if="!f.use_input">
+                                                        <input type="text" x-model="f.value"
+                                                               :placeholder="_builderOpIsMulti(f.op) ? (f.op === 'BETWEEN' ? 'low, high' : 'a, b, c') : 'valor literal'"
+                                                               class="w-full rounded border border-surface-200 px-2 py-1 text-[11px] font-mono">
+                                                    </template>
+                                                    <template x-if="f.use_input">
+                                                        <div class="flex items-center gap-1">
+                                                            <span class="text-[10px] text-surface-400 font-mono">{% raw %}{{ inputs.{% endraw %}</span>
+                                                            <input type="text" x-model="f.input_name" placeholder="nome_do_input"
+                                                                   class="flex-1 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-mono">
+                                                            <span class="text-[10px] text-surface-400 font-mono">{% raw %} }}{% endraw %}</span>
+                                                        </div>
+                                                    </template>
+                                                </div>
+                                            </template>
+                                            <button @click="removeBuilderFilter(idx)" type="button" class="p-1 rounded hover:bg-rose-50 text-rose-500" aria-label="Remover">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                                            </button>
+                                        </div>
+                                        <!-- Toggles use_input / if_present -->
+                                        <div class="flex items-center gap-4 pl-1 text-[10px] text-surface-600" x-show="_builderOpNeedsValue(f.op)">
+                                            <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                                                <input type="checkbox" x-model="f.use_input" class="rounded">
+                                                <span>Receber via input da skill</span>
+                                            </label>
+                                            <label class="inline-flex items-center gap-1.5 cursor-pointer" :class="!f.use_input ? 'opacity-30 cursor-not-allowed' : ''">
+                                                <input type="checkbox" x-model="f.if_present" :disabled="!f.use_input" class="rounded">
+                                                <span>Filtro opcional (pular se input ausente)</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- ORDER BY + LIMIT -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <div class="flex items-center justify-between mb-1">
+                                    <label class="text-[11px] font-semibold text-brand-900">Ordenação</label>
+                                    <button @click="addBuilderOrderBy()" type="button" class="text-[11px] text-amber-600 hover:text-amber-700 font-medium">+ Adicionar</button>
+                                </div>
+                                <template x-if="tableBuilder.order_by.length === 0">
+                                    <div class="text-[10px] text-surface-400 italic px-2 py-1.5">Sem ordenação</div>
+                                </template>
+                                <div class="space-y-1">
+                                    <template x-for="(o, idx) in tableBuilder.order_by" :key="idx">
+                                        <div class="flex items-center gap-1">
+                                            <select x-model="o.col" class="flex-1 rounded border border-surface-200 px-2 py-1 text-[11px] font-mono">
+                                                <template x-for="c in (tableBuilder.table.schema_json || [])" :key="c.name">
+                                                    <option :value="c.name" x-text="c.name"></option>
+                                                </template>
+                                            </select>
+                                            <select x-model="o.dir" class="rounded border border-surface-200 px-2 py-1 text-[11px] font-mono">
+                                                <option value="ASC">ASC</option>
+                                                <option value="DESC">DESC</option>
+                                            </select>
+                                            <button @click="removeBuilderOrderBy(idx)" type="button" class="p-1 rounded hover:bg-rose-50 text-rose-500" aria-label="Remover">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                                            </button>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-[11px] font-semibold text-brand-900 mb-1">Limite de linhas</label>
+                                <input type="number" min="1" max="1000" x-model.number="tableBuilder.limit"
+                                       class="w-full rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[12px] font-mono outline-none focus:border-amber-400">
+                                <p class="text-[10px] text-surface-400 mt-1">Máx. 1000 (hard cap por execução).</p>
+
+                                <label class="block text-[11px] font-semibold text-brand-900 mb-1 mt-3">Alias de saída (opcional)</label>
+                                <input type="text" x-model="tableBuilder.output_alias" placeholder="ex: resultado"
+                                       class="w-full rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[12px] font-mono outline-none focus:border-amber-400">
+                                <p class="text-[10px] text-surface-400 mt-1">Sem alias: resultado vai para <code>context.tables.<span x-text="tableBuilder.alias"></span></code>.</p>
+                            </div>
+                        </div>
+
+                        <!-- Preview -->
+                        <div class="border-t border-surface-100 pt-4">
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-[11px] font-semibold text-brand-900">Preview (executa query real)</label>
+                                <button @click="previewTableQuery(_buildTestInputs())"
+                                        :disabled="tableBuilder.previewLoading"
+                                        type="button"
+                                        class="rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 px-3 py-1 text-[11px] font-semibold text-amber-700 disabled:opacity-50">
+                                    <span x-show="!tableBuilder.previewLoading">▶ Executar preview</span>
+                                    <span x-show="tableBuilder.previewLoading">Executando...</span>
+                                </button>
+                            </div>
+                            <!-- Inputs de teste -->
+                            <template x-if="builderInferredInputs.length > 0">
+                                <div class="rounded-lg border border-amber-200 bg-amber-50/40 p-2 mb-2 space-y-1">
+                                    <p class="text-[10px] font-semibold text-amber-700 mb-1">Inputs de teste:</p>
+                                    <template x-for="i in builderInferredInputs" :key="i.name">
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-[11px] font-mono text-amber-900 w-32 truncate" x-text="i.name"></span>
+                                            <input type="text" x-model="tableBuilder._testInputs[i.name]"
+                                                   :placeholder="i.type + (i.required ? ' (obrigatório)' : ' (opcional)')"
+                                                   class="flex-1 rounded border border-amber-300 bg-white px-2 py-1 text-[11px] font-mono">
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                            <template x-if="tableBuilder.previewError">
+                                <div class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700">
+                                    <strong>Erro:</strong> <span x-text="tableBuilder.previewError"></span>
+                                </div>
+                            </template>
+                            <template x-if="tableBuilder.previewResult">
+                                <div class="rounded-lg border border-emerald-200 bg-white">
+                                    <div class="px-3 py-2 border-b border-surface-100 bg-emerald-50/40 flex items-center justify-between text-[11px]">
+                                        <span class="text-emerald-700"><strong x-text="tableBuilder.previewResult.row_count"></strong> linha(s) · <span x-text="tableBuilder.previewResult.duration_ms"></span>ms</span>
+                                        <code class="text-[9px] text-surface-500 font-mono truncate ml-3" x-text="tableBuilder.previewResult.sql_rendered"></code>
+                                    </div>
+                                    <div class="max-h-48 overflow-auto">
+                                        <table class="text-[10px] w-full">
+                                            <thead class="text-surface-500 sticky top-0 bg-surface-50">
+                                                <tr>
+                                                    <template x-for="c in tableBuilder.previewResult.columns" :key="c">
+                                                        <th class="text-left py-1 px-2 font-mono" x-text="c"></th>
+                                                    </template>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="font-mono">
+                                                <template x-for="(r, ri) in tableBuilder.previewResult.rows" :key="ri">
+                                                    <tr class="border-t border-surface-100 hover:bg-amber-50/30">
+                                                        <template x-for="c in tableBuilder.previewResult.columns" :key="c">
+                                                            <td class="py-0.5 px-2 text-brand-900" x-text="r[c] === null ? '∅' : r[c]"></td>
+                                                        </template>
+                                                    </tr>
+                                                </template>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Footer -->
+                    <div class="px-6 py-3 border-t border-surface-100 flex items-center justify-end gap-2 shrink-0">
+                        <button @click="closeTableBuilder()" type="button" class="px-4 py-1.5 rounded-lg border border-surface-200 text-[12px] text-surface-600 hover:bg-surface-50">Cancelar</button>
+                        <button @click="applyTableBinding()" type="button"
+                                :disabled="!tableBuilder.alias || tableBuilder.selectCols.length === 0"
+                                class="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[12px] font-semibold disabled:opacity-50">
+                            Inserir no SKILL.md
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
 </div>
 {% endblock %}
 
@@ -365,6 +668,11 @@ function skillForm(editId) {
         // Onda 6 Wave 2b: governance skill ↔ source (RAG)
         availableSources: [],     // [{id, name, source_type, confidentiality_label, ...}]
         boundSourceIds: [],       // ids atualmente vinculados (parsed de raw_content)
+        // Onda Tabular — data_tables visíveis ao user para "Inserir Tabela"
+        availableTables: [],      // [{id, name, urn, schema_json, row_count, ...}]
+        // Query Builder modal (Fase 3.2)
+        tableBuilderOpen: false,
+        tableBuilder: null,       // {table, select[], filters[], order_by[], limit, alias, inputs[], previewResult, previewError}
         form: { raw_content: '', tags: '[]' },
 
         // Achata connectors + endpoints para a lista do dropdown "Inserir API"
@@ -468,12 +776,326 @@ function skillForm(editId) {
             }
         },
 
+        // ─── Onda Tabular: carrega data_tables visíveis ao user ─────
+        async loadAvailableTables() {
+            try {
+                const resp = await fetch('/api/v1/data-tables', { credentials: 'include' });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const body = await resp.json();
+                this.availableTables = body.data_tables || [];
+            } catch(e) {
+                this.availableTables = [];
+                showToast('Erro ao carregar tabelas: ' + (e.message || ''), 'error');
+            }
+        },
+
+        // ─── Onda Tabular: Query Builder modal (Fase 3.2) ──────────
+        // Permite ao usuário compor visualmente: SELECT cols, WHERE filters,
+        // ORDER BY, LIMIT. Preview executa a query real via API. "Inserir"
+        // gera bloco YAML e injeta em ## Data Tables no SKILL.md.
+        openTableQueryBuilder(table) {
+            // alias dentro do SKILL.md (usado como `id` no YAML do bloco)
+            const aliasBase = (table.name || 'tabela')
+                .toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'tabela';
+            this.tableBuilder = {
+                table,
+                alias: aliasBase,
+                // Default: todas as colunas selecionadas
+                selectCols: (table.schema_json || []).map(c => c.name),
+                filters: [],         // [{col, op, value, if_present, input_name}]
+                order_by: [],        // [{col, dir}]
+                limit: 100,
+                output_alias: '',    // se preenchido, output_mapping.<alias> = "$" senão default tables.<id>
+                _testInputs: {},     // valores de teste para o preview
+                previewResult: null,
+                previewError: null,
+                previewLoading: false,
+            };
+            this.tableBuilderOpen = true;
+        },
+
+        // Monta dict de inputs para preview a partir dos _testInputs digitados.
+        // Tenta converter para o tipo certo conforme inferência do schema.
+        _buildTestInputs() {
+            if (!this.tableBuilder) return {};
+            const out = {};
+            for (const i of this.builderInferredInputs) {
+                const raw = this.tableBuilder._testInputs?.[i.name];
+                if (raw === undefined || raw === null || raw === '') continue;
+                if (i.type === 'integer') {
+                    const n = parseInt(raw, 10);
+                    if (!isNaN(n)) out[i.name] = n;
+                } else if (i.type === 'number') {
+                    const n = Number(raw);
+                    if (!isNaN(n)) out[i.name] = n;
+                } else if (i.type === 'boolean') {
+                    out[i.name] = String(raw).toLowerCase() === 'true';
+                } else {
+                    out[i.name] = String(raw);
+                }
+            }
+            return out;
+        },
+
+        closeTableBuilder() {
+            this.tableBuilderOpen = false;
+            this.tableBuilder = null;
+        },
+
+        addBuilderFilter() {
+            if (!this.tableBuilder) return;
+            const firstCol = this.tableBuilder.table.schema_json?.[0]?.name || '';
+            this.tableBuilder.filters.push({
+                col: firstCol, op: '=', value: '',
+                use_input: false, input_name: '',
+                if_present: false,
+            });
+        },
+
+        removeBuilderFilter(idx) {
+            if (!this.tableBuilder) return;
+            this.tableBuilder.filters.splice(idx, 1);
+        },
+
+        addBuilderOrderBy() {
+            if (!this.tableBuilder) return;
+            const firstCol = this.tableBuilder.table.schema_json?.[0]?.name || '';
+            this.tableBuilder.order_by.push({ col: firstCol, dir: 'ASC' });
+        },
+
+        removeBuilderOrderBy(idx) {
+            if (!this.tableBuilder) return;
+            this.tableBuilder.order_by.splice(idx, 1);
+        },
+
+        // Operadores liberados (espelho de SqlOperator em types.py)
+        get builderOperators() {
+            return [
+                {v:'=', label:'='}, {v:'!=', label:'!='},
+                {v:'>', label:'>'}, {v:'>=', label:'>='},
+                {v:'<', label:'<'}, {v:'<=', label:'<='},
+                {v:'LIKE', label:'LIKE (case-sensitive)'},
+                {v:'ILIKE', label:'ILIKE (case-insensitive)'},
+                {v:'IN', label:'IN (lista)'}, {v:'NOT IN', label:'NOT IN (lista)'},
+                {v:'BETWEEN', label:'BETWEEN [a,b]'},
+                {v:'IS NULL', label:'IS NULL'}, {v:'IS NOT NULL', label:'IS NOT NULL'},
+            ];
+        },
+
+        _builderOpNeedsValue(op) {
+            return op !== 'IS NULL' && op !== 'IS NOT NULL';
+        },
+
+        _builderOpIsMulti(op) {
+            return op === 'IN' || op === 'NOT IN' || op === 'BETWEEN';
+        },
+
+        _builderParseFilterValue(f) {
+            // Se o filtro está ligado a um input, value vira template Jinja
+            // (montado por concat para não colidir com o parser de templates do servidor)
+            if (f.use_input && f.input_name) {
+                return '{' + '{ inputs.' + f.input_name + ' }' + '}';
+            }
+            // Multi-value: parse CSV em lista
+            if (this._builderOpIsMulti(f.op)) {
+                const raw = String(f.value || '').trim();
+                if (!raw) return [];
+                // BETWEEN tem 2 valores; IN/NOT IN N. Detect tipo numérico por heurística.
+                const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+                return parts.map(p => /^-?\d+(\.\d+)?$/.test(p) ? Number(p) : p);
+            }
+            // Single value: tenta numérico
+            const v = String(f.value ?? '').trim();
+            if (v === '') return null;
+            if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v);
+            if (v === 'true' || v === 'false') return v === 'true';
+            return v;
+        },
+
+        // Preview real: executa a query contra a tabela com inputs de teste
+        async previewTableQuery(testInputs) {
+            if (!this.tableBuilder) return;
+            this.tableBuilder.previewLoading = true;
+            this.tableBuilder.previewError = null;
+            this.tableBuilder.previewResult = null;
+            try {
+                const filters = this.tableBuilder.filters.map(f => {
+                    const out = { col: f.col, op: f.op };
+                    if (this._builderOpNeedsValue(f.op)) {
+                        out.value = this._builderParseFilterValue(f);
+                    }
+                    if (f.if_present && f.use_input && f.input_name) {
+                        out.if_present = f.input_name;
+                    }
+                    return out;
+                });
+                const order_by = this.tableBuilder.order_by.map(o => o.col + ' ' + (o.dir || 'ASC'));
+                const payload = {
+                    inputs: testInputs || {},
+                    select: this.tableBuilder.selectCols,
+                    filters,
+                    order_by,
+                    limit: Number(this.tableBuilder.limit) || 100,
+                };
+                const resp = await fetch('/api/v1/data-tables/' + this.tableBuilder.table.id + '/query', {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    credentials: 'include',
+                    body: JSON.stringify(payload),
+                });
+                if (!resp.ok) {
+                    let msg = `HTTP ${resp.status}`;
+                    try { const j = await resp.json(); msg = j.detail || msg; } catch {}
+                    throw new Error(msg);
+                }
+                this.tableBuilder.previewResult = await resp.json();
+            } catch(e) {
+                this.tableBuilder.previewError = e.message || 'falha no preview';
+            } finally {
+                this.tableBuilder.previewLoading = false;
+            }
+        },
+
+        // Inputs declarados pelo Builder (extraídos dos filtros use_input=true)
+        get builderInferredInputs() {
+            if (!this.tableBuilder) return [];
+            const seen = new Set();
+            const out = [];
+            for (const f of this.tableBuilder.filters) {
+                if (f.use_input && f.input_name && !seen.has(f.input_name)) {
+                    seen.add(f.input_name);
+                    // Tipo: inferido pela coluna do schema da tabela
+                    const colDef = (this.tableBuilder.table.schema_json || []).find(c => c.name === f.col);
+                    out.push({
+                        name: f.input_name,
+                        type: this._duckdbTypeToInputType(colDef?.type || 'VARCHAR'),
+                        required: !f.if_present,
+                    });
+                }
+            }
+            return out;
+        },
+
+        _duckdbTypeToInputType(t) {
+            const T = String(t || '').toUpperCase();
+            if (T.includes('INT')) return 'integer';
+            if (T.includes('DOUBLE') || T.includes('FLOAT') || T.includes('DECIMAL') || T.includes('NUMERIC')) return 'number';
+            if (T.includes('BOOL')) return 'boolean';
+            if (T.includes('DATE') || T.includes('TIME')) return 'string';
+            return 'string';
+        },
+
+        // Gera bloco YAML conforme schema canônico ## Data Tables e insere
+        // (ou atualiza) no raw_content. Idempotente: 2ª inserção sobrescreve
+        // o item com mesmo id (alias).
+        applyTableBinding() {
+            if (!this.tableBuilder) return;
+            const b = this.tableBuilder;
+            const item = {
+                id: b.alias,
+                table_ref: b.table.urn,
+                query: {
+                    select: b.selectCols,
+                    filters: b.filters.map(f => {
+                        const out = { col: f.col, op: f.op };
+                        if (this._builderOpNeedsValue(f.op)) {
+                            out.value = f.use_input && f.input_name
+                                ? ('{' + '{ inputs.' + f.input_name + ' }' + '}')
+                                : (this._builderOpIsMulti(f.op) ? this._builderParseFilterValue(f) : (f.value || ''));
+                        }
+                        if (f.if_present && f.use_input && f.input_name) {
+                            out.if_present = f.input_name;
+                        }
+                        return out;
+                    }),
+                    order_by: b.order_by.map(o => o.col + ' ' + (o.dir || 'ASC')),
+                    limit: Number(b.limit) || 100,
+                },
+            };
+            if (b.output_alias) {
+                item.output_mapping = { [b.output_alias]: '$' };
+            }
+            const yamlBlock = this._generateDataTableYaml(item);
+            // Garante frontmatter declarative ANTES de injetar (a função
+            // _injectDataTablesSection muta this.form.raw_content)
+            this.form.raw_content = this._ensureDeclarativeFrontmatter(this.form.raw_content || '');
+            this._injectDataTablesSection(yamlBlock, item.id);
+            this.closeTableBuilder();
+            showToast('Tabela "' + item.id + '" inserida em ## Data Tables');
+        },
+
+        _generateDataTableYaml(item) {
+            const filters = item.query.filters.map(f => {
+                const parts = [`      - col: ${f.col}`, `        op: "${f.op}"`];
+                if ('value' in f) {
+                    if (Array.isArray(f.value)) {
+                        parts.push(`        value: [${f.value.map(v => typeof v === 'string' ? `"${v}"` : v).join(', ')}]`);
+                    } else if (typeof f.value === 'string') {
+                        parts.push(`        value: "${f.value.replace(/"/g, '\\"')}"`);
+                    } else {
+                        parts.push(`        value: ${f.value}`);
+                    }
+                }
+                if (f.if_present) parts.push(`        if_present: ${f.if_present}`);
+                return parts.join('\n');
+            }).join('\n');
+            const select = item.query.select.length ? `[${item.query.select.join(', ')}]` : '[]';
+            const order = item.query.order_by.length
+                ? `      order_by: [${item.query.order_by.map(o => `"${o}"`).join(', ')}]\n`
+                : '';
+            const outMap = item.output_mapping
+                ? `    output_mapping:\n${Object.entries(item.output_mapping).map(([k,v]) => `      ${k}: "${v}"`).join('\n')}\n`
+                : '';
+            return `  - id: ${item.id}
+    table_ref: ${item.table_ref}
+    query:
+      select: ${select}
+      filters:
+${filters || '        []'}
+${order}      limit: ${item.query.limit}
+${outMap}`;
+        },
+
+        _injectDataTablesSection(yamlItem, itemId) {
+            let content = this.form.raw_content || '';
+            const sectionRegex = /(## Data Tables\s*\n)([\s\S]*?)(?=\n## |\n*$)/;
+            const fenceTablesRegex = /```yaml\s*\ntables:\s*\n([\s\S]*?)\n```/;
+
+            if (sectionRegex.test(content)) {
+                // Seção existe: encontra/atualiza item por id
+                content = content.replace(sectionRegex, (full, header, body) => {
+                    // Remove item antigo com mesmo id (idempotência)
+                    const itemRe = new RegExp(`  - id: ${itemId}[\\s\\S]*?(?=\\n  - id: |\\n\`\`\`|$)`, 'g');
+                    let cleanedBody = body.replace(itemRe, '');
+                    if (fenceTablesRegex.test(cleanedBody)) {
+                        cleanedBody = cleanedBody.replace(fenceTablesRegex, (f, inner) => {
+                            return '```yaml\ntables:\n' + (inner.trim() ? inner.trimEnd() + '\n' : '') + yamlItem + '\n```';
+                        });
+                    } else {
+                        cleanedBody = '```yaml\ntables:\n' + yamlItem + '\n```\n';
+                    }
+                    return header + cleanedBody;
+                });
+            } else {
+                // Cria seção. Coloca ANTES de ## Output Contract se existir.
+                const newSection = `\n## Data Tables\n\`\`\`yaml\ntables:\n${yamlItem}\n\`\`\`\n`;
+                if (/## Output Contract/.test(content)) {
+                    content = content.replace(/(## Output Contract)/, newSection + '\n$1');
+                } else {
+                    content = content.trimEnd() + '\n' + newSection;
+                }
+            }
+            this.form.raw_content = content;
+        },
+
         async load() {
             try { this.mcpTools = (await api.get('/api/v1/tools')).tools || []; } catch {}
             await this._reloadApiConnectors();
             // Onda 6 Wave 2b: carrega knowledge_sources p/ multi-select RAG.
             // Eager load (não esperar usuário abrir o dropdown) — payload é leve.
             await this.loadAvailableSources();
+            // Onda Tabular: carrega data_tables (mesma razão — payload leve)
+            await this.loadAvailableTables();
 
             if (editId) {
                 try {

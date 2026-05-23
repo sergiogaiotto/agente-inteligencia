@@ -1,6 +1,6 @@
 # Handoff — Próxima Sessão
 
-> **Última atualização**: 2026-05-20, A1 (integration test declarative_engine ↔ API Connectors) concluído.
+> **Última atualização**: 2026-05-23, Onda Tabular completa (4 fases) — pendente commit/PR.
 > **Como usar**: leia este documento primeiro na próxima sessão, depois decida por onde começar.
 
 ---
@@ -8,8 +8,9 @@
 ## Estado atual da plataforma
 
 - **85 PRs em main** (após merge de #86), zero PRs abertos
-- **516 testes verdes** (`pytest tests/`) — +22 testes do A1
-- **Última atividade**: A1 do API Connectors concluído (PR #86) — engine migrado para `app.core.http_auth`, ganhou suporte a 5 body types, auth headers passaram a aparecer redactados em `api_call_logs.request_headers`
+- **668 testes verdes** (`pytest tests/`) — +74 da Onda Tabular vs handoff anterior
+- **Trabalho NÃO commitado no branch `feat/evidence-inspect-drawer-and-row-click`**: Onda Tabular completa (CSV/XLSX → DuckDB consultável via skills declarativas). 4 fases entregues, aguardando empacotamento em PRs.
+- **Última atividade commitada**: A1 do API Connectors concluído (PR #86) — engine migrado para `app.core.http_auth`, suporte a 5 body types, auth headers redactados em `api_call_logs.request_headers`
 
 ### Onde olhar para contexto rápido
 
@@ -106,6 +107,43 @@ Esses 4 itens foram **reconhecidos no PR #84** mas deixados fora do escopo para 
 
 ---
 
+### A0 (NOVO 2026-05-23). Onda Tabular — empacotamento em PRs
+
+**Status**: backend + engine + parser + frontend KB + frontend Skills implementados e testados. Suite 668 verde. **NÃO commitado**.
+
+Branch `feat/evidence-inspect-drawer-and-row-click` tem além do que originalmente prometeu (drawer de Inspeção + linha clicável). Decisão pendente: empacotar a Onda Tabular como:
+
+**Opção A — 4 PRs sequenciais (mais rastreável)**:
+1. `feat(tabular): backend DuckDB + endpoints REST (Onda Tabular, PR 1/4)` — `app/data_tables/`, `app/evidence/tabular.py`, `app/routes/data_tables.py`, DDL + repos, 55 testes
+2. `feat(tabular): parser ## Data Tables + engine declarativo (Onda Tabular, PR 2/4)` — `app/skill_parser/parser.py`, `app/agents/declarative_engine.py`, 19 testes
+3. `feat(tabular): frontend KB — modal promote + tab Tabelas (Onda Tabular, PR 3/4)` — `app/templates/pages/evidence.html`
+4. `feat(tabular): frontend Skills — botão Inserir Tabela + Query Builder (Onda Tabular, PR 4/4)` — `app/templates/pages/skill_form.html`
+
+**Opção B — 1 PR único** "Onda Tabular completa" — mais simples, perde granularidade de review.
+
+**Arquivos novos**: `app/data_tables/__init__.py`, `types.py`, `queries.py`; `app/evidence/tabular.py`; `app/routes/data_tables.py`; `tests/test_data_tables.py`; `tests/test_data_tables_engine.py`.
+**Arquivos modificados**: `app/core/database.py`, `app/main.py`, `requirements.txt`, `app/skill_parser/parser.py`, `app/agents/declarative_engine.py`, `app/templates/pages/evidence.html`, `app/templates/pages/skill_form.html`.
+
+**Smoke test manual pendente** (em homolog após merge):
+1. Upload CSV em /rag → modal "Promover para tabela" aparece → cria tabela
+2. Tab "Tabelas" no drawer Inspecionar lista a tabela com schema correto
+3. /skills/new → 4º botão "Inserir Tabela" mostra dropdown com a tabela criada
+4. Query Builder → preview retorna linhas reais → "Inserir" gera bloco YAML válido em ## Data Tables
+5. Criar skill declarative com ## Data Tables, executar agente, verificar resultado no context.tables.<id>
+
+**Decisões fixadas (não revisar sem motivo)**:
+- DuckDB embarcado (1 arquivo .duckdb por tabela em `data/tabular/<ks_id>/<table_id>.duckdb`)
+- Read-only por execução (safety técnica, não só prompt)
+- Bind vars `?` (nunca string interpolation — defesa contra SQL injection)
+- Dual-mode (RAG + tabela coexistem na mesma KS)
+- 13 operadores SQL no MVP (= != > >= < <= LIKE ILIKE IN NOT IN BETWEEN IS NULL IS NOT NULL)
+- Hardcoded: MAX_ROWS_RETURNED=1000, MAX_TABLE_SIZE_MB=50, MAX_COLUMNS=100 (convenção #9)
+- Visibility herdada da KS (`confidentiality_label`)
+
+**Onda Tabular 2+ (não escopo)**: JOIN cross-table, AND/OR grouping em filtros, case-sensitivity explícita em LIKE, dashboard de queries mais usadas, GROUP BY + agregações.
+
+---
+
 ### B. Outros pendentes do projeto
 
 #### B1. PR #79 — módulos reescritos (status open?)
@@ -195,6 +233,7 @@ A primeira sessão saberá:
 
 | Data | Sessão | PRs entregues | Próximo |
 |---|---|---|---|
+| 2026-05-23 | Onda Tabular completa (4 fases) — CSV/XLSX → DuckDB consultável via Skills | NÃO commitado (+74 testes) | Empacotar em 4 PRs ou consolidar em 1, smoke manual em homolog |
 | 2026-05-20 | A1 — declarative_engine integration tests | #86 (1 PR, +22 testes) | A2/A3/A4 do API Connectors |
 | 2026-05-20 | Sessão de qualidade (API Connectors + tool strategy + Guia Interativo) | #77-#84 (8 PRs) | Gaps A1-A4 do API Connectors |
 | 2026-05-19 | Sessão Onda 4 Catálogo + GPT-OSS/Qwen3 + Modelo Primário | #67-#76 (10 PRs) | Reescrita Guia Interativo (5 PRs) |
