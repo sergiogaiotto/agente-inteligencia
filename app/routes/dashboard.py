@@ -835,11 +835,11 @@ async def get_llm_routing():
         "defaults": DEFAULT_ROUTING,
         "task_types": list(TASK_TYPES),
         "task_descriptions": {
-            "tool_calling": "Uso de ferramentas (function calls). Pra tarefas complexas que precisam invocar APIs/MCPs externas. Default: Azure OpenAI (estabilidade comprovada com tool_choice).",
-            "reasoning": "Texto com raciocínio. Pra tarefas que exigem análise/explicação em PT-BR. Default: Maritaca Sabiá-4.",
-            "instruct": "Apenas texto (instruction following). Inferência comum. **Aceita imagens** — quando input é multimodal, plataforma roteia automaticamente pro multimodal_fallback. Default: Maritaca Sabiá-4.",
-            "classification": "Classificação e categorização. Estruturação de informações em labels/buckets fixos. Default: Maritaca Sabiá-4.",
-            "multimodal_fallback": "Modelo usado quando o input contém imagem mas o modelo da task escolhida é text-only. Default: Azure GPT-4o (multimodal nativo).",
+            "tool_calling": "Uso de ferramentas (function calls). Pra tarefas complexas que precisam invocar APIs/MCPs externas. Default: GPT-OSS-120B (open-weight via hub interno).",
+            "reasoning": "Texto com raciocínio. Pra tarefas que exigem análise/explicação em PT-BR. Default: GPT-OSS-120B (open-weight via hub interno).",
+            "instruct": "Apenas texto (instruction following). Inferência comum. **Aceita imagens** — quando input é multimodal, plataforma roteia automaticamente pro multimodal_fallback. Default: GPT-OSS-20B (open-weight via hub interno).",
+            "classification": "Classificação e categorização. Estruturação de informações em labels/buckets fixos. Default: GPT-OSS-20B (open-weight via hub interno).",
+            "multimodal_fallback": "Modelo usado quando o input contém imagem mas o modelo da task escolhida é text-only. Default: Azure GPT-4o (único multimodal nativo pronto pra produção).",
         },
     }
 

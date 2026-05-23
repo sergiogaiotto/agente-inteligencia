@@ -553,12 +553,14 @@ function agentForm(editId) {
                     classification: r.routing?.classification || '',
                 };
             } catch {
-                // Defaults — caso endpoint indisponível, mostra placeholder
+                // Defaults espelham app/llm_routing.py DEFAULT_ROUTING — quando
+                // endpoint indisponível, mostra placeholder consistente com o que
+                // o backend usaria como fallback.
                 this.resolvedRouting = {
-                    tool_calling: 'azure/gpt-4o',
-                    reasoning: 'maritaca/sabia-4',
-                    instruct: 'maritaca/sabia-4',
-                    classification: 'maritaca/sabia-4',
+                    tool_calling: 'gpt-oss-120b/openai/gpt-oss-120b',
+                    reasoning: 'gpt-oss-120b/openai/gpt-oss-120b',
+                    instruct: 'gpt-oss-20b/openai/gpt-oss-20b',
+                    classification: 'gpt-oss-20b/openai/gpt-oss-20b',
                 };
             }
         },

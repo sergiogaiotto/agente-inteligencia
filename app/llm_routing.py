@@ -5,13 +5,19 @@ Reasoning / Instruct / Classification), e este módulo resolve qual
 provider/model será usado, lendo o roteamento configurável em
 `platform_settings` (key-value store).
 
-Defaults (preset inicial):
-- tool_calling   → azure/gpt-4o          (inferência complexa, function calls)
-- reasoning      → maritaca/sabia-4      (raciocínio em PT-BR)
-- instruct       → maritaca/sabia-4      (texto simples, instruction-following)
-- classification → maritaca/sabia-4      (estruturação de output)
-- multimodal_fallback → azure/gpt-4o     (quando input tem imagem e o
-                                          modelo resolvido é text-only)
+Defaults (preset inicial — calibrado para open-weight first, com fallback
+hospedado para multimodal):
+- tool_calling   → gpt-oss-120b/openai/gpt-oss-120b  (function calls / inferência complexa)
+- reasoning      → gpt-oss-120b/openai/gpt-oss-120b  (raciocínio em PT-BR)
+- instruct       → gpt-oss-20b/openai/gpt-oss-20b    (texto simples, instruction-following)
+- classification → gpt-oss-20b/openai/gpt-oss-20b    (estruturação de output)
+- multimodal_fallback → azure/gpt-4o                 (único multimodal nativo
+                                                      pronto pra produção)
+
+A escolha do GPT-OSS como default é deliberada: open-weight no hub interno
+elimina custo por token e mantém soberania de dados em BR (sem trânsito EU/US).
+Multimodal fallback continua em Azure GPT-4o porque GPT-OSS atual é text-only.
+Operadores podem mudar tudo via /settings → Roteamento LLM sem restart.
 
 Resolver é cache-friendly: load_routing usa um TTL pra não bater no DB
 a cada interação.
@@ -35,10 +41,10 @@ logger = logging.getLogger(__name__)
 TASK_TYPES = ("tool_calling", "reasoning", "instruct", "classification")
 
 DEFAULT_ROUTING: dict[str, str] = {
-    "tool_calling": "azure/gpt-4o",
-    "reasoning": "maritaca/sabia-4",
-    "instruct": "maritaca/sabia-4",
-    "classification": "maritaca/sabia-4",
+    "tool_calling": "gpt-oss-120b/openai/gpt-oss-120b",
+    "reasoning": "gpt-oss-120b/openai/gpt-oss-120b",
+    "instruct": "gpt-oss-20b/openai/gpt-oss-20b",
+    "classification": "gpt-oss-20b/openai/gpt-oss-20b",
     "multimodal_fallback": "azure/gpt-4o",
 }
 
