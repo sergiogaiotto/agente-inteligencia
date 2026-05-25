@@ -22,6 +22,32 @@
 }
 
 {$TLS_SITE::80} {
+	# ─── Observabilidade (profile full) ─────────────────────────────
+	# Reverse proxy para Grafana sob /grafana/* (mesma origin → sem CORS
+	# nem SSH tunnel). Grafana precisa de GF_SERVER_ROOT_URL e
+	# GF_SERVER_SERVE_FROM_SUB_PATH=true (definidos no docker-compose.yml).
+	# Sobrevive se grafana estiver down (Caddy retorna 502, browser mostra
+	# erro normal — só não derruba o resto da app).
+	handle_path /grafana/* {
+		reverse_proxy grafana:3000 {
+			# Headers que o Grafana usa pra detectar o reverse proxy
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
+	}
+
+	# Dashboard nativo do Qdrant (opcional, debug).
+	handle_path /qdrant/* {
+		reverse_proxy qdrant:6333
+	}
+
+	# Loki API (debug — útil pra rodar curl direto sem expor porta).
+	# Acesso protegido pela mesma camada do app (cookie/api key).
+	handle_path /loki/* {
+		reverse_proxy loki:3100
+	}
+
+	# Tudo o mais vai pra app FastAPI.
 	reverse_proxy app:7000
 
 	encode gzip zstd
@@ -29,7 +55,10 @@
 	# Headers de segurança (não sobrepõe se app já enviar).
 	header {
 		X-Content-Type-Options nosniff
-		X-Frame-Options DENY
+		# X-Frame-Options removido aqui porque Grafana SOB /grafana/* já manda
+		# o seu próprio (controlado por GF_SECURITY_ALLOW_EMBEDDING). Para
+		# rotas da app, o backend define Content-Security-Policy frame-ancestors
+		# se precisar.
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "geolocation=(), microphone=(), camera=()"
 		# HSTS: comentado por segurança. Em prod, descomente DEPOIS de
