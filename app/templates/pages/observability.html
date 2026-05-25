@@ -158,6 +158,144 @@
             </div>
         </div>
     </div>
+
+    <!-- ════════════════════════════════════════════════════════════
+         Manutenção de Logs (Onda Observabilidade)
+         Evita entupimento de storage. Lista arquivos rotacionados em
+         logs/, mostra disk usage, permite truncar / forçar rotação /
+         apagar archives antigos / ver últimas N linhas (tail).
+         ════════════════════════════════════════════════════════════ -->
+    <div class="mt-6 rounded-xl border border-surface-200 bg-white">
+        <div class="flex items-center justify-between border-b border-surface-100 px-4 py-3">
+            <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                <h2 class="text-[13px] font-semibold text-brand-900">Manutenção de Logs</h2>
+                <span x-show="logs.totals" class="text-[10px] text-surface-400" x-text="'(' + (logs.totals?.all_size_human || '0 B') + ' em disco · ' + (logs.totals?.archives_count || 0) + ' archives)'"></span>
+            </div>
+            <div class="flex items-center gap-2">
+                <button @click="loadLogsStats()" :disabled="logsLoading" class="rounded-lg border border-surface-200 px-3 py-1 text-[11px] text-surface-600 hover:bg-surface-50 disabled:opacity-50">
+                    <span x-text="logsLoading ? 'Atualizando...' : '↻ Atualizar'"></span>
+                </button>
+                <button @click="forceRotate()" class="rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 px-3 py-1 text-[11px] font-semibold text-amber-800"
+                        title="Força rotação de todos os arquivos abertos (gera backup com data atual, esvazia atual)">
+                    ↻ Forçar rotação
+                </button>
+                <button @click="confirmDeleteArchives()" :disabled="!logs.totals?.archives_count" class="rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 px-3 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-30">
+                    🗑 Limpar archives
+                </button>
+            </div>
+        </div>
+        <div class="px-4 py-3 space-y-3">
+            <!-- Stat cards -->
+            <div x-show="logs.disk" class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                <div class="rounded-lg bg-surface-50 px-2.5 py-2">
+                    <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Arquivos ativos</div>
+                    <div class="text-[14px] font-bold text-brand-900 font-mono" x-text="logs.totals?.files_size_human || '—'"></div>
+                </div>
+                <div class="rounded-lg bg-surface-50 px-2.5 py-2">
+                    <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Archives (backups)</div>
+                    <div class="text-[14px] font-bold text-brand-900 font-mono">
+                        <span x-text="logs.totals?.archives_size_human || '0 B'"></span>
+                        <span class="text-[10px] text-surface-500" x-text="'(' + (logs.totals?.archives_count || 0) + ')'"></span>
+                    </div>
+                </div>
+                <div class="rounded-lg bg-surface-50 px-2.5 py-2">
+                    <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Disco livre</div>
+                    <div class="text-[14px] font-bold font-mono"
+                         :class="logs.disk?.used_pct > 85 ? 'text-rose-700' : (logs.disk?.used_pct > 70 ? 'text-amber-700' : 'text-brand-900')"
+                         x-text="logs.disk?.free_human || '—'"></div>
+                </div>
+                <div class="rounded-lg bg-surface-50 px-2.5 py-2">
+                    <div class="text-[9px] uppercase tracking-wider text-surface-400 font-semibold">Uso do disco</div>
+                    <div class="text-[14px] font-bold font-mono"
+                         :class="logs.disk?.used_pct > 85 ? 'text-rose-700' : (logs.disk?.used_pct > 70 ? 'text-amber-700' : 'text-brand-900')"
+                         x-text="logs.disk ? (logs.disk.used_pct + '%') : '—'"></div>
+                </div>
+            </div>
+
+            <!-- Alerta de disco -->
+            <div x-show="logs.disk?.used_pct > 85" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700">
+                ⚠ Disco acima de 85% — considere "Limpar archives" ou "Forçar rotação" antes que afete a aplicação.
+            </div>
+
+            <!-- Tabela de arquivos -->
+            <div x-show="logs.files" class="overflow-x-auto">
+                <table class="w-full text-[11px]">
+                    <thead class="text-surface-400 border-b border-surface-100">
+                        <tr>
+                            <th class="text-left font-semibold py-1.5 pr-3">Arquivo</th>
+                            <th class="text-left font-semibold py-1.5 px-2">Descrição</th>
+                            <th class="text-right font-semibold py-1.5 px-2">Tamanho</th>
+                            <th class="text-right font-semibold py-1.5 px-2">Retenção</th>
+                            <th class="text-left font-semibold py-1.5 px-2">Última escrita</th>
+                            <th class="text-right font-semibold py-1.5 pl-2">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="f in (logs.files || [])" :key="f.name">
+                            <tr class="border-b border-surface-50 hover:bg-surface-50/50">
+                                <td class="font-mono py-1.5 pr-3 text-brand-900">
+                                    <span x-text="f.name + '.log'"></span>
+                                    <span x-show="!f.exists" class="ml-1 text-[9px] text-surface-400 italic">(vazio)</span>
+                                </td>
+                                <td class="text-surface-500 py-1.5 px-2" x-text="f.description"></td>
+                                <td class="text-right font-mono py-1.5 px-2"
+                                    :class="f.size_bytes > 50_000_000 ? 'text-rose-700 font-bold' : (f.size_bytes > 10_000_000 ? 'text-amber-700' : 'text-surface-700')"
+                                    x-text="f.size_human"></td>
+                                <td class="text-right font-mono py-1.5 px-2 text-surface-500" x-text="f.retention_days + 'd'"></td>
+                                <td class="text-[10px] py-1.5 px-2 text-surface-500" x-text="f.mtime ? ago(f.mtime) : '—'"></td>
+                                <td class="text-right py-1.5 pl-2 whitespace-nowrap">
+                                    <button @click="openTail(f.name)" :disabled="!f.exists" class="text-brand-600 hover:text-brand-700 px-1.5 disabled:opacity-30" title="Ver últimas 100 linhas">
+                                        👁
+                                    </button>
+                                    <button @click="confirmClear(f.name)" :disabled="!f.exists || f.size_bytes === 0" class="text-rose-600 hover:text-rose-700 px-1.5 disabled:opacity-30" title="Truncar (zera conteúdo, preserva arquivo)">
+                                        ✕
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+
+            <p class="text-[10px] text-surface-400">
+                Logs estruturados JSON em <code class="bg-surface-100 px-1 rounded" x-text="logs.log_dir || 'logs/'"></code> ·
+                Rotação diária automática (UTC) · Truncar/rotação manuais exigem role <strong>root</strong>.
+            </p>
+        </div>
+    </div>
+
+    <!-- Modal: tail viewer -->
+    <div x-show="tailOpen" x-transition.opacity x-cloak
+         @keydown.escape.window="tailOpen=false"
+         class="fixed inset-0 z-[9995] bg-black/40 flex items-center justify-center p-4">
+        <div @click.away="tailOpen=false" class="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div class="flex items-center justify-between px-5 py-3 border-b border-surface-100">
+                <div>
+                    <p class="text-[10px] uppercase tracking-wider text-amber-600 font-semibold">Últimas linhas</p>
+                    <h3 class="text-[14px] font-bold text-brand-900 font-mono" x-text="tailFile"></h3>
+                </div>
+                <div class="flex items-center gap-2">
+                    <select x-model.number="tailLines" @change="loadTail(tailFile)" class="rounded border border-surface-200 px-2 py-1 text-[11px]">
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                        <option value="500">500</option>
+                        <option value="1000">1000</option>
+                    </select>
+                    <button @click="loadTail(tailFile)" class="rounded border border-surface-200 px-2 py-1 text-[11px] text-surface-600 hover:bg-surface-50">↻</button>
+                    <button @click="tailOpen=false" class="p-1 rounded hover:bg-surface-100 text-surface-400" aria-label="Fechar">✕</button>
+                </div>
+            </div>
+            <div class="flex-1 overflow-auto bg-surface-50 p-3">
+                <pre class="text-[10px] font-mono leading-relaxed text-brand-900 whitespace-pre-wrap" x-text="tailContent || (tailLoading ? 'Carregando...' : '(vazio)')"></pre>
+            </div>
+            <div class="px-5 py-2 border-t border-surface-100 flex items-center justify-between text-[10px] text-surface-500">
+                <span x-text="tailMeta ? (tailMeta.returned_lines + ' linhas · arquivo: ' + (tailMeta.total_size_bytes/1024).toFixed(1) + ' KB' + (tailMeta.truncated ? ' (truncado nos últimos 5MB)' : '')) : ''"></span>
+                <button x-show="tailContent" @click="copyText(tailContent)" class="text-brand-600 hover:text-brand-700">Copiar tudo</button>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}
 
@@ -171,6 +309,10 @@ function observabilityPage() {
         selectedLog: null,
         langfuseUrl: 'https://cloud.langfuse.com',
         pageSize: 10, currentPage: 0, totalInteractions: 0,
+        // Manutenção de logs (Onda Observabilidade)
+        logs: {}, logsLoading: false,
+        tailOpen: false, tailFile: '', tailLines: 100,
+        tailContent: '', tailMeta: null, tailLoading: false,
         get totalPages() { return Math.max(1, Math.ceil(this.totalInteractions / this.pageSize)); },
 
         async load() {
@@ -178,6 +320,79 @@ function observabilityPage() {
             try { const d = await api.get('/api/v1/agents'); this.agents = d.agents || []; } catch {}
             await this.loadPage();
             try { const s = await api.get('/api/v1/settings'); this.langfuseUrl = s.settings?.langfuse_host || 'https://cloud.langfuse.com'; } catch {}
+            this.loadLogsStats();
+        },
+
+        // ─── Manutenção de Logs ────────────────────────────────────
+        async loadLogsStats() {
+            this.logsLoading = true;
+            try { this.logs = await api.get('/api/v1/observability/logs/stats'); }
+            catch(e) { showToast('Erro ao carregar stats de logs: ' + (e.message||''), 'error'); }
+            this.logsLoading = false;
+        },
+
+        async openTail(name) {
+            this.tailFile = name + '.log';
+            this.tailOpen = true;
+            await this.loadTail(name);
+        },
+
+        async loadTail(name) {
+            const clean = name.replace(/\.log$/, '');
+            this.tailLoading = true;
+            this.tailContent = '';
+            try {
+                const r = await api.get('/api/v1/observability/logs/tail/' + encodeURIComponent(clean) + '?lines=' + this.tailLines);
+                this.tailMeta = r;
+                // Pretty-print: se for JSON, indenta cada linha
+                this.tailContent = (r.lines || []).map(ln => {
+                    try { return JSON.stringify(JSON.parse(ln), null, 2); }
+                    catch { return ln; }
+                }).join('\n\n');
+            } catch(e) {
+                this.tailContent = '';
+                showToast('Erro: ' + (e.message||''), 'error');
+            }
+            this.tailLoading = false;
+        },
+
+        async confirmClear(name) {
+            if (!confirm(`Truncar ${name}.log? O conteúdo atual será apagado (preserva o arquivo). Apenas role=root.`)) return;
+            try {
+                const r = await api.post('/api/v1/observability/logs/clear/' + encodeURIComponent(name), {});
+                showToast(`${r.file} truncado (${(r.size_before/1024).toFixed(1)} KB liberados)`, 'success');
+                await this.loadLogsStats();
+            } catch(e) { showToast('Erro: ' + (e.message||''), 'error'); }
+        },
+
+        async forceRotate() {
+            if (!confirm('Forçar rotação de todos os arquivos? Backups com data atual serão criados e os atuais serão zerados. Apenas role=root.')) return;
+            try {
+                const r = await api.post('/api/v1/observability/logs/rotate', {});
+                showToast(`${r.rotated_count} arquivo(s) rotacionados`, 'success');
+                await this.loadLogsStats();
+            } catch(e) { showToast('Erro: ' + (e.message||''), 'error'); }
+        },
+
+        async confirmDeleteArchives() {
+            const total = this.logs.totals?.archives_size_human || '0 B';
+            const count = this.logs.totals?.archives_count || 0;
+            if (!confirm(`Apagar TODOS os ${count} arquivos rotacionados (${total} liberados)? Os arquivos atuais (app.log etc) NÃO são afetados. Apenas role=root.`)) return;
+            try {
+                const r = await api.del('/api/v1/observability/logs/archives');
+                showToast(`${r.deleted_count} archive(s) apagados (${r.freed_human})`, 'success');
+                await this.loadLogsStats();
+            } catch(e) { showToast('Erro: ' + (e.message||''), 'error'); }
+        },
+
+        // Helper "X tempo atrás" (reutilizado em outras telas)
+        ago(iso) {
+            if (!iso) return '—';
+            const t = new Date(iso); const s = Math.floor((Date.now() - t.getTime())/1000);
+            if (s < 60) return s + 's atrás';
+            if (s < 3600) return Math.floor(s/60) + 'min atrás';
+            if (s < 86400) return Math.floor(s/3600) + 'h atrás';
+            return Math.floor(s/86400) + 'd atrás';
         },
 
         async loadPage() {

@@ -47,13 +47,42 @@ scrape_configs:
     pipeline_stages:
       # Docker daemon JSON wrap: {"log": "...", "stream": "stdout", "time": "..."}
       - docker: {}
-      # Extrai trace_id que LoggingInstrumentor injeta (formato: "trace_id=abc123 span_id=def456 ...")
+      # ─────────────────────────────────────────────────────────────
+      # JSON estruturado da app (Onda Observabilidade — JsonFormatter
+      # do app/core/logging_setup.py). Toda linha começa com `{` e
+      # contém pelo menos `level`, `logger`, `msg`. Extraímos `level`,
+      # `logger` e `event` como LABELS (baixa cardinality) — restante
+      # fica acessível via `| json` no LogQL sem custo de index.
+      # ─────────────────────────────────────────────────────────────
+      - match:
+          selector: '{compose_service=~".+"}'
+          stages:
+            # Tenta parsear JSON; se não for JSON (ex: log do uvicorn raw),
+            # `match` com expression vazio segue pro próximo stage sem erro.
+            - json:
+                expressions:
+                  level: level
+                  logger: logger
+                  event: event
+                  trace_id: trace_id
+                  request_id: request_id
+            - labels:
+                level:
+                logger:
+                event:
+                trace_id:
+                request_id:
+      # ─────────────────────────────────────────────────────────────
+      # Retro-compat: extrai trace_id do formato legado do LoggingInstrumentor
+      # ("trace_id=abc... span_id=def..."). Só dispara se NÃO veio do JSON acima
+      # (que já teria setado o label).
+      # ─────────────────────────────────────────────────────────────
       - regex:
-          expression: 'trace_id=(?P<trace_id>[0-9a-f]+)'
+          expression: 'trace_id=(?P<otel_trace_id>[0-9a-f]+)'
       - labels:
-          trace_id:
-      # Tenta extrair severity do log Python ("INFO:logger.name:message")
+          otel_trace_id:
+      # Retro-compat: severity de logs Python texto ("INFO:logger:msg")
       - regex:
-          expression: '^(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL):'
+          expression: '^(?P<text_level>DEBUG|INFO|WARNING|ERROR|CRITICAL):'
       - labels:
-          level:
+          text_level:
