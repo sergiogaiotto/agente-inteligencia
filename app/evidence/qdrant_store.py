@@ -47,7 +47,10 @@ async def get_client():
         try:
             from qdrant_client import AsyncQdrantClient
         except ImportError:
-            logger.warning("qdrant_client não instalado — RAG vetorial desligado.")
+            logger.warning(
+                "qdrant_client não instalado — RAG vetorial desligado",
+                extra={"event": "qdrant.client.import_failed"},
+            )
             return None
         settings = get_settings()
         try:
@@ -59,7 +62,15 @@ async def get_client():
             )
             return _client
         except Exception as e:
-            logger.warning(f"Falha ao criar AsyncQdrantClient: {e}. RAG vetorial desligado.")
+            logger.warning(
+                "Falha ao criar AsyncQdrantClient — RAG vetorial desligado",
+                extra={
+                    "event": "qdrant.client.init_failed",
+                    "qdrant_url": settings.qdrant_url,
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
             return None
 
 
@@ -86,7 +97,17 @@ async def ensure_collection() -> bool:
         _collection_ready = True
         return True
     except Exception as e:
-        logger.warning(f"Falha em ensure_collection: {type(e).__name__}: {e}")
+        logger.warning(
+            "Falha em ensure_collection — Qdrant pode estar offline ou inacessível",
+            extra={
+                "event": "qdrant.collection.ensure_failed",
+                "qdrant_url": settings.qdrant_url,
+                "collection": settings.qdrant_collection,
+                "embedding_dim": EMBEDDING_DIM,
+                "error_type": type(e).__name__,
+            },
+            exc_info=True,
+        )
         return False
 
 
@@ -97,10 +118,24 @@ async def upsert_chunks(chunks: list[dict]) -> int:
     """
     if not chunks:
         return 0
+    settings = get_settings()
     if not await ensure_collection():
+        # ensure_collection já logou a causa raiz com contexto.
+        # Loga aqui também porque ingest.py precisa correlacionar
+        # "upsert abortado" com "Ingestão parcial" no mesmo evento.
+        source_ids = list({c.get("source_id") for c in chunks if c.get("source_id")})
+        logger.warning(
+            "upsert_chunks abortado: collection indisponível",
+            extra={
+                "event": "qdrant.upsert.aborted_no_collection",
+                "qdrant_url": settings.qdrant_url,
+                "collection": settings.qdrant_collection,
+                "chunk_count": len(chunks),
+                "source_ids": source_ids,
+            },
+        )
         return 0
     client = await get_client()
-    settings = get_settings()
     try:
         from qdrant_client.models import PointStruct
         points = [
@@ -118,7 +153,20 @@ async def upsert_chunks(chunks: list[dict]) -> int:
         await client.upsert(collection_name=settings.qdrant_collection, points=points, wait=True)
         return len(points)
     except Exception as e:
-        logger.warning(f"upsert_chunks falhou: {type(e).__name__}: {e}")
+        source_ids = list({c.get("source_id") for c in chunks if c.get("source_id")})
+        logger.warning(
+            "upsert_chunks falhou — chunks ficaram só no Postgres",
+            extra={
+                "event": "qdrant.upsert.failed",
+                "qdrant_url": settings.qdrant_url,
+                "collection": settings.qdrant_collection,
+                "chunk_count": len(chunks),
+                "embedding_dim": len(chunks[0].get("embedding") or []) if chunks else None,
+                "source_ids": source_ids,
+                "error_type": type(e).__name__,
+            },
+            exc_info=True,
+        )
         return 0
 
 
@@ -157,7 +205,18 @@ async def search(query_vector: list[float], top_n: int = 20, source_ids: Optiona
             for p in result.points
         ]
     except Exception as e:
-        logger.warning(f"qdrant search falhou: {type(e).__name__}: {e}")
+        logger.warning(
+            "qdrant search falhou — caller cai em BM25-only",
+            extra={
+                "event": "qdrant.search.failed",
+                "qdrant_url": settings.qdrant_url,
+                "collection": settings.qdrant_collection,
+                "top_n": top_n,
+                "source_filter_count": len(source_ids) if source_ids else 0,
+                "error_type": type(e).__name__,
+            },
+            exc_info=True,
+        )
         return []
 
 
@@ -177,7 +236,17 @@ async def delete_by_source(source_id: str) -> bool:
         )
         return True
     except Exception as e:
-        logger.warning(f"delete_by_source falhou: {type(e).__name__}: {e}")
+        logger.warning(
+            "delete_by_source falhou — pontos antigos podem persistir até próximo replace/reindex",
+            extra={
+                "event": "qdrant.delete.failed",
+                "qdrant_url": settings.qdrant_url,
+                "collection": settings.qdrant_collection,
+                "source_id": source_id,
+                "error_type": type(e).__name__,
+            },
+            exc_info=True,
+        )
         return False
 
 
@@ -196,5 +265,14 @@ async def collection_info() -> Optional[dict]:
             "status": str(getattr(info, "status", "unknown")),
         }
     except Exception as e:
-        logger.warning(f"collection_info falhou: {e}")
+        logger.warning(
+            "collection_info falhou",
+            extra={
+                "event": "qdrant.collection_info.failed",
+                "qdrant_url": settings.qdrant_url,
+                "collection": settings.qdrant_collection,
+                "error_type": type(e).__name__,
+            },
+            exc_info=True,
+        )
         return None
