@@ -46,6 +46,19 @@ from app.core.database import (
     data_tables_repo,
     knowledge_repo,
 )
+from app.data_tables.events import (
+    EVT_ANALYZE_COMPLETED,
+    EVT_ANALYZE_FAILED,
+    EVT_ANALYZE_STARTED,
+    EVT_APPEND_COMPLETED,
+    EVT_APPEND_FAILED,
+    EVT_APPEND_STARTED,
+    EVT_DUCKDB_ERROR,
+    EVT_PROMOTE_COMPLETED,
+    EVT_PROMOTE_FAILED,
+    EVT_PROMOTE_STARTED,
+    EVT_QUERY_EXECUTED,
+)
 from app.data_tables.queries import (
     build_urn,
     find_by_id_with_ks,
@@ -61,6 +74,8 @@ from app.data_tables.types import (
 )
 
 logger = logging.getLogger(__name__)
+# Logger dedicado da Onda Tabular — escreve em logs/tabular.log
+_tabular_logger = logging.getLogger("tabular")
 
 
 class TabularError(Exception):
@@ -599,6 +614,12 @@ async def analyze_tabular(data: bytes, filename: str, mime_type: Optional[str] =
         )
 
     duckdb = _import_duckdb()
+    _t0_analyze = time.perf_counter()
+    _tabular_logger.info(
+        "analyze_started",
+        extra={"event": EVT_ANALYZE_STARTED, "file_name": filename,
+               "ext": ext, "size_bytes": len(data)},
+    )
 
     def _run() -> dict:
         with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
@@ -648,7 +669,34 @@ async def analyze_tabular(data: bytes, filename: str, mime_type: Optional[str] =
             except OSError:
                 pass
 
-    return await asyncio.to_thread(_run)
+    try:
+        result = await asyncio.to_thread(_run)
+    except TabularError as e:
+        _tabular_logger.warning(
+            "analyze_failed",
+            extra={
+                "event": EVT_ANALYZE_FAILED, "file_name": filename, "ext": ext,
+                "error_class": type(e).__name__, "error_msg": str(e),
+                "status_code": e.status_code,
+                "duration_ms": round((time.perf_counter() - _t0_analyze) * 1000, 2),
+            },
+        )
+        raise
+
+    _tabular_logger.info(
+        "analyze_completed",
+        extra={
+            "event": EVT_ANALYZE_COMPLETED, "file_name": filename, "ext": ext,
+            "sheet_count": result.get("sheet_count"),
+            "primary_sheet": result.get("primary_sheet"),
+            "top_score": result.get("score"),
+            "any_ready": any(s.get("tabular_ready") for s in result.get("sheets", [])),
+            "has_auto_detect": any(s.get("header_row_auto_detected")
+                                   for s in result.get("sheets", [])),
+            "duration_ms": round((time.perf_counter() - _t0_analyze) * 1000, 2),
+        },
+    )
+    return result
 
 
 def _build_response(
@@ -725,9 +773,22 @@ async def promote_to_table(
         TabularError: ks não existe (404), arquivo inválido (400),
                       tamanho excedido (413), DuckDB falha (500).
     """
+    _t0_promote = time.perf_counter()
+    _tabular_logger.info(
+        "promote_started",
+        extra={"event": EVT_PROMOTE_STARTED, "ks_id": ks_id, "file_name": filename,
+               "sheet_name": sheet_name, "header_row": header_row},
+    )
     # Sanity checks
     ks = await knowledge_repo.find_by_id(ks_id)
     if not ks:
+        _tabular_logger.warning(
+            "promote_failed",
+            extra={"event": EVT_PROMOTE_FAILED, "ks_id": ks_id,
+                   "file_name": filename, "error_class": "TabularError",
+                   "error_msg": "knowledge_source not found", "status_code": 404,
+                   "duration_ms": round((time.perf_counter() - _t0_promote) * 1000, 2)},
+        )
         raise TabularError(f"knowledge_source '{ks_id}' não encontrada.", status_code=404)
 
     # Reusa análise para validar + capturar schema/score por aba
@@ -862,10 +923,33 @@ async def promote_to_table(
             duckdb_path.unlink(missing_ok=True)
         except OSError:
             pass
+        _tabular_logger.error(
+            "promote_failed",
+            extra={"event": EVT_PROMOTE_FAILED, "ks_id": ks_id, "file_name": filename,
+                   "sheet_name": sheet_name, "error_class": type(e).__name__,
+                   "error_msg": str(e)[:200], "status_code": 500,
+                   "duration_ms": round((time.perf_counter() - _t0_promote) * 1000, 2)},
+        )
         raise TabularError(f"Falha ao registrar tabela: {e}", status_code=500) from e
 
     # Retorna versão enriquecida (com flags da KS) para a UI
     enriched = await find_by_id_with_ks(table_id)
+
+    # Log de sucesso (catálogo de eventos)
+    _tabular_logger.info(
+        "promote_completed",
+        extra={
+            "event": EVT_PROMOTE_COMPLETED,
+            "ks_id": ks_id, "table_id": table_id, "urn": urn,
+            "name": display_name, "sheet_name": sheet_name,
+            "rows": target_sheet.get("rows", 0),
+            "columns": target_sheet.get("columns", len(schema)),
+            "size_bytes": size_bytes,
+            "quality_score": target_sheet.get("score", 0.0),
+            "suggested_pk": target_sheet.get("suggested_pk"),
+            "duration_ms": round((time.perf_counter() - _t0_promote) * 1000, 2),
+        },
+    )
     return enriched or row
 
 
@@ -1044,15 +1128,40 @@ async def append_to_table(
                 except OSError:
                     pass
 
+    _tabular_logger.info(
+        "append_started",
+        extra={"event": EVT_APPEND_STARTED, "table_id": target_table_id,
+               "file_name": filename, "sheet_name": sheet_name},
+    )
     t0 = time.perf_counter()
     try:
         count_before, count_after = await asyncio.to_thread(_do_append)
-    except TabularError:
+    except TabularError as e:
+        _tabular_logger.warning(
+            "append_failed",
+            extra={"event": EVT_APPEND_FAILED, "table_id": target_table_id,
+                   "file_name": filename, "error_class": type(e).__name__,
+                   "error_msg": str(e)[:200], "status_code": e.status_code,
+                   "duration_ms": int((time.perf_counter() - t0) * 1000)},
+        )
         raise
     except Exception as e:
+        _tabular_logger.error(
+            "append_failed",
+            extra={"event": EVT_APPEND_FAILED, "table_id": target_table_id,
+                   "file_name": filename, "error_class": type(e).__name__,
+                   "error_msg": str(e)[:200], "status_code": 500,
+                   "duration_ms": int((time.perf_counter() - t0) * 1000)},
+        )
         raise TabularError(f"Falha ao appendar: {e}", status_code=500) from e
     duration_ms = int((time.perf_counter() - t0) * 1000)
     rows_added = count_after - count_before
+    _tabular_logger.info(
+        "append_completed",
+        extra={"event": EVT_APPEND_COMPLETED, "table_id": target_table_id,
+               "rows_added": rows_added, "row_count_before": count_before,
+               "row_count_after": count_after, "duration_ms": duration_ms},
+    )
 
     # Atualiza row_count e size_bytes na metadata
     try:
@@ -1267,6 +1376,29 @@ async def execute_query(
             })
         except Exception:
             logger.exception("Falha ao gravar audit log de query tabular")
+
+    # Evento canônico: tabular.query.executed (success ou error)
+    operators_used = sorted({
+        str(f.get("op", "")) for f in (filters or []) if f.get("op")
+    })
+    has_template = any(
+        isinstance(f.get("value"), str) and "{{" in f.get("value", "")
+        for f in (filters or [])
+    )
+    _tabular_logger.info(
+        "query_executed",
+        extra={
+            "event": EVT_QUERY_EXECUTED,
+            "table_id": table_id,
+            "table_urn": table.get("urn"),
+            "operators_used": operators_used,
+            "select_count": len(select or []),
+            "has_template": has_template,
+            "row_count": row_count,
+            "duration_ms": duration_ms,
+            "status": status,
+        },
+    )
 
     return {
         "rows": rows,
