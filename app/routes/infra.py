@@ -467,6 +467,19 @@ async def infra_status():
     # local deve sobrescrever no .env.
     ui_qdrant = os.environ.get("QDRANT_UI_URL", "/qdrant/dashboard")
     ui_grafana = os.environ.get("GRAFANA_UI_URL", "/grafana/")
+    # Deep links para Grafana Explore com datasource pré-selecionado.
+    # Útil pra "Abrir UI" em Tempo/Loki ir DIRETO pra busca de traces/logs
+    # em vez de cair na home do Grafana. Os UIDs Tempo/Loki batem com o
+    # provisioning em infra/grafana/provisioning/datasources/datasources.yaml.
+    # Configuráveis via env caso o user customize.
+    ui_grafana_explore_tempo = os.environ.get(
+        "GRAFANA_EXPLORE_TEMPO_URL",
+        ui_grafana.rstrip("/") + '/explore?orgId=1&left=%7B%22datasource%22:%22tempo%22%7D',
+    )
+    ui_grafana_explore_loki = os.environ.get(
+        "GRAFANA_EXPLORE_LOKI_URL",
+        ui_grafana.rstrip("/") + '/explore?orgId=1&left=%7B%22datasource%22:%22loki%22,%22queries%22:%5B%7B%22expr%22:%22%7Bcontainer_name%3D~%5C%22.%2Aagente.%2A%5C%22%7D%22%7D%5D%7D',
+    )
 
     checks = await asyncio.gather(
         _check_postgres(),
@@ -488,14 +501,14 @@ async def infra_status():
             "tempo",
             "http://tempo:3200/ready",
             description="Backend de traces OTLP (Onda 2)",
-            ui_url=ui_grafana,
+            ui_url=ui_grafana_explore_tempo,
             profile_full=True,
         ),
         _check_http(
             "loki",
             "http://loki:3100/ready",
             description="Backend de logs estruturados (Onda 2)",
-            ui_url=ui_grafana,
+            ui_url=ui_grafana_explore_loki,
             profile_full=True,
         ),
         _check_http(
