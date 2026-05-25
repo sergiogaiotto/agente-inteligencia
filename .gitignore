@@ -55,7 +55,8 @@ env/
 
 # ─── Logs ───────────────────────────────────────────────────
 *.log
-logs/
+logs/*
+!logs/.gitkeep
 
 # ─── Docker / volumes locais ────────────────────────────────
 docker-compose.override.yml

@@ -22,6 +22,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Logging estruturado (JSON em logs/*.log) — antes de tudo pra capturar
+    # qualquer erro de startup.
+    try:
+        from app.core.logging_setup import setup_logging
+        setup_logging()
+    except Exception as e:
+        # Não derruba app se logging falhar (defensivo)
+        print(f"WARN: setup_logging falhou: {e}", flush=True)
     await init_db()
     # Após pool aberto, popula os.environ com overrides do settings_store
     # (UI gravou via PUT /settings em sessões anteriores). Sem isso, providers
@@ -54,6 +62,13 @@ app = FastAPI(title=settings.app_name, description="Plataforma Multi-Agente §SK
 # Inicializa OpenTelemetry ANTES dos middlewares para que requests sejam
 # instrumentadas desde o primeiro byte. No-op se OTEL_ENABLED=false.
 init_otel(app)
+
+# ── Request context (logs/Observabilidade) ─────────────────────
+# Middleware que propaga request_id + trace_id via contextvars; JsonFormatter
+# inclui esses IDs em TODOS os logs do ciclo do request. Loga req/resp em
+# logs/api.log. Adiciona X-Request-Id no response.
+from app.core.request_context import install_request_context_middleware
+install_request_context_middleware(app)
 
 # ── Middlewares de segurança (Onda 1) ──────────────────────────
 # Rate-limit (sliding window via Redis com fallback memory) — defesa LLM04.
