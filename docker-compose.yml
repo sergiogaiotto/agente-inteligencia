@@ -360,6 +360,16 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      # ── Subpath atrás do Caddy (mesma origin) ───────────────────
+      # Caddy faz reverse_proxy de /grafana/* → grafana:3000. Grafana precisa
+      # saber que está sob /grafana pra gerar URLs internas corretas (assets,
+      # redirects de login, links em emails). GRAFANA_ROOT_URL default usa
+      # GRAFANA_PUBLIC_HOST que casa com TLS_SITE — em dev local sem domínio
+      # cai num placeholder %(domain)s aceitável.
+      # Para acesso direto na porta 3000 (sem Caddy), setar
+      # GRAFANA_ROOT_URL=http://localhost:3000 e GRAFANA_SUB_PATH=false no .env.
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-%(protocol)s://%(domain)s:%(http_port)s/grafana/}
+      GF_SERVER_SERVE_FROM_SUB_PATH: ${GRAFANA_SUB_PATH:-true}
     volumes:
       - grafana_data:/var/lib/grafana
     ports:

@@ -447,11 +447,26 @@ async def infra_status():
     qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
     opa_url = os.environ.get("OPA_URL", "http://opa:8181")
 
-    # UIs nativas — quando o app está rodando localmente, esses links abrem no browser.
-    # Em produção atrás do Caddy, esses ports não são expostos publicamente, então
-    # os links só funcionam de quem tem SSH tunnel ou acesso à rede interna.
-    ui_qdrant = "http://localhost:6333/dashboard"
-    ui_grafana = "http://localhost:3000"
+    # UIs nativas — link clicado pelo browser do USUÁRIO (não do servidor).
+    # Configurável via env para suportar deploys diversos:
+    #
+    # Desenvolvimento local (sem Caddy):
+    #   GRAFANA_UI_URL=http://localhost:3000
+    #   QDRANT_UI_URL=http://localhost:6333/dashboard
+    #
+    # Produção atrás de Caddy (mesma origin, recomendado):
+    #   GRAFANA_UI_URL=/grafana/                ← path relativo, browser resolve
+    #   QDRANT_UI_URL=/qdrant/dashboard
+    #   → Caddy faz reverse_proxy /grafana/* → grafana:3000 e /qdrant/* → qdrant:6333
+    #     (ver infra/caddy/Caddyfile). Funciona em qualquer domínio sem mexer aqui.
+    #
+    # Acesso via VPN/SSH tunnel local:
+    #   (deixa default = path relativo; user faz `ssh -L 3000:127.0.0.1:3000` antes)
+    #
+    # Defaults: path relativo (assume Caddy). Quem rodar `uvicorn` puro em dev
+    # local deve sobrescrever no .env.
+    ui_qdrant = os.environ.get("QDRANT_UI_URL", "/qdrant/dashboard")
+    ui_grafana = os.environ.get("GRAFANA_UI_URL", "/grafana/")
 
     checks = await asyncio.gather(
         _check_postgres(),

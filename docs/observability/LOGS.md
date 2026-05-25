@@ -192,6 +192,26 @@ Grafana e vê toda a trilha em segundos.
 | `LOG_FORMAT` | `json` (prod) / `text` (test) | JSON estruturado ou texto legível |
 | `LOG_FILE_ENABLED` | `1` (prod) / `0` (test) | Liga handlers de arquivo |
 | `LOG_CONSOLE_ENABLED` | `1` | Liga handler de stdout |
+| `GRAFANA_UI_URL` | `/grafana/` | URL do botão "Abrir UI" em /infra (path relativo = mesma origin via Caddy) |
+| `QDRANT_UI_URL` | `/qdrant/dashboard` | URL do dashboard do Qdrant em /infra |
+| `GRAFANA_ROOT_URL` | `%(protocol)s://%(domain)s:%(http_port)s/grafana/` | Subpath do Grafana (precisa bater com Caddy) |
+| `GRAFANA_SUB_PATH` | `true` | Grafana serve a partir do subpath /grafana |
+
+## Como acessar o Grafana em prod (atrás de Caddy)
+
+Com a configuração padrão (`GRAFANA_UI_URL=/grafana/`), Caddy faz reverse proxy de `/grafana/*` → `grafana:3000` (definido em `infra/caddy/Caddyfile`). Resultado:
+
+- **Dev local (uvicorn puro, sem Caddy)**: setar `GRAFANA_UI_URL=http://localhost:3000` no `.env` + `GRAFANA_SUB_PATH=false` + `GRAFANA_ROOT_URL=http://localhost:3000`.
+- **VPS atrás de Caddy** (recomendado): deixar defaults. Acesso direto via `https://meudominio.com/grafana/` (mesmo domínio da app). Sem SSH tunnel, sem expor porta 3000.
+- **Login**: `admin` / `admin` (ou `GRAFANA_ADMIN_PASSWORD` do `.env`). Mude na 1ª entrada.
+- **Anonymous viewer**: ligado por default (`GRAFANA_ANON_ENABLED=true`) — permite o iframe embutido em `/infra` funcionar sem login. Em prod com dados sensíveis, mude para `false`.
+
+Para acesso direto pela porta 3000 (sem passar pelo Caddy), o `docker-compose.yml` binda `127.0.0.1:3000:3000` — só dá pra acessar via SSH tunnel:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 root@vps
+# Browser local: http://localhost:3000
+```
 
 ## Como instrumentar nova feature
 
