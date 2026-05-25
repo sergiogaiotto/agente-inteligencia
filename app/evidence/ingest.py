@@ -145,14 +145,28 @@ async def ingest_text(
             for i in range(len(chunks))
         ]
         with _tracer.start_as_current_span("ingest.qdrant_upsert") as qspan:
+            qspan.set_attribute("qdrant.expected", len(chunks))
             qdrant_n = await qdrant_upsert(qdrant_payload)
             qspan.set_attribute("qdrant.upserted", qdrant_n)
+            qspan.set_attribute("qdrant.partial", qdrant_n != len(chunks))
+            if qdrant_n != len(chunks):
+                # Marca o span como erro pra alarmar via tracing (Tempo → Grafana).
+                # Import local: trace é dep opcional, evita custo no happy path.
+                from opentelemetry.trace import Status, StatusCode
+                qspan.set_status(Status(StatusCode.ERROR, "qdrant upsert parcial ou abortado"))
 
         partial = qdrant_n != len(chunks)
         if partial:
             logger.warning(
-                f"Ingestão parcial: source={source_id} chunks={len(chunks)} qdrant={qdrant_n}. "
-                "Postgres tem todos; Qdrant divergente. Re-execute quando Qdrant estiver OK."
+                "Ingestão parcial: Postgres tem todos os chunks, Qdrant divergente",
+                extra={
+                    "event": "evidence.ingest.partial",
+                    "source_id": source_id,
+                    "chunks_expected": len(chunks),
+                    "qdrant_upserted": qdrant_n,
+                    "tokens_total": tokens_total,
+                    "hint": "Re-execute a ingestão quando Qdrant estiver OK (logs anteriores de qdrant.* têm a causa raiz)",
+                },
             )
 
         # 6. Atualiza metadados da source
@@ -170,7 +184,10 @@ async def ingest_text(
             "duration_ms": duration_ms,
             "partial": partial,
         }
-        logger.info(f"Ingest OK: {result}")
+        logger.info(
+            "Ingest concluído",
+            extra={"event": "evidence.ingest.completed", **result},
+        )
         return result
 
 
