@@ -77,6 +77,22 @@ Eventos HTTP genéricos (qualquer rota):
 | `http.response` | app.api | INFO/WARN/ERROR (por status), request terminou |
 | `http.exception` | app.api | exceção não tratada |
 
+## Labels indexados pelo Promtail (Onda Observabilidade)
+
+O Promtail (`infra/promtail/promtail-config.yaml`) parseia o JSON e extrai como **labels indexados** os seguintes campos (baixa cardinality, performáticos pra filtrar):
+
+| Label | Fonte | Exemplo |
+|---|---|---|
+| `level` | `level` do JSON | `INFO`, `ERROR` |
+| `logger` | `logger` do JSON | `tabular.promote`, `app.api` |
+| `event` | `event` do JSON | `tabular.promote.completed` |
+| `trace_id` | `trace_id` do JSON | `cli_abc12345` |
+| `request_id` | `request_id` do JSON | `req_a1b2c3d4e5f6` |
+| `container_name` | Docker (sempre) | `agente_app` |
+| `compose_service` | Docker (sempre) | `app` |
+
+Campos NÃO-label (user_id, table_id, duration_ms, rows, etc) ficam acessíveis via `| json | campo="x"` no LogQL. Use labels pra filtros frequentes; use `| json` pra campos high-cardinality ou agregações com `unwrap`.
+
 ## Queries LogQL prontas (Grafana)
 
 ### Eventos da Onda Tabular por minuto, por tipo
@@ -113,16 +129,28 @@ sum by (error_class) (
 )
 ```
 
-### Eventos de um request específico
+### Eventos de um request específico (label-indexed, RÁPIDO)
 
 ```logql
-{container_name=~".*agente.*"} | json | request_id="req_abc123"
+{container_name=~".*agente.*", request_id="req_abc123"}
 ```
 
-### Eventos de um usuário (no client) — usa trace_id
+### Eventos de um usuário (no client) — label trace_id
 
 ```logql
-{container_name=~".*agente.*"} | json | trace_id="cli_xyz789"
+{container_name=~".*agente.*", trace_id="cli_xyz789"}
+```
+
+### Todos os ERRORs (label level)
+
+```logql
+{container_name=~".*agente.*", level="ERROR"}
+```
+
+### Eventos de um logger específico (label logger)
+
+```logql
+{container_name=~".*agente.*", logger=~"tabular\\..*"}
 ```
 
 ### Logs de uma KS específica
