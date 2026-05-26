@@ -6,6 +6,7 @@ Cobre:
 - _build_exec_profile_yaml: shape correto pra cada mode.
 - _build_wizard_prompt: monta system+user prompts com seções obrigatórias.
 - _resolve_bindings_for_prompt: lookup dos IDs nos repos (mockado).
+- _resolve_wizard_llm: roteamento por task_type (Wave Wizard Routing).
 
 Mocks: pool asyncpg via AsyncMock. Não toca LLM nem Postgres real.
 """
@@ -16,11 +17,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.routes.wizard import (
+    WizardAgentRequest,
+    WizardRefineRequest,
     WizardSkillRequest,
+    _DEFAULT_TASK_TYPE,
     _infer_exec_mode,
     _build_exec_profile_yaml,
     _build_wizard_prompt,
     _resolve_bindings_for_prompt,
+    _resolve_wizard_llm,
 )
 
 
@@ -344,3 +349,104 @@ class TestResolveBindings:
         result = await _resolve_bindings_for_prompt(req)
         # Não levanta — só retorna vazio
         assert result["mcp_tools"] == []
+
+
+# ═════════════════════════════════════════════════════════════════
+# Wave Wizard Routing — _resolve_wizard_llm
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestResolveWizardLLM:
+    """Garante que os 3 wizards (skill/agent/refine) usam o roteamento
+    global por task_type quando frontend manda task_type ou cai em default
+    sensato por rota. Retrocompat preserva legacy provider/model explícitos."""
+
+    def test_default_task_types_per_route(self):
+        """Defaults documentados no módulo: skill→reasoning, agent→reasoning,
+        refine→instruct."""
+        assert _DEFAULT_TASK_TYPE["agent"] == "reasoning"
+        assert _DEFAULT_TASK_TYPE["skill"] == "reasoning"
+        assert _DEFAULT_TASK_TYPE["refine"] == "instruct"
+
+    @pytest.mark.asyncio
+    async def test_explicit_task_type_wins(self, monkeypatch):
+        """Frontend manda task_type=reasoning → resolver usa, ignora provider legacy."""
+        async def _fake_resolve(task_type, has_image=False):
+            assert task_type == "reasoning"
+            return ("openai", "gpt-oss-120b")
+        monkeypatch.setattr("app.routes.wizard.resolve_llm_for_task", _fake_resolve)
+
+        req = WizardSkillRequest(description="x", task_type="reasoning")
+        provider, model, task = await _resolve_wizard_llm(req, "skill")
+        assert provider == "openai"
+        assert model == "gpt-oss-120b"
+        assert task == "reasoning"
+
+    @pytest.mark.asyncio
+    async def test_legacy_explicit_provider_respected(self, monkeypatch):
+        """Client antigo manda provider='maritaca' (não-default) e nenhum
+        task_type → respeita escolha legacy (path 2)."""
+        # _resolve_wizard_llm não deve chamar resolve_llm_for_task neste caminho.
+        async def _should_not_call(task_type, has_image=False):
+            raise AssertionError("não deveria cair no roteador")
+        monkeypatch.setattr("app.routes.wizard.resolve_llm_for_task", _should_not_call)
+
+        req = WizardAgentRequest(description="x", provider="maritaca", model="sabia-3")
+        provider, model, task = await _resolve_wizard_llm(req, "agent")
+        assert provider == "maritaca"
+        assert model == "sabia-3"
+        assert task == ""  # legacy não retorna task_type
+
+    @pytest.mark.asyncio
+    async def test_default_provider_openai_falls_back_to_routing(self, monkeypatch):
+        """provider='openai' (default antigo) E sem task_type → trata como
+        'use o padrão' e cai no roteamento global (path 3 com default da rota)."""
+        captured = {}
+        async def _fake_resolve(task_type, has_image=False):
+            captured["task_type"] = task_type
+            return ("gpt-oss-120b", "openai/gpt-oss-120b")
+        monkeypatch.setattr("app.routes.wizard.resolve_llm_for_task", _fake_resolve)
+
+        req = WizardSkillRequest(description="x")  # tudo default
+        provider, model, task = await _resolve_wizard_llm(req, "skill")
+        # Default da rota /skill é "reasoning"
+        assert captured["task_type"] == "reasoning"
+        assert task == "reasoning"
+        assert provider == "gpt-oss-120b"
+
+    @pytest.mark.asyncio
+    async def test_refine_default_is_instruct(self, monkeypatch):
+        captured = {}
+        async def _fake_resolve(task_type, has_image=False):
+            captured["task_type"] = task_type
+            return ("gpt-oss-20b", "openai/gpt-oss-20b")
+        monkeypatch.setattr("app.routes.wizard.resolve_llm_for_task", _fake_resolve)
+
+        req = WizardRefineRequest(current_content="x", instruction="melhore")
+        await _resolve_wizard_llm(req, "refine")
+        assert captured["task_type"] == "instruct"
+
+    @pytest.mark.asyncio
+    async def test_agent_default_is_reasoning(self, monkeypatch):
+        captured = {}
+        async def _fake_resolve(task_type, has_image=False):
+            captured["task_type"] = task_type
+            return ("gpt-oss-120b", "openai/gpt-oss-120b")
+        monkeypatch.setattr("app.routes.wizard.resolve_llm_for_task", _fake_resolve)
+
+        req = WizardAgentRequest(description="x")
+        await _resolve_wizard_llm(req, "agent")
+        assert captured["task_type"] == "reasoning"
+
+    @pytest.mark.asyncio
+    async def test_unknown_route_falls_back_to_reasoning(self, monkeypatch):
+        captured = {}
+        async def _fake_resolve(task_type, has_image=False):
+            captured["task_type"] = task_type
+            return ("any", "model")
+        monkeypatch.setattr("app.routes.wizard.resolve_llm_for_task", _fake_resolve)
+
+        req = WizardSkillRequest(description="x")
+        await _resolve_wizard_llm(req, "rota-inexistente")
+        # Default global do dicionário: reasoning
+        assert captured["task_type"] == "reasoning"

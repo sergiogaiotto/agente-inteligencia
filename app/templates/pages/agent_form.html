@@ -575,8 +575,13 @@ function agentForm(editId) {
         async runWizardAgent() {
             if (!this.wizardPrompt.trim()) return;
             this.wizardLoading = true; this.wizardResult = null;
+            // Wave Wizard Routing: task_type=reasoning + roteamento global.
+            // Não envia provider/model — backend resolve via Settings → Roteamento LLM.
             try {
-                const r = await api.post('/api/v1/wizard/agent', {description: this.wizardPrompt, provider: this.wizardProvider});
+                const r = await api.post('/api/v1/wizard/agent', {
+                    description: this.wizardPrompt,
+                    task_type: 'reasoning',
+                });
                 this.wizardResult = r.agent;
             } catch(e) { showToast('Erro no wizard: ' + e.message, 'error'); }
             this.wizardLoading = false;
@@ -594,8 +599,15 @@ function agentForm(editId) {
         },
         async refineField(field, instruction) {
             this.refining = true;
+            // Wave Wizard Routing: refinar texto é instruction-following.
+            // task_type=instruct (modelo menor configurado em Settings basta).
             try {
-                const r = await api.post('/api/v1/wizard/refine', {current_content: this.form[field], instruction, field, provider: this.form.llm_provider, model: this.form.model});
+                const r = await api.post('/api/v1/wizard/refine', {
+                    current_content: this.form[field],
+                    instruction,
+                    field,
+                    task_type: 'instruct',
+                });
                 this.form[field] = r.refined;
                 showToast('Campo refinado pela IA');
             } catch(e) { showToast('Erro: ' + e.message, 'error'); }
