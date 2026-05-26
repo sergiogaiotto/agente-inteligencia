@@ -1,7 +1,7 @@
 """Rotas do Wizard IA — geração assistida de agentes e skills."""
 import json
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from app.core.llm_providers import get_provider
 import logging
@@ -18,11 +18,31 @@ class WizardAgentRequest(BaseModel):
 
 
 class WizardSkillRequest(BaseModel):
+    """Request do Wizard IA para gerar SKILL.md.
+
+    Wave Wizard UX (PR atual): aceita IDs ESTRUTURADOS dos bindings (MCP, RAG,
+    Tabelas, APIs). Backend resolve nomes humanos via lookup e monta o prompt
+    enriquecido — antes o frontend concatenava texto no campo `description`
+    (gambiarra frágil quando LLM ignorava instruções).
+
+    Retrocompat: campos novos têm default vazio. Clients antigos que mandam só
+    `description, kind, domain, provider` continuam funcionando — apenas perdem
+    o enriquecimento estruturado.
+    """
     description: str
     kind: str = "subagent"
     domain: Optional[str] = ""
     provider: str = "openai"
     model: Optional[str] = ""
+    # Wave Wizard UX: bindings declarados explicitamente em vez de texto livre.
+    # Backend faz lookup nos repositórios e injeta nome+id no prompt.
+    mcp_tool_ids: list[str] = Field(default_factory=list)  # MCP tools IDs
+    source_ids: list[str] = Field(default_factory=list)    # knowledge_sources IDs
+    table_ids: list[str] = Field(default_factory=list)     # data_tables IDs
+    api_keys: list[str] = Field(default_factory=list)      # "conn_id:ep_id"
+    # Execution Profile — fast/standard/rigorous. Influencia mode + reflection +
+    # evidence no SKILL.md gerado. Default vazio = backend infere (smart default).
+    exec_mode: Optional[str] = ""
 
 
 class WizardRefineRequest(BaseModel):
@@ -73,13 +93,244 @@ Regras:
         raise HTTPException(500, f"Erro no wizard: {str(e)}")
 
 
-@router.post("/skill")
-async def wizard_skill(data: WizardSkillRequest):
-    """Wizard IA: gera SKILL.md canônico completo a partir de descrição livre."""
-    try:
-        llm = get_provider(data.provider, model=(data.model or None))
-        response = await llm.generate([
-            {"role": "system", "content": f"""Você é um arquiteto de skills para plataforma multi-agente.
+def _infer_exec_mode(data: WizardSkillRequest) -> str:
+    """Smart default pra Execution Profile baseado nos bindings selecionados.
+
+    Heurística:
+    - RAG (source_ids) → standard (precisa de reflexão pra usar evidence corretamente)
+    - APIs (api_keys) sem RAG → standard (reflexão on-error pra retry em API)
+    - Só MCP/Tabelas/nada → fast (workload típico, latência <12s)
+
+    Aplica só quando data.exec_mode vier vazio. Se o user setou explícito,
+    respeita.
+    """
+    explicit = (data.exec_mode or "").strip().lower()
+    if explicit in ("fast", "standard", "rigorous"):
+        return explicit
+    if data.source_ids:
+        return "standard"
+    if data.api_keys:
+        return "standard"
+    return "fast"
+
+
+def _build_exec_profile_yaml(mode: str) -> str:
+    """Retorna o YAML da seção ## Execution Profile pra um mode dado."""
+    profiles = {
+        "fast": "mode: fast\nreflection: off\nevidence: skip",
+        "standard": "mode: standard\nreflection: on-error\nevidence: optional",
+        "rigorous": "mode: rigorous\nreflection: always\nevidence: required",
+    }
+    return profiles.get(mode, profiles["fast"])
+
+
+async def _resolve_bindings_for_prompt(data: WizardSkillRequest) -> dict:
+    """Lookup dos IDs estruturados → dicts com nome humano + metadata.
+
+    Frontend manda só IDs (refatoração desta wave). Backend resolve nas tabelas
+    e devolve dados ricos pro prompt do LLM. Isso evita que o user tenha que
+    escrever nome no description (gambiarra antiga).
+
+    Returns:
+        {
+          "mcp_tools": [{"name": str, "id": str, "description": str}],
+          "rag_sources": [{"name": str, "id": str, "confidentiality_label": str}],
+          "data_tables": [{"name": str, "id": str, "urn": str, "schema_summary": str}],
+          "api_endpoints": [{"conn_name": str, "ep_name": str, "method": str, "url": str, "key": str}],
+        }
+        Cada lista pode vir vazia se o user não selecionou ou se o ID não existe.
+    """
+    result = {
+        "mcp_tools": [],
+        "rag_sources": [],
+        "data_tables": [],
+        "api_endpoints": [],
+    }
+
+    # Imports lazy — evita acoplar wizard.py a módulos que podem nem estar
+    # carregados em testes unitários do próprio wizard.
+    from app.core.database import knowledge_repo, _get_pool
+
+    # 1. MCP tools — vive em app.tools.* via repository simples
+    if data.mcp_tool_ids:
+        try:
+            pool = _get_pool()
+            async with pool.acquire() as con:
+                rows = await con.fetch(
+                    "SELECT id, name, description FROM tools WHERE id = ANY($1::text[])",
+                    data.mcp_tool_ids,
+                )
+                result["mcp_tools"] = [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning(
+                "wizard: lookup MCP tools falhou — segue sem enriquecimento",
+                extra={"event": "wizard.lookup_mcp_failed", "error_type": type(e).__name__},
+            )
+
+    # 2. Knowledge sources (RAG)
+    if data.source_ids:
+        try:
+            pool = _get_pool()
+            async with pool.acquire() as con:
+                rows = await con.fetch(
+                    "SELECT id, name, confidentiality_label, kb_mode FROM knowledge_sources "
+                    "WHERE id = ANY($1::text[])",
+                    data.source_ids,
+                )
+                result["rag_sources"] = [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning(
+                "wizard: lookup RAG sources falhou — segue sem enriquecimento",
+                extra={"event": "wizard.lookup_sources_failed", "error_type": type(e).__name__},
+            )
+
+    # 3. Data tables (DuckDB)
+    if data.table_ids:
+        try:
+            pool = _get_pool()
+            async with pool.acquire() as con:
+                rows = await con.fetch(
+                    "SELECT id, name, urn, schema_json, row_count FROM data_tables "
+                    "WHERE id = ANY($1::text[])",
+                    data.table_ids,
+                )
+                for r in rows:
+                    # Resumo do schema pra caber no prompt sem inflar tokens.
+                    schema = r.get("schema_json") or "{}"
+                    try:
+                        parsed = json.loads(schema) if isinstance(schema, str) else schema
+                        cols = parsed.get("columns") if isinstance(parsed, dict) else None
+                        schema_summary = ", ".join(
+                            f"{c.get('name')}:{c.get('type')}" for c in (cols or [])[:6]
+                        ) or "(sem schema)"
+                    except Exception:
+                        schema_summary = "(schema não-parseável)"
+                    result["data_tables"].append({
+                        "id": r["id"],
+                        "name": r["name"],
+                        "urn": r.get("urn"),
+                        "row_count": r.get("row_count"),
+                        "schema_summary": schema_summary,
+                    })
+        except Exception as e:
+            logger.warning(
+                "wizard: lookup data_tables falhou — segue sem enriquecimento",
+                extra={"event": "wizard.lookup_tables_failed", "error_type": type(e).__name__},
+            )
+
+    # 4. API endpoints — chave composta "conn_id:ep_id"
+    if data.api_keys:
+        try:
+            pairs = []
+            for k in data.api_keys:
+                parts = k.split(":", 1)
+                if len(parts) == 2 and parts[0] and parts[1]:
+                    pairs.append((parts[0], parts[1]))
+            if pairs:
+                pool = _get_pool()
+                async with pool.acquire() as con:
+                    # JOIN simples — busca todos endpoints + conn de uma vez.
+                    rows = await con.fetch(
+                        """
+                        SELECT c.id AS conn_id, c.name AS conn_name, c.base_url,
+                               e.id AS ep_id, e.name AS ep_name, e.method, e.path
+                        FROM api_connectors c
+                        JOIN api_endpoints e ON e.connector_id = c.id
+                        WHERE e.id = ANY($1::text[])
+                        """,
+                        [p[1] for p in pairs],
+                    )
+                    for r in rows:
+                        result["api_endpoints"].append({
+                            "key": f"{r['conn_id']}:{r['ep_id']}",
+                            "conn_id": r["conn_id"],
+                            "conn_name": r["conn_name"],
+                            "ep_id": r["ep_id"],
+                            "ep_name": r["ep_name"],
+                            "method": r["method"],
+                            "url": f"{(r.get('base_url') or '').rstrip('/')}/{(r.get('path') or '').lstrip('/')}",
+                        })
+        except Exception as e:
+            logger.warning(
+                "wizard: lookup API endpoints falhou — segue sem enriquecimento",
+                extra={"event": "wizard.lookup_apis_failed", "error_type": type(e).__name__},
+            )
+
+    return result
+
+
+def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: str) -> tuple[str, str]:
+    """Monta system + user prompts pro LLM gerar o SKILL.md.
+
+    Tudo que antes ficava concatenado no frontend (mcpContext, apiContext,
+    execContext) agora é construído aqui no servidor a partir de IDs
+    estruturados — nomes humanos vêm do lookup, não de string passada
+    pelo cliente. Mais robusto + testável.
+
+    Returns:
+        (system_prompt, user_prompt)
+    """
+    # Bloco rico das seções OBRIGATÓRIAS que o LLM precisa incluir, com YAML
+    # pronto. LLM costuma respeitar instruções imperativas + exemplo concreto.
+    obligatory_sections = []
+
+    if bindings["mcp_tools"]:
+        bindings_md = "\n".join(
+            f"- `{t['id']}` ({t['name']}) — {(t.get('description') or '').strip()[:100]}"
+            for t in bindings["mcp_tools"]
+        )
+        obligatory_sections.append(
+            "## Tool Bindings\n" + bindings_md
+        )
+
+    if bindings["rag_sources"]:
+        sources_yaml = "\n".join(
+            f"  - {s['id']}   # {s['name']} ({s.get('confidentiality_label', 'internal')})"
+            for s in bindings["rag_sources"]
+        )
+        obligatory_sections.append(
+            "## Evidence Policy\n```yaml\nsources:\n" + sources_yaml + "\n```"
+        )
+
+    if bindings["data_tables"]:
+        # Tabelas viram exemplos no SKILL.md — LLM deve referenciar via URN.
+        tables_md = "\n".join(
+            f"- `{t['urn']}` ({t['name']}, ~{t.get('row_count', '?')} linhas): {t.get('schema_summary', '')}"
+            for t in bindings["data_tables"]
+        )
+        obligatory_sections.append(
+            "## Data Tables\n```yaml\ntables:\n" + "\n".join(
+                f"  - urn: {t['urn']}\n    name: {t['name']}"
+                for t in bindings["data_tables"]
+            ) + "\n```\n\nReferências disponíveis:\n" + tables_md
+        )
+
+    if bindings["api_endpoints"]:
+        api_yaml = "\n".join(
+            f"  - id: {ep['ep_id']}\n    connector_id: {ep['conn_id']}\n"
+            f"    name: {ep['ep_name']}\n    method: {ep['method']}\n    # URL: {ep['url']}"
+            for ep in bindings["api_endpoints"]
+        )
+        # APIs também exigem frontmatter execution_mode: declarative
+        obligatory_sections.append(
+            "INCLUA no frontmatter YAML: `execution_mode: declarative`\n\n"
+            "## API Bindings\n```yaml\nendpoints:\n" + api_yaml + "\n```"
+        )
+
+    # Execution Profile sempre presente
+    obligatory_sections.append(
+        "## Execution Profile\n" + _build_exec_profile_yaml(exec_mode)
+    )
+
+    obligatory_block = (
+        "\n\n=== SEÇÕES OBRIGATÓRIAS A INCLUIR NO SKILL.md ===\n"
+        "Você DEVE incluir EXATAMENTE estes blocos no SKILL.md gerado. "
+        "Preserve YAMLs fenced, IDs e comentários:\n\n"
+        + "\n\n---\n\n".join(obligatory_sections)
+        + "\n=== FIM DAS SEÇÕES OBRIGATÓRIAS ==="
+    ) if obligatory_sections else ""
+
+    system_prompt = f"""Você é um arquiteto de skills para plataforma multi-agente.
 Gere um SKILL.md completo seguindo a anatomia canônica.
 
 O SKILL.md deve conter EXATAMENTE esta estrutura:
@@ -127,11 +378,47 @@ Limites de tokens, tempo e custo.
 ## Examples
 Pares entrada/saída para avaliação.
 
-Gere o SKILL.md completo em formato markdown. Seja específico e detalhado."""},
-            {"role": "user", "content": data.description},
+Gere o SKILL.md completo em formato markdown. Seja específico e detalhado.{obligatory_block}"""
+
+    return system_prompt, data.description
+
+
+@router.post("/skill")
+async def wizard_skill(data: WizardSkillRequest):
+    """Wizard IA: gera SKILL.md canônico a partir de descrição + bindings estruturados.
+
+    Wave Wizard UX (PR atual):
+    - Aceita IDs estruturados (mcp_tool_ids, source_ids, table_ids, api_keys).
+    - Backend resolve nomes humanos via lookup e monta prompt enriquecido.
+    - Smart default: exec_mode inferido se vazio (RAG/API → standard, senão fast).
+    - Retrocompat: clients antigos com só `description, kind, domain` continuam
+      funcionando (apenas perdem o enriquecimento estruturado).
+    """
+    try:
+        bindings = await _resolve_bindings_for_prompt(data)
+        exec_mode = _infer_exec_mode(data)
+        system_prompt, user_prompt = _build_wizard_prompt(data, bindings, exec_mode)
+
+        llm = get_provider(data.provider, model=(data.model or None))
+        response = await llm.generate([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ])
-        return {"status": "ok", "skill_md": response["content"]}
+
+        # Resumo do que foi resolvido — UI pode mostrar pra confirmar.
+        return {
+            "status": "ok",
+            "skill_md": response["content"],
+            "resolved": {
+                "exec_mode": exec_mode,
+                "mcp_count": len(bindings["mcp_tools"]),
+                "rag_count": len(bindings["rag_sources"]),
+                "table_count": len(bindings["data_tables"]),
+                "api_count": len(bindings["api_endpoints"]),
+            },
+        }
     except Exception as e:
+        logger.exception("wizard_skill falhou")
         raise HTTPException(500, f"Erro no wizard: {str(e)}")
 
 

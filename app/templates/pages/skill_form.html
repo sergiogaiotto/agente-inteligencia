@@ -72,6 +72,118 @@
                 Nenhum endpoint de API cadastrado.
                 <a href="/api_connectors" target="_blank" class="font-semibold underline hover:text-violet-800">Cadastrar em API Connectors →</a>
             </div>
+
+            <!-- Wave Wizard UX: Fontes RAG (knowledge_sources) — paridade com o Editor. -->
+            <div x-show="availableSources.length > 0">
+                <div class="flex items-center justify-between mb-1.5">
+                    <label class="block text-[11px] font-semibold text-violet-800">Vincular Fontes RAG (Evidence Policy)</label>
+                    <a href="/rag" target="_blank" class="text-[10px] text-violet-500 hover:text-violet-700">Gerenciar →</a>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    <template x-for="s in availableSources" :key="s.id">
+                        <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 cursor-pointer transition-colors text-[11px]"
+                               :class="wizardSourceIds.includes(s.id) ? 'bg-emerald-100 border-emerald-300 text-emerald-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-emerald-200'">
+                            <input type="checkbox" :checked="wizardSourceIds.includes(s.id)" @change="toggleWizardSource(s.id)" class="hidden">
+                            <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
+                            <span x-text="s.name"></span>
+                            <span class="text-[9px] text-surface-400" x-text="'· ' + (s.confidentiality_label || 'internal')"></span>
+                        </label>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Wave Wizard UX: Tabelas (data_tables DuckDB) — seleção simples. -->
+            <!-- Query Builder completo (filtros, colunas, joins) fica no editor; -->
+            <!-- wizard só marca quais tabelas estão disponíveis pro LLM referenciar. -->
+            <div x-show="availableTables.length > 0">
+                <div class="flex items-center justify-between mb-1.5">
+                    <label class="block text-[11px] font-semibold text-violet-800">Vincular Tabelas (Data Tables)</label>
+                    <a href="/rag" target="_blank" class="text-[10px] text-violet-500 hover:text-violet-700">Gerenciar →</a>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    <template x-for="t in availableTables" :key="t.id">
+                        <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 cursor-pointer transition-colors text-[11px]"
+                               :class="wizardTableIds.includes(t.id) ? 'bg-amber-100 border-amber-300 text-amber-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-amber-200'">
+                            <input type="checkbox" :checked="wizardTableIds.includes(t.id)" @change="toggleWizardTable(t.id)" class="hidden">
+                            <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5m.75-9l3-3 2.148 2.148A12.061 12.061 0 0116.5 7.605"/></svg>
+                            <span x-text="t.name"></span>
+                            <span class="text-[9px] text-surface-400" x-text="t.row_count ? '· ' + t.row_count.toLocaleString() + ' linhas' : ''"></span>
+                        </label>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Wave Wizard UX: Execution Profile como CARDS ricos (paridade com Editor abaixo). -->
+            <!-- Auto-inferido pelo backend se nenhum card selecionado — preview indica. -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <label class="block text-[11px] font-semibold text-violet-800">Execution Profile</label>
+                    <span x-show="!wizardExecMode" class="rounded-full bg-violet-100 text-violet-700 px-2 py-0.5 text-[9px] font-medium">auto-inferido pelo backend</span>
+                </div>
+                <div class="grid grid-cols-3 gap-2">
+                    <button @click="wizardExecMode = wizardExecMode === 'fast' ? '' : 'fast'" type="button"
+                            class="rounded-xl border-2 p-2.5 text-left transition-all"
+                            :class="wizardExecMode === 'fast' ? 'border-emerald-400 bg-emerald-50' : 'border-surface-200 bg-white hover:border-emerald-200'">
+                        <div class="flex items-center gap-1.5 mb-1">
+                            <svg class="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+                            <span class="text-[12px] font-semibold text-brand-900">Fast</span>
+                        </div>
+                        <p class="text-[10px] text-surface-500 leading-tight">1 chamada LLM, sem reflexão. Ideal pra MCP e consultas.</p>
+                        <span class="text-[9px] text-emerald-700 font-medium">~8-12s</span>
+                    </button>
+                    <button @click="wizardExecMode = wizardExecMode === 'standard' ? '' : 'standard'" type="button"
+                            class="rounded-xl border-2 p-2.5 text-left transition-all"
+                            :class="wizardExecMode === 'standard' ? 'border-brand-400 bg-brand-50' : 'border-surface-200 bg-white hover:border-brand-200'">
+                        <div class="flex items-center gap-1.5 mb-1">
+                            <svg class="w-3.5 h-3.5 text-brand-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            <span class="text-[12px] font-semibold text-brand-900">Standard</span>
+                        </div>
+                        <p class="text-[10px] text-surface-500 leading-tight">2 chamadas, reflexão on-error, evidence heurística.</p>
+                        <span class="text-[9px] text-brand-700 font-medium">~15-20s</span>
+                    </button>
+                    <button @click="wizardExecMode = wizardExecMode === 'rigorous' ? '' : 'rigorous'" type="button"
+                            class="rounded-xl border-2 p-2.5 text-left transition-all"
+                            :class="wizardExecMode === 'rigorous' ? 'border-violet-400 bg-violet-50' : 'border-surface-200 bg-white hover:border-violet-200'">
+                        <div class="flex items-center gap-1.5 mb-1">
+                            <svg class="w-3.5 h-3.5 text-violet-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            <span class="text-[12px] font-semibold text-brand-900">Rigorous</span>
+                        </div>
+                        <p class="text-[10px] text-surface-500 leading-tight">3+ chamadas, reflexão completa, evidence via LLM.</p>
+                        <span class="text-[9px] text-violet-700 font-medium">~25-40s</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Wave Wizard UX: Preview do que será gerado — atualiza em tempo real. -->
+            <div class="rounded-lg border border-violet-200 bg-violet-50/40 px-3 py-2.5">
+                <div class="text-[10px] font-semibold uppercase tracking-wider text-violet-600 mb-1.5">Vamos gerar</div>
+                <div class="flex items-center gap-3 flex-wrap text-[11px] text-violet-800">
+                    <span class="inline-flex items-center gap-1">
+                        <span class="font-bold" x-text="wizardKind === 'subagent' ? 'Subagente' : (wizardKind === 'router' ? 'Roteador' : 'Orquestrador')"></span>
+                    </span>
+                    <span x-show="wizardDomain" class="inline-flex items-center gap-1">
+                        · domínio <code class="bg-white px-1 rounded" x-text="wizardDomain"></code>
+                    </span>
+                    <span x-show="wizardMcpIds.length > 0" class="inline-flex items-center gap-1 text-violet-700">
+                        · <strong x-text="wizardMcpIds.length"></strong> MCP<span x-show="wizardMcpIds.length > 1">s</span>
+                    </span>
+                    <span x-show="wizardSourceIds.length > 0" class="inline-flex items-center gap-1 text-emerald-700">
+                        · <strong x-text="wizardSourceIds.length"></strong> Fonte<span x-show="wizardSourceIds.length > 1">s</span> RAG
+                    </span>
+                    <span x-show="wizardTableIds.length > 0" class="inline-flex items-center gap-1 text-amber-700">
+                        · <strong x-text="wizardTableIds.length"></strong> Tabela<span x-show="wizardTableIds.length > 1">s</span>
+                    </span>
+                    <span x-show="wizardApiKeys.length > 0" class="inline-flex items-center gap-1 text-fuchsia-700">
+                        · <strong x-text="wizardApiKeys.length"></strong> API<span x-show="wizardApiKeys.length > 1">s</span> (declarativo)
+                    </span>
+                    <span class="inline-flex items-center gap-1">
+                        · Execution Profile
+                        <code class="bg-white px-1 rounded" x-text="wizardExecMode || _inferExecModePreview()"></code>
+                        <span x-show="!wizardExecMode" class="text-[9px] text-violet-500">(inferido)</span>
+                    </span>
+                </div>
+            </div>
+
             <div class="flex items-center gap-3 flex-wrap">
                 <select x-model="wizardKind" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none">
                     <option value="subagent">Subagente</option>
@@ -79,11 +191,6 @@
                     <option value="orchestrator">Orquestrador</option>
                 </select>
                 <input x-model="wizardDomain" placeholder="Domínio (ex: dev)" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none w-32">
-                <select x-model="wizardExecMode" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none">
-                    <option value="fast">Fast</option>
-                    <option value="standard">Standard</option>
-                    <option value="rigorous">Rigorous</option>
-                </select>
                 <select x-model="wizardProvider" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none">
                     <option value="openai">OpenAI</option><option value="maritaca">Maritaca AI</option>
                 </select>
@@ -659,9 +766,14 @@ function skillForm(editId) {
         saving: false, tab: 'editor',
         showWizard: false, wizardPrompt: '', wizardLoading: false,
         wizardKind: 'subagent', wizardDomain: '', wizardProvider: 'openai',
-        wizardExecMode: 'fast',
+        // Vazio = backend infere (smart default). User pode forçar clicando
+        // num card; clicar de novo limpa (volta pro auto-inferido).
+        wizardExecMode: '',
         wizardMcpIds: [],
         wizardApiKeys: [],
+        // Wave Wizard UX: bindings RAG + Tabelas no wizard.
+        wizardSourceIds: [],
+        wizardTableIds: [],
         parseResult: null,
         mcpTools: [],
         apiConnectors: [],  // lista de connectors registrados
@@ -1152,6 +1264,28 @@ ${outMap}`;
             else this.wizardApiKeys.push(key);
         },
 
+        // Wave Wizard UX: toggles para RAG e Tabelas no wizard.
+        toggleWizardSource(id) {
+            const idx = this.wizardSourceIds.indexOf(id);
+            if (idx >= 0) this.wizardSourceIds.splice(idx, 1);
+            else this.wizardSourceIds.push(id);
+        },
+
+        toggleWizardTable(id) {
+            const idx = this.wizardTableIds.indexOf(id);
+            if (idx >= 0) this.wizardTableIds.splice(idx, 1);
+            else this.wizardTableIds.push(id);
+        },
+
+        // Espelha o smart default do backend (_infer_exec_mode em wizard.py)
+        // só pro preview UI. Se backend mudar a heurística, atualizar aqui.
+        // Não é fonte da verdade — backend re-infere com seus IDs reais.
+        _inferExecModePreview() {
+            if (this.wizardSourceIds.length > 0) return 'standard';
+            if (this.wizardApiKeys.length > 0) return 'standard';
+            return 'fast';
+        },
+
         insertMcpBinding(tool) {
             const binding = this._generateBinding(tool);
             const content = this.form.raw_content || '';
@@ -1412,45 +1546,44 @@ ${outMap}`;
             if (!this.wizardPrompt.trim()) return;
             this.wizardLoading = true;
 
-            let mcpContext = '';
-            if (this.wizardMcpIds.length) {
-                const bindings = this.wizardMcpIds.map(id => {
-                    const t = this.mcpTools.find(m => m.id === id);
-                    return t ? this._generateBinding(t) : '';
-                }).filter(Boolean).join('\n\n');
-                mcpContext = `\n\nINCLUA OBRIGATORIAMENTE a seguinte seção ## Tool Bindings no SKILL.md gerado:\n\n## Tool Bindings\n${bindings}`;
-            }
-
-            let apiContext = '';
-            if (this.wizardApiKeys.length) {
-                const apiBindings = this.wizardApiKeys.map(k => {
-                    const item = this.apiEndpointsFlat.find(i => i.key === k);
-                    return item ? this._generateApiBinding(item) : '';
-                }).filter(Boolean).join('\n\n');
-                if (apiBindings) {
-                    apiContext = `\n\nINCLUA OBRIGATORIAMENTE no frontmatter YAML a chave \`execution_mode: declarative\` E a seguinte seção ## API Bindings (bloco fenced \`\`\`yaml) no SKILL.md gerado, preservando exatamente o YAML abaixo:\n\n## API Bindings\n\`\`\`yaml\n${apiBindings}\n\`\`\``;
-                }
-            }
-
-            const execProfiles = {
-                fast: 'mode: fast\nreflection: off\nevidence: skip',
-                standard: 'mode: standard\nreflection: on-error\nevidence: optional',
-                rigorous: 'mode: rigorous\nreflection: always\nevidence: required',
-            };
-            const execContext = `\n\nINCLUA a seguinte seção ## Execution Profile no SKILL.md gerado:\n\n## Execution Profile\n${execProfiles[this.wizardExecMode]}`;
-
+            // Wave Wizard UX: envia IDs estruturados. Backend resolve nomes
+            // humanos via lookup, monta o prompt enriquecido e infere
+            // exec_mode se vier vazio (smart default).
             try {
                 const r = await api.post('/api/v1/wizard/skill', {
-                    description: this.wizardPrompt + mcpContext + apiContext + execContext,
+                    description: this.wizardPrompt,
                     kind: this.wizardKind,
                     domain: this.wizardDomain,
                     provider: this.wizardProvider,
+                    mcp_tool_ids: this.wizardMcpIds,
+                    source_ids: this.wizardSourceIds,
+                    table_ids: this.wizardTableIds,
+                    api_keys: this.wizardApiKeys,
+                    exec_mode: this.wizardExecMode,  // "" → backend infere
                 });
                 this.form.raw_content = r.skill_md;
+                // Sync dos checkboxes do editor (Fontes RAG) com o que o
+                // wizard usou — UX consistente entre wizard → editor.
+                if (this.wizardSourceIds.length > 0) {
+                    this.boundSourceIds = [...this.wizardSourceIds];
+                }
                 this.showWizard = false;
-                showToast('SKILL.md gerado pela IA — revise e ajuste');
+                // Mensagem rica usando o resumo que o backend devolve
+                const summary = r.resolved ? this._formatResolvedSummary(r.resolved) : '';
+                showToast(`SKILL.md gerado pela IA${summary} — revise e ajuste`);
             } catch(e) { showToast('Erro: ' + e.message, 'error'); }
             this.wizardLoading = false;
+        },
+
+        _formatResolvedSummary(resolved) {
+            const parts = [];
+            if (resolved.mcp_count > 0) parts.push(`${resolved.mcp_count} MCP`);
+            if (resolved.rag_count > 0) parts.push(`${resolved.rag_count} RAG`);
+            if (resolved.table_count > 0) parts.push(`${resolved.table_count} Tabela${resolved.table_count > 1 ? 's' : ''}`);
+            if (resolved.api_count > 0) parts.push(`${resolved.api_count} API`);
+            const bindings = parts.length ? ` (${parts.join(', ')})` : '';
+            const profile = resolved.exec_mode ? ` · ${resolved.exec_mode}` : '';
+            return bindings + profile;
         },
 
         async parseSkill() {
