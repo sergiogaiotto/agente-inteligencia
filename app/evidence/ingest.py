@@ -37,15 +37,20 @@ def _get_vector_store():
     backend via env var sem restart.
 
     Returns:
-        Módulo (não instância) — qdrant_store ou pgvector_store.
+        Módulo (não instância) — pgvector_store (default) ou qdrant_store
+        (legado, opt-in via RAG_VECTOR_BACKEND=qdrant até o PR F).
+
+    Valor desconhecido (ex: typo no .env) cai em pgvector — alinhado com
+    o "default seguro pra nova era". Qdrant fica como opt-in explícito
+    enquanto não é removido.
     """
-    backend = (get_settings().rag_vector_backend or "qdrant").lower()
-    if backend == "pgvector":
-        from app.evidence import pgvector_store
-        return pgvector_store
-    # default + qualquer valor desconhecido cai em qdrant (retrocompat)
-    from app.evidence import qdrant_store
-    return qdrant_store
+    backend = (get_settings().rag_vector_backend or "pgvector").lower()
+    if backend == "qdrant":
+        from app.evidence import qdrant_store
+        return qdrant_store
+    # default ("pgvector") + qualquer valor desconhecido cai em pgvector
+    from app.evidence import pgvector_store
+    return pgvector_store
 
 
 class IngestError(Exception):

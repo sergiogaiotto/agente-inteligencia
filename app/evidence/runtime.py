@@ -36,7 +36,10 @@ _tracer = get_tracer(__name__)
 
 
 def _get_vector_search_fn():
-    """Resolve a função search() do backend ativo (qdrant ou pgvector).
+    """Resolve a função search() do backend ativo.
+
+    Default: pgvector (desde PR E). Qdrant é opt-in explícito via
+    RAG_VECTOR_BACKEND=qdrant até o PR F (que remove o módulo).
 
     Não importa direto pra não acoplar runtime ao import-time do backend
     inativo (cria singletons inúteis). Lazy via settings.
@@ -44,11 +47,12 @@ def _get_vector_search_fn():
     Nome com prefixo `_get_` para não colidir com `Retriever._vector_search()`
     (método de instância) que delega aqui.
     """
-    backend = (get_settings().rag_vector_backend or "qdrant").lower()
-    if backend == "pgvector":
-        from app.evidence.pgvector_store import search as _s
-    else:
+    backend = (get_settings().rag_vector_backend or "pgvector").lower()
+    if backend == "qdrant":
         from app.evidence.qdrant_store import search as _s
+    else:
+        # default pgvector + qualquer valor desconhecido
+        from app.evidence.pgvector_store import search as _s
     return _s
 
 

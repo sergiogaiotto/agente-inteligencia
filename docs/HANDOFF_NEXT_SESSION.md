@@ -1,7 +1,55 @@
 # Handoff — Próxima Sessão
 
-> **Última atualização**: 2026-05-23, Onda Tabular + 7 PRs de polimento (UX, help contextual, fix XLSX multi-aba, infra DuckDB).
+> **Última atualização**: 2026-05-26, **Onda RAG v3 — pgvector substitui Qdrant** (PRs #139, #140, #141, #142, PR E em curso).
 > **Como usar**: leia este documento primeiro na próxima sessão, depois decida por onde começar.
+
+---
+
+## ⚡ Onda RAG v3 — pgvector como backend padrão (2026-05-26)
+
+Substituição estrutural do Qdrant pelo pgvector. Resolve a fricção operacional que custou 2 PRs de mitigação esta semana (divergência Postgres↔Qdrant, drift de dim ao trocar provider).
+
+### Estado dos PRs
+
+| PR | Título | Status |
+|---|---|---|
+| #139 | logs estruturados Qdrant | merged |
+| #140 | /reindex + dim dinâmica | merged |
+| #141 | pgvector como backend alternativo (PR D, dual-write) | merged |
+| #142 | UI mensagens backend-agnósticas (PR G) | open |
+| PR E | default vira pgvector (esta sessão) | open |
+| PR F | remove qdrant_store, serviço docker, deps (pendente) | não criado |
+
+### O que muda em prod ao deployar PR E (necessita ação manual no VPS)
+
+1. Pull do main → restart do app
+2. App sobe com `RAG_VECTOR_BACKEND=pgvector` por default
+3. **Primeira ação manual obrigatória**: `curl -X POST http://app/api/v1/evidence/reindex`
+   - Cria coluna `embedding vector(N)` em `evidence_chunks` na dim do provider ativo (Qwen3=1024)
+   - Cria index HNSW (cosine)
+   - Repopula a partir dos chunks do Postgres + embedder
+4. Confirmar: `GET /api/v1/evidence/collection-info` → `backend=pgvector, dim_match=true, points_count=43`
+5. Banner UI fica verde a partir daí
+
+### Rollback de emergência
+
+```bash
+# .env (no VPS):
+RAG_VECTOR_BACKEND=qdrant
+# restart do app — sem deploy
+```
+
+Qdrant continua rodando até o PR F. Dados antigos lá ainda existem.
+
+### Próximo PR (F — cleanup)
+
+Quando pgvector estabilizar 1-2 semanas em prod:
+- Remove `app/evidence/qdrant_store.py`, `tests/test_qdrant_reindex.py`
+- Remove flag `RAG_VECTOR_BACKEND` (pgvector único)
+- Remove serviço `qdrant` do `docker-compose.yml` + volume `qdrant_data`
+- Remove `qdrant-client` do `requirements.txt`
+- Remove `handle_path /qdrant/*` do Caddy + entrada em `app/routes/infra.py`
+- ADR: `docs/adr/0001-pgvector-replaces-qdrant.md`
 
 ---
 
