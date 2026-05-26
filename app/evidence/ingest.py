@@ -214,6 +214,213 @@ async def clear_source(source_id: str) -> dict:
         }
 
 
+# ─── Reindex global (recreate collection + re-embarcar todos os chunks) ──────
+
+async def reindex_all(
+    *,
+    recreate_collection: bool = True,
+    batch_size: int = 64,
+) -> dict:
+    """Re-embarca todos os chunks do Postgres no Qdrant.
+
+    Caso de uso principal: usuário trocou o provider de embedding pela UI
+    (Azure 1536 → Qwen3 1024), o que invalidou a collection existente. Esta
+    função recria a collection com a dim correta e re-popula a partir do
+    Postgres (que é o source-of-truth do texto).
+
+    Args:
+        recreate_collection: se True (default), DROPA e RECRIA a collection
+            antes — apaga todos os vetores antigos. Use False só se você acabou
+            de criar a collection do zero e quer só popular.
+        batch_size: chunks por chamada de embed_texts/qdrant_upsert. Default 64
+            equilibra latência (1 round-trip por batch) e memória.
+
+    Returns:
+        {
+          "ok": bool,
+          "recreated": bool,                 # se recreate_collection foi True
+          "dim_before": int | None,          # dim antiga da collection (None se não existia)
+          "dim_after": int,                  # dim nova (== provider ativo)
+          "chunks_total": int,               # chunks no Postgres
+          "chunks_embedded": int,            # embeddings gerados com sucesso
+          "chunks_upserted": int,            # vetores que o Qdrant aceitou
+          "sources_count": int,              # qtas knowledge_sources distintas
+          "batches": int,                    # qtos batches processados
+          "duration_ms": int,
+          "errors": list[dict],              # batches que falharam, com {batch_idx, error_type, chunk_ids}
+        }
+
+    Idempotência:
+        Com recreate_collection=True, é idempotente — sempre converge pro mesmo
+        estado (todos os chunks do Postgres no Qdrant com dim correta). Com
+        recreate_collection=False, depende do estado prévio do Qdrant.
+    """
+    from app.evidence.qdrant_store import (
+        recreate_collection as qdrant_recreate,
+        upsert_chunks as qdrant_upsert,
+        get_active_embedding_dim,
+    )
+
+    start = time.time()
+    with _tracer.start_as_current_span("ingest.reindex_all") as span:
+        span.set_attribute("reindex.recreate", recreate_collection)
+        span.set_attribute("reindex.batch_size", batch_size)
+
+        result: dict = {
+            "ok": False,
+            "recreated": False,
+            "dim_before": None,
+            "dim_after": get_active_embedding_dim(),
+            "chunks_total": 0,
+            "chunks_embedded": 0,
+            "chunks_upserted": 0,
+            "sources_count": 0,
+            "batches": 0,
+            "duration_ms": 0,
+            "errors": [],
+        }
+
+        # 1. Recreate collection (destrutivo).
+        if recreate_collection:
+            recreate_res = await qdrant_recreate()
+            if not recreate_res.get("ok"):
+                span.set_attribute("reindex.path", "recreate_failed")
+                result["errors"].append({
+                    "stage": "recreate_collection",
+                    "error_type": recreate_res.get("error_type"),
+                    "error_message": recreate_res.get("error_message"),
+                })
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                logger.error(
+                    "Reindex abortado: recreate_collection falhou",
+                    extra={
+                        "event": "evidence.reindex.aborted",
+                        **{k: v for k, v in result.items() if k != "errors"},
+                    },
+                )
+                return result
+            result["recreated"] = True
+            result["dim_before"] = recreate_res.get("dim_before")
+            result["dim_after"] = recreate_res.get("dim_after")
+
+        # 2. Carrega todos os chunks do Postgres ordenados por source (locality).
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            rows = await con.fetch(
+                """
+                SELECT id, knowledge_source_id, ordinal, text
+                FROM evidence_chunks
+                ORDER BY knowledge_source_id, ordinal
+                """,
+            )
+        chunks_total = len(rows)
+        result["chunks_total"] = chunks_total
+        result["sources_count"] = len({r["knowledge_source_id"] for r in rows})
+        span.set_attribute("reindex.chunks_total", chunks_total)
+        span.set_attribute("reindex.sources_count", result["sources_count"])
+
+        if chunks_total == 0:
+            result["ok"] = True
+            result["duration_ms"] = int((time.time() - start) * 1000)
+            logger.info(
+                "Reindex completo: nenhum chunk no Postgres para re-embarcar",
+                extra={"event": "evidence.reindex.completed_empty", **{k: v for k, v in result.items() if k != "errors"}},
+            )
+            return result
+
+        # 3. Processa em batches: embed → upsert.
+        n_batches = (chunks_total + batch_size - 1) // batch_size
+        for batch_idx in range(n_batches):
+            lo = batch_idx * batch_size
+            hi = min(lo + batch_size, chunks_total)
+            batch = rows[lo:hi]
+            texts = [r["text"] for r in batch]
+
+            try:
+                vectors = await embed_texts(texts)
+            except Exception as e:
+                logger.warning(
+                    "Reindex batch: embed_texts lançou exceção",
+                    extra={
+                        "event": "evidence.reindex.batch_embed_failed",
+                        "batch_idx": batch_idx,
+                        "batch_size": len(batch),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
+                result["errors"].append({
+                    "stage": "embed",
+                    "batch_idx": batch_idx,
+                    "error_type": type(e).__name__,
+                    "chunk_ids": [r["id"] for r in batch],
+                })
+                continue
+
+            if not vectors or len(vectors) != len(batch):
+                logger.warning(
+                    "Reindex batch: embeddings retornaram quantidade inesperada",
+                    extra={
+                        "event": "evidence.reindex.batch_embed_short",
+                        "batch_idx": batch_idx,
+                        "batch_size": len(batch),
+                        "vectors_returned": len(vectors) if vectors else 0,
+                    },
+                )
+                result["errors"].append({
+                    "stage": "embed",
+                    "batch_idx": batch_idx,
+                    "error_type": "ShortBatch",
+                    "expected": len(batch),
+                    "got": len(vectors) if vectors else 0,
+                })
+                continue
+
+            result["chunks_embedded"] += len(vectors)
+
+            payload = [
+                {
+                    "id": batch[i]["id"],
+                    "embedding": vectors[i],
+                    "source_id": batch[i]["knowledge_source_id"],
+                    "ordinal": batch[i]["ordinal"],
+                }
+                for i in range(len(batch))
+            ]
+            upserted = await qdrant_upsert(payload)
+            result["chunks_upserted"] += upserted
+            if upserted != len(batch):
+                # qdrant_upsert já logou — só registra no resumo do reindex.
+                result["errors"].append({
+                    "stage": "upsert",
+                    "batch_idx": batch_idx,
+                    "expected": len(batch),
+                    "got": upserted,
+                })
+            result["batches"] += 1
+
+        result["ok"] = result["chunks_upserted"] == chunks_total
+        result["duration_ms"] = int((time.time() - start) * 1000)
+        span.set_attribute("reindex.chunks_embedded", result["chunks_embedded"])
+        span.set_attribute("reindex.chunks_upserted", result["chunks_upserted"])
+        span.set_attribute("reindex.errors_count", len(result["errors"]))
+        span.set_attribute("reindex.ok", result["ok"])
+
+        if not result["ok"]:
+            from opentelemetry.trace import Status, StatusCode
+            span.set_status(Status(StatusCode.ERROR, "reindex parcial"))
+
+        logger.info(
+            "Reindex concluído",
+            extra={
+                "event": "evidence.reindex.completed",
+                **{k: v for k, v in result.items() if k != "errors"},
+                "errors_count": len(result["errors"]),
+            },
+        )
+        return result
+
+
 async def list_chunks(source_id: str, limit: int = 50, offset: int = 0) -> list[dict]:
     """Lista chunks de uma source (debug/UI). Sem o tsvector (TEXT pesado)."""
     pool = _get_pool()

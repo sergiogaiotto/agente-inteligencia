@@ -1062,6 +1062,70 @@ async def list_source_chunks(ks_id: str, limit: int = 50, offset: int = 0):
     return {"source_id": ks_id, "count": len(chunks), "chunks": chunks}
 
 
+# ─── Reindex global (recreate Qdrant collection + re-embarcar Postgres) ──
+
+@router.get("/evidence/collection-info")
+async def evidence_collection_info():
+    """Diagnóstico do Qdrant: dim atual, dim esperada (provider ativo), drift.
+
+    UI usa pra detectar o cenário "trocou provider sem reindexar" e oferecer
+    o botão de reindex com contexto ("Collection dim=1536, provider espera 1024").
+
+    Returns:
+        {
+          "name": str,
+          "exists": bool,
+          "points_count": int | None,
+          "status": str,                # "green" | "yellow" | "red" | "missing"
+          "dim_actual": int | None,     # None se collection não existe
+          "dim_expected": int,          # dim do embedder ativo
+          "dim_match": bool,            # True se saudável
+        }
+        ou 503 se Qdrant offline.
+    """
+    from app.evidence.qdrant_store import collection_info as _ci
+    info = await _ci()
+    if info is None:
+        raise HTTPException(503, "Qdrant offline ou inacessível")
+    return info
+
+
+class ReindexRequest(BaseModel):
+    # Default True: caso normal é trocou provider → precisa recriar pra mudar dim.
+    # False só pra cenário de "popular collection vazia recém-criada".
+    recreate_collection: bool = True
+    # Batch size do embed+upsert. Ajuste se rate-limit do provider apertar.
+    batch_size: int = 64
+
+
+@router.post("/evidence/reindex")
+async def reindex_evidence(data: ReindexRequest | None = None):
+    """Reindexa todos os chunks: dropa e recria a collection do Qdrant com a
+    dimensão do embedder ATIVO, depois re-embarca todos os chunks do Postgres
+    (que é o source-of-truth do texto).
+
+    Quando usar:
+    - Trocou o provider de embedding via UI (Azure 1536 → Qwen3 1024 etc.)
+    - Sintoma na ingestão: banner "Qdrant divergente" persistente
+    - Após restore de backup do Postgres (Qdrant pode estar dessincronizado)
+
+    Operação destrutiva (apaga vetores do Qdrant). Postgres NÃO é tocado.
+
+    Body opcional:
+        {"recreate_collection": bool = true, "batch_size": int = 64}
+
+    Returns:
+        Dict com métricas detalhadas — ver `app.evidence.ingest.reindex_all`.
+        HTTP 200 sempre, mesmo se houver erros parciais (ver campo `ok` e `errors`).
+    """
+    from app.evidence.ingest import reindex_all
+    req = data or ReindexRequest()
+    return await reindex_all(
+        recreate_collection=req.recreate_collection,
+        batch_size=req.batch_size,
+    )
+
+
 class KBQueryRequest(BaseModel):
     query: str
     top_n: int = 5
