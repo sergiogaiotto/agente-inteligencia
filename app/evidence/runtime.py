@@ -30,10 +30,26 @@ from app.core.database import knowledge_repo, evidences_repo, _get_pool
 from app.core.llm_providers import get_provider
 from app.core.otel import get_tracer
 from app.evidence.embedder import embed_query
-from app.evidence.qdrant_store import search as qdrant_search
 
 logger = logging.getLogger(__name__)
 _tracer = get_tracer(__name__)
+
+
+def _get_vector_search_fn():
+    """Resolve a função search() do backend ativo (qdrant ou pgvector).
+
+    Não importa direto pra não acoplar runtime ao import-time do backend
+    inativo (cria singletons inúteis). Lazy via settings.
+
+    Nome com prefixo `_get_` para não colidir com `Retriever._vector_search()`
+    (método de instância) que delega aqui.
+    """
+    backend = (get_settings().rag_vector_backend or "qdrant").lower()
+    if backend == "pgvector":
+        from app.evidence.pgvector_store import search as _s
+    else:
+        from app.evidence.qdrant_store import search as _s
+    return _s
 
 
 @dataclass
@@ -198,17 +214,26 @@ class Retriever:
 
     async def _vector_search(self, query: str, top_n: int,
                              allowed_source_ids: list[str] | None = None) -> list[dict]:
-        """Embeda a query e busca top_n vizinhos em Qdrant.
-        Wave 2: passa source_ids pra filtro nativo do Qdrant (FieldCondition+MatchAny)."""
+        """Embeda a query e busca top_n vizinhos no vector store ativo.
+
+        Backend (qdrant ou pgvector) é resolvido em runtime via
+        Settings.rag_vector_backend — caller (`Retriever.search`) não muda
+        com a troca. Filtro source_ids vai pro backend:
+        - Qdrant: FieldCondition + MatchAny (filter nativo).
+        - pgvector: WHERE knowledge_source_id = ANY($1) na própria SQL.
+        """
+        backend = (get_settings().rag_vector_backend or "qdrant").lower()
         with _tracer.start_as_current_span("evidence.retrieve.vector") as span:
             span.set_attribute("vector.top_n", top_n)
+            span.set_attribute("rag.vector_backend", backend)
             if allowed_source_ids:
                 span.set_attribute("vector.allowed_sources", len(allowed_source_ids))
             qvec = await embed_query(query)
             if qvec is None:
                 span.set_attribute("vector.path", "embedder_unavailable")
                 return []
-            hits = await qdrant_search(qvec, top_n=top_n, source_ids=allowed_source_ids)
+            search_fn = _get_vector_search_fn()
+            hits = await search_fn(qvec, top_n=top_n, source_ids=allowed_source_ids)
             span.set_attribute("vector.hits", len(hits))
             return hits
 

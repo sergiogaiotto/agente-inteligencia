@@ -824,6 +824,16 @@ _IDEMPOTENT_MIGRATIONS = [
     # - 'hybrid' (default): comportamento legacy — aceita tudo, oferece promote a tabela.
     # Backfill = hybrid para KS existentes (preserva comportamento).
     "ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS kb_mode TEXT DEFAULT 'hybrid'",
+    # ─── PR D pgvector foundation ───────────────────────────────
+    # Extensão `vector` (pgvector). Idempotente; só funciona em imagens com
+    # a extensão disponível (pgvector/pgvector:pg16 e similares). Postgres
+    # vanilla sem pgvector instalado vai dar erro nesta migration — neste
+    # caso, ou trocar imagem ou comentar esta linha (RAG vetorial cai em
+    # qdrant via Settings.rag_vector_backend=qdrant). A coluna `embedding`
+    # NÃO é criada aqui — fica a cargo de pgvector_store.ensure_embedding_column()
+    # que sabe a dim do provider de embedding ativo em runtime
+    # (Azure 1536, Qwen3 1024 etc.). Mudar provider = /reindex recria coluna.
+    "CREATE EXTENSION IF NOT EXISTS vector",
 ]
 
 
@@ -935,6 +945,35 @@ def _split_sql(script: str) -> list[str]:
 # Init / shutdown
 # ═══════════════════════════════════════════════════════════════
 
+async def _init_pool_connection(conn):
+    """Callback executado em CADA conexão nova do pool.
+
+    Registra o codec `pgvector.asyncpg` se a lib estiver disponível — isso
+    permite que asyncpg serialize/deserialize `vector` nativamente
+    (`await conn.fetch("... WHERE embedding <=> $1", numpy_array)` etc.).
+
+    Idempotente e tolerante a falhas:
+    - Se pgvector lib não está instalada → no-op (RAG vetorial cai em qdrant).
+    - Se a extensão `vector` não está criada no Postgres → register_vector
+      lança InvalidArgumentError. Logamos warning e seguimos (a connection
+      ainda funciona pra queries sem vetor).
+    """
+    try:
+        from pgvector.asyncpg import register_vector
+    except ImportError:
+        return  # lib opcional; sem ela, rag_vector_backend=pgvector simplesmente não funciona
+    try:
+        await register_vector(conn)
+    except Exception as e:
+        logger.warning(
+            "pgvector codec não registrado nesta conexão — extensão vector pode não estar criada",
+            extra={
+                "event": "pgvector.codec.register_failed",
+                "error_type": type(e).__name__,
+            },
+        )
+
+
 async def init_db():
     """Cria pool, aplica schema e migrações idempotentes.
 
@@ -949,6 +988,7 @@ async def init_db():
                 min_size=settings.database_pool_min,
                 max_size=settings.database_pool_max,
                 command_timeout=60,
+                init=_init_pool_connection,
             )
             logger.info(f"PostgreSQL pool aberto: min={settings.database_pool_min} max={settings.database_pool_max}")
         async with _pool.acquire() as con:
