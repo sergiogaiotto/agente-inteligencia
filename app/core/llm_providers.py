@@ -22,7 +22,23 @@ logger = logging.getLogger(__name__)
 
 
 class LLMProvider(ABC):
-    """Interface base para provedores de LLM."""
+    """Interface base para provedores de LLM.
+
+    Wave Structured Output (PR atual): generate() aceita kwarg opcional
+    `response_format` no formato OpenAI:
+        {"type": "json_schema", "json_schema": {"name": "X", "schema": {...}, "strict": true}}
+        ou simples {"type": "json_object"}
+    Providers OpenAI-compatible (Azure, Maritaca, GPT-OSS) propagam direto.
+    Ollama traduz pro formato nativo (format="json"). Cada provider que não
+    suportar ignora silenciosamente (cai no fallback de injetar JSON Schema
+    no prompt do system, igual antes).
+    """
+
+    # Flag de classe — providers que suportam structured output marcam True.
+    # Engine consulta antes de tentar passar response_format pra decidir entre
+    # "garantia construtiva" (provider força JSON) vs "prompt + jsonschema
+    # validate depois" (gambiarra de retrocompat). Default False = conservador.
+    supports_structured_output: bool = False
 
     @abstractmethod
     async def generate(self, messages: list[dict], **kwargs) -> dict:
@@ -44,7 +60,14 @@ class AzureOpenAIProvider(LLMProvider):
     - api_version obrigatória (ex: 2024-02-15-preview)
     - `model` no factory é interpretado como `azure_deployment` quando
       passado; do contrário usa AZURE_OPENAI_CHAT_DEPLOYMENT do env.
+
+    Wave Structured Output: aceita response_format via LangChain `bind(...)`.
+    Funciona em api_version >= 2024-08-01-preview pra json_schema; versões
+    mais antigas só suportam json_object. Em ambos casos, propagar o kwarg
+    funciona — Azure rejeita com 400 se incompatível, e o caller faz fallback.
     """
+
+    supports_structured_output = True
 
     def __init__(self, model: str | None = None, temperature: float = 0.7):
         settings = get_settings()
@@ -81,6 +104,11 @@ class AzureOpenAIProvider(LLMProvider):
 # Maritaca AI — endpoint OpenAI-compatível
 # ───────────────────────────────────────────────────────────────
 class MaritacaProvider(LLMProvider):
+    # Maritaca expõe endpoint OpenAI-compatible; response_format vai direto
+    # no JSON do request. Comportamento confirmado em Sabia-3 (function calling
+    # também funciona). Caso falhe, server devolve erro e provider propaga.
+    supports_structured_output = True
+
     def __init__(self, model: str | None = None, temperature: float = 0.7):
         settings = get_settings()
         self.model = model or settings.maritaca_model
@@ -119,6 +147,11 @@ class MaritacaProvider(LLMProvider):
 # Ollama — endpoint OpenAI-compatível (/v1/chat/completions)
 # ───────────────────────────────────────────────────────────────
 class OllamaProvider(LLMProvider):
+    # Ollama via /v1/chat/completions é OpenAI-compatible: aceita
+    # response_format mas não respeita "json_schema" — converte tudo pra
+    # JSON-mode equivalente ao "json_object". Tradução acontece no generate().
+    supports_structured_output = True
+
     def __init__(self, model: str | None = None, temperature: float = 0.7):
         settings = get_settings()
         self.model = model or settings.ollama_model
@@ -135,6 +168,19 @@ class OllamaProvider(LLMProvider):
         )
 
     async def generate(self, messages: list[dict], **kwargs) -> dict:
+        # Ollama nativo prefere `format: "json"` em vez de `response_format`.
+        # Quando engine passa response_format={"type":"json_schema",...},
+        # convertemos pra forma equivalente que o servidor entende.
+        # Schema completo não é honrado (Ollama valida só "é JSON?"), mas
+        # ainda assim ganha-se garantia de JSON parseável — ContractValidator
+        # roda depois pra validar shape específico.
+        rf = kwargs.pop("response_format", None)
+        if rf and isinstance(rf, dict):
+            rf_type = rf.get("type")
+            if rf_type in ("json_schema", "json_object"):
+                # Ollama OpenAI-compat aceita response_format={"type":"json_object"}
+                # ou format:"json" no body — usamos response_format que é cross-compat
+                kwargs["response_format"] = {"type": "json_object"}
         async with httpx.AsyncClient(timeout=180) as client:
             response = await client.post(
                 f"{self.api_url}/v1/chat/completions",
@@ -165,7 +211,13 @@ class GPTOSSProvider(LLMProvider):
     'not-needed' é valor válido de api_key — o proxy autentica de outra
     forma (rede interna, mTLS, etc.). Continua mandando o header
     Authorization Bearer pra compatibilidade com o cliente OpenAI.
+
+    Wave Structured Output: gpt-oss-2025 (20b e 120b) suporta
+    response_format={"type":"json_schema",...} via runtime compatível
+    OpenAI. Caso o servidor não suporte, devolve 400 e caller faz fallback.
     """
+
+    supports_structured_output = True
 
     def __init__(self, size: str = "120b", model: str | None = None, temperature: float = 0.7):
         if size not in ("20b", "120b"):
@@ -223,8 +275,19 @@ class GPTOSSProvider(LLMProvider):
 # Helpers
 # ───────────────────────────────────────────────────────────────
 async def _generate_via_langchain(provider, messages: list[dict], **kwargs) -> dict:
-    """Path comum para providers que usam LangChain (Azure)."""
+    """Path comum para providers que usam LangChain (Azure).
+
+    Wave Structured Output: aceita response_format via .bind(...). LangChain
+    AzureChatOpenAI propaga pro Azure como model_kwargs no request OpenAI.
+    Funciona desde api_version 2024-08-01-preview pra "json_schema"; versões
+    anteriores aceitam "json_object" (sem schema, só garante JSON).
+    """
     llm = provider.get_langchain_llm()
+    response_format = kwargs.pop("response_format", None)
+    if response_format:
+        # .bind(...) cria nova instância com kwargs adicionais que vão
+        # parar no request final ao Azure. Não muta o singleton.
+        llm = llm.bind(response_format=response_format)
     lc_messages = []
     for m in messages:
         if m["role"] == "system":

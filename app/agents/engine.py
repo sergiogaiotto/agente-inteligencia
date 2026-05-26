@@ -44,6 +44,44 @@ _tracer = get_tracer(__name__)
 
 
 # ═══════════════════════════════════════════════════
+# Helpers — Structured Output (Wave atual)
+# ═══════════════════════════════════════════════════
+
+
+def _extract_json_schema_from_contract(contract: str) -> dict | None:
+    """Extrai um JSON Schema do bloco fenced ```json ... ``` em ## Output Contract.
+
+    O parser de SKILL.md mantém o conteúdo bruto da seção em
+    `parsed.output_contract`. Esta função procura o primeiro bloco
+    fenced JSON dentro e parseia.
+
+    Returns:
+        dict (JSON Schema) ou None se não encontrar bloco ou JSON inválido.
+
+    Aceita variações:
+    - ```json ... ``` (com hint de linguagem)
+    - ``` ... ``` (sem hint) — tenta parsear como JSON
+    - JSON cru sem fence (raro) — tenta parsear o contract inteiro
+    """
+    if not contract or not contract.strip():
+        return None
+    import re as _re
+    # 1. Bloco fenced ```json ... ```
+    m = _re.search(r"```(?:json|JSON)?\s*\n([\s\S]*?)\n```", contract)
+    candidate = m.group(1).strip() if m else contract.strip()
+    try:
+        schema = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    # JSON Schema válido tem que ser objeto com pelo menos type ou properties.
+    if not isinstance(schema, dict):
+        return None
+    if not (schema.get("type") or schema.get("properties") or schema.get("$ref")):
+        return None
+    return schema
+
+
+# ═══════════════════════════════════════════════════
 # LangGraph State
 # ═══════════════════════════════════════════════════
 
@@ -89,6 +127,71 @@ class DeepAgentHarness:
         if self.mcp_tools:
             from app.mcp.runtime import build_openai_tools
             self.openai_tools = build_openai_tools(self.mcp_tools)
+        # Wave Structured Output (PR atual): se SKILL.md tem Output Contract
+        # com JSON Schema E provider suporta response_format, cacheia o
+        # response_format aqui pra reusar em todas as chamadas ainvoke.
+        # None quando: contract ausente, schema malformado, provider sem
+        # suporte, ou tools MCP presentes (json_schema + tools no OpenAI
+        # podem conflitar em alguns providers — privilegiamos tools por ser
+        # path principal de produção). Caller cai em fallback (prompt-only).
+        self._response_format = self._build_response_format()
+
+    def _build_response_format(self) -> dict | None:
+        """Extrai JSON Schema do Output Contract e monta payload pro provider.
+
+        Heurística:
+        - Se provider declara supports_structured_output=False → None.
+        - Se há MCP tools → None (evita conflito tools + json_schema; ver
+          comentário no __init__).
+        - Se output_contract não tem bloco ```json ... ``` parseável → None.
+
+        Returns:
+            dict no formato OpenAI {"type":"json_schema","json_schema":{...,"strict":true}}
+            ou None pra fallback no prompt-injection.
+        """
+        if not getattr(self.provider, "supports_structured_output", False):
+            return None
+        if self.openai_tools:
+            # Tools MCP + json_schema podem brigar em alguns providers (Azure
+            # 2024-08 aceita; Maritaca/OSS desconhecido). Por segurança,
+            # privilegia tools. Skill ainda valida via ContractValidator no fim.
+            return None
+        skill = self.config.get("_parsed_skill", {}) or {}
+        contract = skill.get("output_contract") or ""
+        schema = _extract_json_schema_from_contract(contract)
+        if not schema:
+            return None
+        # OpenAI espera nome no schema. Usa title do schema ou fallback genérico.
+        name = (schema.get("title") or "SkillOutput")[:64]
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": name,
+                "schema": schema,
+                "strict": True,
+            },
+        }
+
+    def _apply_response_format(self, llm):
+        """Aplica self._response_format ao LLM via .bind(...) se habilitado.
+
+        Tolerante a falha: se LangChain rejeitar o kwarg, segue sem bind
+        (caller cai em fallback prompt-only). Esse cenário acontece em
+        versões antigas do langchain-openai ou providers sem suporte.
+        """
+        if not self._response_format:
+            return llm
+        try:
+            return llm.bind(response_format=self._response_format)
+        except Exception as e:
+            logger.warning(
+                "structured_output: bind(response_format=...) falhou — fallback prompt-only",
+                extra={
+                    "event": "engine.structured_output.bind_failed",
+                    "error_type": type(e).__name__,
+                },
+            )
+            return llm
 
     def _build_system_prompt(self) -> str:
         """Constrói system prompt a partir do SKILL.md carregado.
@@ -316,8 +419,10 @@ class DeepAgentHarness:
             else:
                 llm_with_tools = llm.bind_tools(self.openai_tools)
         else:
-            # strategy='none' → invocação plain sem tools
-            llm_with_tools = llm
+            # strategy='none' → invocação plain sem tools. Aplica
+            # structured output (no-op quando _response_format é None, ex:
+            # quando há tools — ver _build_response_format).
+            llm_with_tools = self._apply_response_format(llm)
 
         try:
             response = await llm_with_tools.ainvoke(messages, config={"callbacks": callbacks})
@@ -330,7 +435,10 @@ class DeepAgentHarness:
             no_tools_signals = ("does not support tools", "tools not supported", "tool_choice", "function_call is not supported")
             if any(s in err_str for s in no_tools_signals) and self.openai_tools:
                 logger.warning(f"LLM '{self.config.get('model','?')}' não suporta tools — refazendo sem MCP. Erro original: {str(e)[:200]}")
-                response = await llm.ainvoke(messages, config={"callbacks": callbacks})
+                # Fallback sem tools: bom momento pra aplicar response_format
+                # se disponível (no caminho normal _response_format=None quando
+                # há tools, mas neste fallback elas foram removidas).
+                response = await self._apply_response_format(llm).ainvoke(messages, config={"callbacks": callbacks})
                 # Curto-circuita: sem tools não há tool_calls a processar.
                 md = dict(state.get("metadata") or {})
                 md["reflect_recommended"] = self._needs_reflection(response, state)
