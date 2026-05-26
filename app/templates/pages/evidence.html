@@ -316,7 +316,12 @@
                             <strong>✓ Ingestão concluída:</strong>
                             <span x-text="ingestProgress.result.chunks_created + ' chunks · ' + (ingestProgress.result.tokens_total||0).toLocaleString() + ' tokens · ' + (ingestProgress.result.duration_ms||0) + 'ms'"></span>
                             <template x-if="ingestProgress.result.partial">
-                                <span class="block mt-1 text-amber-800">⚠ Qdrant divergente — Postgres tem todos os chunks; vetores podem estar incompletos. Re-execute quando Qdrant estiver OK.</span>
+                                <span class="block mt-1 text-amber-800">
+                                    ⚠ Índice vetorial divergente — Postgres tem todos os chunks, mas o
+                                    <span x-text="(ingestProgress.result.rag_vector_backend || 'vector store') === 'pgvector' ? 'pgvector' : (ingestProgress.result.rag_vector_backend || 'vector store')"></span>
+                                    ficou incompleto. Re-execute a ingestão quando o backend estiver OK
+                                    (ou rode <code class="px-1 bg-amber-100 rounded">POST /api/v1/evidence/reindex</code>).
+                                </span>
                             </template>
                             <!-- Onda Tabular: feedback explícito sobre análise (estado: loading / ok / error / idle) -->
                             <template x-if="ingestForm.file && _isTabularFile(ingestForm.file)">

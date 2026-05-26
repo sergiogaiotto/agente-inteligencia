@@ -567,10 +567,10 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           <p>Quando o agent precisa de uma informação textual, a plataforma combina <em>dois jeitos de buscar</em>:</p>
           <ul>
             <li><strong>BM25</strong> — busca clássica por palavras-chave (exatidão lexical). Se o user pergunta "qual o prazo de cobrança", encontra trechos com essas palavras exatas. Usa <code>tsvector</code> + índice GIN do Postgres.</li>
-            <li><strong>Vetorial</strong> — busca semântica (por significado). "prazo de pagamento" também acharia trechos sobre "cobrança" porque os vetores ficam próximos. Usa Qdrant + embeddings (Azure ou Qwen3).</li>
+            <li><strong>Vetorial</strong> — busca semântica (por significado). "prazo de pagamento" também acharia trechos sobre "cobrança" porque os vetores ficam próximos. Usa o vector store ativo (Qdrant ou pgvector) + embeddings (Azure ou Qwen3).</li>
           </ul>
           <p>Os dois rankings são fundidos via <strong>Reciprocal Rank Fusion</strong> (k=60) — uma fórmula que respeita o melhor dos dois sem ter que escolher. Opcional: um <strong>Reranker LLM</strong> faz uma re-ordenação final por relevância contextual. As top-N evidências vão para o LLM gerador montar a resposta.</p>
-          <p>Pipeline RAG: <strong>ingestão</strong> (você sobe doc) → <strong>chunking</strong> (quebra em pedaços de ~500 tokens) → <strong>embedding</strong> (gera vetores) → <strong>indexação</strong> (BM25 + Qdrant) → consultável em tempo real.</p>
+          <p>Pipeline RAG: <strong>ingestão</strong> (você sobe doc) → <strong>chunking</strong> (quebra em pedaços de ~500 tokens) → <strong>embedding</strong> (gera vetores) → <strong>indexação</strong> (BM25 + vector store) → consultável em tempo real.</p>
 
           <p><strong>Tabelas — consulta SQL em dados estruturados</strong></p>
           <p>Quando você sobe um CSV ou XLSX, a plataforma <em>analisa</em> automaticamente. Se detecta uma planilha estruturada (colunas com tipos, headers limpos), abre um modal próprio oferecendo "Promover para tabela consultável".</p>
@@ -878,7 +878,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>A Infraestrutura mostra a saúde dos serviços de baixo nível que a plataforma usa: PostgreSQL (dados), Redis (rate-limit + cache), Qdrant (vetores do RAG), e o stack de observabilidade quando ativo.</p>
+          <p>A Infraestrutura mostra a saúde dos serviços de baixo nível que a plataforma usa: PostgreSQL (dados e — quando backend=pgvector — também vetores), Redis (rate-limit + cache), vector store dedicado quando ativo (Qdrant, em rota de descomissionamento), e o stack de observabilidade quando ativo.</p>
           <p>É o lugar para investigar "por que está lento?" ou "por que essa página não carregou?" — antes de mergulhar em traces específicos no /observability.</p>
         `
       },
@@ -888,9 +888,9 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         body: `
           <p>Os componentes monitorados:</p>
           <ul>
-            <li><strong>PostgreSQL</strong> — backend único de persistência. Tudo passa por aqui: agents, skills, interactions, audit_log, catalog, etc. Se cair, a plataforma toda fica indisponível.</li>
+            <li><strong>PostgreSQL</strong> — backend único de persistência. Tudo passa por aqui: agents, skills, interactions, audit_log, catalog, etc. Quando <code>RAG_VECTOR_BACKEND=pgvector</code>, também guarda os vetores do RAG via extensão pgvector + HNSW. Se cair, a plataforma toda fica indisponível.</li>
             <li><strong>Redis</strong> — usado para rate-limit (sliding window) e cache leve de routing. Falha = rate-limit desligado (failsafe open).</li>
-            <li><strong>Qdrant</strong> — vector DB para o RAG. Falha = busca de evidência cai em BM25-only (degrada com graça).</li>
+            <li><strong>Vector store</strong> — depende do backend ativo (<code>RAG_VECTOR_BACKEND</code>). pgvector (recomendado): vive dentro do Postgres, sem serviço extra. Qdrant (legado): serviço separado, será removido em uma onda futura. Falha do vector store = busca de evidência cai em BM25-only (degrada com graça).</li>
             <li><strong>OpenTelemetry / LangFuse</strong> — exportação de traces. Quando configurado e ativo, traces aparecem em Tempo/Grafana ou LangFuse.</li>
           </ul>
           <p>Status verificado em tempo real via probes leves (latência de query, ping, health endpoint). Quando algum componente está degradado, o card pisca em laranja/vermelho.</p>
@@ -902,7 +902,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { title: 'Diagnóstico inicial de incidente', body: 'Site lento. Antes de pedir trace, vai em Infra: vê PostgreSQL com latência 2s/query. Foco vira tuning do banco, não da app.' },
           { title: 'Confirmar setup', body: 'Acabou de configurar OTEL? Abre Infra para confirmar que o exporter está conectado e enviando spans.' },
-          { title: 'Capacity planning', body: 'Acompanhar tamanho do banco, uso de Redis, vetores indexados em Qdrant. Quando um deles passa do limite saudável, é hora de escalar.' }
+          { title: 'Capacity planning', body: 'Acompanhar tamanho do banco, uso de Redis, contagem de vetores no vector store. Quando um deles passa do limite saudável, é hora de escalar.' }
         ]
       },
       {
@@ -910,7 +910,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Pegadinhas',
         items: [
           { title: 'Componente "offline" pode ser config', severity: 'info', body: 'Se LangFuse aparece offline, primeiro checa se as credenciais estão preenchidas em /settings. "Offline" pode significar "nunca configurado".' },
-          { title: 'Qdrant down ≠ plataforma down', severity: 'warning', body: 'Quando Qdrant cai, a plataforma continua funcionando mas o RAG perde a parte vetorial. Busca passa a ser BM25-only. Investigue antes que o cliente perceba qualidade pior.' }
+          { title: 'Vector store down ≠ plataforma down', severity: 'warning', body: 'Quando o vector store cai (ou está com dim divergente do embedder ativo), a plataforma continua funcionando mas o RAG perde a parte vetorial. Busca passa a ser BM25-only. Investigue antes que o cliente perceba qualidade pior — e considere rodar POST /api/v1/evidence/reindex para regenerar.' }
         ]
       }
     ],
