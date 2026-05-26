@@ -26,7 +26,13 @@ class Settings(BaseSettings):
     # ── Cache / Redis (memória de contexto) ──
     redis_url: str = "redis://localhost:6379/0"
 
-    # ── Vector DB (Qdrant) ──
+    # ── Vector DB ──
+    # rag_vector_backend: "qdrant" (default histórico, PR D) ou "pgvector"
+    # (RAG v3, Onda atual). PR E vai trocar default pra pgvector; PR F
+    # remove qdrant. Hoje convivem em paralelo via flag — caller (runtime
+    # e ingest) roteia.
+    rag_vector_backend: str = "qdrant"
+    # Qdrant (será removido no PR F)
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
     qdrant_collection: str = "agente_evidence"

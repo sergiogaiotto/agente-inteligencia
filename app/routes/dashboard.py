@@ -1062,11 +1062,11 @@ async def list_source_chunks(ks_id: str, limit: int = 50, offset: int = 0):
     return {"source_id": ks_id, "count": len(chunks), "chunks": chunks}
 
 
-# ─── Reindex global (recreate Qdrant collection + re-embarcar Postgres) ──
+# ─── Reindex global (recreate vector store + re-embarcar Postgres) ──
 
 @router.get("/evidence/collection-info")
 async def evidence_collection_info():
-    """Diagnóstico do Qdrant: dim atual, dim esperada (provider ativo), drift.
+    """Diagnóstico do vector store ATIVO (qdrant ou pgvector via flag).
 
     UI usa pra detectar o cenário "trocou provider sem reindexar" e oferecer
     o botão de reindex com contexto ("Collection dim=1536, provider espera 1024").
@@ -1076,17 +1076,26 @@ async def evidence_collection_info():
           "name": str,
           "exists": bool,
           "points_count": int | None,
-          "status": str,                # "green" | "yellow" | "red" | "missing"
-          "dim_actual": int | None,     # None se collection não existe
-          "dim_expected": int,          # dim do embedder ativo
-          "dim_match": bool,            # True se saudável
+          "status": str,                # "green" | "missing" | "drift" (depende do backend)
+          "dim_actual": int | None,
+          "dim_expected": int,
+          "dim_match": bool,
+          "backend": "qdrant" | "pgvector",
         }
-        ou 503 se Qdrant offline.
+        ou 503 se backend inacessível.
     """
-    from app.evidence.qdrant_store import collection_info as _ci
+    from app.core.config import get_settings as _get_settings
+    backend = (_get_settings().rag_vector_backend or "qdrant").lower()
+    if backend == "pgvector":
+        from app.evidence.pgvector_store import collection_info as _ci
+    else:
+        from app.evidence.qdrant_store import collection_info as _ci
     info = await _ci()
     if info is None:
-        raise HTTPException(503, "Qdrant offline ou inacessível")
+        raise HTTPException(503, f"{backend} offline ou inacessível")
+    # qdrant_store.collection_info ainda não retorna o campo "backend".
+    # pgvector_store já retorna. Adiciona/garante aqui pra a UI sempre saber.
+    info.setdefault("backend", backend)
     return info
 
 

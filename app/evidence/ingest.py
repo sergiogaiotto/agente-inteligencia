@@ -18,14 +18,34 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from app.core.config import get_settings
 from app.core.database import _get_pool, evidence_chunks_repo, knowledge_repo
 from app.core.otel import get_tracer
 from app.evidence.chunker import chunk_text
 from app.evidence.embedder import embed_texts
-from app.evidence.qdrant_store import upsert_chunks as qdrant_upsert, delete_by_source as qdrant_delete
 
 logger = logging.getLogger(__name__)
 _tracer = get_tracer(__name__)
+
+
+def _get_vector_store():
+    """Resolve o módulo de vector store ativo conforme settings.
+
+    Os 2 módulos expõem a mesma interface pública (upsert_chunks, search,
+    delete_by_source, recreate_collection, collection_info, ensure_collection).
+    O roteamento é em runtime (não import-time) pra permitir trocar o
+    backend via env var sem restart.
+
+    Returns:
+        Módulo (não instância) — qdrant_store ou pgvector_store.
+    """
+    backend = (get_settings().rag_vector_backend or "qdrant").lower()
+    if backend == "pgvector":
+        from app.evidence import pgvector_store
+        return pgvector_store
+    # default + qualquer valor desconhecido cai em qdrant (retrocompat)
+    from app.evidence import qdrant_store
+    return qdrant_store
 
 
 class IngestError(Exception):
@@ -106,8 +126,11 @@ async def ingest_text(
                 status_code=500,
             )
 
-        # 3. Replace: limpa state anterior (Postgres + Qdrant)
+        # 3. Replace: limpa state anterior (Postgres + vector store)
         pool = _get_pool()
+        vector_store = _get_vector_store()
+        backend_name = (get_settings().rag_vector_backend or "qdrant").lower()
+        span.set_attribute("rag.vector_backend", backend_name)
         if replace:
             with _tracer.start_as_current_span("ingest.delete_old"):
                 async with pool.acquire() as con:
@@ -115,11 +138,13 @@ async def ingest_text(
                         "DELETE FROM evidence_chunks WHERE knowledge_source_id = $1",
                         source_id,
                     )
-                # Qdrant: best-effort. Se offline, deleções acumulam e o próximo
-                # replace ou /reindex limpa.
-                await qdrant_delete(source_id)
+                # Vector store: best-effort. Qdrant: deleta pontos. pgvector:
+                # no-op (rows já foram apagadas pelo DELETE acima, vetor foi
+                # junto na mesma transação). Mantemos a chamada por paridade
+                # e pra cobertura de edge cases (race com query).
+                await vector_store.delete_by_source(source_id)
 
-        # 4. Insere chunks no Postgres + monta payload do Qdrant
+        # 4. Insere chunks no Postgres + monta payload do vector store
         chunk_ids: list[str] = []
         async with pool.acquire() as con:
             async with con.transaction():
@@ -134,8 +159,10 @@ async def ingest_text(
                         cid, source_id, c.ordinal, c.text, c.token_count, c.char_count,
                     )
 
-        # 5. Upsert no Qdrant (best-effort — Qdrant pode estar offline)
-        qdrant_payload = [
+        # 5. Associa vetores ao vector store ativo.
+        # Qdrant: cria pontos independentes apontando para os chunk_ids.
+        # pgvector: UPDATE evidence_chunks SET embedding=... WHERE id IN (...).
+        vector_payload = [
             {
                 "id": chunk_ids[i],
                 "embedding": vectors[i],
@@ -144,28 +171,30 @@ async def ingest_text(
             }
             for i in range(len(chunks))
         ]
-        with _tracer.start_as_current_span("ingest.qdrant_upsert") as qspan:
-            qspan.set_attribute("qdrant.expected", len(chunks))
-            qdrant_n = await qdrant_upsert(qdrant_payload)
-            qspan.set_attribute("qdrant.upserted", qdrant_n)
-            qspan.set_attribute("qdrant.partial", qdrant_n != len(chunks))
-            if qdrant_n != len(chunks):
+        with _tracer.start_as_current_span("ingest.vector_upsert") as qspan:
+            qspan.set_attribute("rag.vector_backend", backend_name)
+            qspan.set_attribute("vector.expected", len(chunks))
+            vector_n = await vector_store.upsert_chunks(vector_payload)
+            qspan.set_attribute("vector.upserted", vector_n)
+            qspan.set_attribute("vector.partial", vector_n != len(chunks))
+            if vector_n != len(chunks):
                 # Marca o span como erro pra alarmar via tracing (Tempo → Grafana).
                 # Import local: trace é dep opcional, evita custo no happy path.
                 from opentelemetry.trace import Status, StatusCode
-                qspan.set_status(Status(StatusCode.ERROR, "qdrant upsert parcial ou abortado"))
+                qspan.set_status(Status(StatusCode.ERROR, "vector upsert parcial ou abortado"))
 
-        partial = qdrant_n != len(chunks)
+        partial = vector_n != len(chunks)
         if partial:
             logger.warning(
-                "Ingestão parcial: Postgres tem todos os chunks, Qdrant divergente",
+                "Ingestão parcial: Postgres tem todos os chunks, vetores divergem",
                 extra={
                     "event": "evidence.ingest.partial",
+                    "rag_vector_backend": backend_name,
                     "source_id": source_id,
                     "chunks_expected": len(chunks),
-                    "qdrant_upserted": qdrant_n,
+                    "vector_upserted": vector_n,
                     "tokens_total": tokens_total,
-                    "hint": "Re-execute a ingestão quando Qdrant estiver OK (logs anteriores de qdrant.* têm a causa raiz)",
+                    "hint": f"Re-execute a ingestão; logs anteriores de {backend_name}.* têm a causa raiz",
                 },
             )
 
@@ -180,7 +209,12 @@ async def ingest_text(
             "source_id": source_id,
             "chunks_created": len(chunks),
             "tokens_total": tokens_total,
-            "qdrant_upserted": qdrant_n,
+            # qdrant_upserted: retrocompat para UI e clients antigos.
+            # vector_upserted: nome backend-agnóstico (preferir em novos consumers).
+            # Ambos refletem o mesmo número.
+            "qdrant_upserted": vector_n,
+            "vector_upserted": vector_n,
+            "rag_vector_backend": backend_name,
             "duration_ms": duration_ms,
             "partial": partial,
         }
@@ -192,7 +226,8 @@ async def ingest_text(
 
 
 async def clear_source(source_id: str) -> dict:
-    """Apaga todos os chunks de uma source (Postgres + Qdrant). Idempotente."""
+    """Apaga todos os chunks de uma source (Postgres + vector store ativo).
+    Idempotente."""
     with _tracer.start_as_current_span("ingest.clear") as span:
         span.set_attribute("source.id", source_id)
         pool = _get_pool()
@@ -206,11 +241,14 @@ async def clear_source(source_id: str) -> dict:
             pg_deleted = int(res.rsplit(" ", 1)[-1])
         except (ValueError, IndexError):
             pg_deleted = 0
-        qdrant_ok = await qdrant_delete(source_id)
+        vector_store = _get_vector_store()
+        vector_ok = await vector_store.delete_by_source(source_id)
         return {
             "source_id": source_id,
             "postgres_deleted": pg_deleted,
-            "qdrant_deleted": qdrant_ok,
+            # qdrant_deleted: retrocompat. vector_deleted: nome backend-agnóstico.
+            "qdrant_deleted": vector_ok,
+            "vector_deleted": vector_ok,
         }
 
 
@@ -254,17 +292,25 @@ async def reindex_all(
         Com recreate_collection=True, é idempotente — sempre converge pro mesmo
         estado (todos os chunks do Postgres no Qdrant com dim correta). Com
         recreate_collection=False, depende do estado prévio do Qdrant.
+
+    Backend:
+        Roteado via Settings.rag_vector_backend. Qdrant: recria collection +
+        upsert pontos. pgvector: DROP+ADD coluna embedding + UPDATE em batch.
+        Mesma interface — caller não diferencia.
     """
-    from app.evidence.qdrant_store import (
-        recreate_collection as qdrant_recreate,
-        upsert_chunks as qdrant_upsert,
-        get_active_embedding_dim,
-    )
+    # get_active_embedding_dim vive em qdrant_store por enquanto (PR D) — vai
+    # ficar lá mesmo após o cutover (é função de leitura de settings, não de
+    # backend). Os 2 stores importam de lá.
+    from app.evidence.qdrant_store import get_active_embedding_dim
+
+    vector_store = _get_vector_store()
+    backend_name = (get_settings().rag_vector_backend or "qdrant").lower()
 
     start = time.time()
     with _tracer.start_as_current_span("ingest.reindex_all") as span:
         span.set_attribute("reindex.recreate", recreate_collection)
         span.set_attribute("reindex.batch_size", batch_size)
+        span.set_attribute("rag.vector_backend", backend_name)
 
         result: dict = {
             "ok": False,
@@ -278,11 +324,12 @@ async def reindex_all(
             "batches": 0,
             "duration_ms": 0,
             "errors": [],
+            "rag_vector_backend": backend_name,
         }
 
-        # 1. Recreate collection (destrutivo).
+        # 1. Recreate da collection / coluna (destrutivo).
         if recreate_collection:
-            recreate_res = await qdrant_recreate()
+            recreate_res = await vector_store.recreate_collection()
             if not recreate_res.get("ok"):
                 span.set_attribute("reindex.path", "recreate_failed")
                 result["errors"].append({
@@ -387,10 +434,11 @@ async def reindex_all(
                 }
                 for i in range(len(batch))
             ]
-            upserted = await qdrant_upsert(payload)
+            upserted = await vector_store.upsert_chunks(payload)
             result["chunks_upserted"] += upserted
             if upserted != len(batch):
-                # qdrant_upsert já logou — só registra no resumo do reindex.
+                # vector_store.upsert_chunks já logou a causa raiz —
+                # aqui só registra no resumo do reindex.
                 result["errors"].append({
                     "stage": "upsert",
                     "batch_idx": batch_idx,

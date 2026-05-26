@@ -68,9 +68,16 @@ services:
       retries: 3
       start_period: 20s
 
-  # ─── PostgreSQL ──────────────────────────────────────────────────
+  # ─── PostgreSQL (com extensão pgvector) ──────────────────────────
+  # Imagem oficial pgvector/pgvector pré-instala a extensão `vector`.
+  # Drop-in replacement do postgres:16-alpine — mesmo PG_DATA layout,
+  # mesma versão do Postgres 16. Volumes existentes funcionam sem migração.
+  # Onda RAG v3: pgvector substitui Qdrant como backend de embedding.
+  # Compat: enquanto Settings.rag_vector_backend=qdrant, esta extensão
+  # fica disponível mas ociosa. Migration `CREATE EXTENSION IF NOT EXISTS
+  # vector` em database.py é idempotente.
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: agente_postgres
     restart: unless-stopped
     environment:
