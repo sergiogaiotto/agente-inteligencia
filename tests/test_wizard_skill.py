@@ -212,6 +212,24 @@ class TestBuildWizardPrompt:
         assert "## Execution Profile" in system
         assert "mode: rigorous" in system
 
+    def test_never_includes_budget_section_in_prompt(self):
+        """User reportou: seções Budget geradas automaticamente prejudicam
+        desempenho em runtime (tokens=2000, latência=4s, custo=$0.0015).
+        Operador deve definir budget conscientemente depois. Wizard NÃO
+        deve sugerir Budget como parte da estrutura canônica nem dar
+        valores padrão."""
+        req = WizardSkillRequest(description="x")
+        bindings = {"mcp_tools": [], "rag_sources": [], "data_tables": [], "api_endpoints": []}
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        # Não pode aparecer como HEADER no template canônico (linha começando
+        # com "## Budget" seguida de descrição). A menção dentro da instrução
+        # negativa ("NÃO inclua `## Budget`") é OK e desejada.
+        canonical_header = "## Budget\nLimites de tokens"
+        assert canonical_header not in system
+        # Instrução negativa explícita deve orientar o LLM
+        assert "NÃO inclua a seção" in system
+        assert "Budget" in system  # menção da palavra na instrução negativa OK
+
 
 # ═════════════════════════════════════════════════════════════════
 # _resolve_bindings_for_prompt — lookup nos repositórios
