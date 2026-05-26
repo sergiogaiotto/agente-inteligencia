@@ -1105,6 +1105,16 @@ ${outMap}`;
                     // Após carregar markdown da skill, popula os checkboxes do
                     // dropdown de Fontes RAG lendo o ## Evidence Policy.
                     this.syncBoundSourcesFromContent();
+                    // UX: normaliza o bloco YAML pra adicionar `# Nome humano`
+                    // ao lado de cada UUID. Skills antigas (pré-PR) gravavam só
+                    // UUID nu, hostil pra leitura. applyEvidencePolicy() regenera
+                    // o bloco usando availableSources (já carregado eager acima)
+                    // — se já estava no formato novo, regen é idempotente
+                    // (mesma string). Se mudou, o dirty marker vai aparecer
+                    // mas o save ficou pendente da escolha do user.
+                    if (this.boundSourceIds.length > 0) {
+                        this._normalizeEvidencePolicyHumanReadable();
+                    }
                 } catch(e) { showToast('Erro ao carregar skill', 'error'); }
             }
 
@@ -1205,6 +1215,22 @@ ${outMap}`;
             if (i >= 0) this.boundSourceIds.splice(i, 1);
             else this.boundSourceIds.push(srcId);
             this.applyEvidencePolicy();
+        },
+
+        // Roda no load() de skill existente. Equivalente a applyEvidencePolicy()
+        // mas guarda o raw_content original e só substitui se HOUVER mudança
+        // — evita marcar o form como dirty quando o bloco já estava no formato
+        // humanizado. Cenário típico: skill antiga gravou `- <uuid>` nu;
+        // após este normalize, vira `- <uuid>   # Nome da Source` e fica
+        // legível pro humano. Próximo save persiste o formato novo.
+        _normalizeEvidencePolicyHumanReadable() {
+            const before = this.form.raw_content || '';
+            this.applyEvidencePolicy();
+            const after = this.form.raw_content || '';
+            if (before === after) return;  // já estava OK, nada mudou
+            // Log discreto pro dev — útil em troubleshooting "por que essa
+            // skill apareceu dirty ao só abrir?". Sem toast pro user (silent).
+            console.debug('[skill_form] Evidence Policy normalizada com nomes humanos');
         },
 
         // Reescreve ## Evidence Policy no raw_content baseado em
