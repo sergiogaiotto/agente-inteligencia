@@ -184,6 +184,22 @@
                 </div>
             </div>
 
+            <!-- Wave Wizard Routing: removido dropdown de provider/modelo. -->
+            <!-- LLM é resolvido pelo backend via task_type=reasoning + Settings → Roteamento LLM. -->
+            <!-- Info read-only mostra qual modelo será usado, com link pra mudar. -->
+            <div class="rounded-lg border border-violet-100 bg-white/60 px-3 py-2 flex items-center justify-between gap-3 flex-wrap text-[11px] text-violet-700">
+                <div class="flex items-center gap-2">
+                    <svg class="w-3.5 h-3.5 text-violet-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+                    <span>
+                        Gerador:
+                        <span x-show="!wizardLLMInfo.provider" class="text-violet-400 italic">carregando...</span>
+                        <span x-show="wizardLLMInfo.provider" class="font-mono font-semibold" x-text="(wizardLLMInfo.model || wizardLLMInfo.provider) + ''"></span>
+                        <span x-show="wizardLLMInfo.task_type" class="text-violet-400">· task <code class="px-1 bg-violet-100 rounded" x-text="wizardLLMInfo.task_type"></code></span>
+                    </span>
+                </div>
+                <a href="/settings#llm-routing" target="_blank" class="text-[10px] text-violet-500 hover:text-violet-700 underline">configurar →</a>
+            </div>
+
             <div class="flex items-center gap-3 flex-wrap">
                 <select x-model="wizardKind" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none">
                     <option value="subagent">Subagente</option>
@@ -191,9 +207,6 @@
                     <option value="orchestrator">Orquestrador</option>
                 </select>
                 <input x-model="wizardDomain" placeholder="Domínio (ex: dev)" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none w-32">
-                <select x-model="wizardProvider" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none">
-                    <option value="openai">OpenAI</option><option value="maritaca">Maritaca AI</option>
-                </select>
                 <button @click="runWizardSkill()" :disabled="wizardLoading || !wizardPrompt.trim()"
                         class="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-violet-600 disabled:opacity-40 transition-all">
                     <svg x-show="wizardLoading" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
@@ -765,7 +778,11 @@ function skillForm(editId) {
         isEdit: !!editId,
         saving: false, tab: 'editor',
         showWizard: false, wizardPrompt: '', wizardLoading: false,
-        wizardKind: 'subagent', wizardDomain: '', wizardProvider: 'openai',
+        wizardKind: 'subagent', wizardDomain: '',
+        // Wave Wizard Routing: removido wizardProvider/wizardModel.
+        // task_type='reasoning' fixo pra esta rota; provider+model vêm
+        // do /api/v1/dashboard/llm-routing (configurado em Settings).
+        wizardLLMInfo: {provider: '', model: '', task_type: 'reasoning'},
         // Vazio = backend infere (smart default). User pode forçar clicando
         // num card; clicar de novo limpa (volta pro auto-inferido).
         wizardExecMode: '',
@@ -1208,6 +1225,9 @@ ${outMap}`;
             await this.loadAvailableSources();
             // Onda Tabular: carrega data_tables (mesma razão — payload leve)
             await this.loadAvailableTables();
+            // Wave Wizard Routing: lê config global pra mostrar qual modelo
+            // o wizard vai usar (task=reasoning). Falha silencioso (UI mostra "padrão").
+            await this.loadWizardLLMInfo();
 
             if (editId) {
                 try {
@@ -1262,6 +1282,29 @@ ${outMap}`;
             const idx = this.wizardApiKeys.indexOf(key);
             if (idx >= 0) this.wizardApiKeys.splice(idx, 1);
             else this.wizardApiKeys.push(key);
+        },
+
+        // Wave Wizard Routing: lê o roteamento atual da plataforma e popula
+        // wizardLLMInfo. Wizard mostra qual modelo será usado pra task=reasoning.
+        // Falha silencioso — UI mostra "padrão" se request quebrar.
+        async loadWizardLLMInfo() {
+            try {
+                const r = await api.get('/api/v1/dashboard/llm-routing');
+                // Resposta: {routing: {tool_calling: "provider/model", reasoning: ..., ...}, defaults: ..., task_types: [...]}
+                const pair = (r.routing && r.routing.reasoning) || (r.defaults && r.defaults.reasoning) || '';
+                if (pair && pair.includes('/')) {
+                    // Formato "provider/model" ou "provider/openai/gpt-oss-120b" — pega o primeiro como provider
+                    const parts = pair.split('/');
+                    this.wizardLLMInfo = {
+                        provider: parts[0] || '',
+                        model: parts.slice(1).join('/') || parts[0] || '',
+                        task_type: 'reasoning',
+                    };
+                }
+            } catch (e) {
+                // Silent — UI mostra "padrão" e backend resolve mesmo assim.
+                console.debug('[wizard] loadWizardLLMInfo falhou:', e.message);
+            }
         },
 
         // Wave Wizard UX: toggles para RAG e Tabelas no wizard.
@@ -1549,12 +1592,14 @@ ${outMap}`;
             // Wave Wizard UX: envia IDs estruturados. Backend resolve nomes
             // humanos via lookup, monta o prompt enriquecido e infere
             // exec_mode se vier vazio (smart default).
+            // Wave Wizard Routing: NÃO envia provider/model — backend usa
+            // task_type=reasoning + roteamento global (Settings).
             try {
                 const r = await api.post('/api/v1/wizard/skill', {
                     description: this.wizardPrompt,
                     kind: this.wizardKind,
                     domain: this.wizardDomain,
-                    provider: this.wizardProvider,
+                    task_type: this.wizardLLMInfo.task_type || 'reasoning',
                     mcp_tool_ids: this.wizardMcpIds,
                     source_ids: this.wizardSourceIds,
                     table_ids: this.wizardTableIds,

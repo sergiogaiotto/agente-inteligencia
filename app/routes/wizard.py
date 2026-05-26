@@ -1,18 +1,122 @@
-"""Rotas do Wizard IA — geração assistida de agentes e skills."""
+"""Rotas do Wizard IA — geração assistida de agentes e skills.
+
+Wave Wizard Routing (PR atual): integra os 3 wizards (agent/skill/refine)
+ao sistema de roteamento por task_type da Onda 7 (`app/llm_routing.py`).
+
+Antes cada wizard recebia `provider` + `model` do frontend (dropdown manual).
+Agora envia `task_type` semântico — backend resolve via `resolve_llm_for_task`
+consultando os pares configurados em /settings → Roteamento LLM. Mesmo
+sistema que agents usam em runtime — consistência total.
+
+Retrocompat: clients antigos que enviam `provider/model` continuam
+funcionando (legacy path quando task_type não vem).
+
+Defaults sensatos por wizard:
+- /skill   → reasoning  (planejar workflow + failure modes + guardrails)
+- /agent   → reasoning  (planejar system_prompt + skills + tools)
+- /refine  → instruct   (refinar texto existente é instruction-following)
+"""
 import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.core.llm_providers import get_provider
+from app.llm_routing import resolve_llm_for_task
 import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/wizard", tags=["wizard"])
 
 
+# Defaults por rota — usado quando frontend não enviar task_type.
+# Os valores batem com TASK_TYPES de app/llm_routing.py.
+_DEFAULT_TASK_TYPE = {
+    "agent": "reasoning",
+    "skill": "reasoning",
+    "refine": "instruct",
+}
+
+
+async def _resolve_wizard_llm(data, route_name: str) -> tuple[str, str, str]:
+    """Resolve (provider, model, task_type) para uma requisição de wizard.
+
+    Estratégia:
+    1. Se data.task_type vier preenchido → resolve via roteamento global.
+    2. Se data.provider vier preenchido E for diferente do default antigo
+       ("openai" ou "azure") → respeita escolha legacy (compatibilidade
+       com clients que ainda mandam dropdown manual).
+    3. Caso nenhum acima → usa default da rota (reasoning/instruct).
+
+    Returns:
+        (provider, model, task_type_effective)
+        task_type pode vir vazio "" se legacy path foi usado.
+
+    Logs todo resolve pra debug ("qual modelo o wizard usou hoje?").
+    """
+    explicit_task = (getattr(data, "task_type", "") or "").strip()
+
+    # Caso 1: task_type explícito — caminho moderno.
+    if explicit_task:
+        provider, model = await resolve_llm_for_task(explicit_task)
+        logger.info(
+            "wizard.llm.resolved_via_task_type",
+            extra={
+                "event": "wizard.llm.resolved",
+                "wizard_route": route_name,
+                "task_type": explicit_task,
+                "provider": provider,
+                "model": model,
+                "source": "task_type",
+            },
+        )
+        return provider, model, explicit_task
+
+    # Caso 2: legacy — client antigo mandou provider/model explícitos.
+    # Heurística pra detectar "default vs intenção real": se provider veio
+    # vazio OU igual ao default ("openai"), trata como "use o padrão" e cai
+    # no roteamento global. Se veio algo específico ("maritaca", "ollama"),
+    # respeita.
+    legacy_provider = (getattr(data, "provider", "") or "").strip().lower()
+    legacy_model = (getattr(data, "model", "") or "").strip()
+    if legacy_provider and legacy_provider not in ("openai", "azure"):
+        logger.info(
+            "wizard.llm.resolved_via_legacy_provider",
+            extra={
+                "event": "wizard.llm.resolved",
+                "wizard_route": route_name,
+                "provider": legacy_provider,
+                "model": legacy_model or "(default)",
+                "source": "legacy_explicit",
+            },
+        )
+        return legacy_provider, legacy_model, ""
+
+    # Caso 3: nada explícito → default da rota.
+    fallback_task = _DEFAULT_TASK_TYPE.get(route_name, "reasoning")
+    provider, model = await resolve_llm_for_task(fallback_task)
+    logger.info(
+        "wizard.llm.resolved_via_default",
+        extra={
+            "event": "wizard.llm.resolved",
+            "wizard_route": route_name,
+            "task_type": fallback_task,
+            "provider": provider,
+            "model": model,
+            "source": "route_default",
+        },
+    )
+    return provider, model, fallback_task
+
+
 class WizardAgentRequest(BaseModel):
     description: str
     domain: Optional[str] = ""
+    # Wave Wizard Routing: task_type vira o jeito moderno de escolher LLM.
+    # Frontend novo manda task_type=reasoning (default da rota /agent);
+    # backend resolve via /settings → Roteamento LLM.
+    task_type: Optional[str] = ""
+    # Legacy (retrocompat). Clients antigos que ainda escolhem dropdown manual.
+    # Quando task_type vier preenchido, estes campos são ignorados.
     provider: str = "openai"
     model: Optional[str] = ""  # vazio → provider usa default da config
 
@@ -32,6 +136,9 @@ class WizardSkillRequest(BaseModel):
     description: str
     kind: str = "subagent"
     domain: Optional[str] = ""
+    # Wave Wizard Routing: task_type=reasoning por default da rota /skill.
+    task_type: Optional[str] = ""
+    # Legacy (retrocompat — quando task_type vier, ignora).
     provider: str = "openai"
     model: Optional[str] = ""
     # Wave Wizard UX: bindings declarados explicitamente em vez de texto livre.
@@ -49,15 +156,24 @@ class WizardRefineRequest(BaseModel):
     current_content: str
     instruction: str
     field: str = "all"
+    # Wave Wizard Routing: task_type=instruct por default da rota /refine
+    # (refinar texto existente é instruction-following, modelo menor basta).
+    task_type: Optional[str] = ""
+    # Legacy (retrocompat).
     provider: str = "openai"
     model: Optional[str] = ""
 
 
 @router.post("/agent")
 async def wizard_agent(data: WizardAgentRequest):
-    """Wizard IA: gera configuração completa de agente a partir de descrição livre."""
+    """Wizard IA: gera configuração completa de agente a partir de descrição livre.
+
+    Wave Wizard Routing: usa task_type=reasoning (default) e resolve provider+model
+    via roteamento global. Frontend novo não precisa mais mandar provider.
+    """
     try:
-        llm = get_provider(data.provider, model=(data.model or None))
+        provider, model, _ = await _resolve_wizard_llm(data, "agent")
+        llm = get_provider(provider, model=(model or None))
         response = await llm.generate([
             {"role": "system", "content": """Você é um arquiteto de agentes de IA. 
 Dado uma descrição do usuário, gere a configuração completa de um agente.
@@ -399,7 +515,9 @@ async def wizard_skill(data: WizardSkillRequest):
         exec_mode = _infer_exec_mode(data)
         system_prompt, user_prompt = _build_wizard_prompt(data, bindings, exec_mode)
 
-        llm = get_provider(data.provider, model=(data.model or None))
+        # Wave Wizard Routing: usa task_type=reasoning (default) e roteamento global.
+        provider, model, resolved_task = await _resolve_wizard_llm(data, "skill")
+        llm = get_provider(provider, model=(model or None))
         response = await llm.generate([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -415,6 +533,10 @@ async def wizard_skill(data: WizardSkillRequest):
                 "rag_count": len(bindings["rag_sources"]),
                 "table_count": len(bindings["data_tables"]),
                 "api_count": len(bindings["api_endpoints"]),
+                # Wave Wizard Routing: mostra qual LLM foi escolhido.
+                "llm_provider": provider,
+                "llm_model": model,
+                "llm_task_type": resolved_task,
             },
         }
     except Exception as e:
@@ -424,9 +546,14 @@ async def wizard_skill(data: WizardSkillRequest):
 
 @router.post("/refine")
 async def wizard_refine(data: WizardRefineRequest):
-    """Wizard IA: refina/melhora um campo ou conteúdo existente."""
+    """Wizard IA: refina/melhora um campo ou conteúdo existente.
+
+    Wave Wizard Routing: usa task_type=instruct (default) — refinamento é
+    instruction-following, modelo menor (gpt-oss-20b por padrão) basta.
+    """
     try:
-        llm = get_provider(data.provider, model=(data.model or None))
+        provider, model, _ = await _resolve_wizard_llm(data, "refine")
+        llm = get_provider(provider, model=(model or None))
         response = await llm.generate([
             {"role": "system", "content": "Você é um especialista em refinamento de configurações de IA. Melhore o conteúdo conforme a instrução do usuário. Responda APENAS com o conteúdo melhorado, sem explicações adicionais."},
             {"role": "user", "content": f"Campo: {data.field}\n\nConteúdo atual:\n{data.current_content}\n\nInstrução de melhoria:\n{data.instruction}"},
