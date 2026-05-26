@@ -97,12 +97,13 @@
 
     <!-- ═══════════ NÍVEL 2: Detalhes ═══════════ -->
 
-    <!-- Knowledge Ops (Qdrant) -->
-    <div class="mt-6 rounded-xl border border-surface-200 bg-white">
+    <!-- Knowledge Ops — vector store legado (Qdrant). Some quando RAG_VECTOR_BACKEND=pgvector. -->
+    <div class="mt-6 rounded-xl border border-surface-200 bg-white"
+         x-show="(details.rag_vector_backend || 'qdrant') === 'qdrant'">
         <div class="flex items-center justify-between border-b border-surface-100 px-4 py-3">
             <div class="flex items-center gap-2">
                 <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"/></svg>
-                <h2 class="text-[13px] font-semibold text-brand-900">Knowledge Ops — Qdrant</h2>
+                <h2 class="text-[13px] font-semibold text-brand-900">Knowledge Ops — Qdrant (vector store)</h2>
             </div>
             <div class="text-[10px] text-surface-400" x-show="details.qdrant?.ok">
                 <span x-text="(details.qdrant?.collections || []).length"></span> coleção(ões)
@@ -302,7 +303,7 @@
                     só não há traces/logs centralizados.
                 </p>
                 <p class="text-[11px] text-violet-700 leading-relaxed">
-                    UIs nativas (Qdrant Dashboard, Grafana) abrem em nova aba e usam <code class="text-[10px] bg-white px-1 rounded">localhost:&lt;porta&gt;</code> —
+                    UIs nativas (Grafana, e Qdrant Dashboard quando backend legado ativo) abrem em nova aba e usam <code class="text-[10px] bg-white px-1 rounded">localhost:&lt;porta&gt;</code> —
                     funcionam quando você está no host onde o docker está rodando.
                 </p>
             </div>

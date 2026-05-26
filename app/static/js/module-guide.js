@@ -214,7 +214,7 @@ window.MODULE_GUIDE = [
     fundamento: `<p>RAG (Retrieval-Augmented Generation) é a camada que <b>busca</b> documentos relevantes para alimentar o LLM com contexto factual.</p>
 <p class="mt-2"><b>Pipeline de busca</b>:</p>
 <ol class="list-decimal pl-4 mt-2 space-y-1.5">
-  <li><b>Retriever híbrido</b> — combina dois mundos: <b>BM25</b> (busca textual clássica via Postgres <code>tsvector</code> + GIN) + <b>vetorial</b> (busca semântica via Qdrant + embeddings).</li>
+  <li><b>Retriever híbrido</b> — combina dois mundos: <b>BM25</b> (busca textual clássica via Postgres <code>tsvector</code> + GIN) + <b>vetorial</b> (busca semântica via vector store ativo — pgvector ou Qdrant — + embeddings).</li>
   <li><b>Reciprocal Rank Fusion (k=60)</b> — funde os dois rankings em um só.</li>
   <li><b>Reranker LLM (opcional)</b> — reordena os top-K por relevância contextual, com justificativa.</li>
 </ol>

@@ -423,19 +423,27 @@ async def _postgres_details() -> dict:
 
 @router.get("/details")
 async def infra_details():
-    """Métricas detalhadas dos serviços de dados — Qdrant collections,
-    Redis INFO e contagens das tabelas Postgres principais.
+    """Métricas detalhadas dos serviços de dados — vector store (Qdrant ou
+    pgvector), Redis INFO e contagens das tabelas Postgres principais.
 
     Diferente de /status (binário ok/error), /details traz contadores e
     configuração que mudam ao longo do uso.
+
+    Inclui `rag_vector_backend` no top-level pra UI decidir se mostra o
+    card de Qdrant (legado) ou agrega no card de Postgres (pgvector).
     """
+    from app.core.config import get_settings as _get_settings
+    backend = (_get_settings().rag_vector_backend or "qdrant").lower()
     qdrant, redis, pg, duck = await asyncio.gather(
         _qdrant_details(),
         _redis_details(),
         _postgres_details(),
         _duckdb_details(),
     )
-    return {"qdrant": qdrant, "redis": redis, "postgres": pg, "duckdb": duck}
+    return {
+        "qdrant": qdrant, "redis": redis, "postgres": pg, "duckdb": duck,
+        "rag_vector_backend": backend,
+    }
 
 
 @router.get("/status")
