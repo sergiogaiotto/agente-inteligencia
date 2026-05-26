@@ -488,11 +488,14 @@ Bases autorizadas e thresholds de evidência (quando aplicável).
 ## Guardrails
 Políticas de conteúdo, PII, jurisdição.
 
-## Budget
-Limites de tokens, tempo e custo.
-
 ## Examples
 Pares entrada/saída para avaliação.
+
+IMPORTANTE: NÃO inclua a seção `## Budget` (limites de tokens, tempo ou custo).
+Restrições de budget devem ser definidas pelo operador depois, conscientemente —
+gerar valores automáticos prejudica o desempenho do agente em runtime sem ganho
+real (LLM não sabe o ROI/budget aceitável do caso de uso). Seção é opcional no
+parser, então omitir é seguro.
 
 Gere o SKILL.md completo em formato markdown. Seja específico e detalhado.{obligatory_block}"""
 
