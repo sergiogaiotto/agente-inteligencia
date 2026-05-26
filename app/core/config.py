@@ -27,12 +27,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # ── Vector DB ──
-    # rag_vector_backend: "qdrant" (default histórico, PR D) ou "pgvector"
-    # (RAG v3, Onda atual). PR E vai trocar default pra pgvector; PR F
-    # remove qdrant. Hoje convivem em paralelo via flag — caller (runtime
-    # e ingest) roteia.
-    rag_vector_backend: str = "qdrant"
-    # Qdrant (será removido no PR F)
+    # rag_vector_backend: "pgvector" (default desde PR E) ou "qdrant"
+    # (legado, será removido no PR F). Caller (runtime + ingest) roteia.
+    # Trocar valor → restart do app. Para migrar dados do antigo backend,
+    # rodar POST /api/v1/evidence/reindex (re-embarca a partir do Postgres).
+    rag_vector_backend: str = "pgvector"
+    # Qdrant (legado, será removido no PR F)
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
     qdrant_collection: str = "agente_evidence"

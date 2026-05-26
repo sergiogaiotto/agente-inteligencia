@@ -336,6 +336,18 @@ class TestCollectionInfo:
 
 
 class TestReindexAll:
+    """Testes do pipeline reindex_all com backend Qdrant explícito.
+
+    PR E mudou default pra pgvector. Estes testes ainda exercitam o caminho
+    qdrant — fixture autouse força a flag pra isolar o backend testado.
+    Testes equivalentes pro pgvector ficam em test_pgvector_store.py.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _force_qdrant_backend(self, monkeypatch):
+        monkeypatch.setenv("RAG_VECTOR_BACKEND", "qdrant")
+        yield
+
     @pytest.mark.asyncio
     async def test_empty_postgres_returns_ok_no_op(self, monkeypatch, fresh_settings):
         """Sem chunks no Postgres: ok=True, nada upsertado."""

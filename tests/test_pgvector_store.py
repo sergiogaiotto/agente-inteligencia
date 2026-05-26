@@ -376,33 +376,46 @@ class TestCollectionInfo:
 
 
 class TestBackendRouter:
-    def test_ingest_resolves_pgvector(self, monkeypatch, fresh_settings):
+    def test_ingest_resolves_pgvector_explicit(self, monkeypatch, fresh_settings):
         monkeypatch.setenv("RAG_VECTOR_BACKEND", "pgvector")
         from app.evidence import ingest
         store = ingest._get_vector_store()
         assert store.__name__.endswith("pgvector_store")
 
-    def test_ingest_resolves_qdrant_default(self, monkeypatch, fresh_settings):
+    def test_ingest_resolves_pgvector_by_default(self, monkeypatch, fresh_settings):
+        """PR E: default mudou de qdrant para pgvector."""
         monkeypatch.delenv("RAG_VECTOR_BACKEND", raising=False)
         from app.evidence import ingest
         store = ingest._get_vector_store()
+        assert store.__name__.endswith("pgvector_store")
+
+    def test_ingest_resolves_qdrant_opt_in(self, monkeypatch, fresh_settings):
+        """Qdrant continua disponível como opt-in explícito (rollback) até PR F."""
+        monkeypatch.setenv("RAG_VECTOR_BACKEND", "qdrant")
+        from app.evidence import ingest
+        store = ingest._get_vector_store()
         assert store.__name__.endswith("qdrant_store")
 
-    def test_ingest_resolves_qdrant_on_unknown_value(self, monkeypatch, fresh_settings):
+    def test_ingest_resolves_pgvector_on_unknown_value(self, monkeypatch, fresh_settings):
+        """Valor desconhecido (typo) cai em pgvector — default seguro da nova era."""
         monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus-faiss-pinecone")
         from app.evidence import ingest
         store = ingest._get_vector_store()
-        # Backend desconhecido cai em qdrant (default seguro, mantém retrocompat)
-        assert store.__name__.endswith("qdrant_store")
+        assert store.__name__.endswith("pgvector_store")
 
-    def test_runtime_resolves_pgvector_search_fn(self, monkeypatch, fresh_settings):
+    def test_runtime_resolves_pgvector_by_default(self, monkeypatch, fresh_settings):
+        monkeypatch.delenv("RAG_VECTOR_BACKEND", raising=False)
+        from app.evidence import runtime
+        fn = runtime._get_vector_search_fn()
+        assert fn.__module__ == "app.evidence.pgvector_store"
+
+    def test_runtime_resolves_pgvector_explicit(self, monkeypatch, fresh_settings):
         monkeypatch.setenv("RAG_VECTOR_BACKEND", "pgvector")
         from app.evidence import runtime
         fn = runtime._get_vector_search_fn()
-        # Função search do módulo pgvector_store
         assert fn.__module__ == "app.evidence.pgvector_store"
 
-    def test_runtime_resolves_qdrant_search_fn(self, monkeypatch, fresh_settings):
+    def test_runtime_resolves_qdrant_opt_in(self, monkeypatch, fresh_settings):
         monkeypatch.setenv("RAG_VECTOR_BACKEND", "qdrant")
         from app.evidence import runtime
         fn = runtime._get_vector_search_fn()
