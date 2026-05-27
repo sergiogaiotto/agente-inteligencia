@@ -388,6 +388,14 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
     """
     # Bloco rico das seções OBRIGATÓRIAS que o LLM precisa incluir, com YAML
     # pronto. LLM costuma respeitar instruções imperativas + exemplo concreto.
+    #
+    # MUDANÇA 2026-05-27 (bug user: "escolhi só RAG e Wizard inventou tools"):
+    # Antes, quando o user NÃO selecionava MCP tools, `## Tool Bindings` ficava
+    # fora deste bloco — mas o esqueleto do system_prompt principal listava a
+    # seção como canônica. LLM completava criativamente com nomes inventados
+    # (`knowledge_search`, `summarize_text`), causando C3_mcp_unmatched no
+    # preflight e poluindo a skill. Agora a seção é SEMPRE incluída
+    # explicitamente: com a lista real OU com declaração de vazio.
     obligatory_sections = []
 
     if bindings["mcp_tools"]:
@@ -397,6 +405,24 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         )
         obligatory_sections.append(
             "## Tool Bindings\n" + bindings_md
+        )
+    else:
+        # Lista explicitamente os recursos efetivamente disponíveis pra o LLM
+        # não se sentir tentado a inventar tools. Se nem RAG, nem tables, nem
+        # APIs, a frase deixa clara essa condição (skill pura de raciocínio).
+        available = []
+        if bindings.get("rag_sources"):
+            available.append("RAG (Evidence Policy)")
+        if bindings.get("data_tables"):
+            available.append("Data Tables (## Data Tables)")
+        if bindings.get("api_endpoints"):
+            available.append("APIs declarativas (## API Bindings)")
+        recursos = ", ".join(available) if available else "apenas raciocínio LLM (sem bindings externos)"
+        obligatory_sections.append(
+            "## Tool Bindings\n"
+            "(Nenhuma ferramenta MCP foi selecionada para esta skill. Esta seção "
+            "DEVE permanecer com a declaração abaixo — NÃO invente nomes de tools.)\n\n"
+            f"_Esta skill não usa ferramentas MCP. Recursos disponíveis: {recursos}._"
         )
 
     if bindings["rag_sources"]:
@@ -438,16 +464,35 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         "## Execution Profile\n" + _build_exec_profile_yaml(exec_mode)
     )
 
+    # Regras anti-hallucination: explícitas pra evitar que o LLM invente
+    # bindings que o user não escolheu. Sem isso, o LLM tende a "completar"
+    # com tools genéricas como knowledge_search/summarize_text mesmo quando
+    # o bloco obrigatório está vazio de MCP.
+    anti_halluc_rules = (
+        "REGRAS ANTI-INVENÇÃO (CRÍTICAS):\n"
+        "1. Use APENAS os bindings declarados no bloco SEÇÕES OBRIGATÓRIAS abaixo.\n"
+        "2. NÃO invente nomes de tools MCP (ex: knowledge_search, summarize_text). "
+        "Se não há MCP no bloco obrigatório, declare explicitamente \"sem tools MCP\".\n"
+        "3. NÃO invente IDs de knowledge_sources em ## Evidence Policy. "
+        "Use APENAS os IDs listados no bloco obrigatório.\n"
+        "4. NÃO invente endpoints de API. Use APENAS os do bloco obrigatório.\n"
+        "5. Workflow PODE descrever passos lógicos sem nomear tools concretas — "
+        "use frases como \"consulta a base RAG\" em vez de citar tools inexistentes."
+    )
+
     obligatory_block = (
         "\n\n=== SEÇÕES OBRIGATÓRIAS A INCLUIR NO SKILL.md ===\n"
         "Você DEVE incluir EXATAMENTE estes blocos no SKILL.md gerado. "
-        "Preserve YAMLs fenced, IDs e comentários:\n\n"
+        "Preserve YAMLs fenced, IDs e comentários. "
+        "NÃO adicione tools/sources/endpoints que NÃO estejam neste bloco:\n\n"
         + "\n\n---\n\n".join(obligatory_sections)
         + "\n=== FIM DAS SEÇÕES OBRIGATÓRIAS ==="
     ) if obligatory_sections else ""
 
     system_prompt = f"""Você é um arquiteto de skills para plataforma multi-agente.
 Gere um SKILL.md completo seguindo a anatomia canônica.
+
+{anti_halluc_rules}
 
 O SKILL.md deve conter EXATAMENTE esta estrutura:
 
@@ -474,7 +519,9 @@ Schema tipado do envelope esperado em formato JSON Schema.
 Sequência de passos do workflow. Para subagentes, linear. Para roteadores, DAG.
 
 ## Tool Bindings
-Lista de tools MCP permitidas com condições de uso.
+Lista de tools MCP **estritamente** das fornecidas no bloco obrigatório.
+Se o bloco obrigatório declara "sem tools MCP", reproduza essa declaração
+sem listar tools inventadas.
 
 ## Output Contract
 Schema tipado da saída esperada.
@@ -484,12 +531,14 @@ Enumeração de falhas e ação prescrita.
 
 ## Evidence Policy
 Bases autorizadas e thresholds de evidência (quando aplicável).
+Use APENAS os IDs de knowledge_sources do bloco obrigatório.
 
 ## Guardrails
 Políticas de conteúdo, PII, jurisdição.
 
 ## Examples
-Pares entrada/saída para avaliação.
+Pares entrada/saída para avaliação. As tools/sources referenciadas nos
+exemplos DEVEM bater com o bloco obrigatório — sem invenções.
 
 IMPORTANTE: NÃO inclua a seção `## Budget` (limites de tokens, tempo ou custo).
 Restrições de budget devem ser definidas pelo operador depois, conscientemente —
