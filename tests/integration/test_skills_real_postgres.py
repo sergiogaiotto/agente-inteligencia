@@ -175,22 +175,42 @@ class TestConstraints:
 
 class TestMigrationIdempotency:
     @pytest.mark.asyncio
-    async def test_alter_table_add_column_if_not_exists_runs_twice(self, db_pool):
-        """As migrations idempotentes de _IDEMPOTENT_MIGRATIONS DEVEM poder
-        rodar repetidamente sem erro (init_db chama em todo startup)."""
+    async def test_full_migrations_sequence_runs_twice(self, db_pool):
+        """A SEQUÊNCIA COMPLETA de _IDEMPOTENT_MIGRATIONS deve poder rodar
+        em ordem 2x sem erro — exatamente o que init_db faz em todo startup.
+
+        Importante testar a sequência inteira (não cada migration isolada)
+        porque alguns padrões só são idempotentes em PAR. Ex catalog_submissions:
+            DROP CONSTRAINT IF EXISTS x;
+            ADD CONSTRAINT x ...;
+        Isoladamente, o ADD na 2ª chamada estoura DuplicateObjectError. Mas
+        em sequência, o DROP do início da iteração 2 limpa antes do ADD —
+        comportamento real do init_db.
+        """
         from app.core.database import _IDEMPOTENT_MIGRATIONS
 
-        # Roda todas duas vezes — se alguma não for idempotente, falha
-        async with db_pool.acquire() as con:
+        async def _run_all(con):
             for migration in _IDEMPOTENT_MIGRATIONS:
-                # Pula extensões que podem falhar por permissão (CREATE EXTENSION
-                # vector requer privilégio + binário instalado).
+                # Pula extensões — CREATE EXTENSION vector requer privilégio
+                # superuser + binário instalado, foge do escopo deste teste.
                 if "CREATE EXTENSION" in migration:
                     continue
-                try:
-                    await con.execute(migration)
-                    await con.execute(migration)  # 2ª vez
-                except Exception as e:
-                    pytest.fail(
-                        f"Migration não-idempotente: {migration[:80]} — {type(e).__name__}: {e}"
-                    )
+                await con.execute(migration)
+
+        async with db_pool.acquire() as con:
+            # 1ª passagem — pode estar virgem ou parcial; tem que terminar limpa
+            try:
+                await _run_all(con)
+            except Exception as e:
+                pytest.fail(
+                    f"1ª execução das migrations falhou: {type(e).__name__}: {e}"
+                )
+            # 2ª passagem — simula restart do app. Tem que ser inofensiva.
+            try:
+                await _run_all(con)
+            except Exception as e:
+                pytest.fail(
+                    f"Sequência de migrations NÃO é idempotente em 2ª execução "
+                    f"(simula restart): {type(e).__name__}: {e}. "
+                    f"Init_db iria quebrar em restart de prod."
+                )
