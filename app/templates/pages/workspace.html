@@ -1284,6 +1284,24 @@ function workspacePage() {
             XLSX.utils.book_append_sheet(wb,wsLog,'Execution Log');
             XLSX.utils.book_append_sheet(wb,wsSummary,'Resumo');
             XLSX.utils.book_append_sheet(wb,wsDiag,'Diagnóstico');
+            // Aba 'Evidências' (Onda Observabilidade RAG, 2026-05-27):
+            // 1 linha por chunk recuperado pelo retriever. Permite triagem
+            // de score baixo — "base não cobre" (snippet irrelevante) vs
+            // "embedder mal calibrado" (snippet bate mas score baixo).
+            const evDetail=trace.evidence_detail||[];
+            if(evDetail.length){
+                const evRows=evDetail.map(e=>({
+                    '#':e.ordinal||0,
+                    'Score':typeof e.score==='number'?e.score.toFixed(4):e.score,
+                    'Fonte':e.source||'—',
+                    'KB ID':e.knowledge_source_id||'',
+                    'Texto (preview 500c)':e.text_preview||'',
+                    'Tamanho original':e.text_full_len||0,
+                }));
+                const wsEv=XLSX.utils.json_to_sheet(evRows);
+                wsEv['!cols']=[{wch:4},{wch:9},{wch:30},{wch:38},{wch:80},{wch:14}];
+                XLSX.utils.book_append_sheet(wb,wsEv,'Evidências');
+            }
             XLSX.writeFile(wb,`execution-log_${agName}_${ts}.xlsx`);
             showToast('XLSX exportado');
         },
