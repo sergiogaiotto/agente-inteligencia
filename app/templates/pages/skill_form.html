@@ -90,6 +90,22 @@
                         </label>
                     </template>
                 </div>
+                <!-- min_relevance: threshold de evidência (## Evidence Policy →
+                     min_relevance no SKILL.md gerado). Só aparece quando há fonte
+                     selecionada — sem RAG, threshold não faz sentido. Empty string
+                     = wizard não emite a chave; engine aplica default 0.3. -->
+                <div x-show="wizardSourceIds.length > 0" class="mt-2 flex items-center gap-2">
+                    <label class="text-[10px] font-medium text-violet-700 whitespace-nowrap" title="Score mínimo médio de evidência pro verifier aceitar a resposta. Default do engine: 0.30">
+                        Threshold mínimo de evidência
+                    </label>
+                    <input type="number" x-model="wizardMinRelevance" min="0" max="1" step="0.05" placeholder="0.30"
+                           class="w-20 rounded-md border border-violet-200 bg-white px-2 py-1 text-[11px] text-violet-900 outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-200">
+                    <span class="text-[10px] text-surface-400">
+                        opcional ·
+                        <span x-show="!wizardMinRelevance">vazio = default 0.30 do engine</span>
+                        <span x-show="wizardMinRelevance" x-text="'gera min_relevance: ' + wizardMinRelevance + ' no ## Evidence Policy'"></span>
+                    </span>
+                </div>
             </div>
 
             <!-- Wave Wizard UX: Tabelas (data_tables DuckDB) — seleção simples. -->
@@ -791,6 +807,10 @@ function skillForm(editId) {
         // Wave Wizard UX: bindings RAG + Tabelas no wizard.
         wizardSourceIds: [],
         wizardTableIds: [],
+        // Threshold de evidência (## Evidence Policy → min_relevance). String
+        // pra permitir input vazio = backend não emite a chave; engine usa
+        // default 0.3. Convertido pra float no submit (ou null se vazio).
+        wizardMinRelevance: '',
         parseResult: null,
         mcpTools: [],
         apiConnectors: [],  // lista de connectors registrados
@@ -1594,6 +1614,12 @@ ${outMap}`;
             // exec_mode se vier vazio (smart default).
             // Wave Wizard Routing: NÃO envia provider/model — backend usa
             // task_type=reasoning + roteamento global (Settings).
+            // Threshold: input em string ("0.15"), backend espera float ou null.
+            // Empty string → null → backend não emite min_relevance no YAML.
+            const mrRaw = (this.wizardMinRelevance || '').trim();
+            const mrParsed = mrRaw === '' ? null : parseFloat(mrRaw);
+            const minRelevance = (mrParsed !== null && !Number.isNaN(mrParsed) && mrParsed >= 0 && mrParsed <= 1)
+                ? mrParsed : null;
             try {
                 const r = await api.post('/api/v1/wizard/skill', {
                     description: this.wizardPrompt,
@@ -1605,6 +1631,7 @@ ${outMap}`;
                     table_ids: this.wizardTableIds,
                     api_keys: this.wizardApiKeys,
                     exec_mode: this.wizardExecMode,  // "" → backend infere
+                    min_relevance: minRelevance,
                 });
                 this.form.raw_content = r.skill_md;
                 // Sync dos checkboxes do editor (Fontes RAG) com o que o
