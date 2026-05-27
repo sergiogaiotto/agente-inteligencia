@@ -176,8 +176,13 @@ class TestBuildWizardPrompt:
         assert "# Manuais (internal)" in system  # comentário humano
 
     def test_rag_without_min_relevance_omits_threshold(self):
-        """Sem min_relevance no payload, YAML NÃO inclui a chave — engine
-        aplica default 0.3. Compat com skills antigas geradas antes da feature."""
+        """Sem min_relevance no payload, o YAML do bloco obrigatório NÃO inclui
+        a chave — engine aplica default 0.3.
+
+        Verifica que a CHAVE `min_relevance: <valor>` NÃO está presente no
+        bloco obrigatório. A palavra `min_relevance` pode aparecer na regra
+        anti-hallucination citando o conceito — isso é OK e esperado.
+        """
         req = WizardSkillRequest(description="x", source_ids=["s1"])
         bindings = {
             "mcp_tools": [],
@@ -185,8 +190,11 @@ class TestBuildWizardPrompt:
             "data_tables": [], "api_endpoints": [],
         }
         system, _ = _build_wizard_prompt(req, bindings, "standard")
-        # YAML do Evidence Policy não cita min_relevance quando user não informou
-        assert "min_relevance" not in system
+        # Bloco obrigatório do Evidence Policy não emite a linha de YAML
+        # (ex: 'min_relevance: 0.15'). Regex bate apenas se houver ': ' seguido
+        # de número — não bate em prosa "use `min_relevance` configurado".
+        import re as _re
+        assert not _re.search(r"min_relevance:\s*\d", system)
 
     def test_rag_with_min_relevance_emits_threshold(self):
         """Com min_relevance setado, YAML inclui a linha — engine vai aplicar."""
@@ -212,6 +220,56 @@ class TestBuildWizardPrompt:
         """0.0 e 1.0 são valores válidos — Pydantic ge=0, le=1 (inclusive)."""
         WizardSkillRequest(description="x", min_relevance=0.0)
         WizardSkillRequest(description="x", min_relevance=1.0)
+
+    def test_anti_halluc_rules_forbid_numeric_threshold_in_prose(self):
+        """Regra 6 (2026-05-27): LLM não deve inventar valores como '0.05' em
+        Workflow/Failure Modes quando user não informou.
+
+        Bug observado: skill gerada antes desta regra tinha
+        '... ≥ `min_relevance` (0.05)' no Workflow e Failure Modes em texto
+        livre, mas o YAML do Evidence Policy não tinha a chave. Engine usava
+        default 0.30 enquanto a 'documentação' da skill dizia 0.05.
+        """
+        req = WizardSkillRequest(description="x", source_ids=["s1"])  # sem min_relevance
+        bindings = {
+            "mcp_tools": [],
+            "rag_sources": [{"id": "s1", "name": "Manuais", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # System prompt deve EXPLICITAMENTE proibir inventar valores numéricos
+        assert "NÃO invente valores numéricos" in system
+        # Deve dar exemplos concretos de como o LLM pode citar sem número
+        assert "score abaixo do `min_relevance`" in system or "threshold definido em Evidence Policy" in system
+        # Deve instruir explicitamente: sem bloco obrigatório → não cite número
+        assert "NÃO cite número nenhum" in system
+
+    def test_anti_halluc_rule_7_reinforces_exact_value_when_provided(self):
+        """Quando user FORNECE min_relevance, system prompt instrui LLM a usar
+        EXATAMENTE esse número se mencionar em prosa — evita drift entre o
+        valor declarado no YAML e o citado no Workflow."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"], min_relevance=0.15)
+        bindings = {
+            "mcp_tools": [],
+            "rag_sources": [{"id": "s1", "name": "Manuais", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # Regra 7 ativada — cita o valor exato
+        assert "0.15" in system
+        assert "EXATAMENTE esse número" in system
+
+    def test_no_threshold_rule_7_when_no_min_relevance(self):
+        """Sem min_relevance, regra 7 não aparece (não há valor pra reforçar)."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        bindings = {
+            "mcp_tools": [],
+            "rag_sources": [{"id": "s1", "name": "Manuais", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # Texto da regra 7 só aparece quando há valor a reforçar
+        assert "EXATAMENTE esse número" not in system
 
     def test_includes_data_tables_with_urn(self):
         req = WizardSkillRequest(description="x", table_ids=["tbl-1"])

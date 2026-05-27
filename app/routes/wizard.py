@@ -479,6 +479,27 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
     # bindings que o user não escolheu. Sem isso, o LLM tende a "completar"
     # com tools genéricas como knowledge_search/summarize_text mesmo quando
     # o bloco obrigatório está vazio de MCP.
+    #
+    # Regra 6 (2026-05-27): valores numéricos de configuração (min_relevance,
+    # max_age_days, etc) NÃO podem ser inventados em prosa. Antes desta regra,
+    # o LLM citava "min_relevance (0.05)" em Workflow e Failure Modes mesmo
+    # quando o user não tinha informado nenhum valor — gerava ilusão de que
+    # a skill aplicava 0.05 em runtime, mas como o YAML estava sem a chave,
+    # o engine usava default 0.30. Operador editava agente sem entender por
+    # quê o threshold mostrado no painel não batia com a "documentação" da
+    # skill.
+    #
+    # Bloco threshold_rule fica VAZIO quando o user não informou — a regra 6
+    # base já cobre. Quando informou, reforça pra LLM usar o número exato em
+    # eventuais menções pra preservar coerência interna do markdown.
+    threshold_rule = ""
+    if data.min_relevance is not None:
+        threshold_rule = (
+            f"\n7. O valor de min_relevance fornecido pelo operador é "
+            f"`{data.min_relevance}`. Se citar esse threshold em prosa "
+            "(Workflow/Failure Modes/etc), use EXATAMENTE esse número — "
+            "nunca invente um valor diferente."
+        )
     anti_halluc_rules = (
         "REGRAS ANTI-INVENÇÃO (CRÍTICAS):\n"
         "1. Use APENAS os bindings declarados no bloco SEÇÕES OBRIGATÓRIAS abaixo.\n"
@@ -488,7 +509,17 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         "Use APENAS os IDs listados no bloco obrigatório.\n"
         "4. NÃO invente endpoints de API. Use APENAS os do bloco obrigatório.\n"
         "5. Workflow PODE descrever passos lógicos sem nomear tools concretas — "
-        "use frases como \"consulta a base RAG\" em vez de citar tools inexistentes."
+        "use frases como \"consulta a base RAG\" em vez de citar tools inexistentes.\n"
+        "6. NÃO invente valores numéricos de configuração (min_relevance, "
+        "max_age_days, etc) em prosa. O valor concreto de threshold de evidência "
+        "vive APENAS na chave `min_relevance` do YAML em ## Evidence Policy — "
+        "e SOMENTE quando estiver no bloco SEÇÕES OBRIGATÓRIAS. Em Workflow e "
+        "Failure Modes, cite o conceito sem número: use frases como "
+        "\"score abaixo do `min_relevance` configurado\" ou "
+        "\"threshold definido em Evidence Policy\". Se o bloco obrigatório NÃO "
+        "trouxer min_relevance, NÃO cite número nenhum (o engine aplicará o "
+        "default da plataforma)."
+        + threshold_rule
     )
 
     obligatory_block = (
