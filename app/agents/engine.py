@@ -1228,6 +1228,20 @@ async def execute_interaction(
     # None quando nenhum verifier roda (pipeline, fast skip, fallback heurístico).
     verification = None
 
+    # Threshold de evidência: lê min_relevance do ## Evidence Policy da skill
+    # (parser já extrai pra _evidence_policy_parsed.min_relevance). Quando
+    # ausente, default 0.3 — comportamento histórico. Faixa válida [0..1]
+    # garantida pelo parser. Single source of truth pros 3 caminhos
+    # heurísticos abaixo (production_async, v2_fallback, standard).
+    _DEFAULT_MIN_RELEVANCE = 0.3
+    _ev_policy_for_threshold = (skill_data.get("_evidence_policy_parsed") or {}) if skill_data else {}
+    _raw_mr = _ev_policy_for_threshold.get("min_relevance")
+    _min_relevance = float(_raw_mr) if isinstance(_raw_mr, (int, float)) else _DEFAULT_MIN_RELEVANCE
+    _min_relevance_source = "skill" if isinstance(_raw_mr, (int, float)) else "default"
+    # Exposto no result.trace pra audit/UI mostrar "Threshold: 0.15 (skill)"
+    ctx.metadata["evidence_min_relevance"] = _min_relevance
+    ctx.metadata["evidence_min_relevance_source"] = _min_relevance_source
+
     if pipeline_context or skip_evidence:
         await fsm.run_verify_evidence({"ok": True, "confidence": 1.0})
     elif _pg_settings.verifier_v2_enabled and _pg_settings.verifier_production_async:
@@ -1250,7 +1264,7 @@ async def execute_interaction(
                 max_concurrent=_pg_settings.verifier_max_concurrent_jobs,
             )
         avg_score = (sum(e.relevance_score for e in evidences) / len(evidences)) if evidences else 0.5
-        await fsm.run_verify_evidence({"ok": avg_score >= 0.3, "confidence": avg_score})
+        await fsm.run_verify_evidence({"ok": avg_score >= _min_relevance, "confidence": avg_score})
     elif _pg_settings.verifier_v2_enabled:
         # ─── Verifier v2 (§14.2 — judge multi-dim + ContractValidator) ──
         # Roda em todos os profiles exceto fast-com-pipeline. Com ou sem evidências.
@@ -1282,7 +1296,7 @@ async def execute_interaction(
             logger.warning(f"Verifier v2 falhou ({type(_e).__name__}: {_e}); fallback para heurística")
             verification = None
             avg_score = (sum(e.relevance_score for e in evidences) / len(evidences)) if evidences else 0.5
-            await fsm.run_verify_evidence({"ok": avg_score >= 0.3, "confidence": avg_score})
+            await fsm.run_verify_evidence({"ok": avg_score >= _min_relevance, "confidence": avg_score})
     elif exec_profile == "rigorous" and evidences:
         # Legacy: rigorous + evidences → EvidenceChecker monolítico (Onda 0)
         verification = await evidence_checker.verify(draft, evidences, skill_data.get("guardrails", ""))
@@ -1296,7 +1310,7 @@ async def execute_interaction(
         # Standard: verificação heurística (sem chamada LLM)
         avg_score = sum(e.relevance_score for e in evidences) / len(evidences)
         await fsm.run_verify_evidence({
-            "ok": avg_score >= 0.3,
+            "ok": avg_score >= _min_relevance,
             "confidence": avg_score,
         })
     else:
@@ -1433,10 +1447,25 @@ async def _build_result(
     elif final == "Escalate":
         diagnostics.append({"level": "danger", "text": "Escalado para supervisão humana — risco alto detectado"})
 
+    # Threshold efetivo aplicado ao verifier — vem do ctx.metadata setado
+    # antes da fase Verify. Diagnóstico cita o threshold pra user entender
+    # POR QUE caiu em Refuse (e poder ajustar min_relevance na skill).
+    _diag_min_relevance = float(ctx.metadata.get("evidence_min_relevance") or 0.3)
+    _diag_threshold_source = ctx.metadata.get("evidence_min_relevance_source") or "default"
+    _diag_threshold_label = f"{_diag_min_relevance:.2f} ({_diag_threshold_source})"
+
     if evidence_count == 0:
         diagnostics.append({"level": "info", "text": "Nenhuma evidência encontrada. Registre bases de conhecimento em Evidência para habilitar RAG."})
-    elif ctx.evidence_score < 0.3:
-        diagnostics.append({"level": "warning", "text": f"Score de evidência baixo ({ctx.evidence_score:.2f}). As bases de conhecimento podem não cobrir este tema."})
+    elif ctx.evidence_score < _diag_min_relevance:
+        diagnostics.append({
+            "level": "warning",
+            "text": (
+                f"Score de evidência baixo ({ctx.evidence_score:.2f}) — abaixo do "
+                f"threshold {_diag_threshold_label}. Ajuste `min_relevance` em "
+                f"## Evidence Policy da skill se quiser aceitar evidência mais fraca, "
+                f"ou cure a base pra cobrir o tema."
+            ),
+        })
     elif ctx.evidence_score >= 0.7:
         diagnostics.append({"level": "success", "text": f"Evidência forte (score {ctx.evidence_score:.2f}). Boa cobertura pelas bases autorizadas."})
 
@@ -1510,6 +1539,8 @@ async def _build_result(
         transitions=ctx.transition_log, evidence_count=evidence_count,
         evidence_sources=evidence_sources, evidence_score=ctx.evidence_score,
         evidence_detail=evidence_detail,
+        evidence_min_relevance=_diag_min_relevance,
+        evidence_min_relevance_source=_diag_threshold_source,
         duration=duration, final_state=final,
     )
 
@@ -1533,6 +1564,10 @@ async def _build_result(
             # exportar pro XLSX, viabilizando triagem de "base não cobre" vs
             # "embedder mal calibrado".
             "evidence_detail": evidence_detail,
+            # Threshold efetivo aplicado pelo verifier heurístico. `source`
+            # diz se veio do ## Evidence Policy da skill ou default 0.3 do engine.
+            "evidence_min_relevance": _diag_min_relevance,
+            "evidence_min_relevance_source": _diag_threshold_source,
             "diagnostics": diagnostics,
             "journey": ctx.journey or "—",
             "channel": ctx.channel,
@@ -1571,6 +1606,8 @@ def _build_execution_log(
     evidence_count: int, evidence_sources: list,
     evidence_score: float, duration: float, final_state: str,
     evidence_detail: list | None = None,
+    evidence_min_relevance: float = 0.3,
+    evidence_min_relevance_source: str = "default",
 ) -> list:
     """Constrói log de execução estruturado.
 
@@ -1579,6 +1616,10 @@ def _build_execution_log(
     Quando presente, cada chunk vira uma linha no log — permite ao operador
     ver POR QUE o score agregado ficou baixo (base não cobre o tema vs.
     embedder mal calibrado) sem precisar olhar logs estruturados crus.
+
+    `evidence_min_relevance` + `_source`: threshold efetivo aplicado pelo
+    verifier heurístico. Quando vem da skill (`source="skill"`), mostra
+    no log que o valor é declarativo e auditável.
     """
     log = []
 
@@ -1654,16 +1695,28 @@ def _build_execution_log(
              t.get("condition", ""), "success" if t.get("to") in ("Recommend","LogAndClose") else "info")
 
     if evidence_count > 0:
+        # Header agregado: agora cita o threshold efetivo + se foi declarado
+        # na skill (## Evidence Policy → min_relevance) ou é default do engine.
+        # Score abaixo do threshold = FSM cai em Refuse — o user precisa ver o
+        # número exato pra entender e poder ajustar.
+        _aggregated_level = "warning" if evidence_score < evidence_min_relevance else (
+            "success" if evidence_score >= 0.7 else "info"
+        )
         _add("evidence", "🔍", f"{evidence_count} evidência(s) encontrada(s)",
-             f"Score: {evidence_score:.2f} · Fontes: {', '.join(evidence_sources[:5])}")
+             f"Score: {evidence_score:.2f} · Threshold: {evidence_min_relevance:.2f} "
+             f"({evidence_min_relevance_source}) · Fontes: {', '.join(evidence_sources[:5])}",
+             _aggregated_level)
         # Detalhe por chunk: ordenado por score desc, texto truncado a 300
         # chars no log (preview a 500 fica em evidence_detail no trace pra
         # quem precisar do conteúdo cheio via API).
         for ev in sorted(evidence_detail or [], key=lambda x: -x.get("score", 0)):
             score = ev.get("score", 0)
             # Score < threshold marca como warning pro user notar visualmente
-            # qual chunk está puxando o agregado pra baixo.
-            ev_level = "warning" if score < 0.3 else ("success" if score >= 0.7 else "info")
+            # qual chunk está puxando o agregado pra baixo. Threshold real
+            # (não mais hardcoded 0.3) — espelha a regra do verifier.
+            ev_level = "warning" if score < evidence_min_relevance else (
+                "success" if score >= 0.7 else "info"
+            )
             preview = (ev.get("text_preview") or "").replace("\n", " ")[:300]
             source = ev.get("source") or "?"
             _add(
