@@ -257,3 +257,109 @@ class TestRequestContextMiddleware:
         # Pelo menos 1 log com event=http.exception
         events = [getattr(rec, "event", None) for rec in caplog.records]
         assert "http.exception" in events
+
+
+# ─── request_received: visibilidade default + body/query logging ───
+# Verifica que GET/POST/PUT/PATCH chegando geram log INFO com payload
+# redactado. Antes era DEBUG (invisível em LOG_LEVEL=INFO default).
+
+
+class TestRequestReceivedLogging:
+    def _make_app(self):
+        app = FastAPI()
+        install_request_context_middleware(app)
+
+        @app.get("/items")
+        def list_items(q: str = "", token: str = ""):
+            return {"q": q, "token_seen": bool(token)}
+
+        @app.post("/items")
+        def create_item(payload: dict):
+            return {"created": True}
+
+        @app.post("/upload")
+        async def upload(): return {"ok": True}
+
+        return app
+
+    def test_get_logs_query_params_with_pii_redacted(self, caplog):
+        client = TestClient(self._make_app())
+        with caplog.at_level(logging.INFO, logger="app.api"):
+            r = client.get("/items?q=foo&token=supersecret123")
+        assert r.status_code == 200
+        # Acha o request_received
+        received = [r for r in caplog.records if getattr(r, "event", None) == "http.request"]
+        assert received, "request_received não foi logado em INFO"
+        qp = received[0].query_params
+        assert qp["q"] == "foo"
+        assert qp["token"] == "***REDACTED***"
+
+    def test_post_logs_body_preview_with_pii_redacted(self, caplog):
+        client = TestClient(self._make_app())
+        with caplog.at_level(logging.INFO, logger="app.api"):
+            r = client.post("/items", json={"name": "Foo", "password": "hunter2"})
+        assert r.status_code == 200
+        received = [r for r in caplog.records if getattr(r, "event", None) == "http.request"]
+        assert received
+        body_preview = getattr(received[0], "body_preview", "")
+        assert "Foo" in body_preview
+        assert "hunter2" not in body_preview, "Senha vazou no log!"
+        assert "REDACTED" in body_preview
+
+    def test_post_body_still_readable_by_handler(self):
+        """Smoke crítico: ler body no middleware NÃO pode quebrar o handler
+        downstream — o body precisa estar cacheado pro endpoint consumir."""
+        client = TestClient(self._make_app())
+        r = client.post("/items", json={"name": "Bar"})
+        assert r.status_code == 200
+        assert r.json() == {"created": True}
+
+    def test_get_without_query_omits_field(self, caplog):
+        client = TestClient(self._make_app())
+        with caplog.at_level(logging.INFO, logger="app.api"):
+            client.get("/items")
+        received = [r for r in caplog.records if getattr(r, "event", None) == "http.request"]
+        assert received
+        # GET sem query → não tem query_params no extra (evita ruído)
+        assert not hasattr(received[0], "query_params") or not received[0].query_params
+
+    def test_health_path_still_silent(self, caplog):
+        """is_noisy preservado — /api/health não polui mesmo com INFO."""
+        app = FastAPI()
+        install_request_context_middleware(app)
+        @app.get("/api/health")
+        def h(): return {"status": "ok"}
+        client = TestClient(app)
+        with caplog.at_level(logging.INFO, logger="app.api"):
+            client.get("/api/health")
+        received = [r for r in caplog.records if getattr(r, "event", None) == "http.request"]
+        assert not received, "/api/health deveria continuar silencioso"
+
+
+# ─── Retenção uniforme 7d (decisão operacional 2026-05-27) ────────
+# Trava o contrato pra ambos os arquivos. Se mudar um sem o outro, UI mostra
+# valor diferente do real (TimedRotatingFileHandler.backupCount).
+
+
+class TestLogRetentionPolicy:
+    def test_all_log_files_retention_7_days(self):
+        from app.core.logging_setup import _LOG_FILES
+        for name, cfg in _LOG_FILES.items():
+            assert cfg["retention_days"] == 7, (
+                f"_LOG_FILES['{name}'].retention_days = {cfg['retention_days']}; "
+                "esperado 7d (decisão 2026-05-27)"
+            )
+
+    def test_logs_admin_meta_matches_setup(self):
+        """Os dois dicts (logging_setup + logs_admin) devem ter a MESMA
+        retenção por arquivo — UI lê de logs_admin, handler real lê de
+        logging_setup. Drift = bug silencioso."""
+        from app.core.logging_setup import _LOG_FILES
+        from app.routes.logs_admin import _LOG_FILES_META
+        for name in _LOG_FILES:
+            assert name in _LOG_FILES_META, f"'{name}' falta em _LOG_FILES_META"
+            assert _LOG_FILES[name]["retention_days"] == _LOG_FILES_META[name]["retention_days"], (
+                f"retention_days divergente para '{name}': "
+                f"setup={_LOG_FILES[name]['retention_days']}, "
+                f"meta={_LOG_FILES_META[name]['retention_days']}"
+            )

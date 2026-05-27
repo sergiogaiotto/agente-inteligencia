@@ -18,6 +18,7 @@ Convenção dos IDs:
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import secrets
@@ -28,6 +29,7 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.logging_setup import (
+    _redact_dict,
     request_id_var,
     trace_id_var,
     user_id_var,
@@ -36,6 +38,72 @@ from app.core.logging_setup import (
 _logger = logging.getLogger("app.api")
 
 _REQ_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
+
+# Bodies maiores que isto não são lidos (defesa contra uploads e streams).
+_BODY_READ_CAP_BYTES = 8 * 1024  # 8KB lido do request
+_BODY_PREVIEW_BYTES = 2 * 1024   # 2KB no log final
+
+# Métodos cujo body costuma valer a pena logar pra troubleshooting.
+_BODY_LOG_METHODS = frozenset({"POST", "PUT", "PATCH"})
+
+# Content-Types cujo body é razoável serializar em log (sem binários).
+_BODY_LOG_CONTENT_TYPES = ("application/json", "application/x-www-form-urlencoded")
+
+
+async def _capture_body_preview(request: Request) -> str:
+    """Lê body com cap e devolve preview redactado pra log.
+
+    Retorna `""` em qualquer situação que torne o log inviável:
+    - body vazio
+    - Content-Type não logável (multipart, octet-stream, vídeo, etc.)
+    - Content-Length declarado > _BODY_READ_CAP_BYTES (não desperdiça I/O)
+    - JSON malformado (ainda devolve texto truncado, sem tentar redactar)
+
+    O `request.body()` cacheia em `request._body` — o handler downstream
+    consegue ler de novo sem perder o stream (Starlette/FastAPI lidam com isso
+    pra rotas regulares; não use em streaming endpoints).
+    """
+    ctype = (request.headers.get("content-type") or "").lower().split(";", 1)[0].strip()
+    if ctype and not any(ctype == t for t in _BODY_LOG_CONTENT_TYPES):
+        return ""
+
+    # Evita ler bodies enormes (uploads). Content-Length nem sempre vem;
+    # quando vem, respeita.
+    clen = request.headers.get("content-length")
+    if clen and clen.isdigit() and int(clen) > _BODY_READ_CAP_BYTES:
+        return f"<body omitido: {clen} bytes > cap {_BODY_READ_CAP_BYTES}>"
+
+    try:
+        raw = await request.body()
+    except Exception:
+        return ""
+
+    if not raw:
+        return ""
+
+    # Truncate hard antes de parsear (defensivo contra body grande sem
+    # content-length).
+    truncated = len(raw) > _BODY_READ_CAP_BYTES
+    raw = raw[:_BODY_READ_CAP_BYTES]
+
+    if ctype == "application/json":
+        try:
+            parsed = json.loads(raw.decode("utf-8", errors="replace"))
+            if isinstance(parsed, dict):
+                parsed = _redact_dict(parsed)
+            text = json.dumps(parsed, ensure_ascii=False)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            text = raw.decode("utf-8", errors="replace")
+    else:
+        # x-www-form-urlencoded — não tem PII estruturada que dê pra parsear
+        # de forma segura aqui; devolve string com nota.
+        text = raw.decode("utf-8", errors="replace")
+
+    if len(text) > _BODY_PREVIEW_BYTES:
+        text = text[:_BODY_PREVIEW_BYTES] + f"…<truncado em {_BODY_PREVIEW_BYTES} bytes>"
+    if truncated:
+        text += "  <body cortado no cap de leitura>"
+    return text
 
 
 def _generate_request_id() -> str:
@@ -92,15 +160,28 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         status_code = 500
         try:
             if not is_noisy:
-                _logger.debug(
-                    "request_received",
-                    extra={
-                        "event": "http.request",
-                        "method": method,
-                        "path": path,
-                        "client_trace_id": tid,
-                    },
-                )
+                # request_received agora é INFO (era DEBUG) — visibilidade default
+                # da chegada de cada GET/POST sem precisar baixar LOG_LEVEL.
+                # Inclui query_params em verbos read-only e body_preview em POST/
+                # PUT/PATCH, ambos redactados via _redact_dict pra PII conhecida.
+                extras: dict = {
+                    "event": "http.request",
+                    "method": method,
+                    "path": path,
+                    "client_trace_id": tid,
+                }
+                # Query params: dict redactado (chaves sensíveis viram REDACTED).
+                # `dict(request.query_params)` aplaina multi-values, mas como log
+                # não precisa de fidelidade, basta a leitura humana.
+                qp = dict(request.query_params)
+                if qp:
+                    extras["query_params"] = _redact_dict(qp)
+                # Body preview pra mutating methods (POST/PUT/PATCH).
+                if method in _BODY_LOG_METHODS:
+                    preview = await _capture_body_preview(request)
+                    if preview:
+                        extras["body_preview"] = preview
+                _logger.info("request_received", extra=extras)
             response = await call_next(request)
             status_code = response.status_code
             # Echo request_id no response pro cliente poder reportar

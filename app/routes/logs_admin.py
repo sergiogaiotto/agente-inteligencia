@@ -44,11 +44,14 @@ router = APIRouter(prefix="/api/v1/observability/logs", tags=["observability"])
 # (espelhado de logging_setup._LOG_FILES — fonte única de verdade seria
 # importar, mas aqui ficamos com cópia explícita pra desacoplar UI).
 _LOG_FILES_META = {
-    "app":     {"retention_days": 14,  "description": "Geral da aplicação"},
-    "tabular": {"retention_days": 30,  "description": "Onda Tabular (analyze/promote/append/query)"},
-    "api":     {"retention_days": 14,  "description": "Request/response HTTP"},
-    "audit":   {"retention_days": 90,  "description": "Writes em DB (compliance)"},
-    "errors":  {"retention_days": 30,  "description": "Apenas ERROR+ (escalation)"},
+    # Retenção uniforme 7d alinhada a logging_setup._LOG_FILES (2026-05-27).
+    # Se mudar lá, mudar aqui também — a UI lê esta cópia. Idealmente seria
+    # 1 fonte de verdade compartilhada, mas evitamos import circular.
+    "app":     {"retention_days": 7,  "description": "Geral da aplicação"},
+    "tabular": {"retention_days": 7,  "description": "Onda Tabular (analyze/promote/append/query)"},
+    "api":     {"retention_days": 7,  "description": "Request/response HTTP"},
+    "audit":   {"retention_days": 7,  "description": "Writes em DB (compliance — tabela `audit_log` é source of truth)"},
+    "errors":  {"retention_days": 7,  "description": "Apenas ERROR+ (escalation)"},
 }
 
 # Limites defensivos para tail
