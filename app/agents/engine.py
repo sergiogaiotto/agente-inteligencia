@@ -1386,6 +1386,22 @@ async def _build_result(
     final = ctx.current_state.value
     evidence_count = len(ctx.evidences) if ctx.evidences else 0
     evidence_sources = list({e.get("source_name", e.get("snippet_text", "")[:30]) for e in ctx.evidences}) if ctx.evidences else []
+    # Detalhe por chunk pra debug — user precisa ver o conteúdo recuperado
+    # quando o score agrega fica baixo e a FSM cai em Refuse, pra distinguir
+    # "base não cobre o tema" de "embedder mal calibrado". Limita a 500 chars
+    # por snippet pra evitar inflar o trace.
+    evidence_detail = [
+        {
+            "ordinal": i + 1,
+            "score": round(float(e.get("relevance_score") or 0), 4),
+            "source": e.get("source_name") or "",
+            "knowledge_source_id": e.get("knowledge_source_id") or "",
+            "snippet_id": e.get("snippet_id") or "",
+            "text_preview": (e.get("snippet_text") or "")[:500],
+            "text_full_len": len(e.get("snippet_text") or ""),
+        }
+        for i, e in enumerate(ctx.evidences or [])
+    ]
 
     # Métricas de invocações reais — querya tool_calls e binding_executions
     # filtradas por interaction_id. Best-effort: erro de DB devolve listas vazias
@@ -1493,6 +1509,7 @@ async def _build_result(
         mcp_tools_detail=mcp_tools_detail or [],
         transitions=ctx.transition_log, evidence_count=evidence_count,
         evidence_sources=evidence_sources, evidence_score=ctx.evidence_score,
+        evidence_detail=evidence_detail,
         duration=duration, final_state=final,
     )
 
@@ -1510,6 +1527,12 @@ async def _build_result(
             "total_steps": total_steps,
             "evidence_count": evidence_count,
             "evidence_sources": evidence_sources,
+            # Onda Observabilidade RAG (2026-05-27): texto + score por chunk
+            # retornado pelo retriever, ordenado pela ordem original. Permite
+            # UI mostrar aba "Evidências" no painel de rastreabilidade e
+            # exportar pro XLSX, viabilizando triagem de "base não cobre" vs
+            # "embedder mal calibrado".
+            "evidence_detail": evidence_detail,
             "diagnostics": diagnostics,
             "journey": ctx.journey or "—",
             "channel": ctx.channel,
@@ -1547,8 +1570,16 @@ def _build_execution_log(
     mcp_tools_detail: list, transitions: list,
     evidence_count: int, evidence_sources: list,
     evidence_score: float, duration: float, final_state: str,
+    evidence_detail: list | None = None,
 ) -> list:
-    """Constrói log de execução estruturado."""
+    """Constrói log de execução estruturado.
+
+    `evidence_detail` (Onda Observabilidade RAG, 2026-05-27): lista de dicts
+    com `text_preview`/`score`/`source` por chunk recuperado pelo retriever.
+    Quando presente, cada chunk vira uma linha no log — permite ao operador
+    ver POR QUE o score agregado ficou baixo (base não cobre o tema vs.
+    embedder mal calibrado) sem precisar olhar logs estruturados crus.
+    """
     log = []
 
     def _add(category, icon, title, detail="", level="info"):
@@ -1625,6 +1656,22 @@ def _build_execution_log(
     if evidence_count > 0:
         _add("evidence", "🔍", f"{evidence_count} evidência(s) encontrada(s)",
              f"Score: {evidence_score:.2f} · Fontes: {', '.join(evidence_sources[:5])}")
+        # Detalhe por chunk: ordenado por score desc, texto truncado a 300
+        # chars no log (preview a 500 fica em evidence_detail no trace pra
+        # quem precisar do conteúdo cheio via API).
+        for ev in sorted(evidence_detail or [], key=lambda x: -x.get("score", 0)):
+            score = ev.get("score", 0)
+            # Score < threshold marca como warning pro user notar visualmente
+            # qual chunk está puxando o agregado pra baixo.
+            ev_level = "warning" if score < 0.3 else ("success" if score >= 0.7 else "info")
+            preview = (ev.get("text_preview") or "").replace("\n", " ")[:300]
+            source = ev.get("source") or "?"
+            _add(
+                "evidence", "📄",
+                f"#{ev.get('ordinal', '?')} · score {score:.2f} · {source}",
+                preview + (" …" if ev.get("text_full_len", 0) > 300 else ""),
+                ev_level,
+            )
     else:
         _add("evidence", "🔍", "Sem evidências consultadas", "", "info")
 
