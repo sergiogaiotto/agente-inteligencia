@@ -1,0 +1,41 @@
+# Pre-commit hooks — rodam ANTES de cada commit local.
+# Pega regressões antes do push, sem precisar esperar o CI.
+#
+# Setup (1x por clone):
+#     pip install pre-commit
+#     pre-commit install
+#
+# Depois disso, git commit dispara automaticamente. Pular em emergência:
+#     git commit --no-verify -m "..."
+# (NÃO faça isso de hábito — pra isso existe o CI bloqueando merge.)
+
+repos:
+  # Hooks essenciais — leves, pegam erros bobos antes do pytest.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$  # markdown usa whitespace pra hard break
+      - id: end-of-file-fixer
+      - id: check-yaml
+        exclude: docker-compose\.yml$  # k8s-style anchors podem confundir
+      - id: check-added-large-files
+        args: ["--maxkb=500"]  # bloqueia binário grande commitado por engano
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: detect-private-key
+
+  # Pytest local — só os testes unitários (rápido, ~25s).
+  # Integration tests precisam de docker, ficam pro CI.
+  - repo: local
+    hooks:
+      - id: pytest-unit
+        name: pytest (unit, sem integration)
+        entry: python -m pytest tests/ -x -q -m "not integration"
+        language: system
+        # Roda só quando arquivos .py mudam (não em mudança de markdown/YAML).
+        types: [python]
+        # Roda 1x por commit (não por arquivo) — pytest descobre seus alvos.
+        pass_filenames: false
+        # Não roda em stage de message (apenas em pre-commit).
+        stages: [pre-commit]
