@@ -15,12 +15,12 @@ limpo entre testes, sem precisar drop/create schema.
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import socket
 from typing import AsyncIterator
 
 import pytest
+import pytest_asyncio
 import asyncpg
 
 
@@ -64,14 +64,6 @@ def _postgres_reachable(url: str, timeout: float = 1.0) -> bool:
         return False
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Mesmo loop pra sessão inteira — fixtures async session-scoped funcionam."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
 @pytest.fixture(scope="session", autouse=True)
 def _skip_if_no_postgres():
     """Pula TODOS os testes do diretório integration/ se Postgres inacessível.
@@ -88,12 +80,16 @@ def _skip_if_no_postgres():
         )
 
 
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture
 async def db_pool() -> AsyncIterator[asyncpg.Pool]:
     """Pool dedicado pros testes (não reusa app pool — evita interferência).
 
     Aplica o schema do app (CREATE TABLEs + migrations) na primeira vez —
     idempotente, então safe se DB já estava configurada.
+
+    Function-scope (default): cria pool por teste. ~300ms overhead por teste,
+    aceitável pra ~10 testes de integração. Evita complicação de loop_scope
+    do pytest-asyncio em mode strict.
     """
     url = _test_database_url()
     pool = await asyncpg.create_pool(dsn=url, min_size=1, max_size=3, command_timeout=30)
@@ -116,7 +112,7 @@ async def db_pool() -> AsyncIterator[asyncpg.Pool]:
     await pool.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def db_tx(db_pool: asyncpg.Pool) -> AsyncIterator[asyncpg.Connection]:
     """Connection envolvida em transação que dá ROLLBACK no teardown.
 
