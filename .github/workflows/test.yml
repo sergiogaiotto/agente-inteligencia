@@ -1,0 +1,64 @@
+name: Tests
+
+# Roda a suite pytest em cada push (qualquer branch) e PR contra main.
+# Bloqueia merge se vermelho — protege main de regressão de lógica pura.
+#
+# Cobre os ~840 testes unitários atuais (mockados, sem Postgres real).
+# Smoke tests com Postgres real ficam em job separado (test-integration)
+# pra não atrasar o feedback do CI principal — ver PR irmão.
+#
+# Custo: GitHub Actions free pra repos privados pessoais (~2000 min/mês).
+# Cada run gasta ~30-45s (setup Python + pip + pytest ~25s).
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+      - "fix/**"
+      - "chore/**"
+  pull_request:
+    branches:
+      - main
+
+# Cancela runs antigos quando novo commit chega no mesmo branch — economiza
+# minutos de CI e dá feedback rápido. Pra main mantém histórico (no-cancel).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: pytest (unit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # Cache de pip por hash do requirements.txt — speedup ~3x em runs
+          # subsequentes do mesmo branch.
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest
+        # -x para falhar no primeiro erro (feedback rápido em PR review).
+        # -q reduz output (CI logs limpos). --strict-markers já vem do
+        # pytest.ini — pega marker typo (ex: @pytest.mark.integraion).
+        run: |
+          python -m pytest tests/ -x -q
+        env:
+          # Suprime logs de arquivo durante testes — CI não tem volume
+          # persistente e LOG_FILE_ENABLED=0 evita criar logs/*.log.
+          LOG_FILE_ENABLED: "0"
+          LOG_CONSOLE_ENABLED: "0"
