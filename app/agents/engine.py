@@ -1217,6 +1217,11 @@ async def execute_interaction(
                 profile=exec_profile,
                 turn_id=None,  # turn é criado em LogAndClose; verifier persiste sem turn_id
                 interaction_id=ctx.interaction_id,
+                # Wave Contract Retry: passa o LLM ativo pra Verifier poder
+                # re-chamar com instrução de correção se ContractValidator
+                # marcar compliant=false. Sem isso, retry fica desabilitado.
+                llm_provider_name=agent.get("llm_provider"),
+                llm_model=agent.get("model"),
             )
             await fsm.run_verify_evidence({
                 "ok": verification.ok,
@@ -1293,6 +1298,10 @@ def _serialize_verification(v) -> dict | None:
         "judge_model": str(getattr(v, "judge_model", "") or ""),
         "duration_ms": int(getattr(v, "duration_ms", 0) or 0),
         "risk_high": bool(getattr(v, "risk_high", False)),
+        # Wave Contract Retry: expõe na resposta HTTP pra UI mostrar
+        # "✓ Verifier corrigiu a saída via retry" e operador auditar.
+        "contract_retried": bool(getattr(v, "contract_retried", False)),
+        "contract_original_errors": list(getattr(v, "contract_original_errors", []) or []),
     }
 
 

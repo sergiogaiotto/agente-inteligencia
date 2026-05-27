@@ -161,6 +161,18 @@ class Settings(BaseSettings):
     # Cap de tokens da resposta do juiz. ~600 cobre 4 dimensões + claims sem cortar.
     verifier_max_tokens: int = 800
 
+    # ── Contract retry on failure (Wave atual) ──
+    # Quando ContractValidator marca compliant=false, Verifier re-chama o LLM
+    # 1x com instrução de correção (incluindo os erros específicos). Custo:
+    # 1 chamada LLM extra na falha. Ganho: muitas violações de formato são
+    # triviais (vírgula sobrando, chave faltando) — o retry corrige sem
+    # operador intervir. Default ON (qualidade > custo); desligue em casos
+    # extremos de orçamento apertado.
+    verifier_contract_retry_enabled: bool = True
+    # Cap de tokens da resposta do retry. Maior que o do judge (800) porque
+    # aqui o LLM regenera o draft completo, não só uma avaliação.
+    verifier_contract_retry_max_tokens: int = 2000
+
     # ── Verifier production mode (async sampling) ──
     # Quando True E verifier_v2_enabled True, o branch verifier do engine não
     # bloqueia mais a resposta: sample_rate% das interações são julgadas em
