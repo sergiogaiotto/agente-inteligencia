@@ -65,6 +65,12 @@ COPY --chown=app:app app ./app
 # Diretório de uploads / dados
 RUN mkdir -p ${APP_HOME}/data/uploads && chown -R app:app ${APP_HOME}/data
 
+# Diretório de logs estruturados (logging_setup grava aqui via LOG_DIR=logs).
+# Sem mkdir+chown explícitos o user `app` (uid 1000) não conseguia criar a
+# pasta dentro de /app/ (que é root) e setup_logging() falhava silenciosamente
+# — file handlers viravam no-op e a UI de Manutenção de Logs mostrava 0 B.
+RUN mkdir -p ${APP_HOME}/logs && chown -R app:app ${APP_HOME}/logs
+
 USER app
 
 EXPOSE 7000

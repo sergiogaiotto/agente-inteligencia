@@ -1004,11 +1004,25 @@ async def init_db():
         async with _pool.acquire() as con:
             for stmt in _split_sql(SCHEMA):
                 await con.execute(stmt)
+            # Migrations idempotentes — falhas viram WARNING (não DEBUG) para
+            # aparecer no errors.log/console. Histórico: a `ADD COLUMN data_tables`
+            # do schema drift da Onda Tabular falhava silenciosa em deploys
+            # antigos, causando 500 no POST /api/v1/skills (bug bug.skills.create
+            # 2026-05). Não derruba startup — pool já está aberto e schema base
+            # já rodou; queremos apenas visibilidade.
             for migration in _IDEMPOTENT_MIGRATIONS:
                 try:
                     await con.execute(migration)
                 except Exception as e:
-                    logger.debug(f"Migration ignorada: {migration[:60]} — {e}")
+                    logger.warning(
+                        "db.migration.failed",
+                        extra={
+                            "event": "db.migration.failed",
+                            "migration_preview": migration[:120],
+                            "error_type": type(e).__name__,
+                            "error": str(e)[:200],
+                        },
+                    )
 
 
 async def close_db():

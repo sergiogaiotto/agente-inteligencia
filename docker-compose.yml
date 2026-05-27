@@ -56,6 +56,12 @@ services:
     volumes:
       # APP_DATA_DIR=/var/lib/agente-persist/app pra persistir uploads/evidências em VPS.
       - ${APP_DATA_DIR:-app_data}:/app/data
+      # APP_LOGS_DIR=/var/lib/agente-persist/logs em prod; volume nomeado em dev.
+      # Sem este mount, /app/logs/*.log somia em cada `docker restart` e a UI
+      # de Manutenção de Logs mostrava sempre "0 B em disco" (bug 2026-05-27).
+      # Retenção de 7d é aplicada pelo TimedRotatingFileHandler (backupCount),
+      # não pelo Docker — o volume só garante que o arquivo sobrevive a restart.
+      - ${APP_LOGS_DIR:-app_logs}:/app/logs
     logging:
       driver: json-file
       options:
@@ -411,6 +417,8 @@ services:
 volumes:
   app_data:
     name: agente_app_data
+  app_logs:
+    name: agente_app_logs
   postgres_data:
     name: agente_postgres_data
   redis_data:

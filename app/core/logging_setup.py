@@ -216,15 +216,21 @@ class TextFormatter(logging.Formatter):
 
 
 _LOG_FILES = {
-    "app":     {"level": logging.INFO,    "retention_days": 14,
+    # Retenção uniforme: 7 dias em todos. Decisão operacional 2026-05-27 — disco
+    # do app é compartilhado com uploads/evidências (volume /app/data), e logs
+    # antigos não ajudam troubleshoot (recorremos a Grafana/Loki pra análise
+    # longa). Atenção a `audit.log`: vinha com 90d por convenção de compliance
+    # — se sua política exigir > 7d, sobrescreva via env LOG_RETENTION_AUDIT_DAYS
+    # ou exporte audit_log do DB (single source of truth via tabela `audit_log`).
+    "app":     {"level": logging.INFO,    "retention_days": 7,
                 "loggers": ["app", "uvicorn", "fastapi"]},
-    "tabular": {"level": logging.DEBUG,   "retention_days": 30,
+    "tabular": {"level": logging.DEBUG,   "retention_days": 7,
                 "loggers": ["tabular"]},
-    "api":     {"level": logging.INFO,    "retention_days": 14,
+    "api":     {"level": logging.INFO,    "retention_days": 7,
                 "loggers": ["app.api"]},
-    "audit":   {"level": logging.INFO,    "retention_days": 90,
+    "audit":   {"level": logging.INFO,    "retention_days": 7,
                 "loggers": ["audit"]},
-    "errors":  {"level": logging.ERROR,   "retention_days": 30,
+    "errors":  {"level": logging.ERROR,   "retention_days": 7,
                 "loggers": None},  # captura de qualquer logger
 }
 
