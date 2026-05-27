@@ -175,6 +175,44 @@ class TestBuildWizardPrompt:
         assert "s1" in system
         assert "# Manuais (internal)" in system  # comentário humano
 
+    def test_rag_without_min_relevance_omits_threshold(self):
+        """Sem min_relevance no payload, YAML NÃO inclui a chave — engine
+        aplica default 0.3. Compat com skills antigas geradas antes da feature."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        bindings = {
+            "mcp_tools": [],
+            "rag_sources": [{"id": "s1", "name": "Manuais", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # YAML do Evidence Policy não cita min_relevance quando user não informou
+        assert "min_relevance" not in system
+
+    def test_rag_with_min_relevance_emits_threshold(self):
+        """Com min_relevance setado, YAML inclui a linha — engine vai aplicar."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"], min_relevance=0.15)
+        bindings = {
+            "mcp_tools": [],
+            "rag_sources": [{"id": "s1", "name": "Manuais", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # YAML deve ter `min_relevance: 0.15` dentro do bloco Evidence Policy
+        assert "min_relevance: 0.15" in system
+
+    def test_min_relevance_rejects_out_of_range(self):
+        """Pydantic rejeita valores fora de [0..1]."""
+        import pytest as _pt
+        with _pt.raises(Exception):
+            WizardSkillRequest(description="x", min_relevance=1.5)
+        with _pt.raises(Exception):
+            WizardSkillRequest(description="x", min_relevance=-0.1)
+
+    def test_min_relevance_accepts_extremes(self):
+        """0.0 e 1.0 são valores válidos — Pydantic ge=0, le=1 (inclusive)."""
+        WizardSkillRequest(description="x", min_relevance=0.0)
+        WizardSkillRequest(description="x", min_relevance=1.0)
+
     def test_includes_data_tables_with_urn(self):
         req = WizardSkillRequest(description="x", table_ids=["tbl-1"])
         bindings = {

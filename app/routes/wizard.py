@@ -150,6 +150,11 @@ class WizardSkillRequest(BaseModel):
     # Execution Profile — fast/standard/rigorous. Influencia mode + reflection +
     # evidence no SKILL.md gerado. Default vazio = backend infere (smart default).
     exec_mode: Optional[str] = ""
+    # Threshold de confiança mínima para evidência (## Evidence Policy →
+    # min_relevance). None = wizard não emite a chave; engine usa default 0.3.
+    # Range [0..1] validado pelo Pydantic. Aceitar exatamente 0.0 e 1.0 é
+    # deliberado (0.0 = aceita qualquer; 1.0 = só evidência perfeita).
+    min_relevance: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
 class WizardRefineRequest(BaseModel):
@@ -430,8 +435,14 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
             f"  - {s['id']}   # {s['name']} ({s.get('confidentiality_label', 'internal')})"
             for s in bindings["rag_sources"]
         )
+        # min_relevance opcional — só emite quando user setou explicitamente.
+        # Quando ausente, o engine usa default 0.3 (engine.py:_DEFAULT_MIN_RELEVANCE).
+        # Faixa válida [0..1] garantida pelo Pydantic (Field ge/le).
+        threshold_yaml = ""
+        if data.min_relevance is not None:
+            threshold_yaml = f"\nmin_relevance: {data.min_relevance}"
         obligatory_sections.append(
-            "## Evidence Policy\n```yaml\nsources:\n" + sources_yaml + "\n```"
+            "## Evidence Policy\n```yaml\nsources:\n" + sources_yaml + threshold_yaml + "\n```"
         )
 
     if bindings["data_tables"]:
