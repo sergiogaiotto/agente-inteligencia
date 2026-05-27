@@ -68,8 +68,68 @@ async def list_skills(limit: int = 50, offset: int = 0, kind: str = None, domain
 
 @router.get("/{skill_id}")
 async def get_skill(skill_id: str):
+    """Retorna a skill com metadata parsed da SKILL.md.
+
+    Além das colunas brutas da tabela, devolve `summary` (objeto opt-in para
+    clients) com derivações úteis pra UI mostrar sem ter que parsear o YAML
+    no frontend: execution_mode, evidence_policy_parsed (com min_relevance/
+    sources/max_age_days/cite_sources), e contagens de bindings (api/tables/
+    tools). Útil pra agent_form step Revisão mostrar config-chave da skill
+    vinculada sem o usuário ter que abrir Editar Skill.
+    """
     s = await skills_repo.find_by_id(skill_id)
     if not s: raise HTTPException(404, "Skill não encontrada")
+    # Parse defensivo — skill com raw_content inválido não derruba endpoint;
+    # apenas devolve `summary` ausente. UI esconde a seção quando faltar.
+    try:
+        raw = s.get("raw_content") or ""
+        if raw.strip():
+            parsed = parse_skill_md(raw)
+            # Contagem de tool bindings (texto markdown — split por linhas com
+            # "- " ou "|" ; heurística simples sem parser de table)
+            tool_bindings_text = parsed.tool_bindings or ""
+            has_explicit_no_mcp = (
+                "Nenhuma ferramenta MCP" in tool_bindings_text
+                or "não usa ferramentas MCP" in tool_bindings_text
+            )
+            tool_count = 0
+            if not has_explicit_no_mcp:
+                # Conta linhas que começam com "- `" ou "- **" (formato típico
+                # do wizard) ou linhas de tabela com "|"
+                for line in tool_bindings_text.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith(("- `", "- **")):
+                        tool_count += 1
+            s["summary"] = {
+                "urn": parsed.frontmatter.id,
+                "kind": parsed.frontmatter.kind,
+                "stability": parsed.frontmatter.stability,
+                "execution_mode": parsed.execution_mode,
+                "evidence_policy_parsed": parsed.evidence_policy_parsed or {},
+                "api_bindings_count": len(parsed.api_bindings_parsed or []),
+                "data_tables_count": len(parsed.data_tables_parsed or []),
+                "tool_bindings_count": tool_count,
+                "tool_bindings_explicit_none": has_explicit_no_mcp,
+                "sections_with_content": [
+                    name for name, attr in [
+                        ("Purpose", "purpose"),
+                        ("Inputs", "inputs"),
+                        ("Workflow", "workflow"),
+                        ("Tool Bindings", "tool_bindings"),
+                        ("Output Contract", "output_contract"),
+                        ("Failure Modes", "failure_modes"),
+                        ("Guardrails", "guardrails"),
+                        ("Evidence Policy", "evidence_policy"),
+                        ("Examples", "examples"),
+                    ] if (getattr(parsed, attr, "") or "").strip()
+                ],
+            }
+    except Exception as e:
+        # Não derruba o GET — UI lida com summary ausente
+        logger.warning(
+            "skill_summary_parse_failed",
+            extra={"event": "skills.summary.failed", "skill_id": skill_id, "error_type": type(e).__name__},
+        )
     return s
 
 @router.post("/lint", status_code=200)

@@ -395,6 +395,86 @@
                     <span class="text-[12px] text-surface-400">Skill Vinculada</span>
                     <span class="text-[13px] font-medium" :class="selectedSkillPreview ? 'text-brand-900' : 'text-surface-300'" x-text="selectedSkillPreview ? selectedSkillPreview.name + ' (v' + (selectedSkillPreview.version||'0.1.0') + ')' : 'Nenhuma'"></span>
                 </div>
+
+                <!-- ─── Detalhes da skill vinculada ─── -->
+                <!-- Bloco compacto com config-chave do SKILL.md vinculado.
+                     `skillSummary` é carregado em runPreflight (step Revisão).
+                     Esconde quando não há skill vinculada ou summary não veio. -->
+                <template x-if="form.skill_id && skillSummary">
+                    <div class="ml-3 mt-1 mb-1 rounded-lg border border-brand-100 bg-brand-50/30 p-3 space-y-1.5">
+                        <div class="text-[10px] font-bold text-brand-600 uppercase tracking-widest mb-1">Detalhes da Skill</div>
+
+                        <!-- URN -->
+                        <div class="flex justify-between gap-2" x-show="skillSummary.urn">
+                            <span class="text-[11px] text-surface-400">URN</span>
+                            <span class="text-[11px] font-mono text-brand-900 truncate" :title="skillSummary.urn" x-text="skillSummary.urn"></span>
+                        </div>
+
+                        <!-- Execution Profile -->
+                        <div class="flex justify-between gap-2" x-show="skillSummary.execution_mode">
+                            <span class="text-[11px] text-surface-400">Execution Profile</span>
+                            <span class="text-[11px] font-mono"
+                                :class="{
+                                    'text-emerald-700': skillSummary.execution_mode === 'fast',
+                                    'text-brand-700': skillSummary.execution_mode === 'standard',
+                                    'text-violet-700': skillSummary.execution_mode === 'rigorous',
+                                    'text-fuchsia-700': skillSummary.execution_mode === 'declarative',
+                                }"
+                                x-text="skillSummary.execution_mode"></span>
+                        </div>
+
+                        <!-- Evidence Policy: fontes + threshold -->
+                        <template x-if="skillSummary.evidence_policy_parsed">
+                            <div>
+                                <div class="flex justify-between gap-2" x-show="(skillSummary.evidence_policy_parsed.sources || []).length > 0">
+                                    <span class="text-[11px] text-surface-400">Fontes RAG (Evidence Policy)</span>
+                                    <span class="text-[11px] font-medium text-emerald-700" x-text="(skillSummary.evidence_policy_parsed.sources || []).length + ' fonte(s)'"></span>
+                                </div>
+                                <div class="flex justify-between gap-2">
+                                    <span class="text-[11px] text-surface-400">Threshold (min_relevance)</span>
+                                    <span class="text-[11px] font-mono"
+                                        :class="skillSummary.evidence_policy_parsed.min_relevance !== undefined ? 'text-violet-700 font-semibold' : 'text-surface-400'"
+                                        x-text="skillSummary.evidence_policy_parsed.min_relevance !== undefined
+                                            ? skillSummary.evidence_policy_parsed.min_relevance.toFixed(2) + ' (skill)'
+                                            : '0.30 (default do engine)'"></span>
+                                </div>
+                                <div class="flex justify-between gap-2" x-show="skillSummary.evidence_policy_parsed.max_age_days">
+                                    <span class="text-[11px] text-surface-400">Idade máxima da fonte</span>
+                                    <span class="text-[11px] font-mono text-brand-700" x-text="skillSummary.evidence_policy_parsed.max_age_days + ' dias'"></span>
+                                </div>
+                                <div class="flex justify-between gap-2" x-show="skillSummary.evidence_policy_parsed.cite_sources">
+                                    <span class="text-[11px] text-surface-400">Citação obrigatória</span>
+                                    <span class="text-[11px] font-medium text-emerald-700">Sim — [E1], [E2]…</span>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- Bindings: tools / APIs / tabelas -->
+                        <div class="flex justify-between gap-2">
+                            <span class="text-[11px] text-surface-400">Tool Bindings (MCP)</span>
+                            <span class="text-[11px] font-medium"
+                                :class="skillSummary.tool_bindings_count > 0 ? 'text-brand-700' : 'text-surface-400'"
+                                x-text="skillSummary.tool_bindings_explicit_none
+                                    ? 'Sem MCP (declarado)'
+                                    : (skillSummary.tool_bindings_count + ' tool(s) referenciada(s)')"></span>
+                        </div>
+                        <div class="flex justify-between gap-2" x-show="skillSummary.api_bindings_count > 0">
+                            <span class="text-[11px] text-surface-400">API Bindings (declarativos)</span>
+                            <span class="text-[11px] font-medium text-fuchsia-700" x-text="skillSummary.api_bindings_count + ' endpoint(s)'"></span>
+                        </div>
+                        <div class="flex justify-between gap-2" x-show="skillSummary.data_tables_count > 0">
+                            <span class="text-[11px] text-surface-400">Data Tables</span>
+                            <span class="text-[11px] font-medium text-amber-700" x-text="skillSummary.data_tables_count + ' tabela(s)'"></span>
+                        </div>
+
+                        <!-- Seções preenchidas (resumo de cobertura do SKILL.md) -->
+                        <div class="flex justify-between gap-2 pt-1" x-show="(skillSummary.sections_with_content || []).length > 0">
+                            <span class="text-[11px] text-surface-400">Seções §5</span>
+                            <span class="text-[11px] font-medium text-brand-700" x-text="(skillSummary.sections_with_content || []).length + ' de 9 seções'"></span>
+                        </div>
+                    </div>
+                </template>
+
                 <div class="flex justify-between">
                     <span class="text-[12px] text-surface-400">Exigir Evidência (RAG)</span>
                     <span class="text-[13px] font-medium" :class="form.require_evidence ? 'text-emerald-600' : 'text-amber-600'" x-text="form.require_evidence ? 'Sim — consulta bases' : 'Não — usa conhecimento do LLM'"></span>
@@ -440,6 +520,11 @@ function agentForm(editId) {
         newDomainInput: '',
         // Onda 4: Pre-flight check
         preflight: { loading: false, report: null },
+        // Summary da skill vinculada — carregado em runPreflight (step Revisão).
+        // Contém parsed metadata (urn, execution_mode, evidence_policy_parsed,
+        // contagens de bindings, seções preenchidas). null quando sem skill ou
+        // GET falhou — o template Detalhes da Skill esconde nesse caso.
+        skillSummary: null,
         form: {
             name: '', description: '', kind: 'subagent', domain: '', skill_id: '',
             task_type: 'tool_calling',  // Onda 7: paradigma novo, default tool_calling
@@ -686,6 +771,19 @@ function agentForm(editId) {
                 };
             } finally {
                 this.preflight.loading = false;
+            }
+            // Carrega metadata parsed da skill vinculada pra UI Revisão
+            // mostrar "Detalhes da Skill". Não bloqueia preflight — se falhar,
+            // skillSummary fica null e o template esconde a seção.
+            await this.loadSkillSummary();
+        },
+        async loadSkillSummary() {
+            if (!this.form.skill_id) { this.skillSummary = null; return; }
+            try {
+                const skill = await api.get(`/api/v1/skills/${this.form.skill_id}`);
+                this.skillSummary = skill.summary || null;
+            } catch (_e) {
+                this.skillSummary = null;
             }
         },
         async save() {
