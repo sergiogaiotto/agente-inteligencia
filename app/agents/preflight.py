@@ -30,6 +30,10 @@ KNOWN_MODELS: dict[str, set[str]] = {
     "maritaca": {"sabia-3", "sabiazinho-3", "sabia-2-medium", "sabia-2-small"},
     "ollama": set(),  # local, qualquer modelo é potencialmente válido
     "azure": set(),  # custom deployment names, sem catálogo
+    # gpt-oss-* — model id pode variar conforme deployment do hub interno
+    # (ex: "openai/gpt-oss-120b", "gpt-oss-120b-fp8"). Sem catálogo fixo.
+    "gpt-oss-20b": set(),
+    "gpt-oss-120b": set(),
 }
 
 GENERIC_PROMPT_MARKERS = (
@@ -59,16 +63,30 @@ def _check(id_: str, severity: str, title: str, detail: str,
 # ═══════════════════════════════════════════════════════════════════════
 
 def check_api_key(payload: dict, settings) -> Optional[PreflightCheckResult]:
-    """C1 — provider declarado tem API key real configurada."""
+    """C1 — provider declarado tem API key real configurada.
+
+    Onda 7: quando `task_type` está setado, o provider real vem do roteamento
+    global (resolve_llm_for_task em runtime). Antes deste fix, este check
+    olhava direto `payload['llm_provider']` (default 'azure') e reclamava de
+    API key faltante mesmo quando o agente nunca usaria azure em execução —
+    falso positivo bloqueando criação de agentes com task_type. O orquestrador
+    `run_preflight` resolve via `_resolve_effective_payload` antes de chamar
+    este check, então `payload['llm_provider']` aqui já reflete o provider
+    efetivo.
+    """
     provider = (payload.get("llm_provider") or "").lower()
     # Onda 7 Wave 5: "openai" semantic vira alias de Azure (cleanup OPENAI_API_KEY).
     # Ambos consultam azure_openai_api_key. Mapping também corrige "azure" pra
     # azure_openai_api_key (era "azure_api_key" — bug latent que nunca casava).
+    # gpt-oss-* mapeia pra settings próprias (URL+key por size) — proxy aceita
+    # 'not-needed' como key, então o check abaixo permite esse valor.
     key_attr_map = {
         "openai": "azure_openai_api_key",
         "azure": "azure_openai_api_key",
         "maritaca": "maritaca_api_key",
         "ollama": "ollama_api_key",
+        "gpt-oss-20b": "oss20b_api_key",
+        "gpt-oss-120b": "oss120b_api_key",
     }
     key_attr = key_attr_map.get(provider)
     if not key_attr:
@@ -80,8 +98,25 @@ def check_api_key(payload: dict, settings) -> Optional[PreflightCheckResult]:
             fix_hint="/settings", field="llm_provider",
         )
     key = (getattr(settings, key_attr, None) or "").strip()
-    # Ollama dispensa key real (default 'ollama'); demais precisam de algo válido.
+    # Providers que rodam em rede interna não exigem key real:
+    # - Ollama: default 'ollama' (auth desativado)
+    # - GPT-OSS-*: hub interno aceita 'not-needed' (auth via mTLS/rede privada)
     if provider == "ollama":
+        return None
+    if provider.startswith("gpt-oss-") and (key == "" or key == "not-needed"):
+        # URL é o que importa pra gpt-oss; key pode ser 'not-needed'. Mas se
+        # URL não está configurada, sinaliza — o agente não vai conseguir chamar.
+        url_attr = "oss20b_url" if provider == "gpt-oss-20b" else "oss120b_url"
+        url = (getattr(settings, url_attr, None) or "").strip()
+        if not url:
+            return _check(
+                "C1_api_key", "error",
+                f"URL do '{provider}' não configurada",
+                f"O agente usa provider '{provider}' (open-weight via hub interno) "
+                f"mas a URL do endpoint não está setada em /settings → Plataforma → "
+                "GPT-OSS. Sem URL, o agente não consegue chamar o LLM.",
+                fix_hint="/settings", field="llm_provider",
+            )
         return None
     if not key or any(key.startswith(p) for p in PLACEHOLDER_KEY_PREFIXES):
         return _check(
@@ -414,16 +449,50 @@ async def check_inputs_cover_refs(payload: dict, skills_repo) -> Optional[Prefli
 _SEV_ORDER = {"error": 0, "warning": 1, "info": 2}
 
 
+async def _resolve_effective_payload(payload: dict) -> dict:
+    """Onda 7: quando task_type setado, o provider/model em runtime vêm do
+    routing global — não dos campos snapshot do agent. Este helper devolve
+    uma cópia do payload com `llm_provider`/`model` substituídos pelos
+    valores resolvidos, espelhando o que o engine faz em
+    `engine.py:resolve_llm_for_task`.
+
+    Sem task_type, devolve o payload intacto (caminho legacy).
+
+    Falha de resolução é log + fallback ao payload original — não bloqueia
+    o preflight inteiro.
+    """
+    task_type = (payload.get("task_type") or "").strip()
+    if not task_type:
+        return payload
+    try:
+        from app.llm_routing import resolve_llm_for_task
+        provider, model = await resolve_llm_for_task(task_type)
+    except Exception as e:
+        logger.warning(
+            "preflight._resolve_effective_payload falhou: %s — usando snapshot",
+            e, extra={"event": "preflight.routing_resolve_failed", "task_type": task_type},
+        )
+        return payload
+    effective = dict(payload)
+    effective["llm_provider"] = provider
+    effective["model"] = model
+    return effective
+
+
 async def run_preflight(payload: dict) -> PreflightReport:
     """Roda os 9 checks contra `payload` (dict no formato AgentCreate).
     Retorna PreflightReport com lista ordenada (errors → warnings → infos).
 
-    Síncronos rodam serial; async com gather.
+    Síncronos rodam serial; async com gather. Quando `task_type` está setado,
+    resolve provider/model via routing global ANTES de chamar os checks — o
+    snapshot legacy `llm_provider` no payload é ignorado (era origem de
+    falsos C1_api_key contra 'azure' default).
     """
     from app.core.config import get_settings
     from app.core.database import skills_repo, tools_repo
 
     settings = get_settings()
+    payload = await _resolve_effective_payload(payload)
     results: list[PreflightCheckResult] = []
 
     # Síncronos (sem I/O) — serial, custo desprezível.
