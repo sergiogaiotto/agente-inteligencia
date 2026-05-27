@@ -46,6 +46,19 @@ class VerificationResult:
     contract_errors: list[str] = field(default_factory=list)
     judge_model: str = ""
     duration_ms: int = 0
+    # Wave Contract Retry (PR atual)
+    contract_retried: bool = False
+    """True quando o Verifier detectou compliant=false e re-chamou o LLM
+    com instrução de correção. False = sem retry (1ª chamada passou OU
+    setting desabilitado OU sem llm_provider disponível)."""
+    contract_original_errors: list[str] = field(default_factory=list)
+    """Erros do PRIMEIRO attempt (antes do retry). contract_errors fica
+    com erros do attempt FINAL (segundo, se retry aconteceu). Pra auditoria
+    e debugging — operador vê se a retry corrigiu ou não."""
+    contract_retry_draft: str = ""
+    """Draft corrigido pelo LLM no retry. Preservado pra audit (se retry
+    falhou, operador precisa ver o que LLM produziu na 2ª tentativa).
+    Vazio quando contract_retried=False."""
 
 
 # ───────────────────────────────────────────────────────────────
@@ -74,6 +87,12 @@ class Verifier:
         turn_id: Optional[str] = None,
         interaction_id: Optional[str] = None,
         persist: bool = True,
+        # Wave Contract Retry (PR atual): caller passa o provider+model
+        # usados pra gerar o draft, pra que Verifier possa re-chamar SE
+        # ContractValidator falhar. None → retry desabilitado (mesmo provider
+        # antigo continua funcionando, apenas perde o ganho do retry).
+        llm_provider_name: Optional[str] = None,
+        llm_model: Optional[str] = None,
     ) -> VerificationResult:
         """Verifica um draft.
 
@@ -100,12 +119,93 @@ class Verifier:
             # ─── 1. ContractValidator (síncrono, sem LLM) ────────
             contract_compliant = True
             contract_errors: list[str] = []
+            contract_retried = False
+            contract_original_errors: list[str] = []
+            contract_retry_draft = ""
             if output_contract:
                 from app.verifier.contract_validator import validate_contract
                 cr = validate_contract(draft, output_contract)
                 contract_compliant = cr.compliant
                 contract_errors = cr.errors
                 span.set_attribute("verifier.contract_compliant", contract_compliant)
+
+                # Wave Contract Retry: 1ª tentativa violou → tenta de novo
+                # com o LLM (instrução de correção). Acontece só se:
+                # - setting habilitado (default True)
+                # - caller passou llm_provider_name (pra reconstruir o provider)
+                # - tem erros específicos pra mostrar pro LLM (não vazio)
+                if (
+                    not contract_compliant
+                    and settings.verifier_contract_retry_enabled
+                    and llm_provider_name
+                    and contract_errors
+                ):
+                    contract_original_errors = list(contract_errors)
+                    logger.info(
+                        "verifier: contract failed — iniciando retry com LLM",
+                        extra={
+                            "event": "verifier.contract.retry_initiated",
+                            "first_attempt_errors": contract_errors[:3],
+                            "llm_provider": llm_provider_name,
+                            "llm_model": llm_model or "(default)",
+                        },
+                    )
+                    span.add_event("verifier.contract.retry_initiated")
+                    try:
+                        new_draft = await self._retry_contract_with_llm(
+                            original_draft=draft,
+                            errors=contract_errors,
+                            output_contract=output_contract,
+                            user_question=user_question,
+                            llm_provider_name=llm_provider_name,
+                            llm_model=llm_model,
+                            max_tokens=settings.verifier_contract_retry_max_tokens,
+                        )
+                    except Exception as e:
+                        # Retry falhou (rede/LLM erro) — segue com result original.
+                        logger.warning(
+                            "verifier: retry chamada LLM falhou",
+                            extra={
+                                "event": "verifier.contract.retry_call_failed",
+                                "error_type": type(e).__name__,
+                            },
+                            exc_info=True,
+                        )
+                        span.add_event("verifier.contract.retry_call_failed")
+                        new_draft = ""
+
+                    if new_draft:
+                        # Re-valida o draft corrigido.
+                        cr2 = validate_contract(new_draft, output_contract)
+                        contract_retried = True
+                        contract_retry_draft = new_draft
+                        if cr2.compliant:
+                            # Sucesso: usa novo draft como o oficial.
+                            draft = new_draft
+                            contract_compliant = True
+                            contract_errors = []
+                            span.set_attribute("verifier.contract_retry_success", True)
+                            span.add_event("verifier.contract.retry_succeeded")
+                            logger.info(
+                                "verifier: retry corrigiu o contrato — draft substituído",
+                                extra={"event": "verifier.contract.retry_succeeded"},
+                            )
+                        else:
+                            # Retry também falhou: mantém errors do 2º attempt
+                            # (mais úteis pra debugging — mostra que LLM
+                            # ignorou a correção). Original preservado em
+                            # contract_original_errors pra audit.
+                            contract_errors = cr2.errors
+                            span.set_attribute("verifier.contract_retry_success", False)
+                            span.add_event("verifier.contract.retry_failed_final")
+                            logger.warning(
+                                "verifier: retry NÃO corrigiu — operador deve revisar",
+                                extra={
+                                    "event": "verifier.contract.retry_failed_final",
+                                    "original_errors": contract_original_errors[:3],
+                                    "retry_errors": cr2.errors[:3],
+                                },
+                            )
 
             # ─── 2. MultiDimJudge (LLM) ─────────────────────────
             # Profile fast: pula judge (só contract). Standard/rigorous: roda judge.
@@ -175,6 +275,10 @@ class Verifier:
                 contract_errors=contract_errors,
                 judge_model=judge_model,
                 duration_ms=duration_ms,
+                # Wave Contract Retry
+                contract_retried=contract_retried,
+                contract_original_errors=contract_original_errors,
+                contract_retry_draft=contract_retry_draft,
             )
 
             # ─── 4. Persistência ────────────────────────────────
@@ -185,6 +289,81 @@ class Verifier:
                     logger.warning(f"verifier persist falhou: {e}")
 
             return result
+
+    @staticmethod
+    async def _retry_contract_with_llm(
+        *,
+        original_draft: str,
+        errors: list[str],
+        output_contract: str,
+        user_question: str,
+        llm_provider_name: str,
+        llm_model: Optional[str] = None,
+        max_tokens: int = 2000,
+    ) -> str:
+        """Re-chama o LLM com instrução de correção do contrato.
+
+        Prompt é minimalista e cirúrgico:
+        - Inclui o draft anterior (pra LLM ver o que produziu)
+        - Inclui os erros específicos do ContractValidator
+        - Inclui o contrato esperado (pra LLM relembrar o shape)
+        - Pede regeneração mantendo conteúdo factual
+
+        Returns:
+            Novo draft string (pode ser vazio se LLM devolveu nada).
+            Não valida — caller revalida com ContractValidator.
+        """
+        from app.core.llm_providers import get_provider
+
+        provider = get_provider(llm_provider_name, model=(llm_model or None))
+
+        errors_block = "\n".join(f"- {e}" for e in errors[:5]) or "(violação não detalhada)"
+        system = (
+            "Você é um corretor de saída JSON. Recebe um draft que VIOLOU o "
+            "contrato de saída e gera versão corrigida, preservando o conteúdo "
+            "factual e ajustando APENAS o que viola o contrato. NÃO explique. "
+            "Responda APENAS com o JSON corrigido (sem markdown, sem ```)."
+        )
+        user = (
+            f"### Contrato esperado (Output Contract)\n{output_contract}\n\n"
+            f"### Erros detectados pelo validador\n{errors_block}\n\n"
+            f"### Pergunta original do usuário (contexto)\n{user_question or '(não fornecida)'}\n\n"
+            f"### Draft anterior (que violou o contrato)\n{original_draft}\n\n"
+            "### Tarefa\n"
+            "Regere o JSON corrigindo APENAS os pontos de violação acima. "
+            "Preserve campos e valores que já estavam corretos. Devolva JSON "
+            "puro, sem comentários e sem ```."
+        )
+
+        # Tenta usar structured output se provider suportar (PR anterior).
+        # Reduz chance de o retry também violar formato JSON.
+        kwargs: dict = {"max_tokens": max_tokens}
+        if getattr(provider, "supports_structured_output", False):
+            # Tenta extrair schema do contract pra usar response_format.
+            try:
+                # Import lazy do helper do engine — evita import circular.
+                from app.agents.engine import _extract_json_schema_from_contract
+                schema = _extract_json_schema_from_contract(output_contract)
+                if schema:
+                    kwargs["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": (schema.get("title") or "CorrectedOutput")[:64],
+                            "schema": schema,
+                            "strict": True,
+                        },
+                    }
+            except Exception:
+                pass  # silent — sem response_format, segue só com prompt
+
+        resp = await provider.generate(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            **kwargs,
+        )
+        return (resp.get("content") or "").strip()
 
     @staticmethod
     def _extract_scores(dimensions: dict) -> dict[str, Optional[float]]:
