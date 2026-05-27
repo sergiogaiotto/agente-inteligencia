@@ -212,6 +212,71 @@ class TestBuildWizardPrompt:
         assert "## Execution Profile" in system
         assert "mode: rigorous" in system
 
+    def test_always_includes_anti_hallucination_rules(self):
+        """Regra crítica do system_prompt: pra qualquer combinação de bindings,
+        o LLM precisa receber as REGRAS ANTI-INVENÇÃO explícitas. Bug user
+        2026-05-27: escolheu só RAG e Wizard gerou `knowledge_search`/
+        `summarize_text` inventadas em ## Tool Bindings."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        bindings = {
+            "mcp_tools": [],
+            "rag_sources": [{"id": "s1", "name": "Manuais", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        assert "ANTI-INVENÇÃO" in system, (
+            "Regras anti-hallucination devem estar SEMPRE no system_prompt"
+        )
+        # Cita exemplos concretos das tools que o LLM costuma inventar
+        assert "knowledge_search" in system or "NÃO invente" in system
+
+    def test_tool_bindings_explicit_when_no_mcp_with_rag(self):
+        """Bug user 2026-05-27: escolheu só RAG, sem MCP. Antes deste fix
+        o system_prompt deixava `## Tool Bindings` sem orientação no bloco
+        obrigatório → LLM completava com knowledge_search/summarize_text.
+        Agora a seção é incluída EXPLICITAMENTE com declaração de vazio
+        + menção dos recursos reais disponíveis (RAG nesse caso)."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        bindings = {
+            "mcp_tools": [],
+            "rag_sources": [{"id": "s1", "name": "Manuais", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # Tool Bindings está no system, MAS com texto declarativo de vazio
+        # (não com lista de tools inventadas).
+        assert "## Tool Bindings" in system
+        # A frase exata sinaliza ao LLM pra não inventar
+        assert "não usa ferramentas MCP" in system or "NÃO invente" in system
+        # Cita o recurso real (RAG) que está disponível, pra o LLM não se
+        # sentir "obrigado" a inventar tools.
+        assert "RAG" in system
+
+    def test_tool_bindings_explicit_when_no_bindings_at_all(self):
+        """Cenário extremo: skill pura de raciocínio, sem MCP, sem RAG,
+        sem tabelas, sem APIs. Tool Bindings ainda deve ser declarada
+        explicitamente para o LLM não preencher do nada."""
+        req = WizardSkillRequest(description="x")
+        bindings = {"mcp_tools": [], "rag_sources": [], "data_tables": [], "api_endpoints": []}
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        assert "## Tool Bindings" in system
+        # Declara o caso "apenas raciocínio LLM"
+        assert "raciocínio" in system.lower() or "sem bindings" in system.lower()
+
+    def test_mcp_section_intact_when_mcp_selected(self):
+        """Não-regressão: quando user seleciona MCP, a lista real é injetada
+        normalmente (sem o stub de vazio)."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["t1"])
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "Search Tool", "description": "Busca"}],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        assert "Search Tool" in system
+        # NÃO deve aparecer a frase de "skill não usa ferramentas MCP"
+        # quando MCP está presente.
+        assert "não usa ferramentas MCP" not in system
+
     def test_never_includes_budget_section_in_prompt(self):
         """User reportou: seções Budget geradas automaticamente prejudicam
         desempenho em runtime (tokens=2000, latência=4s, custo=$0.0015).
