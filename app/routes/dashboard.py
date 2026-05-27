@@ -54,10 +54,23 @@ def _build_mcp_auth(auth_type: str = "", auth_token: str = "", auth_config: str 
       - needs_oauth_fetch: bool — se precisa buscar token OAuth2 antes de usar
 
     auth_type: 'api_key', 'oauth2', 'mTLS', ou ''
-    auth_token: token simples (usado por api_key)
+    auth_token: token simples (usado por api_key) — pode vir cifrado (fernet:)
+                quando a UI ecoa o valor lido do banco
     auth_config: JSON string com config complexa (OAuth2/mTLS)
+
+    Bug 2026-05-27 (Tavily HTTP 401): a UI carregava `tools.auth_token`
+    cifrado do banco (string com prefixo `fernet:`) e enviava de volta no
+    POST /tools/test sem alteração. _build_mcp_auth montava header
+    `Authorization: Bearer fernet:gAAAAA...` e o servidor MCP rejeitava com
+    401. Fix: read_secret() é idempotente — texto plano passa direto,
+    fernet decifra. Mesmo comportamento que mcp/runtime.py já usava em
+    invocação real de tools.
     """
     import json as _json
+    from app.core.secrets import read_secret
+
+    # Idempotente: decifra fernet:... ou devolve plaintext intacto.
+    auth_token = read_secret(auth_token) if auth_token else ""
 
     result = {
         "headers": {**MCP_HEADERS},
