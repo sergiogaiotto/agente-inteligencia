@@ -44,6 +44,65 @@ _tracer = get_tracer(__name__)
 
 
 # ═══════════════════════════════════════════════════
+# Helpers — Pre-check de configuração do LLM provider
+# ═══════════════════════════════════════════════════
+
+
+def _resolve_provider_config(provider: str, settings) -> tuple[str, Optional[str]]:
+    """Verifica se o provider tem configuração suficiente pra ser invocado.
+
+    Returns:
+        (api_key_efetiva, missing_reason)
+        - api_key_efetiva: valor a passar adiante (pode ser sentinel como
+          'ollama' ou 'not-needed').
+        - missing_reason: None quando OK; string com motivo curto pra exibir
+          ao user quando bloqueia.
+
+    Onda 7 Wave 4 + bug 2026-05-27 (workspace mostrava "API Key do provedor
+    'gpt-oss-120b' não configurada" mesmo com URL + key='not-needed' setadas):
+    - "openai"/"azure": ambos consomem azure_openai_api_key (legacy alias).
+    - "ollama": dispensa key real, sentinel 'ollama' é OK.
+    - "gpt-oss-20b"/"gpt-oss-120b": hub interno autentica via rede privada/
+      mTLS; 'not-needed' (e mesmo vazio) é aceito. O que IMPORTA é a URL.
+    - Outros: provider desconhecido → bloqueia com missing_reason.
+
+    Placeholders ('sk-your', 'mrt-your', 'change', 'your-...') também
+    bloqueiam — significam que ninguém configurou de verdade.
+    """
+    PLACEHOLDER_PREFIXES = ("sk-your", "your-", "mrt-your", "change", "placeholder")
+
+    if provider in ("openai", "azure"):
+        api_key = (settings.azure_openai_api_key or "").strip()
+        if not api_key or api_key.startswith(PLACEHOLDER_PREFIXES):
+            return "", "API Key do Azure OpenAI não está configurada"
+        return api_key, None
+
+    if provider == "maritaca":
+        api_key = (settings.maritaca_api_key or "").strip()
+        if not api_key or api_key.startswith(PLACEHOLDER_PREFIXES):
+            return "", "API Key da Maritaca não está configurada"
+        return api_key, None
+
+    if provider == "ollama":
+        # Ollama dispensa key real — 'ollama' é o sentinel default.
+        return settings.ollama_api_key or "ollama", None
+
+    if provider == "gpt-oss-20b":
+        # GPT-OSS: a chave NÃO é a barreira (proxy interno autentica via rede
+        # privada/mTLS). URL é o que importa — sem URL, agente não chama nada.
+        if not (settings.oss20b_url or "").strip():
+            return "", "URL do GPT-OSS-20B não está configurada"
+        return settings.oss20b_api_key or "not-needed", None
+
+    if provider == "gpt-oss-120b":
+        if not (settings.oss120b_url or "").strip():
+            return "", "URL do GPT-OSS-120B não está configurada"
+        return settings.oss120b_api_key or "not-needed", None
+
+    return "", f"Provider '{provider}' desconhecido — sem mapeamento de configuração"
+
+
+# ═══════════════════════════════════════════════════
 # Helpers — Structured Output (Wave atual)
 # ═══════════════════════════════════════════════════
 
@@ -1009,22 +1068,12 @@ async def execute_interaction(
     from app.core.config import get_settings
     settings = get_settings()
     provider = agent.get("llm_provider", "azure")
-    # Onda 7 Wave 4: "openai" semantic vira Azure (cleanup do OpenAI público).
-    # llm_providers.py mantém alias OpenAIProvider → AzureOpenAIProvider, então
-    # tanto agentes legacy (provider="openai") quanto novos (provider="azure")
-    # usam a mesma chave do Azure.
-    if provider in ("openai", "azure"):
-        api_key = settings.azure_openai_api_key
-    elif provider == "maritaca":
-        api_key = settings.maritaca_api_key
-    elif provider == "ollama":
-        api_key = settings.ollama_api_key or "ollama"  # Ollama dispensa key
-    else:
-        api_key = ""
-    if not api_key or api_key.startswith(("sk-your", "your-", "mrt-your", "change")):
+    api_key, missing_reason = _resolve_provider_config(provider, settings)
+
+    if missing_reason:
         draft = (
-            f"⚠ API Key do provedor '{provider}' não configurada.\n\n"
-            f"Acesse Configurações → Plataforma e insira a API Key do {provider.upper()}.\n"
+            f"⚠ {missing_reason}.\n\n"
+            f"Acesse Configurações → Plataforma e configure '{provider}'.\n"
             f"Modelo selecionado: {agent.get('model', '?')}"
         )
         await fsm.run_draft_answer(draft)
