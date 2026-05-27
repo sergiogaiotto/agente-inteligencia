@@ -264,6 +264,18 @@
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
                             Pass-through ativo
                         </span>
+                        <!-- "Empoderar skill": atalho que monta um system prompt mínimo
+                             delegando explicitamente à skill vinculada. Só faz sentido
+                             se há skill_id no passo Básico — daí o x-show. Template fixo
+                             usa {{USER_INPUT}} como variável de runtime. -->
+                        <button x-show="form.skill_id && selectedSkillPreview"
+                                @click="applyEmpowerSkillTemplate()"
+                                type="button"
+                                title="Substitui o System Prompt por um template que delega à skill vinculada"
+                                class="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100 transition-colors">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                            Empoderar skill
+                        </button>
                         <button @click="refineField('system_prompt', 'Melhore este system prompt: torne-o mais específico, adicione formato de saída e guardrails')" :disabled="refining"
                                 class="inline-flex items-center gap-1 rounded-lg bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-600 hover:bg-violet-100 disabled:opacity-40 transition-colors">
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
@@ -525,6 +537,30 @@ function agentForm(editId) {
             if (!id) return;
             const sp = this.savedPrompts.find(p => p.id === id);
             if (sp) { this.form.system_prompt = sp.prompt_text; showToast('Prompt "' + sp.name + '" aplicado'); }
+        },
+        // Template "Empoderar skill": cria um system prompt mínimo que delega
+        // explicitamente à skill vinculada no passo Básico. Útil quando o
+        // operador quer que o agente seja apenas um proxy executor da skill,
+        // sem persona/instruções adicionais (anti-passthrough sem reescrever
+        // tudo do zero). `{{USER_INPUT}}` é a variável que o engine substitui
+        // em runtime pela mensagem do usuário.
+        applyEmpowerSkillTemplate() {
+            const skill = this.selectedSkillPreview;
+            if (!skill) {
+                showToast('Selecione uma skill no passo Básico antes', 'error');
+                return;
+            }
+            // Substitui SEM confirmar — se o user tinha conteúdo e clicou no
+            // botão, a intenção foi clara. Ctrl+Z não funciona em textarea
+            // controlado por Alpine, mas o user pode editar manualmente.
+            const current = (this.form.system_prompt || '').trim();
+            if (current && current !== 'Você é um agente inteligente.' && current !== 'Você é um agente inteligente e especializado.') {
+                if (!confirm('O System Prompt atual será substituído pelo template de empoderar skill. Continuar?')) {
+                    return;
+                }
+            }
+            this.form.system_prompt = `Use a skill ${skill.name} para responder:\n\n{{USER_INPUT}}`;
+            showToast('Prompt configurado para empoderar a skill "' + skill.name + '"');
         },
         async loadModels() {
             try {
