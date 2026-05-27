@@ -304,14 +304,65 @@
                                     </template>
                                 </div>
 
-                                <!-- Contract -->
+                                <!-- Contract — mostra status + selo de retry se Verifier corrigiu via LLM -->
                                 <div class="rounded-lg px-3 py-1.5 flex items-center justify-between text-[11px]"
                                      :class="lastTrace.verification.contract_compliant ? 'bg-surface-50' : 'bg-amber-50'">
                                     <span class="text-surface-500">Contract</span>
-                                    <span class="font-semibold"
-                                          :class="lastTrace.verification.contract_compliant ? 'text-emerald-600' : 'text-amber-700'"
-                                          x-text="lastTrace.verification.contract_compliant ? '✓ ok' : '⚠ violado'"></span>
+                                    <div class="flex items-center gap-1.5">
+                                        <span x-show="lastTrace.verification.contract_retried"
+                                              class="rounded-full bg-violet-100 text-violet-700 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+                                              title="Verifier detectou violação no 1º attempt e re-chamou o LLM com instrução de correção">
+                                            ↻ retry
+                                        </span>
+                                        <span class="font-semibold"
+                                              :class="lastTrace.verification.contract_compliant ? 'text-emerald-600' : 'text-amber-700'"
+                                              x-text="lastTrace.verification.contract_compliant ? '✓ ok' : '⚠ violado'"></span>
+                                    </div>
                                 </div>
+
+                                <!-- Contract errors expandido: alerta amarelo com lista dos erros do validador -->
+                                <!-- (Wave UI Contract Errors): hoje os erros ficavam só no JSON do response — operador -->
+                                <!-- tinha que abrir devtools pra ver. Agora mostra explícito quando compliant=false. -->
+                                <template x-if="!lastTrace.verification.contract_compliant && (lastTrace.verification.contract_errors || []).length > 0">
+                                    <div class="rounded-lg border border-amber-300 bg-amber-50/80 px-3 py-2">
+                                        <div class="flex items-center justify-between mb-1">
+                                            <div class="text-[10px] font-bold text-amber-800">
+                                                ⚠ Output Contract violado
+                                                <span class="font-normal text-amber-600">
+                                                    (<span x-text="lastTrace.verification.contract_errors.length"></span>
+                                                    <span x-text="lastTrace.verification.contract_errors.length === 1 ? 'erro' : 'erros'"></span>)
+                                                </span>
+                                            </div>
+                                            <button @click="contractErrorsOpen = !contractErrorsOpen"
+                                                    type="button"
+                                                    class="text-[9px] text-amber-700 hover:text-amber-900 font-semibold uppercase tracking-wider">
+                                                <span x-text="contractErrorsOpen ? '↑ ocultar' : '↓ detalhar'"></span>
+                                            </button>
+                                        </div>
+                                        <div x-show="contractErrorsOpen" x-collapse>
+                                            <ul class="list-disc pl-4 space-y-0.5 text-[10px] text-amber-900 font-mono">
+                                                <template x-for="e in lastTrace.verification.contract_errors.slice(0,10)" :key="e">
+                                                    <li x-text="e"></li>
+                                                </template>
+                                            </ul>
+                                            <p class="mt-2 text-[10px] text-amber-700 italic">
+                                                <template x-if="lastTrace.verification.contract_retried">
+                                                    <span>
+                                                        Verifier tentou corrigir via retry mas LLM persistiu o erro.
+                                                        Revise o ## Output Contract do SKILL.md (talvez muito estrito) ou
+                                                        o prompt do agente.
+                                                    </span>
+                                                </template>
+                                                <template x-if="!lastTrace.verification.contract_retried">
+                                                    <span>
+                                                        Verifier não tentou retry (setting desabilitado ou provider não passou).
+                                                        Resposta foi entregue mesmo violando o contrato.
+                                                    </span>
+                                                </template>
+                                            </p>
+                                        </div>
+                                    </div>
+                                </template>
 
                                 <!-- Unsupported claims (alucinação suspeita) -->
                                 <template x-if="(lastTrace.verification.unsupported_claims || []).length > 0">
@@ -430,6 +481,10 @@ function workspacePage() {
         input:'', sending:false,
         renamingId:null, renameValue:'',
         showTrace:true, lastTrace:null, activeTraceIdx:-1,
+        // Wave UI Contract Errors: controla se a lista detalhada dos
+        // contract_errors está expandida no painel de trace. Default
+        // fechado pra não poluir; user clica "↓ detalhar" pra abrir.
+        contractErrorsOpen:false,
         pendingFiles:[],
         execMode:'agent',
         pipelineRoots:[],
