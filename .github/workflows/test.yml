@@ -3,12 +3,11 @@ name: Tests
 # Roda a suite pytest em cada push (qualquer branch) e PR contra main.
 # Bloqueia merge se vermelho — protege main de regressão de lógica pura.
 #
-# Cobre os ~840 testes unitários atuais (mockados, sem Postgres real).
-# Smoke tests com Postgres real ficam em job separado (test-integration)
-# pra não atrasar o feedback do CI principal — ver PR irmão.
+# 2 jobs:
+# - test: 850+ testes unitários mockados (rápido, ~30s, sem deps externas)
+# - test-integration: smoke com Postgres pgvector real (mais lento, ~60s)
 #
 # Custo: GitHub Actions free pra repos privados pessoais (~2000 min/mês).
-# Cada run gasta ~30-45s (setup Python + pip + pytest ~25s).
 
 on:
   push:
@@ -51,14 +50,68 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run pytest
+      - name: Run pytest (unit only)
         # -x para falhar no primeiro erro (feedback rápido em PR review).
         # -q reduz output (CI logs limpos). --strict-markers já vem do
         # pytest.ini — pega marker typo (ex: @pytest.mark.integraion).
+        # -m "not integration" → roda só os mocked (rápido, sem deps externas).
+        # Integração com Postgres real vai no job test-integration abaixo.
         run: |
-          python -m pytest tests/ -x -q
+          python -m pytest tests/ -x -q -m "not integration"
         env:
           # Suprime logs de arquivo durante testes — CI não tem volume
           # persistente e LOG_FILE_ENABLED=0 evita criar logs/*.log.
+          LOG_FILE_ENABLED: "0"
+          LOG_CONSOLE_ENABLED: "0"
+
+  test-integration:
+    # Smoke tests com Postgres pgvector REAL. Pega bugs que mocks não pegam
+    # (coluna ausente, constraint, JSONB encoding, migrations). Bug do PR
+    # #151 (data_tables column missing) seria pego aqui automaticamente.
+    name: pytest (integration — Postgres real)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Service container Postgres pgvector — mesma imagem que prod usa
+    # (docker-compose.yml: pgvector/pgvector:pg16). DDL e migrations rodam
+    # idênticas, smoke pega divergências reais.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: agente
+          POSTGRES_PASSWORD: agente
+          POSTGRES_DB: agente_inteligencia_test
+        ports:
+          - 5432:5432
+        # Health check garante Postgres pronto antes do pytest começar.
+        options: >-
+          --health-cmd "pg_isready -U agente -d agente_inteligencia_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest (integration)
+        run: |
+          python -m pytest tests/integration -v -m integration
+        env:
+          # Aponta pro service container — não usa DATABASE_URL real.
+          TEST_DATABASE_URL: postgresql://agente:agente@localhost:5432/agente_inteligencia_test
           LOG_FILE_ENABLED: "0"
           LOG_CONSOLE_ENABLED: "0"
