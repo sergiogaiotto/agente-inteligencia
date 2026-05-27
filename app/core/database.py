@@ -824,6 +824,16 @@ _IDEMPOTENT_MIGRATIONS = [
     # - 'hybrid' (default): comportamento legacy — aceita tudo, oferece promote a tabela.
     # Backfill = hybrid para KS existentes (preserva comportamento).
     "ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS kb_mode TEXT DEFAULT 'hybrid'",
+    # Onda Tabular — coluna `data_tables` na tabela skills.
+    # Bug reportado: criar skill nova pela UI estourava 500 com
+    # `UndefinedColumnError: column "data_tables" of relation "skills"
+    # does not exist`. O parser (skill_to_db_dict em app/skill_parser/parser.py)
+    # já retornava `data_tables` no dict desde os PRs #110/#115, mas a DDL
+    # da tabela skills (CREATE TABLE acima) não foi atualizada e nenhuma
+    # migration idempotente cobriu o gap. Esta ALTER fecha o circuito —
+    # idempotente, então safe em qualquer ambiente. TEXT default '' (vazio)
+    # = compat com skills antigas que não tinham ## Data Tables.
+    "ALTER TABLE skills ADD COLUMN IF NOT EXISTS data_tables TEXT DEFAULT ''",
     # ─── PR D pgvector foundation ───────────────────────────────
     # Extensão `vector` (pgvector). Idempotente; só funciona em imagens com
     # a extensão disponível (pgvector/pgvector:pg16 e similares). Postgres
