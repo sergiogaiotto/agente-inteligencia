@@ -92,7 +92,14 @@ markitdown[all]>=0.1.5
 duckdb>=1.0.0
 
 # === Testing (dev) ===
-# Testes de lógica pura (Pydantic, parsers, state machines). Integração
-# com Postgres não é coberta por enquanto — smoke test manual em docs/catalog.
+# Testes de lógica pura (Pydantic, parsers, state machines) +
+# integration tests com Postgres real (tests/integration/, requer docker).
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+# Cobertura de código — reporta % no CI sem bloquear merge.
+# Roda com: pytest --cov=app --cov-report=term-missing
+# Útil pra ver módulos sem teste (não pra atingir 100% — alvo realista: 70-80%).
+pytest-cov>=5.0.0
+# Pre-commit framework — orquestra hooks locais antes de cada commit.
+# Setup: pre-commit install (1x por clone). Config em .pre-commit-config.yaml.
+pre-commit>=3.5.0
