@@ -522,6 +522,14 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
                     break
 
         if matched:
+            # Sobrescreve `name` com o nome humano do Registry. Wizard hoje
+            # escreve UUID nos backticks (`- `<id>` (Display)`), e sem este
+            # override o function call do LLM ficava com nome
+            # `e46f1652_7918_4cc5_...` — LLM não reconhecia como tool relevante
+            # e ignorava. Após match, `pt.name` vira "Tavily MCP Server" (ou
+            # nome real), build_openai_tools sanitiza pra `Tavily_MCP_Server`
+            # — function name semântico que o LLM efetivamente invoca.
+            pt['name'] = matched.get('name') or pt.get('name', '')
             pt['mcp_server'] = matched.get('mcp_server') or pt.get('mcp_server', '')
             pt['description'] = matched.get('description') or ''
             pt['db_id'] = matched.get('id', '')
