@@ -170,6 +170,26 @@
                 </div>
             </div>
 
+            <!-- Onda 1 Output Shape: preset de tamanho da resposta. Quando preenchido,
+                 wizard injeta ## Output Shape no SKILL.md. Engine respeita via diretiva
+                 no system_prompt + truncate hard pós-LLM. -->
+            <div>
+                <div class="flex items-center justify-between mb-1.5">
+                    <label class="block text-[11px] font-semibold text-violet-800">Formato da saída (tamanho)</label>
+                    <span x-show="!wizardLengthPreset" class="rounded-full bg-violet-100 text-violet-700 px-2 py-0.5 text-[9px] font-medium">opcional · sem preset = default 'digest' (1500 chars)</span>
+                </div>
+                <select x-model="wizardLengthPreset" class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none focus:border-violet-400">
+                    <option value="">— Sem preset (engine usa 'digest' ≤ 1500 chars) —</option>
+                    <option value="intent">📌 Intenção · ≤ 600 chars · frase curta</option>
+                    <option value="summary">📝 Resumo · ≤ 600 chars · síntese curta</option>
+                    <option value="digest">📃 Sumário · ≤ 1500 chars · default</option>
+                    <option value="analysis">📊 Análise · ≤ 4000 chars · análise estruturada</option>
+                    <option value="report">📚 Relatório · ≤ 8000 chars · texto longo</option>
+                    <option value="unbounded">∞ Livre · sem corte · todo o texto preservado</option>
+                </select>
+                <p x-show="wizardLengthPreset" class="mt-1 text-[10px] text-violet-600" x-text="'Gera ## Output Shape com length_preset: ' + wizardLengthPreset + '. Engine trunca resposta se LLM exceder.'"></p>
+            </div>
+
             <!-- Wave Wizard UX: Preview do que será gerado — atualiza em tempo real. -->
             <div class="rounded-lg border border-violet-200 bg-violet-50/40 px-3 py-2.5">
                 <div class="text-[10px] font-semibold uppercase tracking-wider text-violet-600 mb-1.5">Vamos gerar</div>
@@ -811,6 +831,9 @@ function skillForm(editId) {
         // pra permitir input vazio = backend não emite a chave; engine usa
         // default 0.3. Convertido pra float no submit (ou null se vazio).
         wizardMinRelevance: '',
+        // Onda 1 Output Shape: preset de tamanho. Vazio = backend não emite
+        // ## Output Shape; engine usa default 'digest' (1500 chars).
+        wizardLengthPreset: '',
         parseResult: null,
         mcpTools: [],
         apiConnectors: [],  // lista de connectors registrados
@@ -1632,6 +1655,7 @@ ${outMap}`;
                     api_keys: this.wizardApiKeys,
                     exec_mode: this.wizardExecMode,  // "" → backend infere
                     min_relevance: minRelevance,
+                    length_preset: this.wizardLengthPreset || null,
                 });
                 this.form.raw_content = r.skill_md;
                 // Sync dos checkboxes do editor (Fontes RAG) com o que o

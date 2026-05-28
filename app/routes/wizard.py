@@ -155,6 +155,14 @@ class WizardSkillRequest(BaseModel):
     # Range [0..1] validado pelo Pydantic. Aceitar exatamente 0.0 e 1.0 é
     # deliberado (0.0 = aceita qualquer; 1.0 = só evidência perfeita).
     min_relevance: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    # Onda 1 Output Shape: preset de tamanho da resposta. None = wizard não
+    # emite ## Output Shape; engine usa default 'digest' (1500 chars).
+    # Validado contra LENGTH_PRESETS (intent/summary/digest/analysis/report/
+    # unbounded).
+    length_preset: Optional[str] = Field(
+        default=None,
+        pattern=r"^(intent|summary|digest|analysis|report|unbounded)$",
+    )
 
 
 class WizardRefineRequest(BaseModel):
@@ -474,6 +482,16 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
     obligatory_sections.append(
         "## Execution Profile\n" + _build_exec_profile_yaml(exec_mode)
     )
+
+    # Onda 1 Output Shape: emite ## Output Shape quando user escolheu preset.
+    # Sem preset, NÃO inclui a seção — engine cai em default ('digest') sem
+    # poluir a skill com YAML opcional.
+    if data.length_preset:
+        obligatory_sections.append(
+            "## Output Shape\n```yaml\n"
+            f"length_preset: {data.length_preset}\n"
+            "```"
+        )
 
     # Regras anti-hallucination: explícitas pra evitar que o LLM invente
     # bindings que o user não escolheu. Sem isso, o LLM tende a "completar"
