@@ -207,3 +207,53 @@ class TestMatchByUuid:
         assert len(out) == 1
         # Sem db_id = engine identifica como unmatched
         assert not out[0].get("db_id")
+
+
+class TestNameOverrideAfterMatch:
+    """Bug crítico (2026-05-28): após match_with_registry, pt.name continuava
+    sendo o UUID dos backticks. build_openai_tools sanitizava em
+    `e46f1652_7918_4cc5_81a4_2920427d62b6` — LLM não reconhecia, não chamava,
+    resposta saía vazia (caso real do _Qresearch_ com Tavily).
+
+    Fix: match_with_registry sobrescreve pt.name com matched.name após casar.
+    """
+
+    @pytest.mark.asyncio
+    async def test_uuid_in_pt_name_replaced_with_human_name(self, fake_repo):
+        """Cenário do bug: parsed_tool veio do Wizard com UUID nos backticks.
+        Após match, pt.name DEVE ser 'Tavily MCP Server' (não o UUID)."""
+        parsed = [{"name": "e46f1652-7918-4cc5-81a4-2920427d62b6"}]
+        out = await match_with_registry(parsed, fake_repo)
+        assert len(out) == 1
+        assert out[0]["name"] == "Tavily MCP Server", (
+            f"name não foi sobrescrito após match — veio '{out[0]['name']}'. "
+            "build_openai_tools vai gerar function name esquisito e o LLM não chama."
+        )
+        # Sanity: o UUID continua disponível como db_id pra outros usos
+        assert out[0]["db_id"] == "e46f1652-7918-4cc5-81a4-2920427d62b6"
+
+    @pytest.mark.asyncio
+    async def test_legacy_skill_with_name_preserves_name(self, fake_repo):
+        """Skill legacy (formato `- **Tavily MCP Server**`) já tinha o nome
+        correto — após match, NÃO deve ser alterado (matched.name = mesma coisa)."""
+        parsed = [{"name": "Tavily MCP Server"}]
+        out = await match_with_registry(parsed, fake_repo)
+        assert out[0]["name"] == "Tavily MCP Server"
+
+    @pytest.mark.asyncio
+    async def test_unmatched_tool_keeps_original_name(self, fake_repo):
+        """Quando NÃO casa (tool órfã), name preserva o que veio do parser.
+        Engine vai sinalizar como unmatched no execution_log (PR #169)."""
+        parsed = [{"name": "ghost-tool-uuid"}]
+        out = await match_with_registry(parsed, fake_repo)
+        assert out[0]["name"] == "ghost-tool-uuid"
+        assert not out[0].get("db_id")
+
+    @pytest.mark.asyncio
+    async def test_fallback_via_display_name_also_overrides(self, fake_repo):
+        """UUID obsoleto + display_name correto: match resolve via display,
+        e o name final é o do Registry (não display, não UUID)."""
+        parsed = [{"name": "obsolete-uuid-xxxx", "display_name": "Tavily MCP Server"}]
+        out = await match_with_registry(parsed, fake_repo)
+        # Match resolveu via display_name; nome final vem do Registry.
+        assert out[0]["name"] == "Tavily MCP Server"
