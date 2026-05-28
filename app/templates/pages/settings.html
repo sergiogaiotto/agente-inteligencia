@@ -122,6 +122,40 @@
             </button>
         </div>
 
+        <!-- Idioma de Resposta (default global) — destaque no topo da aba.
+             Aplicado quando agent.response_language está vazio. Engine prepende
+             diretiva no system_prompt em toda chamada LLM. -->
+        <div class="rounded-xl border-2 border-violet-300 bg-gradient-to-br from-violet-50 to-white p-5 mb-5">
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-3">
+                    <span class="text-lg">🌐</span>
+                    <div>
+                        <div class="text-[13px] font-semibold text-brand-900">Idioma de Resposta — Default Global</div>
+                        <div class="text-[11px] text-surface-500">Aplicado a <strong>todos</strong> os agentes que não fizeram override no campo <code class="font-mono text-violet-600">response_language</code>. Engine força o LLM a responder neste idioma mesmo quando RAG/MCP retornam conteúdo em outras línguas.</div>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <label class="block text-[11px] font-semibold text-surface-500 mb-1">Idioma padrão</label>
+                <select x-model="config.default_response_language" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none focus:border-violet-400">
+                    <option value="pt-BR">Português brasileiro (pt-BR)</option>
+                    <option value="pt-PT">Português europeu (pt-PT)</option>
+                    <option value="en-US">Inglês americano (en-US)</option>
+                    <option value="en-GB">Inglês britânico (en-GB)</option>
+                    <option value="es-ES">Espanhol (es-ES)</option>
+                    <option value="es-MX">Espanhol mexicano (es-MX)</option>
+                    <option value="fr-FR">Francês (fr-FR)</option>
+                    <option value="de-DE">Alemão (de-DE)</option>
+                    <option value="it-IT">Italiano (it-IT)</option>
+                    <option value="ja-JP">Japonês (ja-JP)</option>
+                    <option value="zh-CN">Chinês simplificado (zh-CN)</option>
+                </select>
+            </div>
+            <p class="text-[10px] text-violet-700 mt-2 flex items-center gap-1">
+                <span>ⓘ</span> Override por agente em <a href="/agents" class="underline hover:text-violet-900">Agentes</a> → Editar → step Básico → "Idioma da resposta".
+            </p>
+        </div>
+
         <!-- Modelo Primário (fallback global) — destaque no topo -->
         <div class="rounded-xl border-2 border-brand-300 bg-gradient-to-br from-brand-50 to-white p-5 mb-5">
             <div class="flex items-center justify-between mb-3">
@@ -926,6 +960,8 @@ function settingsPage() {
             max_iterations:25,timeout:120,
             // Modelo Primário (fallback global)
             primary_provider:'', primary_model:'',
+            // Idioma de resposta (default global) — fallback quando agent.response_language vazio
+            default_response_language: 'pt-BR',
             // GPT-OSS (Onda 4 plataforma)
             oss120b_url:'', oss120b_model:'openai/gpt-oss-120b', oss120b_api_key:'not-needed',
             oss20b_url:'',  oss20b_model:'openai/gpt-oss-20b',   oss20b_api_key:'not-needed',
