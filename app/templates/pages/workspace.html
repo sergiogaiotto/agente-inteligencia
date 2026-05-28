@@ -440,15 +440,105 @@
                     <div>
                         <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-2">Métricas</h3>
                         <div class="grid grid-cols-2 gap-2">
-                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.duration_ms?.toFixed(0)||'—'"></div><div class="text-[9px] text-surface-400 uppercase">Latência (ms)</div></div>                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.total_steps||lastTrace.transitions?.length||0"></div><div class="text-[9px] text-surface-400 uppercase">Transições</div></div>
-                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.evidence_count||0"></div><div class="text-[9px] text-surface-400 uppercase">Evidências</div></div>
-                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.mcp_tools?.length||0"></div><div class="text-[9px] text-surface-400 uppercase">MCP Tools</div></div>
-                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.api_tools_count||0"></div><div class="text-[9px] text-surface-400 uppercase">API Tools</div></div>
+                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.duration_ms?.toFixed(0)||'—'"></div><div class="text-[9px] text-surface-400 uppercase">Latência (ms)</div></div>
+                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"><div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.total_steps||lastTrace.transitions?.length||0"></div><div class="text-[9px] text-surface-400 uppercase">Transições</div></div>
+                            <!-- EVIDÊNCIAS: clicável quando > 0, expande painel abaixo com chunks recuperados -->
+                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center transition-colors"
+                                 :class="(lastTrace.trace?.evidence_count||0) > 0 ? 'cursor-pointer hover:bg-emerald-50 ring-1 ring-transparent hover:ring-emerald-200' : ''"
+                                 @click="if ((lastTrace.trace?.evidence_count||0) > 0) metricExpanded = metricExpanded === 'evidence' ? '' : 'evidence'"
+                                 :title="(lastTrace.trace?.evidence_count||0) > 0 ? 'Clique pra ver os chunks recuperados' : 'Sem chunks pra detalhar'">
+                                <div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.evidence_count||0"></div>
+                                <div class="text-[9px] text-surface-400 uppercase flex items-center justify-center gap-1">
+                                    <span>Evidências</span>
+                                    <span x-show="(lastTrace.trace?.evidence_count||0) > 0" class="text-emerald-500" x-text="metricExpanded === 'evidence' ? '▴' : '▾'"></span>
+                                </div>
+                            </div>
+                            <!-- MCP TOOLS: clicável quando > 0, mostra invocações reais (não declaradas) -->
+                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center transition-colors"
+                                 :class="(lastTrace.trace?.mcp_tools?.length||0) > 0 ? 'cursor-pointer hover:bg-brand-50 ring-1 ring-transparent hover:ring-brand-200' : ''"
+                                 @click="if ((lastTrace.trace?.mcp_tools?.length||0) > 0) metricExpanded = metricExpanded === 'mcp' ? '' : 'mcp'"
+                                 :title="(lastTrace.trace?.mcp_tools?.length||0) > 0 ? 'Clique pra ver as ferramentas MCP invocadas' : 'Nenhuma ferramenta MCP foi invocada'">
+                                <div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.mcp_tools?.length||0"></div>
+                                <div class="text-[9px] text-surface-400 uppercase flex items-center justify-center gap-1">
+                                    <span>MCP Tools</span>
+                                    <span x-show="(lastTrace.trace?.mcp_tools?.length||0) > 0" class="text-brand-500" x-text="metricExpanded === 'mcp' ? '▴' : '▾'"></span>
+                                </div>
+                            </div>
+                            <!-- API TOOLS: clicável quando > 0, mostra binding_executions -->
+                            <div class="rounded-lg bg-surface-50 px-3 py-2 text-center transition-colors"
+                                 :class="(lastTrace.trace?.api_tools_count||0) > 0 ? 'cursor-pointer hover:bg-fuchsia-50 ring-1 ring-transparent hover:ring-fuchsia-200' : ''"
+                                 @click="if ((lastTrace.trace?.api_tools_count||0) > 0) metricExpanded = metricExpanded === 'api' ? '' : 'api'"
+                                 :title="(lastTrace.trace?.api_tools_count||0) > 0 ? 'Clique pra ver as chamadas de API binding' : 'Nenhuma API binding foi executada'">
+                                <div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.api_tools_count||0"></div>
+                                <div class="text-[9px] text-surface-400 uppercase flex items-center justify-center gap-1">
+                                    <span>API Tools</span>
+                                    <span x-show="(lastTrace.trace?.api_tools_count||0) > 0" class="text-fuchsia-500" x-text="metricExpanded === 'api' ? '▴' : '▾'"></span>
+                                </div>
+                            </div>
                             <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"
                                  :title="(lastTrace.trace?.tokens?.input||0).toLocaleString('pt-BR')+' in (último prompt) + '+(lastTrace.trace?.tokens?.output||0).toLocaleString('pt-BR')+' out (gerados) · '+(lastTrace.trace?.tokens?.calls||0)+' chamada(s) LLM · billing total: '+(lastTrace.trace?.tokens?.total_billed||0).toLocaleString('pt-BR')">
                                 <div class="text-[16px] font-bold text-brand-900" x-text="(lastTrace.trace?.tokens?.total||0).toLocaleString('pt-BR')"></div>
                                 <div class="text-[9px] text-surface-400 uppercase">Tokens</div>
                             </div>
+                        </div>
+                        <!-- ── Painel de drilldown — Evidências ── -->
+                        <div x-show="metricExpanded === 'evidence' && (lastTrace.trace?.evidence_detail?.length||0) > 0"
+                             x-transition.duration.150ms
+                             class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/30 p-2 space-y-1.5">
+                            <div class="text-[9px] font-bold text-emerald-700 uppercase tracking-wider mb-1">Chunks recuperados</div>
+                            <template x-for="(ev, i) in lastTrace.trace?.evidence_detail || []" :key="i">
+                                <div class="rounded bg-white border border-emerald-100 px-2 py-1.5">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="text-[10px] font-mono text-brand-900" x-text="'#'+ev.ordinal+' · '+(ev.source||'?')"></span>
+                                        <span class="text-[10px] font-mono"
+                                              :class="ev.score >= 0.7 ? 'text-emerald-700 font-bold' : (ev.score >= 0.3 ? 'text-brand-600' : 'text-amber-600')"
+                                              x-text="'score '+(ev.score?.toFixed(2)||'?')"></span>
+                                    </div>
+                                    <div class="mt-1 text-[10px] text-surface-600 line-clamp-2" x-text="ev.text_preview||''"></div>
+                                </div>
+                            </template>
+                        </div>
+                        <!-- ── Painel de drilldown — MCP Tools ── -->
+                        <div x-show="metricExpanded === 'mcp' && (lastTrace.trace?.mcp_tools?.length||0) > 0"
+                             x-transition.duration.150ms
+                             class="mt-2 rounded-lg border border-brand-200 bg-brand-50/30 p-2 space-y-1.5">
+                            <div class="text-[9px] font-bold text-brand-700 uppercase tracking-wider mb-1">Ferramentas MCP invocadas</div>
+                            <template x-for="(t, i) in lastTrace.trace?.mcp_tools || []" :key="i">
+                                <div class="rounded bg-white border border-brand-100 px-2 py-1.5">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="text-[10px] font-mono font-semibold text-brand-900" x-text="t.name||'?'"></span>
+                                        <span class="text-[9px] font-mono"
+                                              :class="t.status === 'completed' ? 'text-emerald-600' : (t.status === 'error' ? 'text-rose-600' : 'text-surface-400')"
+                                              x-text="t.status||'?'"></span>
+                                    </div>
+                                    <div class="mt-0.5 flex items-center gap-2 text-[9px] text-surface-500">
+                                        <span x-show="t.server" x-text="t.server"></span>
+                                        <span x-show="t.latency_ms" x-text="t.latency_ms?.toFixed(0)+' ms'"></span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                        <!-- ── Painel de drilldown — API Tools ── -->
+                        <div x-show="metricExpanded === 'api' && (lastTrace.trace?.api_tools?.length||0) > 0"
+                             x-transition.duration.150ms
+                             class="mt-2 rounded-lg border border-fuchsia-200 bg-fuchsia-50/30 p-2 space-y-1.5">
+                            <div class="text-[9px] font-bold text-fuchsia-700 uppercase tracking-wider mb-1">API bindings executados</div>
+                            <template x-for="(a, i) in lastTrace.trace?.api_tools || []" :key="i">
+                                <div class="rounded bg-white border border-fuchsia-100 px-2 py-1.5">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="text-[10px] font-mono font-semibold text-brand-900" x-text="a.binding_id||'?'"></span>
+                                        <span class="text-[9px] font-mono"
+                                              :class="a.status_code >= 200 && a.status_code < 300 ? 'text-emerald-600' : (a.status_code >= 400 ? 'text-rose-600' : 'text-surface-400')"
+                                              x-text="(a.status_code||0)+(a.is_compensation ? ' · compensação' : '')"></span>
+                                    </div>
+                                    <div class="mt-0.5 flex items-center gap-2 text-[9px] text-surface-500">
+                                        <span x-show="a.latency_ms" x-text="a.latency_ms?.toFixed(0)+' ms'"></span>
+                                        <span x-show="a.attempts > 1" class="text-amber-600" x-text="a.attempts+' tentativas'"></span>
+                                        <span x-show="a.skipped_by_breaker" class="text-amber-600">circuit-breaker</span>
+                                    </div>
+                                    <div x-show="a.error" class="mt-1 text-[9px] text-rose-600 line-clamp-2" x-text="a.error"></div>
+                                </div>
+                            </template>
                         </div>
                     </div>
                     <div>
@@ -481,6 +571,9 @@ function workspacePage() {
         input:'', sending:false,
         renamingId:null, renameValue:'',
         showTrace:true, lastTrace:null, activeTraceIdx:-1,
+        // Drilldown nos cards de Métricas: '' | 'evidence' | 'mcp' | 'api'.
+        // Toggle ao clicar no card correspondente. Reset ao trocar de mensagem.
+        metricExpanded:'',
         // Wave UI Contract Errors: controla se a lista detalhada dos
         // contract_errors está expandida no painel de trace. Default
         // fechado pra não poluir; user clica "↓ detalhar" pra abrir.
