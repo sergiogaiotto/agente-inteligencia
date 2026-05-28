@@ -770,6 +770,12 @@ _IDEMPOTENT_MIGRATIONS = [
     # topo do segmento do agente no log pós-execução. Zero impacto de perf —
     # injetado durante a montagem do log que já estava sendo construído.
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS processing_message TEXT",
+    # response_language: override do idioma de resposta por agente. NULL =
+    # herda settings.default_response_language (pt-BR padrão). Formato BCP-47
+    # ("pt-BR", "en-US", "es-ES"). Engine prepende instrução no system_prompt
+    # garantindo que LLM responde no idioma escolhido mesmo quando evidências
+    # vêm em outro idioma (caso típico: busca Tavily inglês → resposta pt-BR).
+    "ALTER TABLE agents ADD COLUMN IF NOT EXISTS response_language TEXT",
     # Golden Dataset enriquecido — taxonomia, peso ponderado, match flexível, sentinelas
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS category TEXT",
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS weight REAL DEFAULT 1.0",

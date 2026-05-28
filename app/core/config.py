@@ -84,6 +84,15 @@ class Settings(BaseSettings):
     primary_provider: str = ""  # ex: "gpt-oss-120b" | "azure" | "maritaca" | "ollama"
     primary_model: str = ""     # ex: "openai/gpt-oss-120b" | "gpt-4o" | "sabia-4"
 
+    # ── Idioma de resposta (fallback global) ──
+    # Aplicado quando agent.response_language está vazio. Engine prepende
+    # instrução explícita no system_prompt — LLM responde no idioma escolhido
+    # mesmo quando contexto/evidências estão em outros idiomas (caso típico:
+    # busca Tavily retorna inglês, mas resposta sai em pt-BR).
+    # Formato: tag IETF BCP-47 ("pt-BR", "en-US", "es-ES"). UI mostra label
+    # humano via _LANGUAGE_LABELS em llm_providers (mapeamento futuro).
+    default_response_language: str = "pt-BR"
+
     # ── Embedding provider (Qwen3 | Azure) ──
     # Default: Qwen3 (open-weight via hub interno). Reusa URL/key do OSS source
     # escolhido (oss20b ou oss120b), só muda o path. Endpoint efetivo:
@@ -295,6 +304,8 @@ _UI_TO_ENV_MAP = {
     # Modelo Primário (fallback global)
     "primary_provider": "PRIMARY_PROVIDER",
     "primary_model":    "PRIMARY_MODEL",
+    # Idioma de resposta global (BCP-47: pt-BR, en-US, ...)
+    "default_response_language": "DEFAULT_RESPONSE_LANGUAGE",
     # Embedding (Qwen3 reusa URL/key do OSS source)
     "embedding_provider": "EMBEDDING_PROVIDER",
     "qwen3_source":       "QWEN3_SOURCE",
