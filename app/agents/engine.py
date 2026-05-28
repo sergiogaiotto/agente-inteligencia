@@ -1361,6 +1361,8 @@ async def execute_interaction(
     return await _build_result(
         ctx, start, mesh_chain=mesh_chain, attachments=attachment_meta,
         agent=agent, skill_data=skill_data, mcp_tools_detail=mcp_tools_detail,
+        mcp_tools_declared_count=mcp_tools_declared_count,
+        mcp_tools_unmatched=mcp_tools_unmatched,
         verification=verification,
     )
 
@@ -1395,6 +1397,8 @@ async def _build_result(
     mesh_chain: list = None, attachments: list = None,
     agent: dict = None, skill_data: dict = None,
     mcp_tools_detail: list = None,
+    mcp_tools_declared_count: int = 0,
+    mcp_tools_unmatched: list = None,
     verification=None,
 ) -> dict:
     """Constrói resultado enriquecido com detalhes de execução.
