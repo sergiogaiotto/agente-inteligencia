@@ -335,6 +335,15 @@ class DeepAgentHarness:
         # ter precedência forte na atenção do LLM.
         _lang = _resolve_response_language(self.config, _get_settings_lang())
         parts.append(_build_response_language_directive(_lang))
+        # Output Shape — diretiva de TAMANHO da resposta. Quando skill declara
+        # length_preset em ## Output Shape, engine injeta limite explícito.
+        # Sem declaração, usa default ('digest' = 1500 chars) — comportamento
+        # back-compat suave (skills antigas continuam ~mesmo tamanho).
+        _shape = skill.get("_output_shape_parsed") or {}
+        _preset = _shape.get("length_preset")
+        if _preset:
+            from app.skill_parser.output_shape import build_directive as _len_directive
+            parts.append(_len_directive(_preset))
         parts.append(
             self.config.get("system_prompt", "Você é um agente inteligente."),
         )
@@ -1021,6 +1030,9 @@ async def execute_interaction(
                 "_api_bindings_count": len(getattr(parsed, "api_bindings_parsed", []) or []),
                 # Onda 6 Wave 2: evidence_policy estruturado (sources/limits/cite_sources)
                 "_evidence_policy_parsed": getattr(parsed, "evidence_policy_parsed", {}) or {},
+                # Onda 1 Output Shape: length_preset + max_chars (engine usa
+                # pra injetar diretiva no system_prompt + truncate hard).
+                "_output_shape_parsed": getattr(parsed, "output_shape_parsed", {}) or {},
             }
 
     agent["_parsed_skill"] = skill_data
@@ -1317,6 +1329,35 @@ async def execute_interaction(
             draft = f"⚠ Erro ao chamar LLM ({provider}/{agent.get('model','?')}): {err_str[:200]}"
         logger.warning(f"LLM error for agent {agent_id}: {err_str}")
 
+    # Onda 1 Output Shape: truncate hard pós-LLM quando skill declara
+    # length_preset. Mesmo com diretiva no system_prompt, modelos podem
+    # exceder o limite — last-resort enforcement. Truncated_by_preset
+    # vira sinal no execution_log + dimensão format_compliance do Verifier.
+    _truncated_by_preset = False
+    _preset_applied = ""
+    _shape_in_skill = (skill_data or {}).get("_output_shape_parsed") or {}
+    _preset_for_truncate = _shape_in_skill.get("length_preset")
+    if _preset_for_truncate and draft and not draft.startswith("⚠"):
+        # Pula truncate em drafts de erro (já são curtos e informativos).
+        from app.skill_parser.output_shape import enforce_truncate as _enforce_truncate
+        new_draft, was_truncated = _enforce_truncate(draft, _preset_for_truncate)
+        if was_truncated:
+            draft = new_draft
+            _truncated_by_preset = True
+            _preset_applied = _preset_for_truncate
+            logger.warning(
+                "output_shape.truncated",
+                extra={
+                    "event": "output_shape.truncated",
+                    "agent_id": agent.get("id", ""),
+                    "preset": _preset_for_truncate,
+                    "original_len": len(new_draft) + 100,  # aprox.
+                },
+            )
+    # Expõe pro Verifier/UI consultarem
+    ctx.metadata["output_truncated_by_preset"] = _truncated_by_preset
+    ctx.metadata["output_preset_applied"] = _preset_applied
+
     await fsm.run_draft_answer(draft)
 
     # Verificação multi-dim (Verifier v2) — capturada para retornar no result.
@@ -1573,6 +1614,26 @@ async def _build_result(
     elif duration < 3000:
         diagnostics.append({"level": "success", "text": f"Resposta rápida ({duration:.0f}ms)."})
 
+    # Onda 1 Output Shape: dimensão format_compliance — quando engine truncou
+    # o draft por exceder length_preset declarado, sinaliza no diagnóstico.
+    # Operador vê e ajusta (preset maior ou Workflow mais conciso na skill).
+    _truncated = bool(ctx.metadata.get("output_truncated_by_preset"))
+    _preset = ctx.metadata.get("output_preset_applied") or ""
+    if _truncated and _preset:
+        from app.skill_parser.output_shape import LENGTH_PRESETS
+        cfg = LENGTH_PRESETS.get(_preset, {})
+        max_chars = cfg.get("max_chars")
+        label = cfg.get("label", _preset)
+        diagnostics.append({
+            "level": "warning",
+            "text": (
+                f"Format compliance: resposta excedeu o limite e foi truncada "
+                f"(preset '{label}', máximo {max_chars} chars). LLM gerou texto mais "
+                "longo que o declarado em ## Output Shape. Ajuste o preset pra "
+                "tamanho maior, ou refine o Workflow da skill pra ser mais conciso."
+            ),
+        })
+
     verification_dict = _serialize_verification(verification)
     if verification_dict:
         dims = verification_dict.get("dimensions") or {}
@@ -1700,6 +1761,10 @@ async def _build_result(
             # mantido aqui pra simetria semântica com mcp_tools (execução real, não
             # declaração).
             "api_tools_count": api_tools_invoked_count,
+            # Onda 1 Output Shape — sinaliza format_compliance pra UI/audit.
+            # True = LLM violou o length_preset declarado e engine truncou.
+            "output_truncated_by_preset": bool(ctx.metadata.get("output_truncated_by_preset")),
+            "output_preset_applied": ctx.metadata.get("output_preset_applied") or "",
             "tokens": ctx.metadata.get("tokens") or {"input": 0, "output": 0, "total": 0},
             "execution_log": exec_log,
         },

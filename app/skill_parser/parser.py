@@ -17,7 +17,7 @@ from typing import Optional
 
 
 REQUIRED_SECTIONS = ["Purpose", "Activation Criteria", "Inputs", "Workflow", "Tool Bindings", "Output Contract", "Failure Modes"]
-OPTIONAL_SECTIONS = ["Delegations", "Compensation", "Guardrails", "Budget", "Examples", "Telemetry", "Data Dependencies", "Model Constraints", "Evidence Policy", "Gold Refs", "Execution Profile", "API Bindings", "Data Tables"]
+OPTIONAL_SECTIONS = ["Delegations", "Compensation", "Guardrails", "Budget", "Examples", "Telemetry", "Data Dependencies", "Model Constraints", "Evidence Policy", "Gold Refs", "Execution Profile", "API Bindings", "Data Tables", "Output Shape"]
 VALID_KINDS = {"orchestrator", "router", "subagent"}
 VALID_STABILITY = {"alpha", "beta", "stable", "deprecated"}
 VALID_EXEC_MODES = {"fast", "standard", "rigorous", "declarative"}
@@ -71,6 +71,12 @@ class ParsedSkill:
     # ## API Bindings em termos de modelo declarativo.
     data_tables: str = ""          # raw text (markdown or YAML)
     data_tables_parsed: list = field(default_factory=list)  # list of dicts
+    # Onda 1 Output Shape: presets de tamanho/forma da resposta. Bloco YAML
+    # opcional em `## Output Shape`. Parser extrai `length_preset` (validado
+    # contra LENGTH_PRESETS de output_shape.py). Default no engine quando
+    # ausente: 'digest' (1500 chars).
+    output_shape: str = ""         # raw text
+    output_shape_parsed: dict = field(default_factory=dict)  # {length_preset, max_chars}
     raw_content: str = ""
     content_hash: str = ""
     validation_errors: list = field(default_factory=list)
@@ -174,6 +180,20 @@ def parse_skill_md(content: str) -> ParsedSkill:
     if result.data_tables.strip():
         result.data_tables_parsed = _parse_data_tables(result.data_tables)
 
+    # ── Output Shape — preset de tamanho da resposta (Onda 1 do roadmap) ──
+    # Bloco YAML opcional: `length_preset: digest`. Validado contra
+    # LENGTH_PRESETS. Preset inválido → erro de validação (não silencioso —
+    # operador precisa saber que digitou typo). Skill sem o bloco vira
+    # comportamento default no engine ("digest" — 1500 chars).
+    if result.output_shape.strip():
+        result.output_shape_parsed = _parse_output_shape(result.output_shape)
+        invalid_preset = result.output_shape_parsed.get("_invalid_preset")
+        if invalid_preset:
+            result.validation_errors.append(
+                f"length_preset inválido em ## Output Shape: '{invalid_preset}'. "
+                f"Válidos: intent, summary, digest, analysis, report, unbounded."
+            )
+
     # Validação declarative: pelo menos UMA fonte declarativa precisa existir
     # (API Bindings OU Data Tables). Skills puras MCP/RAG não usam declarative.
     if result.execution_mode == "declarative" and not (
@@ -275,6 +295,55 @@ def _parse_data_tables(section_text: str) -> list[dict]:
             continue
         parsed.append(_normalize_yaml11_bool_keys(item))
     return parsed
+
+
+def _parse_output_shape(section_text: str) -> dict:
+    """Parse a seção ## Output Shape (Onda 1 do roadmap de Output Control).
+
+    Aceita bloco fenced YAML:
+        ```yaml
+        length_preset: digest   # intent|summary|digest|analysis|report|unbounded
+        ```
+
+    Sem fence: tenta parsear como YAML inline (linha única `length_preset: X`).
+    Sem YAML válido: devolve {} (skill cai no default do engine).
+
+    Returns:
+        dict com `length_preset` validado E `max_chars` resolvido. Preset
+        inválido entra como `_invalid_preset` pro caller adicionar erro de
+        validação — não silencioso.
+    """
+    if not section_text or not section_text.strip():
+        return {}
+
+    fence_open = re.search(r"```(?:yaml|yml)?\s*\n", section_text)
+    if fence_open:
+        body = section_text[fence_open.end():]
+        body = re.sub(r"\n```\s*$", "", body)
+    else:
+        body = section_text
+
+    try:
+        data = yaml.safe_load(body)
+    except yaml.YAMLError:
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    result: dict = {"raw": section_text}
+    raw_preset = data.get("length_preset")
+    if raw_preset:
+        from app.skill_parser.output_shape import is_valid_preset, get_max_chars
+        preset_str = str(raw_preset).strip().lower()
+        if is_valid_preset(preset_str):
+            result["length_preset"] = preset_str
+            result["max_chars"] = get_max_chars(preset_str)
+        else:
+            # Sinaliza pro caller — não absorve silenciosamente. Operador
+            # provavelmente digitou typo (ex: "digist" em vez de "digest").
+            result["_invalid_preset"] = preset_str
+    return result
 
 
 def _parse_evidence_policy(section_text: str) -> dict:
