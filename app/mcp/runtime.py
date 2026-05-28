@@ -383,55 +383,144 @@ async def run_stdio_session(command: str, action: str = "test", tool_name: str =
 # ═══════════════════════════════════════════════════
 
 def parse_tool_bindings(bindings_text: str) -> list[dict]:
-    """Extrai ferramentas declaradas no ## Tool Bindings do SKILL.md."""
+    """Extrai ferramentas declaradas no ## Tool Bindings do SKILL.md.
+
+    Aceita 2 formatos de declaração:
+
+    1) Wizard (PR #145+): formato canônico atual
+       `- ``<id_or_name>`` (Display Name) — descrição livre`
+       Onde:
+       - `id_or_name`: tipicamente o UUID do registro em /tools (Wizard
+         injeta `t['id']`). Pode ser nome textual em skills manuais.
+       - `Display Name`: opcional, dentro de parênteses — fallback caso
+         o id_or_name não case com o Registry.
+
+       Bug histórico (descoberto 2026-05-28): este formato não era
+       reconhecido pelo parser, que esperava só o formato 2 legacy.
+       Resultado: toda skill gerada pelo Wizard com MCP tinha tools
+       silenciosamente descartadas; LLM operava sem tools (alucinação).
+
+    2) Legacy/manual: formato Markdown bold
+       `- **Nome da Tool**`
+       `  - Servidor MCP: https://...`
+       `  - Operações: search, extract`
+
+    Retorna lista de dicts com chaves: `name` (id ou nome canônico),
+    `display_name` (opcional, do `()` no formato 1), `mcp_server`,
+    `operations`, `sensitivity`, `timeout`, `condition`.
+
+    Em caso de skill com os 2 formatos misturados, ambos são acumulados.
+    """
     if not bindings_text or not bindings_text.strip():
         return []
-    tools = []
-    entries = re.split(r'^- \*\*', bindings_text, flags=re.MULTILINE)
-    for entry in entries:
-        entry = entry.strip()
-        if not entry:
+
+    tools: list[dict] = []
+
+    # ── Formato 1: Wizard com backticks ────────────────────────────
+    # Regex consome a linha inteira: `id_or_name` (Display) — descrição
+    # Display e descrição são opcionais. Múltiplas linhas → múltiplas tools.
+    wizard_pattern = re.compile(
+        r"^-\s+`([^`]+)`\s*(?:\(([^)]+)\))?\s*(?:[—\-–][^\n]*)?$",
+        re.MULTILINE,
+    )
+    for m in wizard_pattern.finditer(bindings_text):
+        raw_id = m.group(1).strip()
+        display = (m.group(2) or "").strip()
+        if not raw_id:
             continue
-        tool = {}
-        name_match = re.match(r'(.+?)\*\*', entry)
-        if name_match:
-            tool['name'] = name_match.group(1).strip()
-        for line in entry.split('\n'):
-            line = line.strip().lstrip('- ')
-            if ':' in line:
-                key, val = line.split(':', 1)
-                key = key.strip().lower()
-                val = val.strip()
-                if 'servidor' in key or 'server' in key or 'mcp' in key:
-                    tool['mcp_server'] = val
-                elif 'opera' in key:
-                    tool['operations'] = [op.strip() for op in val.split(',') if op.strip()]
-                elif 'classifica' in key or 'sensitivity' in key:
-                    tool['sensitivity'] = val
-                elif 'timeout' in key:
-                    tool['timeout'] = val
-                elif 'condi' in key:
-                    tool['condition'] = val
-        if tool.get('name'):
-            tools.append(tool)
+        tool = {"name": raw_id}
+        if display:
+            tool["display_name"] = display
+        tools.append(tool)
+
+    # ── Formato 2: Legacy com `- **Nome**` ─────────────────────────
+    # Só roda se o formato 1 não produziu nada — evita duplicar tools
+    # se a skill (rara) misturar os dois. Heurística simples: legacy
+    # exige asteriscos, então o split por `- **` é suficiente.
+    if not tools and "- **" in bindings_text:
+        entries = re.split(r'^- \*\*', bindings_text, flags=re.MULTILINE)
+        for entry in entries:
+            entry = entry.strip()
+            if not entry:
+                continue
+            tool = {}
+            name_match = re.match(r'(.+?)\*\*', entry)
+            if name_match:
+                tool['name'] = name_match.group(1).strip()
+            for line in entry.split('\n'):
+                line = line.strip().lstrip('- ')
+                if ':' in line:
+                    key, val = line.split(':', 1)
+                    key = key.strip().lower()
+                    val = val.strip()
+                    if 'servidor' in key or 'server' in key or 'mcp' in key:
+                        tool['mcp_server'] = val
+                    elif 'opera' in key:
+                        tool['operations'] = [op.strip() for op in val.split(',') if op.strip()]
+                    elif 'classifica' in key or 'sensitivity' in key:
+                        tool['sensitivity'] = val
+                    elif 'timeout' in key:
+                        tool['timeout'] = val
+                    elif 'condi' in key:
+                        tool['condition'] = val
+            if tool.get('name'):
+                tools.append(tool)
+
     return tools
 
 
 async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict]:
-    """Cruza ferramentas do SKILL.md com o registro no banco."""
+    """Cruza ferramentas do SKILL.md com o registro no banco.
+
+    Suporta múltiplas estratégias de match, em ordem:
+    1. `pt.name == tools.id` exato (formato Wizard com UUID nos backticks)
+    2. `pt.name == tools.name` case-insensitive (skills manuais)
+    3. `pt.display_name == tools.name` case-insensitive (Wizard com Display
+       Name no parênteses como fallback se UUID não existir mais)
+    4. Substring fuzzy bidirecional (último recurso, legacy compat)
+
+    Antes (até 2026-05-27) só fazia 2 e 4. Resultado: skills geradas pelo
+    Wizard com UUID nos backticks NUNCA casavam — tools órfãs, alucinação
+    do LLM. Skills manuais com nome textual continuavam funcionando.
+    """
     if not parsed_tools:
         return []
     registered = await tools_repo.find_all(limit=200)
-    reg_map = {t['name'].lower(): dict(t) for t in registered}
+    # 2 índices: por id (lookup exato) e por nome (lookup case-insensitive)
+    reg_by_id = {t.get('id', ''): dict(t) for t in registered if t.get('id')}
+    reg_by_name = {t['name'].lower(): dict(t) for t in registered if t.get('name')}
     enriched = []
     for pt in parsed_tools:
-        name_lower = pt.get('name', '').lower()
-        matched = reg_map.get(name_lower)
+        pt_name = pt.get('name', '').strip()
+        pt_name_lower = pt_name.lower()
+        pt_display = (pt.get('display_name') or '').strip().lower()
+        matched = None
+
+        # 1. Match exato por id (Wizard usa UUID nos backticks)
+        if pt_name in reg_by_id:
+            matched = reg_by_id[pt_name]
+        # 2. Match exato por name (case-insensitive)
+        if not matched and pt_name_lower in reg_by_name:
+            matched = reg_by_name[pt_name_lower]
+        # 3. Fallback: display_name do parênteses casa com algum name
+        if not matched and pt_display and pt_display in reg_by_name:
+            matched = reg_by_name[pt_display]
+        # 4. Fuzzy substring (legacy compat). Roda sobre name (UUID não
+        # faz sentido em substring), e sobre display_name se houver.
         if not matched:
-            for rname, rdata in reg_map.items():
-                if name_lower in rname or rname in name_lower:
-                    matched = rdata
+            candidates = [pt_name_lower]
+            if pt_display:
+                candidates.append(pt_display)
+            for needle in candidates:
+                if not needle:
+                    continue
+                for rname, rdata in reg_by_name.items():
+                    if needle in rname or rname in needle:
+                        matched = rdata
+                        break
+                if matched:
                     break
+
         if matched:
             pt['mcp_server'] = matched.get('mcp_server') or pt.get('mcp_server', '')
             pt['description'] = matched.get('description') or ''
