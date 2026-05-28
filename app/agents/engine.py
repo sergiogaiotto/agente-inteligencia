@@ -1084,15 +1084,37 @@ async def execute_interaction(
 
     mcp_tools = []
     mcp_tools_detail = []
+    # Tools declaradas no SKILL.md que NÃO resolvem no Tools Registry. Antes
+    # eram silenciosamente descartadas — usuário via "Sem ferramentas MCP" no
+    # painel sem entender que a skill referencia tools inexistentes (ex:
+    # Tavily MCP referenciado mas nome não bate com /tools). Resultado:
+    # LLM alucina o output em vez de chamar a tool real. Agora a lista
+    # vai pro execution_log com warning explícito.
+    mcp_tools_unmatched: list[str] = []
+    mcp_tools_declared_count = 0
     try:
         if skill_data.get("tool_bindings"):
             from app.mcp.runtime import parse_tool_bindings, match_with_registry
             from app.core.database import tools_repo
             parsed_bindings = parse_tool_bindings(skill_data["tool_bindings"])
             if parsed_bindings:
-                mcp_tools = await match_with_registry(parsed_bindings, tools_repo)
+                mcp_tools_declared_count = len(parsed_bindings)
+                enriched = await match_with_registry(parsed_bindings, tools_repo)
+                # match_with_registry devolve TODAS as parsed_tools com `db_id`
+                # setado quando casou no Registry. Filtra aqui pra mcp_tools
+                # conter só as efetivamente invocáveis.
+                mcp_tools = [t for t in enriched if t.get("db_id")]
+                mcp_tools_unmatched = [t.get("name", "?") for t in enriched if not t.get("db_id")]
                 mcp_tools_detail = [{"name": t.get("name",""), "server": t.get("mcp_server",""), "ops": t.get("operations",[])} for t in mcp_tools]
-                logger.info(f"MCP tools resolved: {[t.get('name') for t in mcp_tools]}")
+                logger.info(
+                    "mcp_tools.resolved",
+                    extra={
+                        "event": "mcp.tools.resolved",
+                        "declared": mcp_tools_declared_count,
+                        "resolved_names": [t.get("name") for t in mcp_tools],
+                        "unmatched_names": mcp_tools_unmatched,
+                    },
+                )
 
                 # ── Onda 4a: gate de invocação por sensitivity ──────────
                 # Quando OPA_ENABLED=true, filtra mcp_tools para apenas as que a
@@ -1536,6 +1558,8 @@ async def _build_result(
     exec_log = _build_execution_log(
         agent=agent, skill_data=skill_data, skill_detail=skill_detail,
         mcp_tools_detail=mcp_tools_detail or [],
+        mcp_tools_declared_count=mcp_tools_declared_count,
+        mcp_tools_unmatched=mcp_tools_unmatched or [],
         transitions=ctx.transition_log, evidence_count=evidence_count,
         evidence_sources=evidence_sources, evidence_score=ctx.evidence_score,
         evidence_detail=evidence_detail,
@@ -1588,6 +1612,11 @@ async def _build_result(
             # chamadas executadas. mcp_tools_available preserva a lista declarada
             # para a aba de "Ferramenta(s) MCP vinculada(s)" no execution_log.
             "mcp_tools": mcp_tools_invoked,
+            # Tools declaradas no SKILL.md que NÃO foram resolvidas no Tools
+            # Registry. Quando esta lista é não-vazia, o LLM alucinou o
+            # resultado pra essas tools — UI mostra warning explícito.
+            "mcp_tools_unmatched": mcp_tools_unmatched or [],
+            "mcp_tools_declared_count": mcp_tools_declared_count,
             "mcp_tools_available": mcp_tools_detail or [],
             # api_tools_count: contagem de binding_executions desta interaction. Em
             # modo LLM normalmente é 0 (bindings só rodam em execute_declarative);
@@ -1608,6 +1637,8 @@ def _build_execution_log(
     evidence_detail: list | None = None,
     evidence_min_relevance: float = 0.3,
     evidence_min_relevance_source: str = "default",
+    mcp_tools_declared_count: int = 0,
+    mcp_tools_unmatched: list[str] | None = None,
 ) -> list:
     """Constrói log de execução estruturado.
 
@@ -1677,8 +1708,17 @@ def _build_execution_log(
     _mode_level = {"fast": "info", "standard": "info", "rigorous": "warning"}
     _add("skill", "⚡", f"Execution Profile: {_exec_mode}", _mode_labels.get(_exec_mode, ""), _mode_level.get(_exec_mode, "info"))
 
+    # Distingue 3 cenários no log de tools MCP:
+    # 1. Skill não declara nada → "Sem ferramentas MCP" (info, neutro)
+    # 2. Skill declara N e TODAS resolvem → "N ferramenta(s) MCP vinculada(s)" + detalhes
+    # 3. Skill declara N mas algumas/todas NÃO resolvem → warning explícito
+    #    indicando alucinação iminente (LLM vai operar sem as tools que
+    #    deveria usar). Antes a UI mostrava "Sem ferramentas MCP" igual ao
+    #    cenário 1 — confusão crítica que esconde bug de Tools Registry.
+    _unmatched = mcp_tools_unmatched or []
     if mcp_tools_detail:
-        _add("tools", "🔧", f"{len(mcp_tools_detail)} ferramenta(s) MCP vinculada(s)")
+        _add("tools", "🔧", f"{len(mcp_tools_detail)} ferramenta(s) MCP vinculada(s)",
+             f"{len(mcp_tools_detail)} de {mcp_tools_declared_count} declarada(s) resolvem no Registry" if mcp_tools_declared_count else "")
         for t in mcp_tools_detail:
             ops = t.get("ops", [])
             if isinstance(ops, str):
@@ -1686,8 +1726,32 @@ def _build_execution_log(
                 except: ops = [ops]
             ops_str = ", ".join(ops) if ops else "—"
             _add("tools", "⚙️", t.get("name", "?"), f"Server: {t.get('server','')} · Ops: {ops_str}")
+    elif _unmatched:
+        # Skill declarou tools mas NENHUMA resolveu no Registry.
+        # Alucinação iminente — LLM vai operar sem ferramenta real.
+        _add(
+            "tools", "⚠️",
+            f"{len(_unmatched)} tool(s) MCP declaradas mas NÃO resolvem no Tools Registry",
+            f"Nomes: {', '.join(_unmatched[:5])}. "
+            "LLM vai operar SEM essas ferramentas — risco alto de alucinação "
+            "na resposta (URLs, dados, citações inventados). "
+            "Confira /tools — o nome da skill precisa bater com o `name` do "
+            "registro, case-insensitive. Sem fix, a resposta NÃO foi obtida via "
+            "MCP real, apenas memorização do LLM.",
+            "warning",
+        )
     else:
         _add("tools", "🔧", "Sem ferramentas MCP", "", "info")
+
+    # Linha extra: quando algumas resolvem e outras não, lista as órfãs
+    if mcp_tools_detail and _unmatched:
+        _add(
+            "tools", "⚠️",
+            f"{len(_unmatched)} tool(s) declarada(s) NÃO resolvem",
+            f"Sem registro em /tools: {', '.join(_unmatched[:5])}. "
+            "LLM pode tentar chamá-las e falhar, ou alucinar o resultado.",
+            "warning",
+        )
 
     _add("fsm", "🔀", f"FSM — {len(transitions)} transição(ões)")
     for i, t in enumerate(transitions):
