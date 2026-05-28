@@ -335,10 +335,23 @@
                                 Adiciona <code class="text-violet-700">## API Bindings</code> + define <code class="text-violet-700">execution_mode: declarative</code>
                             </div>
                             <template x-for="item in apiEndpointsFlat" :key="item.key">
-                                <button @click="insertApiBinding(item); apiDropdown=false" type="button" class="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-violet-50 transition-colors">
-                                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-100 text-violet-700 shrink-0 font-mono text-[9px] font-bold" x-text="item.method"></div>
+                                <button @click="insertApiBinding(item); apiDropdown=false" type="button"
+                                        class="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors"
+                                        :class="isInsertedInRaw(item.ep_id) ? 'bg-violet-50/50 hover:bg-violet-50' : 'hover:bg-violet-50'"
+                                        :title="isInsertedInRaw(item.ep_id) ? 'Endpoint já referenciado no SKILL.md — clique pra inserir novamente' : 'Inserir API Binding declarativo'">
+                                    <div class="flex h-7 w-7 items-center justify-center rounded-lg shrink-0 font-mono text-[9px] font-bold"
+                                         :class="isInsertedInRaw(item.ep_id) ? 'bg-violet-200 text-violet-800' : 'bg-violet-100 text-violet-700'"
+                                         x-text="item.method"></div>
                                     <div class="min-w-0 flex-1">
-                                        <div class="text-[11px] font-semibold text-brand-900 truncate"><span x-text="item.ep_name"></span></div>
+                                        <div class="text-[11px] font-semibold text-brand-900 truncate flex items-center gap-1.5">
+                                            <span x-text="item.ep_name"></span>
+                                            <span x-show="isInsertedInRaw(item.ep_id)"
+                                                  class="inline-flex items-center gap-0.5 rounded-full bg-violet-100 px-1.5 py-0.5 text-[8px] font-bold text-violet-700"
+                                                  title="Endpoint já referenciado no SKILL.md atual">
+                                                <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
+                                                INSERIDO
+                                            </span>
+                                        </div>
                                         <div class="text-[9px] text-surface-400 truncate">
                                             <span class="font-semibold text-violet-600" x-text="item.conn_name"></span>
                                             <span class="font-mono" x-text="' · ' + item.path"></span>
@@ -441,12 +454,24 @@
                                 Adiciona <code class="text-amber-700">## Data Tables</code> + executa query parametrizada (sem LLM gerando SQL)
                             </div>
                             <template x-for="t in availableTables" :key="t.id">
-                                <button @click="openTableQueryBuilder(t); tableDropdown=false" type="button" class="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-amber-50 transition-colors">
-                                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-700 shrink-0">
+                                <button @click="openTableQueryBuilder(t); tableDropdown=false" type="button"
+                                        class="w-full flex items-start gap-2.5 px-3 py-2 text-left transition-colors"
+                                        :class="isInsertedInRaw(t.urn) ? 'bg-amber-50/50 hover:bg-amber-50' : 'hover:bg-amber-50'"
+                                        :title="isInsertedInRaw(t.urn) ? 'Tabela já referenciada no SKILL.md — clique pra adicionar outra consulta' : 'Abrir Query Builder e inserir referência'">
+                                    <div class="flex h-7 w-7 items-center justify-center rounded-lg shrink-0"
+                                         :class="isInsertedInRaw(t.urn) ? 'bg-amber-200 text-amber-800' : 'bg-amber-100 text-amber-700'">
                                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 7.5h18M3 12h18M3 16.5h18M7.5 3v18M16.5 3v18"/></svg>
                                     </div>
                                     <div class="min-w-0 flex-1">
-                                        <div class="text-[11px] font-semibold text-brand-900 truncate" x-text="t.name"></div>
+                                        <div class="text-[11px] font-semibold text-brand-900 truncate flex items-center gap-1.5">
+                                            <span x-text="t.name"></span>
+                                            <span x-show="isInsertedInRaw(t.urn)"
+                                                  class="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[8px] font-bold text-amber-700"
+                                                  title="Tabela já referenciada no SKILL.md atual">
+                                                <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
+                                                INSERIDA
+                                            </span>
+                                        </div>
                                         <div class="text-[9px] text-surface-400 truncate">
                                             <span class="font-mono" x-text="(t.row_count||0).toLocaleString() + ' linhas · ' + t.column_count + ' col'"></span>
                                             <span x-show="t.ks_name" class="text-amber-600 ml-1" x-text="'· ' + t.ks_name"></span>
@@ -481,21 +506,38 @@
                     <!-- ═════ Inserir MCP (tools clássicos) ═════ -->
                     <div class="relative" x-data="{mcpDropdown:false}">
                         <button @click="mcpDropdown = !mcpDropdown" x-show="mcpTools.length > 0" type="button"
-                                class="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-100 transition-colors">
+                                class="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 px-2.5 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-100 transition-colors"
+                                :title="mcpTools.filter(t => isInsertedInRaw(t.id)).length + ' de ' + mcpTools.length + ' MCP tool(s) já inserida(s) no SKILL.md'">
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
                             Inserir MCP
+                            <!-- Badge com contagem de tools já inseridas vs disponíveis. -->
+                            <span x-show="mcpTools.filter(t => isInsertedInRaw(t.id)).length > 0"
+                                  class="rounded-full bg-teal-200 px-1.5 py-0.5 text-[9px] font-bold"
+                                  x-text="mcpTools.filter(t => isInsertedInRaw(t.id)).length + '/' + mcpTools.length"></span>
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
                         </button>
                         <div x-show="mcpDropdown" @click.away="mcpDropdown=false" x-transition
                              class="absolute right-0 top-full mt-1 w-72 rounded-xl bg-white border border-surface-200 shadow-lg z-50 py-1 max-h-60 overflow-y-auto">
                             <div class="px-3 py-1.5 text-[9px] font-bold text-surface-400 uppercase tracking-wider">Selecione para inserir</div>
                             <template x-for="t in mcpTools" :key="t.id">
-                                <button @click="insertMcpBinding(t); mcpDropdown=false" type="button" class="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-surface-50 transition-colors">
-                                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-100 text-teal-600 shrink-0">
+                                <button @click="insertMcpBinding(t); mcpDropdown=false" type="button"
+                                        class="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors"
+                                        :class="isInsertedInRaw(t.id) ? 'bg-teal-50/50 hover:bg-teal-50' : 'hover:bg-surface-50'"
+                                        :title="isInsertedInRaw(t.id) ? 'Já inserido no SKILL.md — clique pra inserir novamente' : 'Inserir Tool Binding'">
+                                    <div class="flex h-7 w-7 items-center justify-center rounded-lg shrink-0"
+                                         :class="isInsertedInRaw(t.id) ? 'bg-teal-200 text-teal-700' : 'bg-teal-100 text-teal-600'">
                                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
                                     </div>
-                                    <div class="min-w-0">
-                                        <div class="text-[11px] font-semibold text-brand-900 truncate" x-text="t.name"></div>
+                                    <div class="min-w-0 flex-1">
+                                        <div class="text-[11px] font-semibold text-brand-900 truncate flex items-center gap-1.5">
+                                            <span x-text="t.name"></span>
+                                            <span x-show="isInsertedInRaw(t.id)"
+                                                  class="inline-flex items-center gap-0.5 rounded-full bg-teal-100 px-1.5 py-0.5 text-[8px] font-bold text-teal-700"
+                                                  title="Tool já referenciada no SKILL.md atual">
+                                                <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
+                                                INSERIDO
+                                            </span>
+                                        </div>
                                         <div class="text-[9px] text-surface-400 truncate" x-text="t.mcp_server || '—'"></div>
                                     </div>
                                 </button>
@@ -1370,6 +1412,19 @@ ${outMap}`;
             if (this.wizardSourceIds.length > 0) return 'standard';
             if (this.wizardApiKeys.length > 0) return 'standard';
             return 'fast';
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // UX: detecta itens já inseridos no SKILL.md (raw_content).
+        // Usado pelos 4 dropdowns (MCP, API, RAG, Tabela) pra marcar
+        // visualmente o que está presente vs disponível. Busca literal
+        // case-insensitive por substring — ID/UUID/URN são únicos o
+        // suficiente pra não dar falso positivo.
+        // ═══════════════════════════════════════════════════════
+        isInsertedInRaw(identifier) {
+            if (!identifier) return false;
+            const content = (this.form.raw_content || '').toLowerCase();
+            return content.includes(String(identifier).toLowerCase());
         },
 
         insertMcpBinding(tool) {
