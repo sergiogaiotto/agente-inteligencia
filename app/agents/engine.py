@@ -1560,7 +1560,13 @@ async def _build_result(
     # Métricas de invocações reais — querya tool_calls e binding_executions
     # filtradas por interaction_id. Best-effort: erro de DB devolve listas vazias
     # (UI fica com 0 mas não quebra o response).
+    #
+    # api_tools_invoked: lista detalhada das execuções de bindings declarativos
+    # (paridade com mcp_tools_invoked). UI usa pra drilldown no card API TOOLS.
+    # Cada item tem binding_id, call_id (vincula com api_call_logs), status_code,
+    # latency, attempts e flag is_compensation.
     mcp_tools_invoked: list = []
+    api_tools_invoked: list = []
     api_tools_invoked_count: int = 0
     try:
         from app.core.database import tool_calls_repo, binding_executions_repo
@@ -1575,6 +1581,19 @@ async def _build_result(
             for r in _tc_rows
         ]
         _be_rows = await binding_executions_repo.find_all(interaction_id=ctx.interaction_id, limit=200)
+        api_tools_invoked = [
+            {
+                "binding_id": r.get("binding_id") or "",
+                "call_id": r.get("call_id") or "",
+                "status_code": int(r.get("status_code") or 0),
+                "latency_ms": float(r.get("latency_ms") or 0),
+                "attempts": int(r.get("attempts") or 1),
+                "error": (r.get("error") or "")[:200] if r.get("error") else "",
+                "is_compensation": bool(r.get("is_compensation") or False),
+                "skipped_by_breaker": bool(r.get("skipped_by_breaker") or False),
+            }
+            for r in _be_rows
+        ]
         api_tools_invoked_count = len(_be_rows)
     except Exception as _metric_err:
         logger.warning(f"Falha ao carregar métricas de invocação (interaction={ctx.interaction_id}): {_metric_err}")
@@ -1761,8 +1780,13 @@ async def _build_result(
             # mantido aqui pra simetria semântica com mcp_tools (execução real, não
             # declaração).
             "api_tools_count": api_tools_invoked_count,
-            # Onda 1 Output Shape — sinaliza format_compliance pra UI/audit.
-            # True = LLM violou o length_preset declarado e engine truncou.
+            # api_tools: lista detalhada das execuções (PR #174 — drilldown).
+            # Cada item tem binding_id, call_id, status_code, latency, attempts,
+            # is_compensation. UI usa pra expandir o card API TOOLS com a lista.
+            "api_tools": api_tools_invoked,
+            # Onda 1 Output Shape (PR #175) — sinaliza format_compliance pra
+            # UI/audit. True = LLM violou o length_preset declarado e engine
+            # truncou. UI mostra warning no diagnóstico.
             "output_truncated_by_preset": bool(ctx.metadata.get("output_truncated_by_preset")),
             "output_preset_applied": ctx.metadata.get("output_preset_applied") or "",
             "tokens": ctx.metadata.get("tokens") or {"input": 0, "output": 0, "total": 0},
