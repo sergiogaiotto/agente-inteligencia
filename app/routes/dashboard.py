@@ -11,7 +11,7 @@ CORREÇÕES (2026-04):
 """
 import uuid, json, logging
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from app.models.schemas import ReleaseCreate, GoldCaseCreate, KnowledgeSourceCreate, ToolCreate, ToolUpdate, RunEvalRequest
 from app.core.database import (
@@ -1713,6 +1713,13 @@ class SettingsSave(BaseModel):
     # Modelo Primário (fallback global)
     primary_provider: Optional[str] = ""
     primary_model: Optional[str] = ""
+    # Idioma de resposta (default global) — fallback quando agent.response_language
+    # vazio. Pattern BCP-47. UI dropdown impõe valores válidos; pattern aqui
+    # protege contra payloads diretos via API.
+    default_response_language: Optional[str] = Field(
+        default="pt-BR",
+        pattern=r"^[a-z]{2}(-[A-Z]{2})?$",
+    )
     # GPT-OSS (open-weight) — Onda 4 plataforma
     oss120b_url: Optional[str] = ""
     oss120b_model: Optional[str] = "openai/gpt-oss-120b"
