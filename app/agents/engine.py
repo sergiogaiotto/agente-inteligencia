@@ -44,6 +44,67 @@ _tracer = get_tracer(__name__)
 
 
 # ═══════════════════════════════════════════════════
+# Helpers — Idioma de resposta (resolução em cascata)
+# ═══════════════════════════════════════════════════
+
+# Mapeia tag BCP-47 → label humano usado na instrução do system_prompt.
+# Mantém formato natural ("português brasileiro" em vez de "pt-BR") pra LLM
+# entender melhor — modelos open-weight respondem mais consistente com nome
+# da língua do que tag técnica.
+_LANGUAGE_LABELS = {
+    "pt-BR": "português brasileiro (pt-BR)",
+    "pt-PT": "português europeu (pt-PT)",
+    "en-US": "inglês americano (en-US)",
+    "en-GB": "inglês britânico (en-GB)",
+    "es-ES": "espanhol (es-ES)",
+    "es-MX": "espanhol mexicano (es-MX)",
+    "fr-FR": "francês (fr-FR)",
+    "de-DE": "alemão (de-DE)",
+    "it-IT": "italiano (it-IT)",
+    "ja-JP": "japonês (ja-JP)",
+    "zh-CN": "chinês simplificado (zh-CN)",
+}
+
+
+def _resolve_response_language(agent: dict, settings) -> str:
+    """Resolve idioma de resposta em cascata: agente > settings > hard fallback.
+
+    Returns:
+        BCP-47 tag (ex: "pt-BR") que o LLM deve usar pra responder. NUNCA
+        vazia — sempre tem fallback final pra "pt-BR".
+
+    A regra hard-coded "pt-BR" no fim é o último escudo caso platform
+    settings esteja corrompido. Operador pode customizar via env
+    DEFAULT_RESPONSE_LANGUAGE ou Settings UI.
+    """
+    agent_lang = (agent.get("response_language") or "").strip() if agent else ""
+    if agent_lang:
+        return agent_lang
+    settings_lang = (getattr(settings, "default_response_language", "") or "").strip()
+    if settings_lang:
+        return settings_lang
+    return "pt-BR"
+
+
+def _build_response_language_directive(lang_tag: str) -> str:
+    """Constrói bloco do system_prompt instruindo o LLM sobre idioma da resposta.
+
+    Texto imperativo curto — modelos open-weight (gpt-oss-120b) tendem a
+    espelhar idioma do contexto/evidência se não houver diretiva explícita.
+    Esta diretiva força a resposta no idioma escolhido mesmo quando RAG ou
+    tools MCP retornam conteúdo em outra língua.
+    """
+    label = _LANGUAGE_LABELS.get(lang_tag, lang_tag)
+    return (
+        "[IDIOMA DA RESPOSTA]\n"
+        f"Sempre responda em {label}, mesmo quando o contexto, evidências de "
+        "RAG ou resultados de tools MCP estiverem em outros idiomas. Traduza "
+        "ou adapte conteúdo recuperado quando necessário. Mantenha nomes "
+        "próprios, marcas, código-fonte e URLs no original."
+    )
+
+
+# ═══════════════════════════════════════════════════
 # Helpers — Pre-check de configuração do LLM provider
 # ═══════════════════════════════════════════════════
 
@@ -259,12 +320,24 @@ class DeepAgentHarness:
         e inclui catálogo explícito com o nome exato (sanitizado) que o LLM
         deve usar no function call — isso evita que o modelo priorize fabricar
         o shape do Output Contract em vez de invocar a ferramenta.
+
+        Idioma da resposta é prependido como diretiva curta antes do system
+        prompt do agente — modelos open-weight tendem a espelhar idioma do
+        contexto/evidências (busca Tavily em inglês → resposta em inglês)
+        se não houver instrução explícita. Resolução em cascata:
+        agent.response_language > settings.default_response_language > pt-BR.
         """
         import re as _re
+        from app.core.config import get_settings as _get_settings_lang
         skill = self.config.get("_parsed_skill", {})
-        parts = [
+        parts = []
+        # Idioma — DIRETIVA prependida (antes do system_prompt do agent) pra
+        # ter precedência forte na atenção do LLM.
+        _lang = _resolve_response_language(self.config, _get_settings_lang())
+        parts.append(_build_response_language_directive(_lang))
+        parts.append(
             self.config.get("system_prompt", "Você é um agente inteligente."),
-        ]
+        )
         if skill.get("purpose"):
             parts.append(f"\n## Purpose\n{skill['purpose']}")
         if skill.get("workflow"):

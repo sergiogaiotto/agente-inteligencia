@@ -50,6 +50,30 @@
                        class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition">
                 <p class="mt-1 text-[10px] text-surface-400">Opcional. Até 140 caracteres. Aparece como entrada 💬 no log de execução, humanizando a narrativa do pipeline.</p>
             </div>
+            <!-- Idioma de resposta — override do default global da plataforma.
+                 Vazio = herda settings.default_response_language. Engine
+                 prepende instrução no system_prompt em toda chamada LLM. -->
+            <div>
+                <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">
+                    Idioma da resposta
+                    <span class="text-[10px] font-normal text-surface-400">— força idioma do output, mesmo com evidências em outras línguas</span>
+                </label>
+                <select x-model="form.response_language" class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 outline-none transition">
+                    <option value="">— Herdar global (pt-BR padrão)</option>
+                    <option value="pt-BR">Português brasileiro (pt-BR)</option>
+                    <option value="pt-PT">Português europeu (pt-PT)</option>
+                    <option value="en-US">Inglês americano (en-US)</option>
+                    <option value="en-GB">Inglês britânico (en-GB)</option>
+                    <option value="es-ES">Espanhol (es-ES)</option>
+                    <option value="es-MX">Espanhol mexicano (es-MX)</option>
+                    <option value="fr-FR">Francês (fr-FR)</option>
+                    <option value="de-DE">Alemão (de-DE)</option>
+                    <option value="it-IT">Italiano (it-IT)</option>
+                    <option value="ja-JP">Japonês (ja-JP)</option>
+                    <option value="zh-CN">Chinês simplificado (zh-CN)</option>
+                </select>
+                <p class="mt-1 text-[10px] text-surface-400">Default global em <a href="/settings" class="text-brand-500 hover:underline">/settings</a>. Use override quando o agente atende público específico (ex: cliente internacional).</p>
+            </div>
             <div class="grid grid-cols-3 gap-4">
                 <div>
                     <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Tipo (Camada)</label>
@@ -476,6 +500,11 @@
                 </template>
 
                 <div class="flex justify-between">
+                    <span class="text-[12px] text-surface-400">Idioma da resposta</span>
+                    <span class="text-[13px] font-medium" :class="form.response_language ? 'text-brand-900' : 'text-surface-400'"
+                          x-text="form.response_language || 'Herda global (pt-BR padrão)'"></span>
+                </div>
+                <div class="flex justify-between">
                     <span class="text-[12px] text-surface-400">Exigir Evidência (RAG)</span>
                     <span class="text-[13px] font-medium" :class="form.require_evidence ? 'text-emerald-600' : 'text-amber-600'" x-text="form.require_evidence ? 'Sim — consulta bases' : 'Não — usa conhecimento do LLM'"></span>
                 </div>
@@ -536,6 +565,8 @@ function agentForm(editId) {
             accepts_images: false,
             accepts_documents: false,
             processing_message: '',
+            // Idioma de resposta — vazio = herda default global do platform.
+            response_language: '',
         },
         // Onda 7: mapa task_id → "provider/model" do routing settings.
         // Carregado via GET /llm-routing em load(). Atualiza UI dos cards.
@@ -756,6 +787,7 @@ function agentForm(editId) {
                     accepts_images: !!this.form.accepts_images,
                     accepts_documents: !!this.form.accepts_documents,
                     processing_message: (this.form.processing_message || '').trim() || null,
+                    response_language: (this.form.response_language || '').trim() || null,
                 };
                 this.preflight.report = await api.post('/api/v1/agents/preflight', payload);
             } catch (e) {
@@ -795,9 +827,14 @@ function agentForm(editId) {
                 return;
             }
             this.saving = true;
+            // Sanitiza form pra submit: string vazia em campos com pattern
+            // (response_language) precisa virar null senão o Pydantic rejeita
+            // com 422 (pattern não bate em "").
+            const payload = { ...this.form };
+            if (!payload.response_language) payload.response_language = null;
             try {
-                if (this.isEdit) { await api.put(`/api/v1/agents/${editId}`, this.form); showToast('Agente atualizado'); }
-                else { await api.post('/api/v1/agents', this.form); showToast('Agente criado'); }
+                if (this.isEdit) { await api.put(`/api/v1/agents/${editId}`, payload); showToast('Agente atualizado'); }
+                else { await api.post('/api/v1/agents', payload); showToast('Agente criado'); }
                 setTimeout(() => window.location.href = '/agents', 800);
             } catch(e) { showToast(e.message, 'error'); }
             this.saving = false;

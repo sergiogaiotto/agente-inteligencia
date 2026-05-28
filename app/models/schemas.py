@@ -29,6 +29,16 @@ class AgentCreate(BaseModel):
     # ("Orquestrando seu pedido", "Escolhendo o especialista", etc.). Limite curto
     # pra evitar logs poluídos. NULL/vazio = não injeta nada (back-compat).
     processing_message: Optional[str] = Field(default=None, max_length=140)
+    # Idioma de resposta (BCP-47: "pt-BR", "en-US", ...). NULL/vazio = herda
+    # settings.default_response_language (pt-BR padrão). Engine prepende
+    # instrução no system_prompt — LLM responde nesse idioma mesmo quando
+    # evidências vêm em outros (ex: Tavily retorna inglês, resposta sai pt-BR).
+    # Pattern blinda contra valores arbitrários — UI usa dropdown fechado.
+    response_language: Optional[str] = Field(
+        default=None,
+        pattern=r"^[a-z]{2}(-[A-Z]{2})?$",
+        description="BCP-47 tag (pt-BR, en-US, es-ES, ...) ou null pra herdar default global",
+    )
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None
@@ -46,6 +56,10 @@ class AgentUpdate(BaseModel):
     accepts_images: Optional[bool] = None
     accepts_documents: Optional[bool] = None
     processing_message: Optional[str] = Field(default=None, max_length=140)
+    response_language: Optional[str] = Field(
+        default=None,
+        pattern=r"^[a-z]{2}(-[A-Z]{2})?$",
+    )
 
 
 class PreflightCheckResult(BaseModel):
