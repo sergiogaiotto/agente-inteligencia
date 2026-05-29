@@ -12,9 +12,14 @@ Retrocompat: clients antigos que enviam `provider/model` continuam
 funcionando (legacy path quando task_type não vem).
 
 Defaults sensatos por wizard:
-- /skill   → reasoning  (planejar workflow + failure modes + guardrails)
-- /agent   → reasoning  (planejar system_prompt + skills + tools)
-- /refine  → instruct   (refinar texto existente é instruction-following)
+- /skill   → skill_generation  (criar/alterar SKILL.md exige seguir regras
+                                 estruturais rígidas — operations declaradas,
+                                 verbos imperativos, frases proibidas. Separado
+                                 de reasoning desde 2026-05-29 após gpt-oss-120b
+                                 errar 4x consecutivas o mesmo padrão de omitir
+                                 operation=)
+- /agent   → reasoning          (planejar system_prompt + skills + tools)
+- /refine  → instruct           (refinar texto existente é instruction-following)
 """
 import json
 from fastapi import APIRouter, HTTPException
@@ -32,7 +37,7 @@ router = APIRouter(prefix="/api/v1/wizard", tags=["wizard"])
 # Os valores batem com TASK_TYPES de app/llm_routing.py.
 _DEFAULT_TASK_TYPE = {
     "agent": "reasoning",
-    "skill": "reasoning",
+    "skill": "skill_generation",
     "refine": "instruct",
 }
 

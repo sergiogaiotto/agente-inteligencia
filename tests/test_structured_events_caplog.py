@@ -287,7 +287,10 @@ class TestWizardLLMResolvedEvents:
         rec = _find_event(caplog, "wizard.llm.resolved")
         assert rec is not None
         assert rec.source == "route_default"
-        assert rec.task_type == "reasoning"  # default da rota /skill
+        # Default da rota /skill mudou de "reasoning" pra "skill_generation"
+        # em 2026-05-29 — separado após bugs Context7 #1-#4 (gpt-oss-120b
+        # errando consistentemente as regras estruturais).
+        assert rec.task_type == "skill_generation"
 
 
 # ═════════════════════════════════════════════════════════════════

@@ -24,10 +24,14 @@ from app.llm_routing import DEFAULT_ROUTING, TASK_TYPES
 
 
 class TestDefaultRoutingContract:
-    def test_tem_todas_as_5_chaves(self):
-        """4 task types + multimodal_fallback. Falta de qualquer um faz UI
-        mostrar 'carregando...' indefinidamente em agent_form."""
-        for key in ("tool_calling", "reasoning", "instruct", "classification", "multimodal_fallback"):
+    def test_tem_todas_as_chaves(self):
+        """5 task types + multimodal_fallback. Falta de qualquer um faz UI
+        mostrar 'carregando...' indefinidamente em agent_form.
+
+        skill_generation foi adicionado em 2026-05-29 — separado de reasoning
+        após gpt-oss-120b errar 4x consecutivas o mesmo bug Context7."""
+        for key in ("tool_calling", "reasoning", "instruct", "classification",
+                    "skill_generation", "multimodal_fallback"):
             assert key in DEFAULT_ROUTING, f"DEFAULT_ROUTING sem '{key}'"
 
     def test_task_types_alinhado_com_routing(self):
@@ -53,6 +57,14 @@ class TestDefaultRoutingContract:
     def test_classification_default_gpt_oss_20b(self):
         """Classification é o caso mais simples — 20B basta com folga."""
         assert DEFAULT_ROUTING["classification"] == "gpt-oss-20b/openai/gpt-oss-20b"
+
+    def test_skill_generation_default_azure_gpt4o(self):
+        """skill_generation roda o Wizard de criar/alterar SKILL.md. Gerador
+        precisa seguir regras estruturais rígidas (operations declaradas,
+        verbos imperativos, frases proibidas). Default Azure GPT-4o porque
+        gpt-oss-120b vinha errando consistentemente (bugs Context7 #1-#4).
+        Operador pode trocar via UI se quiser experimentar outro modelo."""
+        assert DEFAULT_ROUTING["skill_generation"] == "azure/gpt-4o"
 
     def test_multimodal_fallback_continua_azure_gpt4o(self):
         """GPT-OSS atual é text-only — multimodal segue em Azure GPT-4o.
@@ -110,6 +122,10 @@ class TestLLMRoutingEndpoint:
             assert "GPT-OSS" in descs[task], f"{task} descrição não menciona GPT-OSS: {descs[task]!r}"
         # Multimodal continua mencionando Azure GPT-4o
         assert "GPT-4o" in descs["multimodal_fallback"]
+        # skill_generation menciona Azure GPT-4o (default novo)
+        assert "GPT-4o" in descs["skill_generation"]
+        # E explica POR QUE foi separado (contexto pro operador)
+        assert "Context7" in descs["skill_generation"] or "4x" in descs["skill_generation"]
 
     def test_task_descriptions_nao_mencionam_modelo_obsoleto(self, monkeypatch):
         """Defesa: 'Maritaca Sabiá-4' e 'azure/gpt-4o' eram os defaults antigos
