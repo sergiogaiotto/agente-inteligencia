@@ -203,16 +203,16 @@ class TestInvokeBindingDirect:
         })
         assert r.status_code == 404
 
-    def test_returns_501_for_rag_or_tabular_binding(self, app_client, monkeypatch):
-        """Onda A.3 (próxima) cobre RAG+Tabular. Onda A.2 já incluiu API,
-        então testamos só os que ainda faltam."""
+    def test_returns_422_for_invalid_binding_kind(self, app_client, monkeypatch):
+        """A.1+A.2+A.3 cobrem todos os 4 kinds (mcp/api/tabular/rag).
+        Pydantic regex rejeita anything else com 422."""
         self._patch_db(monkeypatch)
-        for unsupported in ("rag", "tabular"):
+        for invalid in ("invalid", "MCP", "rest"):
             r = app_client.post("/api/v1/workspace/invoke-binding-direct", json={
                 "agent_id": AGENT_ROW["id"], "skill_id": SKILL_ROW["id"],
-                "binding_kind": unsupported, "binding_id": "z", "params": {},
+                "binding_kind": invalid, "binding_id": "z", "params": {},
             })
-            assert r.status_code == 501, f"{unsupported} should still be 501"
+            assert r.status_code == 422, f"{invalid} should be rejected by Pydantic"
 
     def test_returns_404_for_unknown_binding_id(self, app_client, monkeypatch):
         self._patch_db(monkeypatch)

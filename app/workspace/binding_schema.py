@@ -228,12 +228,19 @@ def normalize_mcp_binding(
 
 
 def _extract_template_vars_from_api_bindings(parsed_bindings: list) -> list[str]:
+    """Alias de back-compat — chama _extract_template_vars (versão Onda
+    A.3 que aceita api_bindings OU data_tables OU qualquer mix de dicts)."""
+    return _extract_template_vars(parsed_bindings)
+
+
+def _extract_template_vars(parsed_bindings: list) -> list[str]:
     """Extrai variáveis Jinja2 (`{{ inputs.X }}`, `{{ X }}`) referenciadas
-    em qualquer campo string das api_bindings parsed.
+    em qualquer campo string de uma lista de bindings parsed (api_bindings
+    OU data_tables — ambos compartilham o mesmo modelo de templating).
 
     Usado como fallback quando SKILL não declarou ## Inputs com schema
     parseável: sintetizamos fields a partir das vars realmente usadas
-    nos templates HTTP.
+    nos templates.
 
     Limitação: regex simples — não casa expressões complexas com filtros,
     aritmética, etc. Casa só padrão `{{ name }}` ou `{{ inputs.name }}`.
@@ -252,7 +259,7 @@ def _extract_template_vars_from_api_bindings(parsed_bindings: list) -> list[str]
                 name = m.group(1)
                 # Filtra contexto interno (session_id, context.*, etc.) —
                 # esses não devem aparecer no form pro user.
-                if name in ("session_id", "context", "inputs", "outputs"):
+                if name in ("session_id", "context", "inputs", "outputs", "tables"):
                     continue
                 if name not in seen:
                     seen.add(name)
@@ -275,34 +282,45 @@ def normalize_api_binding_from_skill(
     skill_md: Optional[str] = None,
     parsed_skill=None,
 ) -> Optional[dict]:
-    """Produz CanonicalFormSchema pra invocação de uma SKILL declarativa
-    com `## API Bindings`. Diferente de MCP (1 item por tool), API é
-    1 item por SKILL — porque api_bindings compartilham `## Inputs`
-    via Jinja2 e rodam como unidade através do execute_declarative.
+    """Back-compat alias (Onda A.2 → A.3). Delega pro normalizer
+    declarativo generalizado, mas retorna None quando o resultado seria
+    kind=tabular (a.2 não suportava). Use normalize_declarative_skill_binding
+    direto pra novos callers."""
+    result = normalize_declarative_skill_binding(skill, skill_md, parsed_skill)
+    if result is None:
+        return None
+    # API-only ou hybrid → retorna; tabular-only → omite (A.2 não enxergava)
+    if result.get("binding_kind") == "api":
+        return result
+    return None
 
-    Args:
-        skill: row do skills_repo (id, name, kind, raw_content).
-        skill_md: alias pra raw_content (passe diretamente quando já
-            tiver carregado).
-        parsed_skill: ParsedSkill já calculado (opcional; se None,
-            chamamos parse_skill_md(skill_md) aqui).
 
-    Returns:
-        CanonicalFormSchema ou None quando a SKILL NÃO é declarativa
-        OU não tem ## API Bindings. Caller decide se omite do contexto.
+def normalize_declarative_skill_binding(
+    skill: dict,
+    skill_md: Optional[str] = None,
+    parsed_skill=None,
+) -> Optional[dict]:
+    """Produz CanonicalFormSchema pra SKILL declarativa que tenha
+    ## API Bindings, ## Data Tables, ou ambos.
 
-    Precedência do schema (igual ao MCP):
-    1. SKILL ## Inputs (explícito, com types/required)
-    2. Vars sintetizadas das api_bindings_parsed (fallback)
+    Modelo: 1 item por SKILL (não por binding). Razão: api_bindings_parsed
+    E data_tables_parsed compartilham `## Inputs` via Jinja2 e rodam como
+    UNIDADE através de execute_declarative.
 
-    Onda A.2: NÃO toca em ## Data Tables. Se a SKILL declarativa tem
-    SÓ data_tables (sem api_bindings), retorna None — A.3 cobre isso.
+    binding_kind reflete o conteúdo:
+    - "api"     → SKILL tem api_bindings (com ou sem data_tables hybrid)
+    - "tabular" → SKILL tem só data_tables (sem api_bindings)
+
+    Precedência do schema:
+    1. SKILL ## Inputs explícito
+    2. Template vars de api_bindings + data_tables (fallback)
+
+    Onda A.3: introduz suporte a tabular-only SKILLs.
     """
     md = (skill_md if skill_md is not None else (skill.get("raw_content") or "")) or ""
     if not md.strip():
         return None
 
-    # Parse só quando necessário (evita import circular em algum caller).
     if parsed_skill is None:
         try:
             from app.skill_parser.parser import parse_skill_md
@@ -322,10 +340,15 @@ def normalize_api_binding_from_skill(
     if exec_mode != "declarative":
         return None
 
-    # Gate 2: tem ## API Bindings parseado
+    # Gate 2: tem api_bindings_parsed OU data_tables_parsed
     api_bindings = getattr(parsed_skill, "api_bindings_parsed", None) or []
-    if not api_bindings:
+    data_tables = getattr(parsed_skill, "data_tables_parsed", None) or []
+    if not api_bindings and not data_tables:
         return None
+
+    # binding_kind: api wins quando há api_bindings (cobre hybrid também
+    # — a UI ainda invoca o execute_declarative que roda os 2 grupos).
+    binding_kind = "api" if api_bindings else "tabular"
 
     # 1. ## Inputs como schema (preferência)
     inputs_schema = _extract_inputs_schema(md)
@@ -333,38 +356,94 @@ def normalize_api_binding_from_skill(
         fields = _fields_from_json_schema(inputs_schema)
         schema_source = "skill_inputs"
     else:
-        # 2. Fallback: vars dos templates Jinja
-        template_vars = _extract_template_vars_from_api_bindings(api_bindings)
+        # 2. Fallback: vars de templates (api_bindings + data_tables)
+        template_vars = _extract_template_vars(api_bindings + data_tables)
         if not template_vars:
-            # SKILL declarativa sem inputs e sem vars referenciadas —
-            # ainda invocável (params={}), só não terá form. Retorna
-            # vazio mas mantém schema_source pra UI saber.
             fields = []
         else:
+            ref_label = (
+                "API Bindings" if api_bindings and not data_tables
+                else ("Data Tables" if data_tables and not api_bindings
+                else "API Bindings + Data Tables")
+            )
             fields = [
                 _make_field(
                     name=v, type="string", required=True,
-                    description=f"Variável referenciada nas API Bindings",
+                    description=f"Variável referenciada em {ref_label}",
                     multiline=_infer_multiline(v, ""),
                 )
                 for v in template_vars
             ]
-        schema_source = "template_vars" if not inputs_schema else "skill_inputs"
+        schema_source = "template_vars"
 
-    # Label: nome da skill + dica de binding_kind
     skill_name = skill.get("name") or "(skill sem nome)"
 
     return {
-        "binding_kind": "api",
+        "binding_kind": binding_kind,
         "binding_id": str(skill.get("id") or ""),
         "binding_label": skill_name,
-        "operations": [],  # N/A pra API — execução é skill inteira
+        "operations": [],
         "fields": fields,
         "schema_source": schema_source,
-        # Metadata pra UI: quantidade de bindings, list de IDs (telemetria)
+        # Metadata: o que vai realmente rodar quando invocar
         "api_meta": {
             "binding_count": len(api_bindings),
             "binding_ids": [b.get("id") for b in api_bindings if isinstance(b, dict)],
+            "tables_count": len(data_tables),
+            "tables_ids": [t.get("id") for t in data_tables if isinstance(t, dict)],
+        },
+    }
+
+
+# ───────────────────────────────────────────────────────────────
+# Normalizador RAG — Onda A.3
+# ───────────────────────────────────────────────────────────────
+
+
+def normalize_rag_binding(source: dict) -> dict:
+    """Produz CanonicalFormSchema pra busca direta em 1 knowledge_source.
+
+    Diferente de API/MCP, RAG tem schema FIXO: {query, top_n}. O servidor
+    real (Retriever.search) só aceita esses 2 params + allowed_source_ids
+    (gerenciado por nós). Por isso não há precedência de schema source.
+
+    Args:
+        source: row do knowledge_sources (id, name, source_type,
+            confidentiality_label, kb_mode, ...).
+
+    Returns:
+        CanonicalFormSchema com kind="rag", binding_id=source.id,
+        fields=[query, top_n], + rag_meta com metadata da source pra
+        UI exibir contexto (tipo, confidencialidade, modo).
+    """
+    return {
+        "binding_kind": "rag",
+        "binding_id": str(source.get("id") or ""),
+        "binding_label": source.get("name") or "(source sem nome)",
+        "operations": [],
+        "fields": [
+            _make_field(
+                name="query",
+                type="string",
+                required=True,
+                multiline=True,
+                description="O que buscar nesta base. Texto livre — RAG usa BM25 + vetorial.",
+                placeholder="Ex.: política de reembolso",
+            ),
+            _make_field(
+                name="top_n",
+                type="integer",
+                required=False,
+                default=5,
+                description="Quantos trechos retornar (1-50).",
+            ),
+        ],
+        "schema_source": "rag_fixed",
+        "rag_meta": {
+            "source_type": source.get("source_type") or "",
+            "confidentiality": source.get("confidentiality_label") or "internal",
+            "kb_mode": source.get("kb_mode") or "hybrid",
+            "authorized": bool(source.get("authorized", 0)),
         },
     }
 
