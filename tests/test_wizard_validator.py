@@ -396,6 +396,118 @@ class TestOperationInvented:
 # ───────────────────────────────────────────────────────────────
 
 
+class TestOperationMissing:
+    """Bug Context7 v3 (2026-05-29 #3): Workflow não cita NENHUMA operation
+    mesmo com Registry declarando docs/code/prompt. Engine em runtime não
+    sabe qual operation invocar — tool nunca é chamada.
+
+    Diferente do operation.invented (que pega 'search' quando Registry tem
+    docs/code/prompt), aqui o Workflow não cita NADA — omissão silenciosa
+    que escapa do validador v2.
+    """
+
+    def test_workflow_without_operation_when_registry_declares_fails(self):
+        skill = _FakeSkill(
+            workflow="1. Chame a tool Context 7 MCP Server para obter docs do pattern.",
+        )
+        bindings = _mcp_bindings(name="Context 7 MCP Server", ops="docs,code,prompt")
+        result = validate_generated_skill(skill, bindings)
+        crits = [v for v in result.violations if v.rule == "operation.missing"]
+        assert len(crits) == 1
+        assert crits[0].severity == "critical"
+        assert "docs" in crits[0].message and "code" in crits[0].message
+
+    def test_workflow_with_operation_passes(self):
+        skill = _FakeSkill(workflow="Chame a tool com operation=docs e query=...")
+        bindings = _mcp_bindings(name="Context 7", ops="docs,code,prompt")
+        result = validate_generated_skill(skill, bindings)
+        assert not any(v.rule == "operation.missing" for v in result.violations)
+
+    def test_skip_when_no_operations_declared_in_registry(self):
+        """Tool sem operations no Registry — não dá pra dizer que está
+        'missing', porque não há operations a citar."""
+        skill = _FakeSkill(workflow="Chame a tool.")
+        bindings = _mcp_bindings(name="Mystery", ops="")
+        result = validate_generated_skill(skill, bindings)
+        assert not any(v.rule == "operation.missing" for v in result.violations)
+
+    def test_suggestion_lists_valid_operations(self):
+        skill = _FakeSkill(workflow="Chame a tool para obter info.")
+        bindings = _mcp_bindings(ops="docs,code,prompt")
+        result = validate_generated_skill(skill, bindings)
+        crit = next(v for v in result.violations if v.rule == "operation.missing")
+        for op in ("docs", "code", "prompt"):
+            assert op in crit.suggestion
+
+    def test_operation_invented_takes_precedence_over_missing(self):
+        """Quando há operation citada (mesmo inventada), dispara
+        operation.invented em vez de operation.missing — evita ruído duplo."""
+        skill = _FakeSkill(workflow="Chame a tool com operation=search.")
+        bindings = _mcp_bindings(ops="docs,code")
+        result = validate_generated_skill(skill, bindings)
+        rules = {v.rule for v in result.violations}
+        assert "operation.invented" in rules
+        assert "operation.missing" not in rules
+
+
+class TestOperationContradictsRegistry:
+    """Bug Context7 v3 #2: Tool Bindings escreve texto inventado como
+    'nenhuma operação declarada' / 'operações não disponíveis' mesmo
+    quando o Registry declara docs/code/prompt.
+
+    Esse texto enviesa o LLM em runtime a NÃO chamar a tool, achando que
+    ela não tem operations utilizáveis.
+    """
+
+    @pytest.mark.parametrize("phrase", [
+        "nenhuma operação declarada",
+        "Nenhuma operação declarada para esta tool",
+        "operações não declaradas",
+        "Sem operações disponíveis",
+        "operações não disponíveis para uso",
+    ])
+    def test_detects_various_contradiction_phrases(self, phrase):
+        skill = _FakeSkill(
+            workflow="Chame a tool com operation=docs.",
+            tool_bindings=f"- Context 7 MCP Server\n  *Operações*: {phrase}",
+        )
+        bindings = _mcp_bindings(ops="docs,code,prompt")
+        result = validate_generated_skill(skill, bindings)
+        crits = [v for v in result.violations if v.rule == "operation.contradicts_registry"]
+        assert len(crits) == 1
+
+    def test_clean_tool_bindings_passes(self):
+        skill = _FakeSkill(
+            workflow="Chame a tool com operation=docs.",
+            tool_bindings="- Context 7\n  Operations: docs, code, prompt",
+        )
+        bindings = _mcp_bindings(ops="docs,code,prompt")
+        result = validate_generated_skill(skill, bindings)
+        assert not any(v.rule == "operation.contradicts_registry" for v in result.violations)
+
+    def test_no_contradiction_when_no_ops_in_registry(self):
+        """Quando o Registry NÃO tem operations, dizer 'sem operações' é
+        verdade — não dispara."""
+        skill = _FakeSkill(
+            workflow="Chame a tool.",
+            tool_bindings="- Mystery Tool\n  *Operações*: nenhuma operação declarada",
+        )
+        bindings = _mcp_bindings(ops="")
+        result = validate_generated_skill(skill, bindings)
+        assert not any(v.rule == "operation.contradicts_registry" for v in result.violations)
+
+    def test_suggestion_lists_actual_operations_from_registry(self):
+        skill = _FakeSkill(
+            workflow="Chame a tool com operation=docs.",
+            tool_bindings="*Operações*: nenhuma operação declarada",
+        )
+        bindings = _mcp_bindings(ops="docs,code,prompt")
+        result = validate_generated_skill(skill, bindings)
+        crit = next(v for v in result.violations if v.rule == "operation.contradicts_registry")
+        for op in ("docs", "code", "prompt"):
+            assert op in crit.suggestion
+
+
 class TestRegressionContext7V1:
     """SKILL gerada (anterior a PR #180) tinha Workflow passivo +
     Evidence Policy contraditória. Validador agora pega ambos."""
