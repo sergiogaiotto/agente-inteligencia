@@ -40,12 +40,17 @@ class DryRunRequest(BaseModel):
     skill_md: markdown completo da SKILL (incluindo frontmatter).
     tool_id: UUID da tool MCP declarada (precisa estar em Tool Bindings).
     operation_override: opcional. Quando vazio, usa a primeira do enum.
-    sample_query: input de teste pra montar o payload.
+    sample_query: input de teste pra montar o payload (back-compat Fase 1).
+    extra_params: PR #197 (Fase 2). Dict de field→value pra schemas
+        customizados declarados em ## Inputs da SKILL. Quando presente,
+        backend usa esses valores no payload simulado em vez do par
+        {operation, query} fixo da Fase 1.
     """
     skill_md: str
     tool_id: str
     operation_override: Optional[str] = ""
     sample_query: Optional[str] = "exemplo de consulta"
+    extra_params: Optional[dict] = None
 
 
 class DryRunIssue(BaseModel):
@@ -60,11 +65,22 @@ class DryRunResult(BaseModel):
     """True quando nenhuma issue critical. Avisos não bloqueiam."""
 
     payload_that_would_be_sent: dict
-    """Shape exato que o engine enviaria pra tool MCP em runtime."""
+    """Shape exato que o engine enviaria pra tool MCP em runtime.
+    Quando há extra_params na request, reflete eles. Caso contrário,
+    fallback Fase 1 {operation, query}."""
 
     function_spec: dict
-    """Function spec OpenAI que o engine constrói via build_openai_tools.
-    Operador vê exatamente o que o LLM verá."""
+    """Function spec OpenAI que o ENGINE constrói hoje em
+    build_openai_tools — sempre {operation enum, query string}. Operador
+    vê exatamente o que o LLM verá em runtime no estado atual da
+    plataforma."""
+
+    function_spec_skill_declared: Optional[dict] = None
+    """PR #197 (Fase 2). Function spec que a SKILL DECLARA em ## Inputs.
+    None quando ## Inputs não traz schema JSON parseável. Compara com
+    function_spec pra detectar mismatch (causa raiz dos bugs Context7
+    #1-#5 onde SKILL declara {action, subject, content} mas engine força
+    {operation, query})."""
 
     issues: list[DryRunIssue]
     """Diagnóstico estruturado. UI mostra com cores/agrupado por severidade."""
@@ -113,6 +129,106 @@ def _split_csv_or_json(ops_raw: str) -> list[str]:
 def _sanitize_function_name(name: str) -> str:
     """Alinha com runtime.py:build_openai_tools — function name pra OpenAI."""
     return re.sub(r"[^a-zA-Z0-9_-]", "_", (name or "tool")).strip("_")[:64]
+
+
+def _extract_inputs_schema(skill_md: str) -> Optional[dict]:
+    """Extrai o JSON Schema declarado em `## Inputs` da SKILL.md.
+
+    A seção tipicamente tem formato:
+
+        ## Inputs
+        ```json
+        {"type": "object", "properties": {...}, "required": [...]}
+        ```
+
+    Returns:
+        dict com o JSON Schema parseado OU None quando:
+        - Seção ## Inputs ausente
+        - Não tem bloco fenced JSON
+        - JSON malformado
+        - Schema não tem 'properties' (não dá pra usar como function spec)
+
+    PR #197 (Fase 2): permite o dry-run mostrar o schema REAL que a SKILL
+    declara, separado do schema fixo que o engine MCP força. Quando os
+    dois divergem, é a causa raiz dos bugs Context7 #1-#5 (SKILL declara
+    {action, subject, content}, engine força {operation, query}).
+    """
+    if not skill_md:
+        return None
+    # Acha a seção ## Inputs até próxima seção
+    m = re.search(r"##\s+Inputs\s*\n([\s\S]*?)(?=\n##\s|$)", skill_md)
+    if not m:
+        return None
+    block = m.group(1)
+    # Primeiro bloco fenced json
+    fence = re.search(r"```(?:json|JSON)?\s*\n([\s\S]*?)\n```", block)
+    if not fence:
+        return None
+    import json
+    try:
+        schema = json.loads(fence.group(1).strip())
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(schema, dict):
+        return None
+    # Schema sem properties não vira function spec útil
+    if not isinstance(schema.get("properties"), dict):
+        return None
+    return schema
+
+
+def _build_function_spec_from_skill_inputs(
+    tool: dict,
+    inputs_schema: dict,
+) -> dict:
+    """Constrói function spec OpenAI a partir do JSON Schema declarado
+    em ## Inputs da SKILL. Diferente de _build_function_spec (que força
+    {operation, query}), aqui o operador vê o schema REAL que a SKILL
+    quer expor à tool.
+
+    Preserva: type, properties, required do schema original.
+    Limpa: $schema, title, description top-level, additionalProperties
+    (não fazem sentido no function spec do LLM).
+    """
+    name = _sanitize_function_name(tool.get("name", ""))
+    props = inputs_schema.get("properties") or {}
+    required = inputs_schema.get("required") or []
+    # Mantém só atributos relevantes pra function spec
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": (
+                f"[SKILL-declared schema] Ferramenta MCP '{tool.get('name', '')}'."
+            )[:900],
+            "parameters": {
+                "type": inputs_schema.get("type") or "object",
+                "properties": props,
+                "required": required,
+            },
+        },
+    }
+
+
+def _schemas_have_field_mismatch(
+    engine_spec: dict,
+    skill_spec: Optional[dict],
+) -> Optional[tuple[list[str], list[str]]]:
+    """Compara o function spec do engine vs o schema declarado pela SKILL.
+
+    Returns tuple (skill_only, engine_only) com os nomes dos campos:
+    - skill_only: campos que a SKILL declara mas o engine NÃO envia
+    - engine_only: campos que o engine envia mas a SKILL não declara
+
+    Returns None quando não há schema declarado (não dá pra comparar).
+    """
+    if not skill_spec:
+        return None
+    skill_props = set((skill_spec.get("function") or {}).get("parameters", {}).get("properties", {}).keys())
+    engine_props = set((engine_spec.get("function") or {}).get("parameters", {}).get("properties", {}).keys())
+    skill_only = sorted(skill_props - engine_props)
+    engine_only = sorted(engine_props - skill_props)
+    return (skill_only, engine_only)
 
 
 # ───────────────────────────────────────────────────────────────
@@ -191,8 +307,15 @@ def _diagnose(
     tool: dict,
     operation_chosen: str,
     declared_ops: list[str],
+    engine_spec: dict,
+    skill_spec: Optional[dict] = None,
 ) -> list[DryRunIssue]:
-    """Coleta issues do validador estático + checagens específicas de dry-run."""
+    """Coleta issues do validador estático + checagens específicas de dry-run.
+
+    PR #197 (Fase 2): nova regra schema.mismatch quando ## Inputs da SKILL
+    declara campos diferentes do schema que o engine envia (causa raiz
+    dos bugs Context7 #1-#5).
+    """
     issues: list[DryRunIssue] = []
 
     # ── Validador estático completo (G1-G4, operation.*, section.*) ──
@@ -248,6 +371,41 @@ def _diagnose(
             ),
         ))
 
+    # ── PR #197 (Fase 2): schema.mismatch ──
+    # Causa raiz dos bugs Context7 #1-#5: SKILL declara em ## Inputs um schema
+    # tipo {action, subject, content} mas o engine MCP sempre força
+    # {operation, query} em build_openai_tools. Em runtime o LLM tem que
+    # "comprimir" um no outro e erra.
+    diff = _schemas_have_field_mismatch(engine_spec, skill_spec)
+    if diff is not None:
+        skill_only, engine_only = diff
+        if skill_only or engine_only:
+            # Mensagem articula o problema arquitetural
+            parts = []
+            if skill_only:
+                parts.append(f"SKILL declara em ## Inputs {skill_only} que o engine NÃO envia")
+            if engine_only:
+                parts.append(f"engine força {engine_only} que a SKILL NÃO declara")
+            issues.append(DryRunIssue(
+                severity="warning",  # warning porque o engine atual SEMPRE força
+                                     # operation+query — não é falha da SKILL, é
+                                     # gap arquitetural pra evolução futura
+                rule="schema.mismatch",
+                message=(
+                    "Schema declarado pela SKILL diverge do que o engine MCP "
+                    "envia em runtime: " + "; ".join(parts) + ". O LLM precisa "
+                    "'comprimir' os campos da SKILL nos {operation, query} do "
+                    "engine — frequente causa raiz de chamadas MCP mal-formadas."
+                ),
+                suggestion=(
+                    "Curto prazo: documente no Workflow como mapear "
+                    + ", ".join(skill_only or ["campos da SKILL"]) + " "
+                    "em {operation, query}. Médio prazo: aguarde Fase 3 do "
+                    "dry-run que vai expor schema customizado por tool via "
+                    "Registry (sem precisar comprimir)."
+                ),
+            ))
+
     return issues
 
 
@@ -291,19 +449,40 @@ async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
     else:
         operation_chosen = ""  # sem default — issue será sinalizada
 
-    # 3. Function spec que o engine criaria
+    # 3. Function spec que o ENGINE criaria HOJE (sempre {operation, query})
     function_spec = _build_function_spec(tool)
 
-    # 4. Payload que SERIA enviado em runtime
-    payload = {
-        "operation": operation_chosen,
-        "query": data.sample_query or "exemplo de consulta",
-    }
+    # 4. PR #197 (Fase 2): Function spec que a SKILL DECLARA em ## Inputs.
+    # Quando presente, expomos lado a lado pra mostrar o gap arquitetural.
+    inputs_schema = _extract_inputs_schema(data.skill_md)
+    function_spec_skill_declared = (
+        _build_function_spec_from_skill_inputs(tool, inputs_schema)
+        if inputs_schema else None
+    )
 
-    # 5. Coleta issues
-    issues = _diagnose(data.skill_md, tool, operation_chosen, declared_ops)
+    # 5. Payload simulado.
+    # Fase 1: payload era SEMPRE {operation, query}. Fase 2: quando o user
+    # mandou extra_params, refletimos eles — operador vê o que SERIA
+    # enviado SE o engine respeitasse o schema da SKILL.
+    if data.extra_params:
+        payload = dict(data.extra_params)
+        # Garante operation_resolved no payload pra observability
+        if "operation" not in payload and operation_chosen:
+            payload["operation"] = operation_chosen
+    else:
+        payload = {
+            "operation": operation_chosen,
+            "query": data.sample_query or "exemplo de consulta",
+        }
 
-    # 6. ok = sem criticals
+    # 6. Coleta issues (inclui schema.mismatch quando há SKILL spec)
+    issues = _diagnose(
+        data.skill_md, tool, operation_chosen, declared_ops,
+        engine_spec=function_spec,
+        skill_spec=function_spec_skill_declared,
+    )
+
+    # 7. ok = sem criticals
     ok = all(i.severity != "critical" for i in issues)
 
     logger.info(
@@ -316,6 +495,8 @@ async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
             "ok": ok,
             "critical_count": sum(1 for i in issues if i.severity == "critical"),
             "warning_count": sum(1 for i in issues if i.severity == "warning"),
+            "has_skill_declared_schema": function_spec_skill_declared is not None,
+            "has_extra_params": data.extra_params is not None,
         },
     )
 
@@ -323,6 +504,7 @@ async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
         ok=ok,
         payload_that_would_be_sent=payload,
         function_spec=function_spec,
+        function_spec_skill_declared=function_spec_skill_declared,
         issues=issues,
         operation_resolved=operation_chosen,
     )

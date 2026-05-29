@@ -695,7 +695,14 @@
                                  mas a UI lê o spec real (após primeira chamada de testar)
                                  ou usa fallback estático antes da primeira chamada.
                                  Suporta N campos: enum vira <select>, string com formato
-                                 multi-line vira <textarea>, demais vira <input>. -->
+                                 multi-line vira <textarea>, demais vira <input>.
+                                 PR #197 (Fase 2): badge indica qual spec dirige o form. -->
+                            <template x-if="dryRunResults[t.id]?.function_spec_skill_declared">
+                                <div class="flex items-center gap-1.5 text-[10px] text-violet-700 bg-violet-50 border border-violet-200 rounded-md px-2 py-1">
+                                    <span class="font-semibold">SKILL</span>
+                                    <span>schema custom de <code class="font-mono">## Inputs</code> está dirigindo o form. Engine MCP atual ainda força <code class="font-mono">{operation, query}</code> — veja "Payload + function spec" abaixo.</span>
+                                </div>
+                            </template>
                             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <template x-for="(propMeta, propName) in dryRunFieldsFor(t)" :key="propName">
                                     <div>
@@ -778,11 +785,37 @@
                                                 <pre class="mt-1 rounded bg-white border border-surface-200 px-2 py-1 text-[10px] font-mono overflow-x-auto text-brand-800"
                                                      x-text="JSON.stringify(dryRunResults[t.id].payload_that_would_be_sent, null, 2)"></pre>
                                             </div>
-                                            <div>
-                                                <div class="text-[9px] font-semibold text-surface-400 uppercase tracking-wider">Function spec que o LLM veria</div>
-                                                <pre class="mt-1 rounded bg-white border border-surface-200 px-2 py-1 text-[10px] font-mono overflow-x-auto text-brand-800 max-h-48"
-                                                     x-text="JSON.stringify(dryRunResults[t.id].function_spec, null, 2)"></pre>
-                                            </div>
+                                            <!-- PR #197 (Fase 2): quando SKILL declara schema próprio em ## Inputs,
+                                                 mostra os 2 specs lado a lado. Operador vê o gap arquitetural
+                                                 que é causa raiz dos bugs Context7 #1-#5. -->
+                                            <template x-if="dryRunResults[t.id].function_spec_skill_declared">
+                                                <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                                                    <div>
+                                                        <div class="text-[9px] font-semibold text-violet-600 uppercase tracking-wider flex items-center gap-1">
+                                                            <span class="rounded-sm bg-violet-100 text-violet-700 px-1">SKILL</span>
+                                                            <span>Schema declarado em ## Inputs</span>
+                                                        </div>
+                                                        <pre class="mt-1 rounded bg-white border border-violet-200 px-2 py-1 text-[10px] font-mono overflow-x-auto text-violet-900 max-h-48"
+                                                             x-text="JSON.stringify(dryRunResults[t.id].function_spec_skill_declared, null, 2)"></pre>
+                                                    </div>
+                                                    <div>
+                                                        <div class="text-[9px] font-semibold text-amber-600 uppercase tracking-wider flex items-center gap-1">
+                                                            <span class="rounded-sm bg-amber-100 text-amber-700 px-1">ENGINE</span>
+                                                            <span>Spec que o LLM REALMENTE vê hoje</span>
+                                                        </div>
+                                                        <pre class="mt-1 rounded bg-white border border-amber-200 px-2 py-1 text-[10px] font-mono overflow-x-auto text-amber-900 max-h-48"
+                                                             x-text="JSON.stringify(dryRunResults[t.id].function_spec, null, 2)"></pre>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                            <!-- Quando NÃO há schema declarado, mostra só o do engine (back-compat Fase 1) -->
+                                            <template x-if="!dryRunResults[t.id].function_spec_skill_declared">
+                                                <div>
+                                                    <div class="text-[9px] font-semibold text-surface-400 uppercase tracking-wider">Function spec que o LLM veria</div>
+                                                    <pre class="mt-1 rounded bg-white border border-surface-200 px-2 py-1 text-[10px] font-mono overflow-x-auto text-brand-800 max-h-48"
+                                                         x-text="JSON.stringify(dryRunResults[t.id].function_spec, null, 2)"></pre>
+                                                </div>
+                                            </template>
                                         </div>
                                     </details>
                                 </div>
@@ -1319,9 +1352,20 @@ function skillForm(editId) {
         // estático que reflete o que o engine MCP cria hoje ({operation enum,
         // query string}). Quando o engine evoluir e expor function_specs com
         // N campos, a UI vai acompanhar sem mudança aqui.
+        //
+        // PR #197 (Fase 2): prioriza function_spec_skill_declared quando
+        // presente — quando a SKILL traz ## Inputs com schema JSON parseável,
+        // o operador pode preencher os campos REAIS que a SKILL espera (ex.:
+        // action/subject/content do Context7 MCP Assistant) em vez do par
+        // {operation, query} que o engine MCP força hoje. Isso revela o gap
+        // arquitetural sem trocar runtime — UX educacional + diagnóstico.
         dryRunFieldsFor(tool) {
             const result = this.dryRunResults[tool.id];
-            const spec = result?.function_spec?.function?.parameters;
+            // Fase 2: schema declarado pela SKILL tem precedência (é o que
+            // o autor da SKILL realmente quer expor à tool).
+            const skillSpec = result?.function_spec_skill_declared?.function?.parameters;
+            const engineSpec = result?.function_spec?.function?.parameters;
+            const spec = skillSpec || engineSpec;
             // Caso 1: já temos function_spec do backend — usa ele
             if (spec?.properties) {
                 const required = new Set(spec.required || []);
@@ -1377,15 +1421,23 @@ function skillForm(editId) {
             this.dryRunInFlight[tool.id] = true;
             this.dryRunResults[tool.id] = null;
             try {
-                // Backend hoje aceita só operation_override + sample_query.
-                // Extraímos os 2 campos canônicos do dict de params pra manter
-                // contrato; campos adicionais já viajam pra adoção futura
-                // (campo extra_params no DryRunRequest pode entrar em Fase 2).
+                // Fase 2 (PR #197): manda TODOS os campos preenchidos como
+                // extra_params. Backend usa isso pra montar o payload
+                // simulado quando há schema customizado em ## Inputs.
+                // operation_override + sample_query continuam pra back-compat
+                // (engine MCP atual ainda força {operation, query}).
+                const extraParams = {};
+                for (const [k, v] of Object.entries(inputs)) {
+                    if (v !== undefined && v !== null && v !== '') {
+                        extraParams[k] = v;
+                    }
+                }
                 const r = await api.post('/api/v1/skills/dry-run-tool', {
                     skill_md: this.form.raw_content || '',
                     tool_id: tool.id,
                     operation_override: inputs.operation || '',
                     sample_query: inputs.query || inputs.sample_query || 'exemplo de consulta',
+                    extra_params: Object.keys(extraParams).length > 0 ? extraParams : null,
                 });
                 this.dryRunResults[tool.id] = r;
                 if (typeof showToast === 'function') {

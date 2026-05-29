@@ -383,3 +383,348 @@ class TestRegressionUserSkillContext7:
         # Mesmo com ok=False, payload está montado pra inspeção
         assert body["payload_that_would_be_sent"]["operation"] == "docs"
         assert body["payload_that_would_be_sent"]["query"] == "manual python"
+
+
+# ───────────────────────────────────────────────────────────────
+# PR #197 (Fase 2): schema custom da SKILL + regra schema.mismatch
+# ───────────────────────────────────────────────────────────────
+
+
+# SKILL realista do user (Context7 MCP Assistant) com schema custom
+# {action, subject, content} declarado em ## Inputs. É essa estrutura
+# que dispara schema.mismatch na Fase 2.
+SKILL_CTX7_CUSTOM_INPUTS = """---
+id: urn:skill:geral:subagent:context7-mcp
+version: 0.1.0
+kind: subagent
+owner: e
+stability: alpha
+---
+
+# Context7 MCP Assistant
+
+## Purpose
+Consulta Context7.
+
+## Activation Criteria
+Quando solicitado.
+
+## Inputs
+```json
+{"type":"object","required":["action","subject"],"properties":{"action":{"type":"string","enum":["get_documentation","update_prompt"]},"subject":{"type":"string"},"content":{"type":"string"}}}
+```
+
+## Workflow
+1. **Valide** o payload.
+2. **Chame** a tool `Context 7 MCP Server` com `operation=docs` e `query=<subject>`.
+3. **Avalie** a resposta.
+
+## Tool Bindings
+- `481c5fa3-36bc-4d05-97ff-d502d93521ff` (Context 7 MCP Server) — Plataforma.
+
+## Output Contract
+```json
+{"type":"object"}
+```
+
+## Failure Modes
+- Erro: msg.
+
+## Evidence Policy
+A única fonte autorizada é o binding **Context 7 MCP Server** declarado em ## Tool Bindings.
+
+## Guardrails
+- Sem PII.
+"""
+
+
+class TestExtractInputsSchema:
+    """_extract_inputs_schema parseia o JSON Schema da seção ## Inputs."""
+
+    def test_extracts_full_schema_with_properties_and_required(self):
+        from app.routes.skill_dryrun import _extract_inputs_schema
+        schema = _extract_inputs_schema(SKILL_CTX7_CUSTOM_INPUTS)
+        assert schema is not None
+        assert schema["type"] == "object"
+        assert set(schema["properties"].keys()) == {"action", "subject", "content"}
+        assert schema["required"] == ["action", "subject"]
+        assert schema["properties"]["action"]["enum"] == [
+            "get_documentation", "update_prompt"
+        ]
+
+    def test_returns_none_when_no_inputs_section(self):
+        from app.routes.skill_dryrun import _extract_inputs_schema
+        md = "# Skill\n\n## Purpose\nteste\n"
+        assert _extract_inputs_schema(md) is None
+
+    def test_returns_none_when_no_fenced_block(self):
+        """## Inputs sem ```json``` deve retornar None."""
+        from app.routes.skill_dryrun import _extract_inputs_schema
+        md = "# X\n\n## Inputs\nSem fenced block.\n\n## Outra\n"
+        assert _extract_inputs_schema(md) is None
+
+    def test_returns_none_when_malformed_json(self):
+        from app.routes.skill_dryrun import _extract_inputs_schema
+        md = """# X
+
+## Inputs
+```json
+{not valid json}
+```
+
+## Outra
+"""
+        assert _extract_inputs_schema(md) is None
+
+    def test_returns_none_when_schema_has_no_properties(self):
+        """Schema sem properties não vira function spec útil."""
+        from app.routes.skill_dryrun import _extract_inputs_schema
+        md = """# X
+
+## Inputs
+```json
+{"type":"object"}
+```
+
+## Outra
+"""
+        assert _extract_inputs_schema(md) is None
+
+    def test_returns_none_when_empty(self):
+        from app.routes.skill_dryrun import _extract_inputs_schema
+        assert _extract_inputs_schema("") is None
+
+
+class TestBuildFunctionSpecFromSkillInputs:
+    """_build_function_spec_from_skill_inputs reflete schema declarado."""
+
+    def test_preserves_properties_from_schema(self):
+        from app.routes.skill_dryrun import _build_function_spec_from_skill_inputs
+        inputs = {
+            "type": "object",
+            "required": ["action", "subject"],
+            "properties": {
+                "action": {"type": "string", "enum": ["get_doc", "upd"]},
+                "subject": {"type": "string"},
+                "content": {"type": "string"},
+            },
+        }
+        spec = _build_function_spec_from_skill_inputs(CTX7_TOOL_ROW, inputs)
+        params = spec["function"]["parameters"]
+        assert set(params["properties"].keys()) == {"action", "subject", "content"}
+        assert params["required"] == ["action", "subject"]
+        # Function name sanitizado
+        assert " " not in spec["function"]["name"]
+        # Description sinaliza origem
+        assert "SKILL-declared" in spec["function"]["description"]
+
+    def test_uses_object_type_when_schema_missing_type(self):
+        from app.routes.skill_dryrun import _build_function_spec_from_skill_inputs
+        inputs = {"properties": {"x": {"type": "string"}}}
+        spec = _build_function_spec_from_skill_inputs(CTX7_TOOL_ROW, inputs)
+        assert spec["function"]["parameters"]["type"] == "object"
+
+
+class TestSchemaMismatchDetection:
+    """_schemas_have_field_mismatch compara nomes de fields entre os 2 specs."""
+
+    def test_returns_none_when_skill_spec_absent(self):
+        from app.routes.skill_dryrun import _schemas_have_field_mismatch
+        engine = {"function": {"parameters": {"properties": {"a": {}}}}}
+        assert _schemas_have_field_mismatch(engine, None) is None
+
+    def test_detects_field_present_only_in_skill(self):
+        from app.routes.skill_dryrun import _schemas_have_field_mismatch
+        skill = {"function": {"parameters": {"properties": {
+            "action": {}, "subject": {}, "content": {},
+        }}}}
+        engine = {"function": {"parameters": {"properties": {
+            "operation": {}, "query": {},
+        }}}}
+        skill_only, engine_only = _schemas_have_field_mismatch(engine, skill)
+        assert skill_only == ["action", "content", "subject"]
+        assert engine_only == ["operation", "query"]
+
+    def test_returns_empty_lists_when_schemas_match(self):
+        from app.routes.skill_dryrun import _schemas_have_field_mismatch
+        spec = {"function": {"parameters": {"properties": {
+            "operation": {}, "query": {},
+        }}}}
+        skill_only, engine_only = _schemas_have_field_mismatch(spec, spec)
+        assert skill_only == []
+        assert engine_only == []
+
+
+class TestEndpointPhase2:
+    """Endpoint retorna function_spec_skill_declared + dispara
+    schema.mismatch quando há divergência."""
+
+    def _patch_registry(self, monkeypatch):
+        async def fake_resolve(tool_id):
+            return CTX7_TOOL_ROW if tool_id == CTX7_TOOL_ROW["id"] else None
+        monkeypatch.setattr(
+            "app.routes.skill_dryrun._resolve_tool_from_registry",
+            fake_resolve,
+        )
+
+    def test_returns_skill_declared_spec_when_inputs_has_schema(
+        self, app_client, monkeypatch,
+    ):
+        self._patch_registry(monkeypatch)
+        r = app_client.post("/api/v1/skills/dry-run-tool", json={
+            "skill_md": SKILL_CTX7_CUSTOM_INPUTS,
+            "tool_id": CTX7_TOOL_ROW["id"],
+        })
+        body = r.json()
+        assert body["function_spec_skill_declared"] is not None
+        skill_params = body["function_spec_skill_declared"]["function"]["parameters"]
+        assert set(skill_params["properties"].keys()) == {
+            "action", "subject", "content",
+        }
+
+    def test_skill_declared_spec_is_none_when_no_inputs_schema(
+        self, app_client, monkeypatch,
+    ):
+        """SKILL_GOOD tem ## Inputs ```json {"type":"object"} ``` (sem properties)
+        — Phase 2 deve retornar None."""
+        self._patch_registry(monkeypatch)
+        r = app_client.post("/api/v1/skills/dry-run-tool", json={
+            "skill_md": SKILL_GOOD,
+            "tool_id": CTX7_TOOL_ROW["id"],
+        })
+        body = r.json()
+        assert body["function_spec_skill_declared"] is None
+
+    def test_schema_mismatch_warning_emitted_when_fields_diverge(
+        self, app_client, monkeypatch,
+    ):
+        """Causa raiz dos bugs Context7 #1-#5: SKILL declara
+        {action, subject, content} mas engine força {operation, query}."""
+        self._patch_registry(monkeypatch)
+        r = app_client.post("/api/v1/skills/dry-run-tool", json={
+            "skill_md": SKILL_CTX7_CUSTOM_INPUTS,
+            "tool_id": CTX7_TOOL_ROW["id"],
+        })
+        body = r.json()
+        rules = [i["rule"] for i in body["issues"]]
+        assert "schema.mismatch" in rules
+        mismatch_issue = next(i for i in body["issues"] if i["rule"] == "schema.mismatch")
+        assert mismatch_issue["severity"] == "warning"
+        # Mensagem cita campos divergentes
+        msg = mismatch_issue["message"]
+        assert "action" in msg or "subject" in msg or "content" in msg
+        assert "operation" in msg or "query" in msg
+
+    def test_no_schema_mismatch_when_skill_has_no_inputs_schema(
+        self, app_client, monkeypatch,
+    ):
+        """SKILL sem schema parseável em ## Inputs não dispara mismatch."""
+        self._patch_registry(monkeypatch)
+        r = app_client.post("/api/v1/skills/dry-run-tool", json={
+            "skill_md": SKILL_GOOD,
+            "tool_id": CTX7_TOOL_ROW["id"],
+        })
+        body = r.json()
+        rules = [i["rule"] for i in body["issues"]]
+        assert "schema.mismatch" not in rules
+
+    def test_extra_params_reflected_in_payload(
+        self, app_client, monkeypatch,
+    ):
+        """Quando user envia extra_params com schema custom, payload
+        simulado reflete os valores — operador vê o JSON que SERIA
+        enviado se engine respeitasse o schema da SKILL."""
+        self._patch_registry(monkeypatch)
+        r = app_client.post("/api/v1/skills/dry-run-tool", json={
+            "skill_md": SKILL_CTX7_CUSTOM_INPUTS,
+            "tool_id": CTX7_TOOL_ROW["id"],
+            "extra_params": {
+                "action": "get_documentation",
+                "subject": "python asyncio",
+                "content": "",
+            },
+        })
+        body = r.json()
+        payload = body["payload_that_would_be_sent"]
+        assert payload["action"] == "get_documentation"
+        assert payload["subject"] == "python asyncio"
+        # operation ainda vai pro payload pra observabilidade
+        assert "operation" in payload
+
+    def test_backcompat_payload_when_no_extra_params(
+        self, app_client, monkeypatch,
+    ):
+        """Sem extra_params, payload é {operation, query} (Fase 1)."""
+        self._patch_registry(monkeypatch)
+        r = app_client.post("/api/v1/skills/dry-run-tool", json={
+            "skill_md": SKILL_GOOD,
+            "tool_id": CTX7_TOOL_ROW["id"],
+        })
+        body = r.json()
+        assert set(body["payload_that_would_be_sent"].keys()) == {"operation", "query"}
+
+
+class TestUIPhase2:
+    """UI smoke checks: prioriza schema da SKILL no form + envia extra_params."""
+
+    def test_frontend_prioritizes_skill_declared_spec(self):
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        # dryRunFieldsFor lê function_spec_skill_declared antes do function_spec
+        assert "function_spec_skill_declared" in html
+        assert "skillSpec || engineSpec" in html
+
+    def test_frontend_sends_extra_params(self):
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        # runDryRunTool monta extra_params do dict de params do tool
+        assert "extra_params:" in html
+
+    def test_frontend_shows_dual_schema_side_by_side(self):
+        """Bloco com SKILL spec + engine spec lado a lado quando há mismatch."""
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        assert "Schema declarado em ## Inputs" in html
+        assert "Spec que o LLM REALMENTE vê hoje" in html
+
+    def test_frontend_shows_badge_when_skill_drives_form(self):
+        """Badge SKILL avisa o operador qual spec dirige o form."""
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        assert "schema custom de" in html
+
+
+class TestRegressionContext7SchemaMismatch:
+    """Regressão completa: SKILL Context7 MCP Assistant do user dispara
+    schema.mismatch — provando que dry-run agora ENCONTRA o gap
+    arquitetural que causou os bugs Context7 #1-#5."""
+
+    def _patch_registry(self, monkeypatch):
+        async def fake_resolve(tool_id):
+            return CTX7_TOOL_ROW if tool_id == CTX7_TOOL_ROW["id"] else None
+        monkeypatch.setattr(
+            "app.routes.skill_dryrun._resolve_tool_from_registry",
+            fake_resolve,
+        )
+
+    def test_user_skill_ctx7_v6_now_surfaces_schema_mismatch(
+        self, app_client, monkeypatch,
+    ):
+        """SKILL v6 do user (Context7 MCP Assistant) tem ## Inputs com
+        {action, subject, content}. Sem Fase 2, dry-run só sinalizava
+        operation.* mas o operador não via que o ROOT cause era o
+        engine forçar {operation, query} no shape errado."""
+        self._patch_registry(monkeypatch)
+        r = app_client.post("/api/v1/skills/dry-run-tool", json={
+            "skill_md": SKILL_CTX7_CUSTOM_INPUTS,
+            "tool_id": CTX7_TOOL_ROW["id"],
+        })
+        body = r.json()
+        # function_spec_skill_declared mostra schema real da SKILL
+        assert body["function_spec_skill_declared"] is not None
+        # function_spec mostra o que o engine FORÇA hoje
+        engine_props = body["function_spec"]["function"]["parameters"]["properties"]
+        assert set(engine_props.keys()) == {"operation", "query"}
+        # schema.mismatch presente — operador vê o gap arquitetural
+        rules = [i["rule"] for i in body["issues"]]
+        assert "schema.mismatch" in rules
