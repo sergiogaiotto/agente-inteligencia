@@ -636,6 +636,43 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         obligatory_sections.append(
             "## Tool Bindings\n" + bindings_md
         )
+
+        # ──── Pre-injection do passo 1 do Workflow ────
+        # MUDANÇA 2026-05-29 (bugs Context7 #1-#4): em 4 tentativas
+        # consecutivas, o LLM gerador (gpt-oss-120b) errou o mesmo padrão —
+        # omitiu `operation=` no passo do Workflow. Validador pós-geração
+        # (PR #186/#188/#191) detecta e roda retry, mas o LLM continua
+        # falhando o retry com mesma probabilidade.
+        #
+        # Fix: parar de confiar no LLM gerador pro passo crítico. O Wizard
+        # injeta LITERALMENTE o passo 1 do Workflow em obligatory_sections
+        # com a primeira operation declarada no Registry. LLM gerador só
+        # escreve os passos 2-N específicos da skill (avaliar, formatar,
+        # retornar, etc).
+        #
+        # Vale só pra primeira tool MCP — skills com 2+ tools precisam que
+        # o LLM gerador decida ordem/lógica das chamadas extras (mas o
+        # passo 1 sempre é "Chame a primeira com primeira op").
+        first_tool = bindings["mcp_tools"][0]
+        first_tool_name = first_tool["name"]
+        _ops_first = (first_tool.get("operations") or "").strip()
+        import re as _re_inject
+        _ops_match = _re_inject.search(r"[a-zA-Z][a-zA-Z0-9_]*", _ops_first)
+        if _ops_match:
+            first_op = _ops_match.group(0)
+            workflow_step1 = (
+                f"1. **Chame** a tool `{first_tool_name}` com "
+                f"`operation={first_op}` e `query=<entrada do usuário>` "
+                "ANTES de gerar a resposta."
+            )
+            obligatory_sections.append(
+                "## Workflow\n"
+                "(Passo 1 abaixo é OBRIGATÓRIO e LITERAL — NÃO altere "
+                f"`operation={first_op}` nem remova `query=`. "
+                "Adicione passos 2-N descrevendo como avaliar/formatar/"
+                "retornar a resposta da tool.)\n\n"
+                + workflow_step1
+            )
     else:
         # Lista explicitamente os recursos efetivamente disponíveis pra o LLM
         # não se sentir tentado a inventar tools. Se nem RAG, nem tables, nem
