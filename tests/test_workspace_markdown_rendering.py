@@ -262,3 +262,255 @@ class TestRegressionUserScreenshot:
         lines = self.SAMPLE_USER_INPUT.split("\n")
         headers = [l for l in lines if re.match(r"^#{1,6}\s", l)]
         assert len(headers) >= 1
+
+
+# ═════════════════════════════════════════════════════════════════
+# Smart object card — rendering rico de JSON estruturado
+# ═════════════════════════════════════════════════════════════════
+#
+# User reportou (2026-05-29 #2): respostas com Output Contract estruturado
+# (pattern_type, description, diagram, code_snippet, best_practices,
+# references) apareciam no modo formatado como spans simples — markdown
+# não processado em description, diagram ASCII art colapsado, code_snippet
+# numa linha só, arrays como JSON cru com aspas/colchetes.
+#
+# Fix: _renderObjectCard reescrito com detecção por nome do field + shape
+# do valor. Cada tipo (code, diagram, URL, array de URLs, array de strings,
+# textual) ganha renderer próprio.
+
+
+class TestSmartObjectCardRendering:
+    """Smart field rendering por tipo — diagnostica regressão tipo "alguém
+    apagou o detector de code" sem precisar abrir o chat.
+    """
+
+    def test_render_object_field_helper_defined(self, workspace_html):
+        """Refactor adicionou _renderObjectField como dispatcher por field."""
+        assert "_renderObjectField(key, value)" in workspace_html
+
+    def test_format_field_label_defined(self, workspace_html):
+        """Labels precisam ser capitalizadas (pattern_type → Pattern Type)."""
+        assert "_formatFieldLabel(key)" in workspace_html
+
+    def test_render_field_value_dispatcher_defined(self, workspace_html):
+        assert "_renderFieldValue(key, v)" in workspace_html
+
+
+class TestCodeFieldRendering:
+    """code_snippet, code, source devem virar <pre><code> com whitespace
+    preservado — antes ficavam em <span> numa linha só."""
+
+    def test_render_code_value_helper_defined(self, workspace_html):
+        assert "_renderCodeValue(code)" in workspace_html
+
+    def test_code_renderer_uses_pre_code_tags(self, workspace_html):
+        """Whitespace só preservado dentro de <pre>."""
+        m = re.search(
+            r"_renderCodeValue\s*\(code\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m, "_renderCodeValue não localizado"
+        body = m.group(1)
+        assert "<pre" in body and "<code>" in body, (
+            "renderer de código não usa <pre><code> — whitespace vai colapsar"
+        )
+
+    def test_code_field_name_detector_present(self, workspace_html):
+        """Field names code/code_snippet/snippet/source/example caem no path
+        de código mesmo sem `\\n` no conteúdo."""
+        m = re.search(
+            r"_renderFieldValue\s*\(key, v\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m
+        body = m.group(1)
+        for name in ("code", "snippet", "source", "example"):
+            assert name in body, f"detector de field code não cobre '{name}'"
+
+    def test_code_heuristic_by_content_present(self, workspace_html):
+        """Mesmo quando o nome do field não é 'code', conteúdo com `def `,
+        `class `, `import ` + quebra de linha deve cair no path de código."""
+        m = re.search(
+            r"_renderFieldValue\s*\(key, v\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m
+        body = m.group(1)
+        # Heurística por keywords típicas de código
+        assert "def " in body or "class " in body or "import " in body, (
+            "heurística de detectar código por keywords ausente"
+        )
+
+
+class TestDiagramFieldRendering:
+    """diagram, ascii, chart, tree → <pre> preservando whitespace."""
+
+    def test_diagram_field_renders_in_pre(self, workspace_html):
+        m = re.search(
+            r"_renderFieldValue\s*\(key, v\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m
+        body = m.group(1)
+        assert "diagram" in body, "field 'diagram' não detectado"
+        # Diagram precisa virar <pre> (sem markdown processing — ASCII art
+        # com `*` ou `_` seria estragado por italics)
+        assert re.search(r"diagram[^a-z].*?<pre", body, re.DOTALL), (
+            "diagram não renderiza em <pre>"
+        )
+
+
+class TestArrayFieldRendering:
+    """Arrays de strings, URLs, e mistos têm tratamento diferente."""
+
+    def test_render_array_value_helper_defined(self, workspace_html):
+        assert "_renderArrayValue(lowKey, arr)" in workspace_html
+
+    def test_array_of_urls_becomes_link_list(self, workspace_html):
+        """references=[...urls...] devem virar <ul> com <a> clicáveis,
+        não JSON.stringify cru."""
+        m = re.search(
+            r"_renderArrayValue\s*\([^)]*\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m, "_renderArrayValue não localizado"
+        body = m.group(1)
+        # Field names URL-like detectados
+        assert "references" in body
+        # Renderiza com <a target="_blank">
+        assert 'target="_blank"' in body
+        # E também detecta por shape (todo item começa com http)
+        assert "https?://" in body or "^https" in body
+
+    def test_array_of_strings_becomes_bullet_list(self, workspace_html):
+        """best_practices, steps, etc viram <ul> com bullets — não
+        JSON.stringify cru com colchetes/aspas."""
+        m = re.search(
+            r"_renderArrayValue\s*\([^)]*\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m
+        body = m.group(1)
+        # Path pra array de strings simples
+        assert "<ul" in body
+        # E processa markdown inline em cada item (bold/italic/code)
+        assert "_inlineMd" in body
+
+    def test_array_renderer_handles_empty(self, workspace_html):
+        """Array vazio: renderiza '(vazio)' em vez de listar nada vazio."""
+        m = re.search(
+            r"_renderArrayValue\s*\([^)]*\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m
+        body = m.group(1)
+        assert "vazio" in body or "empty" in body.lower(), (
+            "array vazio sem mensagem de fallback"
+        )
+
+    def test_array_renderer_no_json_stringify_for_strings(self, workspace_html):
+        """Regressão do bug: arrays de strings NÃO devem cair em
+        JSON.stringify (que era o comportamento antigo)."""
+        m = re.search(
+            r"_renderArrayValue\s*\([^)]*\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m
+        body = m.group(1)
+        # Pode haver JSON.stringify no fallback de array MISTO, mas pro path
+        # de array de strings simples não deve haver. Vou verificar que tem
+        # uma branch específica que não usa JSON.stringify
+        assert "every(item => typeof item === 'string')" in body, (
+            "path específico pra array de strings ausente"
+        )
+
+
+class TestUrlFieldRendering:
+    """url, link, href, website → link clicável."""
+
+    def test_render_link_value_helper_defined(self, workspace_html):
+        assert "_renderLinkValue(url)" in workspace_html
+
+    def test_link_renderer_uses_target_blank(self, workspace_html):
+        """Links externos devem abrir em nova aba com rel=noopener."""
+        m = re.search(
+            r"_renderLinkValue\s*\(url\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m
+        body = m.group(1)
+        assert 'target="_blank"' in body
+        assert "noopener" in body
+
+
+class TestTextualFieldRendering:
+    """description, summary, content, body, etc devem passar pelo
+    _renderRichMarkdown (com suporte a tabelas, listas, bold, etc)."""
+
+    def test_textual_fields_use_rich_markdown_renderer(self, workspace_html):
+        """Strings em fields textuais com markdown precisam ser processadas
+        com _renderRichMarkdown, não escapadas cruas."""
+        m = re.search(
+            r"_renderFieldValue\s*\(key, v\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m
+        body = m.group(1)
+        # description é o caso mais comum
+        assert "description" in body
+        # Strings longas (>200 chars) ou com \n também vão pro renderer rico
+        assert "_renderRichMarkdown" in body, (
+            "fields textuais não delegam ao renderer rico — markdown vai cru"
+        )
+
+
+class TestRegressionUserScreenshotMVC:
+    """Regressão do caso real reportado (screenshot MVC Python web).
+    Smart renderer precisa cobrir cada field da resposta sem ficar feio.
+    """
+
+    SAMPLE_OUTPUT = {
+        "pattern_type": "Model-View-Controller (MVC)",
+        "description": "O padrão MVC separa a aplicação em três camadas distintas: **Model** (dados), **View** (apresentação) e **Controller** (orquestra).",
+        "diagram": "| Cliente |  →  | Controller |  →  | Model |\n                            |          |     |    View    |",
+        "code_snippet": "from flask import Flask\nimport SQLAlchemy\napp = Flask(__name__)\n\nclass Todo(db.Model):\n    id = db.Column(db.Integer, primary_key=True)",
+        "best_practices": [
+            "Mantenha a lógica de negócio exclusivamente no Model",
+            "Utilize Blueprints (Flask) ou apps (Django)",
+            "Separe os templates em diretórios claros",
+        ],
+        "references": [
+            "https://flask.palletsprojects.com/",
+            "https://docs.djangoproject.com/",
+            "https://martinfowler.com/eaaCatalog/modelViewController.html",
+        ],
+    }
+
+    def test_sample_has_all_problematic_field_types(self):
+        """Sanity do sample: cobre os 5 tipos que estavam quebrados."""
+        s = self.SAMPLE_OUTPUT
+        # markdown em description
+        assert "**" in s["description"]
+        # ASCII art em diagram (whitespace significativo)
+        assert "  " in s["diagram"]
+        # código multilinha em code_snippet
+        assert "\n" in s["code_snippet"] and "def " in s["code_snippet"] or "import " in s["code_snippet"]
+        # array de strings em best_practices
+        assert isinstance(s["best_practices"], list)
+        assert all(isinstance(x, str) for x in s["best_practices"])
+        # array de URLs em references
+        assert all(x.startswith("http") for x in s["references"])
+
+    def test_field_label_formatting_logic_works_on_sample_keys(self, workspace_html):
+        """_formatFieldLabel precisa converter snake_case → Title Case
+        pros keys do sample (pattern_type, code_snippet, best_practices)."""
+        m = re.search(
+            r"_formatFieldLabel\s*\(key\)\s*\{([\s\S]*?)\n\s+\},",
+            workspace_html,
+        )
+        assert m
+        body = m.group(1)
+        # Replace de underscore por space
+        assert "_/g" in body or "/_/g" in body
+        # Capitalização da primeira letra de cada palavra
+        assert "toUpperCase" in body
