@@ -589,6 +589,188 @@ class TestRegressionContext7V2:
             assert op in crit.suggestion
 
 
+class TestSectionDuplicated:
+    """Bug Context7 v4 (2026-05-29): SKILL 'Context7 Prompt & Code Assistant'
+    tinha `## Tool Bindings` emitido 2x pelo LLM gerador. Validador anterior
+    não pegava — parser merge/ignora a segunda silenciosamente.
+
+    Regra `section.duplicated` exige passar raw_md (markdown original) pra
+    ver duplicações que o parser perde.
+    """
+
+    def _bindings(self):
+        return _mcp_bindings(name="Tool X", ops="docs,code")
+
+    def test_duplicate_tool_bindings_detected(self):
+        md = """---
+id: urn:skill:x:subagent:y
+version: 0.1.0
+kind: subagent
+owner: e
+stability: alpha
+---
+# X
+## Purpose
+P
+## Workflow
+Chame a tool com operation=docs.
+## Tool Bindings
+- `t1` (Tool X)
+## Output Contract
+{}
+## Failure Modes
+F
+## Tool Bindings
+- `t1` (Tool X) — duplicated
+"""
+        from app.skill_parser.parser import parse_skill_md
+        parsed = parse_skill_md(md)
+        result = validate_generated_skill(parsed, self._bindings(), raw_md=md)
+        crits = [v for v in result.violations if v.rule == "section.duplicated"]
+        assert len(crits) == 1
+        assert crits[0].section == "Tool Bindings"
+        assert "2x" in crits[0].message
+
+    def test_single_section_does_not_trigger(self):
+        md = """---
+id: urn:skill:x:subagent:y
+version: 0.1.0
+kind: subagent
+owner: e
+stability: alpha
+---
+# X
+## Purpose
+P
+## Workflow
+Chame com operation=docs.
+## Tool Bindings
+- t1
+"""
+        from app.skill_parser.parser import parse_skill_md
+        parsed = parse_skill_md(md)
+        result = validate_generated_skill(parsed, self._bindings(), raw_md=md)
+        assert not any(v.rule == "section.duplicated" for v in result.violations)
+
+    def test_section_in_code_fence_not_counted(self):
+        """Mention of ## Workflow inside ```fenced``` example should not
+        count as duplicate."""
+        md = """---
+id: urn:skill:x:subagent:y
+version: 0.1.0
+kind: subagent
+owner: e
+stability: alpha
+---
+# X
+## Purpose
+P
+## Workflow
+Chame com operation=docs.
+
+Em exemplos:
+```markdown
+## Workflow
+(isto é só uma menção dentro de bloco fenced)
+```
+
+## Tool Bindings
+- t1
+"""
+        from app.skill_parser.parser import parse_skill_md
+        parsed = parse_skill_md(md)
+        result = validate_generated_skill(parsed, self._bindings(), raw_md=md)
+        assert not any(
+            v.rule == "section.duplicated" and v.section == "Workflow"
+            for v in result.violations
+        )
+
+    def test_without_raw_md_skips_check(self):
+        """Back-compat: caller que não passa raw_md NÃO recebe falso
+        positivo nem KeyError."""
+        skill = _FakeSkill(workflow="Chame com operation=docs.")
+        result = validate_generated_skill(skill, self._bindings())  # raw_md=None
+        assert not any(v.rule == "section.duplicated" for v in result.violations)
+
+    def test_suggestion_explains_uniqueness(self):
+        md = """---
+id: urn:skill:x:subagent:y
+version: 0.1.0
+kind: subagent
+owner: e
+stability: alpha
+---
+# X
+## Purpose
+P
+## Workflow
+Chame com operation=docs.
+## Tool Bindings
+- t1
+## Tool Bindings
+- t1
+"""
+        from app.skill_parser.parser import parse_skill_md
+        parsed = parse_skill_md(md)
+        result = validate_generated_skill(parsed, self._bindings(), raw_md=md)
+        crit = next(v for v in result.violations if v.rule == "section.duplicated")
+        assert "EXATAMENTE 1" in crit.suggestion or "exatamente 1" in crit.suggestion.lower()
+
+
+class TestRegressionContext7PromptAssistant:
+    """Regressão da 4ª SKILL Context7 reportada (2026-05-29):
+    'Context7 Prompt & Code Assistant' v0.1.0 (urn:...:context7-mcp).
+
+    User recebeu: "Não foi possível consultar o servidor Context 7 MCP...
+    Contudo, com base no conhecimento geral..."
+
+    Causa: operation.missing + section.duplicated (## Tool Bindings 2x).
+    """
+
+    FIXTURE = Path("tests/fixtures/context7_skill_prompt_assistant.md")
+
+    def _bindings(self):
+        return {
+            "mcp_tools": [{
+                "id": "481c5fa3-36bc-4d05-97ff-d502d93521ff",
+                "name": "Context 7 MCP Server",
+                "description": "Plataforma Context7",
+                "operations": "docs,code,prompt",
+            }],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+
+    def test_fixture_exists_with_duplicate_tool_bindings(self):
+        assert self.FIXTURE.exists()
+        content = self.FIXTURE.read_text(encoding="utf-8")
+        # Sanity: a fixture preserva os 2 sinais
+        assert "operation=" not in content.split("## Examples")[0]  # workflow não tem op
+        assert content.count("## Tool Bindings") == 2
+
+    def test_prompt_assistant_fails_two_critical_rules(self):
+        """operation.missing + section.duplicated devem disparar."""
+        from app.skill_parser.parser import parse_skill_md
+        md = self.FIXTURE.read_text(encoding="utf-8")
+        parsed = parse_skill_md(md)
+        result = validate_generated_skill(parsed, self._bindings(), raw_md=md)
+
+        assert not result.ok
+        rules = {v.rule for v in result.violations}
+        assert "operation.missing" in rules
+        assert "section.duplicated" in rules
+
+    def test_other_rules_pass(self):
+        """G1/G2/G4 NÃO devem disparar — Workflow imperativo (Chame),
+        Evidence Policy correta, Examples com rastreabilidade."""
+        from app.skill_parser.parser import parse_skill_md
+        md = self.FIXTURE.read_text(encoding="utf-8")
+        parsed = parse_skill_md(md)
+        result = validate_generated_skill(parsed, self._bindings(), raw_md=md)
+        rules = {v.rule for v in result.violations}
+        for r in ("G1.passive_verb", "G1.no_imperative", "G2.internal_phrase", "G4.negative_source"):
+            assert r not in rules
+
+
 class TestRegressionRealContext7Skill:
     """Regressão usando SKILL.md REAL que o user colou em 2026-05-29
     (Context7 Design Pattern Generator v0.1.0, gerada antes de PR #185).

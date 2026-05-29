@@ -921,7 +921,7 @@ async def wizard_skill(data: WizardSkillRequest):
         validation_result = None
         try:
             parsed = parse_skill_md(skill_md)
-            validation_result = validate_generated_skill(parsed, bindings)
+            validation_result = validate_generated_skill(parsed, bindings, raw_md=skill_md)
         except Exception as _parse_err:
             # Parser não conseguiu ler a SKILL — não dá pra validar.
             # Loga e segue sem validação (não vamos bloquear por erro de parse
@@ -953,7 +953,7 @@ async def wizard_skill(data: WizardSkillRequest):
                 # melhor que o original) mas devolve warnings pro operador
                 try:
                     parsed_retry = parse_skill_md(retry_skill_md)
-                    retry_validation = validate_generated_skill(parsed_retry, bindings)
+                    retry_validation = validate_generated_skill(parsed_retry, bindings, raw_md=retry_skill_md)
                     skill_md = retry_skill_md
                     validation_result = retry_validation
                     retries_used = 1

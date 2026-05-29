@@ -219,9 +219,33 @@ def _examples_have_tool_call_marker(examples: str) -> bool:
 # ───────────────────────────────────────────────────────────────
 
 
+_CANONICAL_SECTIONS_TO_CHECK_DUPLICATES = (
+    "Purpose", "Activation Criteria", "Inputs", "Workflow", "Tool Bindings",
+    "Output Contract", "Failure Modes", "Evidence Policy", "Guardrails",
+    "Examples", "Execution Profile", "Output Shape", "API Bindings",
+    "Data Tables",
+)
+
+
+def _count_section_occurrences(raw_md: str, section_name: str) -> int:
+    """Conta quantas vezes uma seção `## X` aparece no markdown.
+
+    Usa regex line-start âncora pra não bater em ocorrências dentro de
+    blocos de código fenced (que costumam ter `#` em comentários).
+    """
+    if not raw_md:
+        return 0
+    # Remove fenced code blocks antes de contar pra não confundir com `#`
+    # dentro de exemplos
+    clean = re.sub(r"```[\s\S]*?```", "", raw_md)
+    pattern = rf"^##\s+{re.escape(section_name)}\s*$"
+    return len(re.findall(pattern, clean, flags=re.MULTILINE))
+
+
 def validate_generated_skill(
     parsed_skill,
     bindings: dict,
+    raw_md: Optional[str] = None,
 ) -> ValidationResult:
     """Valida a SKILL.md gerada contra as regras do Wizard.
 
@@ -233,8 +257,13 @@ def validate_generated_skill(
             {"mcp_tools": [...], "rag_sources": [...],
              "data_tables": [...], "api_endpoints": [...]}
 
-        Cada tool MCP deve ter ao menos {name, operations} pra validação
-        de operations funcionar. operations pode ser CSV ou JSON list.
+            Cada tool MCP deve ter ao menos {name, operations} pra validação
+            de operations funcionar. operations pode ser CSV ou JSON list.
+
+        raw_md: opcional. Markdown ORIGINAL antes do parse — usado pra
+            checagens estruturais que o ParsedSkill perde (ex: detectar
+            seções duplicadas que o parser merge ou ignora). Quando None,
+            essas checagens são puladas (back-compat).
 
     Returns:
         ValidationResult com .ok=True quando nenhuma violação CRITICAL,
@@ -251,6 +280,34 @@ def validate_generated_skill(
         bindings.get("mcp_tools") or bindings.get("rag_sources")
         or bindings.get("data_tables") or bindings.get("api_endpoints")
     )
+
+    # ──── section.duplicated (CRITICAL) ────
+    # Bug Context7 v4 (2026-05-29): SKILL "Context7 Prompt & Code Assistant"
+    # tinha `## Tool Bindings` emitido 2x pelo LLM gerador. Parser merge ou
+    # ignora a segunda, mas a confusão sintática é sinal de geração ruim
+    # — costuma vir junto com outros bugs (workflow incoerente, examples
+    # contradizendo Workflow, etc).
+    if raw_md:
+        for sec in _CANONICAL_SECTIONS_TO_CHECK_DUPLICATES:
+            count = _count_section_occurrences(raw_md, sec)
+            if count > 1:
+                violations.append(Violation(
+                    rule="section.duplicated",
+                    severity="critical",
+                    section=sec,
+                    message=(
+                        f"Seção `## {sec}` aparece {count}x no SKILL.md. "
+                        "Parser pode merge, ignorar a segunda ou pegar conteúdo "
+                        "inconsistente. Sinal de geração ruim — costuma vir junto "
+                        "com outros bugs (Workflow incoerente, Examples "
+                        "contradizendo Workflow, etc)."
+                    ),
+                    suggestion=(
+                        f"Remova as ocorrências extras de `## {sec}`. "
+                        "Cada seção canônica deve aparecer EXATAMENTE 1 vez."
+                    ),
+                    evidence=f"section `{sec}` count={count}",
+                ))
 
     # ──── G1.passive_verb (CRITICAL) ────
     passive = _find_passive_phrase(workflow)
