@@ -632,12 +632,13 @@ async def get_agent_skills_context(agent_id: str, user: dict = Depends(require_u
           ]
         }
     """
-    from app.core.database import agents_repo, skills_repo, tools_repo
+    from app.core.database import agents_repo, skills_repo, tools_repo, knowledge_repo
     from app.mcp.runtime import parse_tool_bindings, match_with_registry
     from app.skill_parser.parser import parse_skill_md
     from app.workspace.binding_schema import (
         normalize_mcp_binding,
-        normalize_api_binding_from_skill,
+        normalize_declarative_skill_binding,
+        normalize_rag_binding,
     )
 
     agent = await agents_repo.find_by_id(agent_id)
@@ -676,16 +677,42 @@ async def get_agent_skills_context(agent_id: str, user: dict = Depends(require_u
                 continue
             bindings_out.append(normalize_mcp_binding(tool, skill_md=raw_md))
 
-        # ── Onda A.2: API bindings — 1 item por SKILL declarativa ──
-        # Pq não 1 por binding? Porque api_bindings_parsed compartilham
-        # ## Inputs via Jinja2 — usuário preenche inputs uma vez e a SKILL
-        # roda como unidade (execute_declarative orquestra todos). Slash
-        # invoke pra API == invocação da SKILL inteira.
-        api_canonical = normalize_api_binding_from_skill(
+        # ── Onda A.2+A.3: SKILL declarativa (api_bindings + data_tables) ──
+        # Pq não 1 por binding? Porque ambos os tipos compartilham ## Inputs
+        # via Jinja2 — usuário preenche inputs uma vez e execute_declarative
+        # orquestra todos. binding_kind reflete o conteúdo (api/tabular).
+        decl_canonical = normalize_declarative_skill_binding(
             skill=sk, skill_md=raw_md, parsed_skill=parsed,
         )
-        if api_canonical:
-            bindings_out.append(api_canonical)
+        if decl_canonical:
+            bindings_out.append(decl_canonical)
+
+        # ── Onda A.3: RAG sources permitidas pela skill ──
+        # SKILL declara via ## Evidence Policy → evidence_policy_parsed.sources
+        # (lista de knowledge_source.id). Sem essa lista, nada é exposto
+        # (defensivo — slash invoke direto bypassa governance do engine).
+        # kb_mode=tabular sources não fazem sentido pra busca RAG textual.
+        rag_source_ids = []
+        if parsed:
+            policy = getattr(parsed, "evidence_policy_parsed", None) or {}
+            rag_source_ids = policy.get("sources") or []
+        if rag_source_ids:
+            try:
+                # Busca em batch — repo não tem find_by_ids, fazemos N lookups
+                for src_id in rag_source_ids:
+                    src = await knowledge_repo.find_by_id(src_id)
+                    if not src:
+                        continue
+                    # Filtra fontes desautorizadas e modo "tabular" (não suportam
+                    # busca textual livre — slash invoke pra tabular RAG seria via
+                    # Data Tables, não RAG).
+                    if not src.get("authorized", 0):
+                        continue
+                    if src.get("kb_mode") == "tabular":
+                        continue
+                    bindings_out.append(normalize_rag_binding(src))
+            except Exception as e:
+                logger.warning(f"skills_context: lookup de RAG sources falhou: {e}")
 
         skills_out.append({
             "skill_id": sid,
@@ -755,14 +782,14 @@ async def invoke_binding_direct(
         validate_params_against_schema,
     )
 
-    if data.binding_kind not in ("mcp", "api"):
+    if data.binding_kind not in ("mcp", "api", "tabular", "rag"):
         raise HTTPException(
             501,
-            f"binding_kind '{data.binding_kind}' não suportado nesta onda. "
-            "Ondas A.1+A.2 cobrem MCP+API; RAG/Tabular vêm em A.3.",
+            f"binding_kind '{data.binding_kind}' não suportado. "
+            "Suportados: mcp (A.1), api (A.2), tabular+rag (A.3).",
         )
 
-    # 1. Resolve agent + skill (comum aos 2 paths)
+    # 1. Resolve agent + skill (comum a todos os paths)
     agent = await agents_repo.find_by_id(data.agent_id)
     if not agent:
         raise HTTPException(404, f"Agent '{data.agent_id}' não encontrado.")
@@ -776,11 +803,22 @@ async def invoke_binding_direct(
         raise HTTPException(400, f"SKILL.md inválido: {e}")
 
     # ──────────────────────────────────────────────────────
-    # Branch: binding_kind == "api" — Onda A.2
+    # Branch: binding_kind in ("api", "tabular") — Onda A.2 + A.3
     # ──────────────────────────────────────────────────────
-    if data.binding_kind == "api":
+    # Ambos rodam via execute_declarative (mesma orquestração com retry,
+    # output_mapping, etc.). Diferença = só o schema de fields (api vem
+    # de api_bindings, tabular de data_tables).
+    if data.binding_kind in ("api", "tabular"):
         return await _invoke_api_binding_direct(
             data=data, agent=agent, skill=sk, parsed=parsed, raw_md=raw_md,
+        )
+
+    # ──────────────────────────────────────────────────────
+    # Branch: binding_kind == "rag" — Onda A.3
+    # ──────────────────────────────────────────────────────
+    if data.binding_kind == "rag":
+        return await _invoke_rag_binding_direct(
+            data=data, agent=agent, skill=sk, parsed=parsed,
         )
 
     # ──────────────────────────────────────────────────────
@@ -925,7 +963,7 @@ async def _invoke_api_binding_direct(
     """
     import time
     from app.workspace.binding_schema import (
-        normalize_api_binding_from_skill,
+        normalize_declarative_skill_binding,
         validate_params_against_schema,
     )
 
@@ -933,19 +971,24 @@ async def _invoke_api_binding_direct(
     if str(skill.get("id") or "") != data.binding_id:
         raise HTTPException(
             404,
-            f"Binding API '{data.binding_id}' não corresponde à skill "
-            f"'{data.skill_id}'. Em API, binding_id deve ser o skill_id.",
+            f"Binding {data.binding_kind} '{data.binding_id}' não corresponde "
+            f"à skill '{data.skill_id}'. Em {data.binding_kind}, binding_id "
+            "deve ser o skill_id.",
         )
 
-    # 2. Gera schema canônico (revalida que skill é declarativa + tem bindings)
-    schema = normalize_api_binding_from_skill(skill, skill_md=raw_md, parsed_skill=parsed)
+    # 2. Gera schema canônico (revalida declarativa + tem api ou data_tables)
+    schema = normalize_declarative_skill_binding(skill, skill_md=raw_md, parsed_skill=parsed)
     if not schema:
         raise HTTPException(
             422,
             f"Skill '{data.skill_id}' não é declarativa OU não tem "
-            "## API Bindings parseável. Apenas declarativas suportam "
-            "invoke-binding-direct kind='api'.",
+            "## API Bindings nem ## Data Tables parseáveis. Apenas "
+            "declarativas suportam invoke-binding-direct kind='api|tabular'.",
         )
+    # Se user disse "api" mas SKILL é só tabular (ou vice-versa), reflete
+    # o que existe — não erra. UX permissiva.
+    if data.binding_kind not in ("api", "tabular"):
+        raise HTTPException(400, "binding_kind precisa ser 'api' ou 'tabular'.")
 
     # 3. Valida params contra schema (required + enum)
     ok, errors = validate_params_against_schema(schema, data.params or {})
@@ -1015,12 +1058,12 @@ async def _invoke_api_binding_direct(
 
     # 7. Log estruturado (auditoria)
     logger.info(
-        "workspace.invoke_direct.api_completed",
+        "workspace.invoke_direct.declarative_completed",
         extra={
             "event": "workspace.invoke_direct",
             "agent_id": data.agent_id,
             "skill_id": data.skill_id,
-            "binding_kind": "api",
+            "binding_kind": data.binding_kind,  # api OU tabular
             "binding_id": data.binding_id,
             "skill_name": skill.get("name") or "",
             "schema_source": schema.get("schema_source"),
@@ -1046,4 +1089,162 @@ async def _invoke_api_binding_direct(
             "errors": errors_out,
             "final_state": decl.get("final_state", "completed"),
         },
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Onda A.3 — Helper de invocação RAG
+# ═══════════════════════════════════════════════════════════════
+
+
+async def _invoke_rag_binding_direct(
+    *,
+    data: "InvokeBindingDirectRequest",
+    agent: dict,
+    skill: dict,
+    parsed,
+):
+    """Invoca busca RAG (Retriever.search) numa knowledge_source específica.
+
+    binding_id = knowledge_source.id. binding_kind="rag". User envia
+    {query, top_n}. Backend:
+    1. Lookup do source no knowledge_repo
+    2. Gate de governance: source DEVE estar em skill.evidence_policy_parsed.sources
+       (slash invoke direto bypassa a camada de evidence policy do engine,
+       então re-implementamos o gate aqui)
+    3. Valida params (query required)
+    4. Chama retriever.search(query, top_n, allowed_source_ids=[binding_id])
+    5. Retorna chunks formatados pra UI renderizar
+    """
+    import time
+    from app.core.database import knowledge_repo
+    from app.workspace.binding_schema import (
+        normalize_rag_binding,
+        validate_params_against_schema,
+    )
+
+    # 1. Lookup source
+    source = await knowledge_repo.find_by_id(data.binding_id)
+    if not source:
+        raise HTTPException(
+            404,
+            f"Knowledge source '{data.binding_id}' não encontrada no Registry.",
+        )
+
+    # 2. Gate de governance: skill precisa autorizar esta source
+    policy = (getattr(parsed, "evidence_policy_parsed", None) or {})
+    allowed_sources = policy.get("sources") or []
+    if not allowed_sources:
+        raise HTTPException(
+            403,
+            f"Skill '{data.skill_id}' não declara nenhuma source em "
+            "## Evidence Policy. Slash invoke RAG requer policy explícita.",
+        )
+    if data.binding_id not in allowed_sources:
+        raise HTTPException(
+            403,
+            f"Source '{data.binding_id}' não está autorizada em "
+            f"## Evidence Policy da skill '{data.skill_id}'. "
+            f"Autorizadas: {allowed_sources}.",
+        )
+    if not source.get("authorized", 0):
+        raise HTTPException(
+            403,
+            f"Source '{data.binding_id}' está marcada como NÃO autorizada "
+            "no Registry. Habilite em /knowledge.",
+        )
+
+    # 3. Gera schema canônico e valida params
+    schema = normalize_rag_binding(source)
+    ok, errors = validate_params_against_schema(schema, data.params or {})
+    if not ok:
+        raise HTTPException(422, {"errors": errors, "schema": schema})
+
+    query = str(data.params.get("query") or "").strip()
+    try:
+        top_n = int(data.params.get("top_n", 5))
+    except (ValueError, TypeError):
+        top_n = 5
+    # Clamp defensivo (Retriever aceita o que vier, mas evitamos 1000 chunks)
+    if top_n < 1:
+        top_n = 1
+    if top_n > 50:
+        top_n = 50
+
+    # 4. Executa busca
+    t0 = time.monotonic()
+    try:
+        from app.evidence.runtime import retriever as _retriever
+        results = await _retriever.search(
+            query=query,
+            skill_evidence_policy=policy if policy else None,
+            top_n=top_n,
+            allowed_source_ids=[data.binding_id],
+        )
+        latency_ms = int((time.monotonic() - t0) * 1000)
+    except Exception as e:
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        logger.error(
+            "workspace.invoke_direct.rag_error",
+            extra={
+                "event": "workspace.invoke_direct",
+                "agent_id": data.agent_id,
+                "skill_id": data.skill_id,
+                "binding_kind": "rag",
+                "binding_id": data.binding_id,
+                "latency_ms": latency_ms,
+                "error": str(e)[:300],
+            },
+        )
+        raise HTTPException(500, f"Erro ao buscar RAG: {str(e)[:300]}")
+
+    # 5. Format result
+    chunks = []
+    for r in results or []:
+        chunks.append({
+            "evidence_id": getattr(r, "evidence_id", "") or "",
+            "snippet": getattr(r, "snippet_text", "") or "",
+            "score": float(getattr(r, "relevance_score", 0.0) or 0.0),
+            "source_name": getattr(r, "source_name", "") or "",
+            "source_id": getattr(r, "source_id", "") or "",
+            "confidentiality": getattr(r, "confidentiality", "internal") or "internal",
+        })
+
+    result_obj = {
+        "chunks": chunks,
+        "total": len(chunks),
+        "query": query,
+        "source": source.get("name") or "",
+    }
+
+    # 6. Log estruturado
+    logger.info(
+        "workspace.invoke_direct.rag_completed",
+        extra={
+            "event": "workspace.invoke_direct",
+            "agent_id": data.agent_id,
+            "skill_id": data.skill_id,
+            "binding_kind": "rag",
+            "binding_id": data.binding_id,
+            "source_name": source.get("name") or "",
+            "schema_source": schema.get("schema_source"),
+            "latency_ms": latency_ms,
+            "ok": True,
+            "chunk_count": len(chunks),
+            "top_n": top_n,
+        },
+    )
+
+    return {
+        "ok": True,
+        "result": result_obj,
+        "result_raw": None,
+        "schema": schema,
+        "payload_sent": {
+            "query": query,
+            "top_n": top_n,
+            "allowed_source_ids": [data.binding_id],
+        },
+        "latency_ms": latency_ms,
+        "tool_name": source.get("name") or "",
     }
