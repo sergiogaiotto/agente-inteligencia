@@ -132,49 +132,14 @@ def _sanitize_function_name(name: str) -> str:
 
 
 def _extract_inputs_schema(skill_md: str) -> Optional[dict]:
-    """Extrai o JSON Schema declarado em `## Inputs` da SKILL.md.
+    """Onda B: delega pro helper canônico em app.skill_parser.inputs_schema.
+    Mantém nome local pra back-compat dos callers existentes.
 
-    A seção tipicamente tem formato:
-
-        ## Inputs
-        ```json
-        {"type": "object", "properties": {...}, "required": [...]}
-        ```
-
-    Returns:
-        dict com o JSON Schema parseado OU None quando:
-        - Seção ## Inputs ausente
-        - Não tem bloco fenced JSON
-        - JSON malformado
-        - Schema não tem 'properties' (não dá pra usar como function spec)
-
-    PR #197 (Fase 2): permite o dry-run mostrar o schema REAL que a SKILL
-    declara, separado do schema fixo que o engine MCP força. Quando os
-    dois divergem, é a causa raiz dos bugs Context7 #1-#5 (SKILL declara
-    {action, subject, content}, engine força {operation, query}).
+    PR #197 (Fase 2) introduziu a primeira cópia. Onda B unifica todas
+    (skill_dryrun + binding_schema + runtime) em 1 fonte de verdade.
     """
-    if not skill_md:
-        return None
-    # Acha a seção ## Inputs até próxima seção
-    m = re.search(r"##\s+Inputs\s*\n([\s\S]*?)(?=\n##\s|$)", skill_md)
-    if not m:
-        return None
-    block = m.group(1)
-    # Primeiro bloco fenced json
-    fence = re.search(r"```(?:json|JSON)?\s*\n([\s\S]*?)\n```", block)
-    if not fence:
-        return None
-    import json
-    try:
-        schema = json.loads(fence.group(1).strip())
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(schema, dict):
-        return None
-    # Schema sem properties não vira function spec útil
-    if not isinstance(schema.get("properties"), dict):
-        return None
-    return schema
+    from app.skill_parser.inputs_schema import extract_inputs_schema
+    return extract_inputs_schema(skill_md or "")
 
 
 def _build_function_spec_from_skill_inputs(
@@ -259,12 +224,14 @@ async def _resolve_tool_from_registry(tool_id: str) -> Optional[dict]:
     return None
 
 
-def _build_function_spec(tool: dict) -> dict:
+def _build_function_spec(tool: dict, skill_md: str = "") -> dict:
     """Reconstrói o function spec OpenAI que app/mcp/runtime.py:build_openai_tools
-    geraria — sem importar o módulo (mantém este endpoint isolado de runtime).
-
-    Operador vê exatamente o JSON que o LLM em runtime vai ver — sem
+    geraria. Operador vê exatamente o JSON que o LLM em runtime vai ver — sem
     surpresas entre dry-run e execução real.
+
+    Onda B: aceita skill_md e respeita ## Inputs declarado (mesma semântica
+    do runtime). Quando skill_md não traz schema parseável, usa fallback
+    legacy {operation, query} — preserva back-compat de testes antigos.
     """
     name = _sanitize_function_name(tool.get("name", ""))
     ops = _split_csv_or_json(tool.get("operations") or "")
@@ -273,31 +240,52 @@ def _build_function_spec(tool: dict) -> dict:
         f"Ferramenta MCP '{tool.get('name', '')}'. Operações disponíveis: {ops_str}. "
         "Chame esta função quando o usuário solicitar dados via esta tool."
     )
-    properties = {
-        "operation": {
-            "type": "string",
-            "description": (
-                f"Operação a executar. Disponíveis: {ops_str}."
-                if ops else "Operação a executar."
-            ),
-        },
-        "query": {
-            "type": "string",
-            "description": "Consulta/parâmetros para a operação.",
-        },
-    }
-    if ops:
-        properties["operation"]["enum"] = ops
+
+    # ── Onda B: usa ## Inputs da SKILL quando disponível ──
+    inputs_schema = _extract_inputs_schema(skill_md or "")
+    if inputs_schema:
+        props = dict(inputs_schema.get("properties") or {})
+        required = list(inputs_schema.get("required") or [])
+        # Injeta enum em `operation` se SKILL declarou string sem enum
+        if ops and isinstance(props.get("operation"), dict):
+            op_spec = dict(props["operation"])
+            if op_spec.get("type") == "string" and not op_spec.get("enum"):
+                op_spec["enum"] = list(ops)
+                props["operation"] = op_spec
+        parameters = {
+            "type": inputs_schema.get("type") or "object",
+            "properties": props,
+            "required": required,
+        }
+    else:
+        # Fallback legacy {operation, query} pré-Onda B
+        properties = {
+            "operation": {
+                "type": "string",
+                "description": (
+                    f"Operação a executar. Disponíveis: {ops_str}."
+                    if ops else "Operação a executar."
+                ),
+            },
+            "query": {
+                "type": "string",
+                "description": "Consulta/parâmetros para a operação.",
+            },
+        }
+        if ops:
+            properties["operation"]["enum"] = ops
+        parameters = {
+            "type": "object",
+            "properties": properties,
+            "required": ["operation", "query"],
+        }
+
     return {
         "type": "function",
         "function": {
             "name": name,
             "description": desc[:900],
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": ["operation", "query"],
-            },
+            "parameters": parameters,
         },
     }
 
@@ -449,11 +437,15 @@ async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
     else:
         operation_chosen = ""  # sem default — issue será sinalizada
 
-    # 3. Function spec que o ENGINE criaria HOJE (sempre {operation, query})
-    function_spec = _build_function_spec(tool)
+    # 3. Function spec que o ENGINE criaria HOJE.
+    # Onda B: agora schema-aware — usa ## Inputs da SKILL quando presente.
+    # Antes (PR #195-#197): sempre {operation, query} fixo.
+    function_spec = _build_function_spec(tool, skill_md=data.skill_md)
 
     # 4. PR #197 (Fase 2): Function spec que a SKILL DECLARA em ## Inputs.
-    # Quando presente, expomos lado a lado pra mostrar o gap arquitetural.
+    # Após Onda B, function_spec == function_spec_skill_declared quando
+    # ## Inputs presente — mantemos os 2 campos pra back-compat de UI/tests
+    # e pra detectar drift defensivo.
     inputs_schema = _extract_inputs_schema(data.skill_md)
     function_spec_skill_declared = (
         _build_function_spec_from_skill_inputs(tool, inputs_schema)

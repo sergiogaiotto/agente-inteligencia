@@ -595,11 +595,14 @@ class TestEndpointPhase2:
         body = r.json()
         assert body["function_spec_skill_declared"] is None
 
-    def test_schema_mismatch_warning_emitted_when_fields_diverge(
+    def test_schema_mismatch_no_longer_fires_after_onda_b(
         self, app_client, monkeypatch,
     ):
-        """Causa raiz dos bugs Context7 #1-#5: SKILL declara
-        {action, subject, content} mas engine força {operation, query}."""
+        """Onda B: engine agora respeita ## Inputs da SKILL — function_spec
+        do engine vira EQUAL ao function_spec_skill_declared. Mismatch só
+        dispararia em situação anômala (drift de implementação). Antes da
+        Onda B este teste assertava o mismatch existir (causa raiz dos
+        bugs Context7); agora asserta que foi RESOLVIDO."""
         self._patch_registry(monkeypatch)
         r = app_client.post("/api/v1/skills/dry-run-tool", json={
             "skill_md": SKILL_CTX7_CUSTOM_INPUTS,
@@ -607,13 +610,11 @@ class TestEndpointPhase2:
         })
         body = r.json()
         rules = [i["rule"] for i in body["issues"]]
-        assert "schema.mismatch" in rules
-        mismatch_issue = next(i for i in body["issues"] if i["rule"] == "schema.mismatch")
-        assert mismatch_issue["severity"] == "warning"
-        # Mensagem cita campos divergentes
-        msg = mismatch_issue["message"]
-        assert "action" in msg or "subject" in msg or "content" in msg
-        assert "operation" in msg or "query" in msg
+        # Mismatch NÃO está mais nas issues — engine respeita a SKILL
+        assert "schema.mismatch" not in rules
+        # function_spec do engine agora mostra os fields da SKILL
+        engine_props = body["function_spec"]["function"]["parameters"]["properties"]
+        assert set(engine_props.keys()) == {"action", "subject", "content"}
 
     def test_no_schema_mismatch_when_skill_has_no_inputs_schema(
         self, app_client, monkeypatch,
@@ -720,11 +721,11 @@ class TestRegressionContext7SchemaMismatch:
             "tool_id": CTX7_TOOL_ROW["id"],
         })
         body = r.json()
-        # function_spec_skill_declared mostra schema real da SKILL
+        # Onda B: function_spec_skill_declared continua mostrando schema da SKILL...
         assert body["function_spec_skill_declared"] is not None
-        # function_spec mostra o que o engine FORÇA hoje
+        # ...E function_spec do engine agora ALINHA com ele (Onda B respeita ## Inputs)
         engine_props = body["function_spec"]["function"]["parameters"]["properties"]
-        assert set(engine_props.keys()) == {"operation", "query"}
-        # schema.mismatch presente — operador vê o gap arquitetural
+        assert set(engine_props.keys()) == {"action", "subject", "content"}
+        # schema.mismatch foi resolvido — engine não força mais {operation, query}
         rules = [i["rule"] for i in body["issues"]]
-        assert "schema.mismatch" in rules
+        assert "schema.mismatch" not in rules

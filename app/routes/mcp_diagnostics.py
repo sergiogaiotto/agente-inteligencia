@@ -100,10 +100,15 @@ async def probe(req: ProbeRequest):
         return out
 
     # 3) Build openai_tools
-    openai_tools = build_openai_tools(mcp_tools)
+    # Onda B: passa skill_md pra build_openai_tools respeitar ## Inputs.
+    # skill_row já foi carregado em ~linha 65; reusa raw_content quando presente.
+    skill_md_diag = (skill_row or {}).get("raw_content") if skill_row else ""
+    openai_tools = build_openai_tools(mcp_tools, skill_md=skill_md_diag or "")
 
     # 4) Harness — usa para detectar force_tool e construir o system prompt
-    harness = DeepAgentHarness(agent, max_iterations=1, mcp_tools=mcp_tools)
+    harness = DeepAgentHarness(
+        agent, max_iterations=1, mcp_tools=mcp_tools, skill_md=skill_md_diag or "",
+    )
     system_prompt = harness._build_system_prompt()
     force_tool = harness._should_force_tool_call()
 

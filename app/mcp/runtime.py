@@ -549,14 +549,43 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
     return enriched
 
 
-def build_openai_tools(mcp_tools: list[dict]) -> list[dict]:
+def build_openai_tools(
+    mcp_tools: list[dict],
+    skill_md: Optional[str] = None,
+) -> list[dict]:
     """Converte ferramentas MCP em definições OpenAI function calling.
 
     O campo `description` é o sinal mais forte que o LLM usa para decidir
     invocar a função — precisa ser específico, não genérico.
+
+    Onda B (schema-aware): quando skill_md tem `## Inputs` com JSON Schema
+    parseável, expõe ESSE schema pro LLM em vez de `{operation, query}` fixo.
+    Resolve causa raiz dos bugs Context7 #1-#5 NO CAMINHO NL — antes, mesmo
+    com SKILL declarando `{action, subject, content}`, o LLM via só
+    `{operation, query}` e tentava comprimir.
+
+    Precedência por tool (mais específico → mais genérico):
+    1. SKILL ## Inputs (skill_md) — quando autor declarou explicitamente
+    2. tool.inputSchema (do MCP discovery) — quando harness pré-descobriu
+       (não automático ainda; Onda B.2 futura)
+    3. Fallback legacy {operation, query} — compat com SKILLs sem ## Inputs
+
+    Args:
+        mcp_tools: lista enriquecida (após match_with_registry).
+        skill_md: markdown completo da SKILL (com frontmatter). Opcional —
+            None preserva 100% do comportamento pré-Onda B.
     """
     if not mcp_tools:
         return []
+
+    # Onda B: parse SKILL ## Inputs uma vez (cacheado por chamada). Reutilizado
+    # pra todas as tools da SKILL — caso comum é 1 SKILL → 1 tool, e mesmo em
+    # SKILLs com múltiplas tools o ## Inputs é o contrato unificado.
+    skill_inputs_schema: Optional[dict] = None
+    if skill_md:
+        from app.skill_parser.inputs_schema import extract_inputs_schema
+        skill_inputs_schema = extract_inputs_schema(skill_md)
+
     openai_tools = []
     for tool in mcp_tools:
         raw_name = tool.get('name', 'tool') or 'tool'
@@ -564,7 +593,8 @@ def build_openai_tools(mcp_tools: list[dict]) -> list[dict]:
         ops = tool.get('operations', []) or []
         user_desc = (tool.get('description') or '').strip()
         ops_list = ', '.join(ops) if ops else 'não listadas'
-        # Descrição rica: nome humano + operações + instrução de uso
+
+        # Description igual ao legado — sempre rica, independente do schema
         desc_parts = [
             f"Ferramenta MCP '{raw_name}'. Operações disponíveis: {ops_list}.",
             "Chame esta função sempre que o usuário solicitar dados que exijam "
@@ -575,38 +605,89 @@ def build_openai_tools(mcp_tools: list[dict]) -> list[dict]:
             desc_parts.insert(1, user_desc[:300])
         desc = ' '.join(desc_parts)
 
-        properties = {
-            "operation": {
-                "type": "string",
-                "description": (
-                    f"Operação a executar. Disponíveis: {ops_list}."
-                    if ops else "Operação a executar."
-                ),
-            },
-            "query": {
-                "type": "string",
-                "description": (
-                    "Consulta/parâmetros para a operação. Para 'search' use a "
-                    "pergunta do usuário em linguagem natural. Para 'extract' use "
-                    "a URL ou identificador. Para 'crawl'/'map' use a URL-raiz."
-                ),
-            },
-        }
-        if ops:
-            properties["operation"]["enum"] = ops
+        # ── Onda B: decide qual schema usar ──
+        if skill_inputs_schema:
+            # SKILL declarou explicitamente — respeita o autor
+            parameters = _make_parameters_from_inputs_schema(skill_inputs_schema, ops)
+            schema_origin = "skill_inputs"
+        elif isinstance(tool.get('inputSchema'), dict) and tool['inputSchema'].get('properties'):
+            # tool.inputSchema vem de MCP discovery (Onda B.2 vai popular automaticamente)
+            parameters = _make_parameters_from_inputs_schema(tool['inputSchema'], ops)
+            schema_origin = "tool_input_schema"
+        else:
+            # Legacy fallback — comportamento pré-Onda B preservado
+            properties = {
+                "operation": {
+                    "type": "string",
+                    "description": (
+                        f"Operação a executar. Disponíveis: {ops_list}."
+                        if ops else "Operação a executar."
+                    ),
+                },
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Consulta/parâmetros para a operação. Para 'search' use a "
+                        "pergunta do usuário em linguagem natural. Para 'extract' use "
+                        "a URL ou identificador. Para 'crawl'/'map' use a URL-raiz."
+                    ),
+                },
+            }
+            if ops:
+                properties["operation"]["enum"] = ops
+            parameters = {
+                "type": "object",
+                "properties": properties,
+                "required": ["operation", "query"],
+            }
+            schema_origin = "legacy_operation_query"
+
         openai_tools.append({
             "type": "function",
             "function": {
                 "name": name,
                 "description": desc[:900],
-                "parameters": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": ["operation", "query"],
-                },
+                "parameters": parameters,
             },
+            # Metadata privada (OpenAI ignora; útil pra observability/testes).
+            # Não vai na request HTTP — só pra introspecção via _schema_origin.
+            "_schema_origin": schema_origin,
         })
+
+    logger.info(
+        f"build_openai_tools: {len(openai_tools)} tools, origins={set(t.get('_schema_origin') for t in openai_tools)}"
+    )
     return openai_tools
+
+
+def _make_parameters_from_inputs_schema(inputs_schema: dict, ops: list) -> dict:
+    """Onda B: constrói `parameters` do function spec a partir de um JSON Schema
+    declarado em ## Inputs OU tool.inputSchema.
+
+    Preserva: type (default object), properties, required.
+    Limpa: $schema, title, description top-level, additionalProperties — não
+    fazem sentido no function spec do LLM.
+
+    Quando há operations declaradas no Registry E o schema tem campo
+    `operation` STRING sem enum, injeta o enum (sem sobrescrever schema do
+    autor). Útil pra SKILLs que documentam `operation` como string genérica.
+    """
+    props = dict(inputs_schema.get("properties") or {})
+    required = list(inputs_schema.get("required") or [])
+    schema_type = inputs_schema.get("type") or "object"
+
+    # Injeta enum em `operation` quando faz sentido (Registry sabe mais que SKILL)
+    if ops and isinstance(props.get("operation"), dict):
+        op_spec = dict(props["operation"])
+        if op_spec.get("type") == "string" and not op_spec.get("enum"):
+            op_spec["enum"] = list(ops)
+            props["operation"] = op_spec
+
+    return {
+        "type": schema_type,
+        "properties": props,
+        "required": required,
+    }
 
 
 # ═══════════════════════════════════════════════════
