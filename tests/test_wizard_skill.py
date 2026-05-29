@@ -12,6 +12,7 @@ Mocks: pool asyncpg via AsyncMock. Não toca LLM nem Postgres real.
 """
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -929,6 +930,109 @@ class TestRegressionContext7Bug:
         idx_frase = low.find("nenhuma fonte externa")
         assert idx_nunca > 0 and idx_frase > 0
         assert abs(idx_nunca - idx_frase) < 300
+
+
+class TestWorkflowPreInjection:
+    """Pre-injection (2026-05-29 PR #192): em 4 tentativas consecutivas
+    o LLM gerador (gpt-oss-120b) omitiu `operation=` no Workflow. Validador
+    detectava e fazia retry, mas o LLM continuava errando.
+
+    Fix: Wizard injeta LITERALMENTE o passo 1 do Workflow em
+    obligatory_sections com a primeira operation declarada. LLM só escreve
+    os passos 2-N.
+    """
+
+    def _mcp_only_bindings(self, ops="docs,code,prompt"):
+        return {
+            "mcp_tools": [{
+                "id": "tool-id-1", "name": "Context 7 MCP Server",
+                "description": "Plataforma Context7",
+                "operations": ops,
+            }],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+
+    def test_workflow_section_pre_injected_when_mcp_has_operations(self):
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        system, _ = _build_wizard_prompt(req, self._mcp_only_bindings(), "fast")
+        # `## Workflow` aparece no obligatory_block (não só no template canônico)
+        start = system.find("=== SEÇÕES OBRIGATÓRIAS")
+        end = system.find("=== FIM DAS SEÇÕES OBRIGATÓRIAS")
+        obligatory = system[start:end]
+        assert "## Workflow" in obligatory
+
+    def test_pre_injected_workflow_uses_first_operation(self):
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        system, _ = _build_wizard_prompt(req, self._mcp_only_bindings(), "fast")
+        # Procura "operation=docs" literal no obligatory
+        start = system.find("=== SEÇÕES OBRIGATÓRIAS")
+        end = system.find("=== FIM DAS SEÇÕES OBRIGATÓRIAS")
+        obligatory = system[start:end]
+        assert "operation=docs" in obligatory
+        assert "`Context 7 MCP Server`" in obligatory
+
+    def test_pre_injected_workflow_uses_imperative_chame(self):
+        """Verbo IMPERATIVO no passo 1 — não 'enriquecimento' etc."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        system, _ = _build_wizard_prompt(req, self._mcp_only_bindings(), "fast")
+        start = system.find("=== SEÇÕES OBRIGATÓRIAS")
+        end = system.find("=== FIM DAS SEÇÕES OBRIGATÓRIAS")
+        obligatory = system[start:end]
+        assert "**Chame**" in obligatory
+
+    def test_pre_injected_workflow_instructs_literal_preservation(self):
+        """Texto explica ao LLM que NÃO pode alterar o passo 1."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        system, _ = _build_wizard_prompt(req, self._mcp_only_bindings(), "fast")
+        start = system.find("=== SEÇÕES OBRIGATÓRIAS")
+        end = system.find("=== FIM DAS SEÇÕES OBRIGATÓRIAS")
+        obligatory = system[start:end]
+        # Instrução de preservação literal
+        assert "LITERAL" in obligatory
+        # E orienta o LLM a adicionar passos 2-N
+        assert "passos 2-N" in obligatory or "Passos 2-N" in obligatory
+
+    def test_no_pre_injection_when_no_mcp_tool(self):
+        """Skill sem MCP — Workflow é responsabilidade do LLM (back-compat)."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        bindings = {
+            "mcp_tools": [],
+            "rag_sources": [{"id": "s1", "name": "M", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        start = system.find("=== SEÇÕES OBRIGATÓRIAS")
+        end = system.find("=== FIM DAS SEÇÕES OBRIGATÓRIAS")
+        obligatory = system[start:end]
+        assert "## Workflow" not in obligatory
+
+    def test_no_pre_injection_when_mcp_without_operations(self):
+        """Tool MCP sem operations no Registry — não tem como pre-injetar
+        operation= literal. Cai no path antigo (LLM gerador escreve)."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._mcp_only_bindings(ops="")
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        start = system.find("=== SEÇÕES OBRIGATÓRIAS")
+        end = system.find("=== FIM DAS SEÇÕES OBRIGATÓRIAS")
+        obligatory = system[start:end]
+        assert "## Workflow" not in obligatory
+
+    def test_pre_injection_uses_first_op_when_multiple(self):
+        """`docs,code,prompt` → primeira (`docs`) é usada no passo 1."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        system, _ = _build_wizard_prompt(
+            req, self._mcp_only_bindings(ops="docs,code,prompt"), "fast",
+        )
+        start = system.find("=== SEÇÕES OBRIGATÓRIAS")
+        end = system.find("=== FIM DAS SEÇÕES OBRIGATÓRIAS")
+        obligatory = system[start:end]
+        # Procura a linha do passo 1
+        assert "operation=docs" in obligatory
+        # NÃO a segunda nem a terceira
+        m_step1 = re.search(r"1\. \*\*Chame\*\*[^\n]*", obligatory)
+        assert m_step1
+        assert "operation=code" not in m_step1.group(0)
+        assert "operation=prompt" not in m_step1.group(0)
 
 
 class TestRegressionContext7BugV2:
