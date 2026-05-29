@@ -11,6 +11,7 @@ from app.core.otel import init_otel
 from app.routes import agents, skills, workspace, mesh, dashboard, frontend, wizard, users
 from app.routes.api_connectors import router as api_connectors_router
 from app.routes.mcp_diagnostics import router as mcp_diagnostics_router
+from app.routes.skill_dryrun import router as skill_dryrun_router
 from app.routes.help import router as help_router
 from app.routes.infra import router as infra_router
 from app.routes.api_keys import router as api_keys_router
@@ -93,6 +94,7 @@ app.include_router(frontend.router)
 
 app.include_router(api_connectors_router)
 app.include_router(mcp_diagnostics_router)
+app.include_router(skill_dryrun_router)
 app.include_router(help_router)
 app.include_router(infra_router)
 app.include_router(api_keys_router)
