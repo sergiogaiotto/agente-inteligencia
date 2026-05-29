@@ -223,6 +223,153 @@ def normalize_mcp_binding(
 
 
 # ───────────────────────────────────────────────────────────────
+# Normalizador API — Onda A.2
+# ───────────────────────────────────────────────────────────────
+
+
+def _extract_template_vars_from_api_bindings(parsed_bindings: list) -> list[str]:
+    """Extrai variáveis Jinja2 (`{{ inputs.X }}`, `{{ X }}`) referenciadas
+    em qualquer campo string das api_bindings parsed.
+
+    Usado como fallback quando SKILL não declarou ## Inputs com schema
+    parseável: sintetizamos fields a partir das vars realmente usadas
+    nos templates HTTP.
+
+    Limitação: regex simples — não casa expressões complexas com filtros,
+    aritmética, etc. Casa só padrão `{{ name }}` ou `{{ inputs.name }}`.
+    Suficiente pra UX inicial — autor pode declarar ## Inputs pra ter
+    controle preciso.
+    """
+    if not parsed_bindings:
+        return []
+    var_pattern = re.compile(r"\{\{\s*(?:inputs\.)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def _walk(value):
+        if isinstance(value, str):
+            for m in var_pattern.finditer(value):
+                name = m.group(1)
+                # Filtra contexto interno (session_id, context.*, etc.) —
+                # esses não devem aparecer no form pro user.
+                if name in ("session_id", "context", "inputs", "outputs"):
+                    continue
+                if name not in seen:
+                    seen.add(name)
+                    out.append(name)
+        elif isinstance(value, dict):
+            for v in value.values():
+                _walk(v)
+        elif isinstance(value, list):
+            for v in value:
+                _walk(v)
+
+    for binding in parsed_bindings:
+        if isinstance(binding, dict):
+            _walk(binding)
+    return out
+
+
+def normalize_api_binding_from_skill(
+    skill: dict,
+    skill_md: Optional[str] = None,
+    parsed_skill=None,
+) -> Optional[dict]:
+    """Produz CanonicalFormSchema pra invocação de uma SKILL declarativa
+    com `## API Bindings`. Diferente de MCP (1 item por tool), API é
+    1 item por SKILL — porque api_bindings compartilham `## Inputs`
+    via Jinja2 e rodam como unidade através do execute_declarative.
+
+    Args:
+        skill: row do skills_repo (id, name, kind, raw_content).
+        skill_md: alias pra raw_content (passe diretamente quando já
+            tiver carregado).
+        parsed_skill: ParsedSkill já calculado (opcional; se None,
+            chamamos parse_skill_md(skill_md) aqui).
+
+    Returns:
+        CanonicalFormSchema ou None quando a SKILL NÃO é declarativa
+        OU não tem ## API Bindings. Caller decide se omite do contexto.
+
+    Precedência do schema (igual ao MCP):
+    1. SKILL ## Inputs (explícito, com types/required)
+    2. Vars sintetizadas das api_bindings_parsed (fallback)
+
+    Onda A.2: NÃO toca em ## Data Tables. Se a SKILL declarativa tem
+    SÓ data_tables (sem api_bindings), retorna None — A.3 cobre isso.
+    """
+    md = (skill_md if skill_md is not None else (skill.get("raw_content") or "")) or ""
+    if not md.strip():
+        return None
+
+    # Parse só quando necessário (evita import circular em algum caller).
+    if parsed_skill is None:
+        try:
+            from app.skill_parser.parser import parse_skill_md
+            parsed_skill = parse_skill_md(md)
+        except Exception:
+            return None
+
+    if not parsed_skill:
+        return None
+
+    # Gate 1: SKILL precisa ser declarativa
+    exec_mode = (
+        getattr(parsed_skill, "execution_mode", "")
+        or getattr(getattr(parsed_skill, "frontmatter", None), "execution_mode", "")
+        or ""
+    )
+    if exec_mode != "declarative":
+        return None
+
+    # Gate 2: tem ## API Bindings parseado
+    api_bindings = getattr(parsed_skill, "api_bindings_parsed", None) or []
+    if not api_bindings:
+        return None
+
+    # 1. ## Inputs como schema (preferência)
+    inputs_schema = _extract_inputs_schema(md)
+    if inputs_schema:
+        fields = _fields_from_json_schema(inputs_schema)
+        schema_source = "skill_inputs"
+    else:
+        # 2. Fallback: vars dos templates Jinja
+        template_vars = _extract_template_vars_from_api_bindings(api_bindings)
+        if not template_vars:
+            # SKILL declarativa sem inputs e sem vars referenciadas —
+            # ainda invocável (params={}), só não terá form. Retorna
+            # vazio mas mantém schema_source pra UI saber.
+            fields = []
+        else:
+            fields = [
+                _make_field(
+                    name=v, type="string", required=True,
+                    description=f"Variável referenciada nas API Bindings",
+                    multiline=_infer_multiline(v, ""),
+                )
+                for v in template_vars
+            ]
+        schema_source = "template_vars" if not inputs_schema else "skill_inputs"
+
+    # Label: nome da skill + dica de binding_kind
+    skill_name = skill.get("name") or "(skill sem nome)"
+
+    return {
+        "binding_kind": "api",
+        "binding_id": str(skill.get("id") or ""),
+        "binding_label": skill_name,
+        "operations": [],  # N/A pra API — execução é skill inteira
+        "fields": fields,
+        "schema_source": schema_source,
+        # Metadata pra UI: quantidade de bindings, list de IDs (telemetria)
+        "api_meta": {
+            "binding_count": len(api_bindings),
+            "binding_ids": [b.get("id") for b in api_bindings if isinstance(b, dict)],
+        },
+    }
+
+
+# ───────────────────────────────────────────────────────────────
 # Validação de payload contra CanonicalFormSchema
 # ───────────────────────────────────────────────────────────────
 

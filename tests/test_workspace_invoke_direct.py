@@ -203,13 +203,16 @@ class TestInvokeBindingDirect:
         })
         assert r.status_code == 404
 
-    def test_returns_501_for_non_mcp_binding(self, app_client, monkeypatch):
+    def test_returns_501_for_rag_or_tabular_binding(self, app_client, monkeypatch):
+        """Onda A.3 (próxima) cobre RAG+Tabular. Onda A.2 já incluiu API,
+        então testamos só os que ainda faltam."""
         self._patch_db(monkeypatch)
-        r = app_client.post("/api/v1/workspace/invoke-binding-direct", json={
-            "agent_id": AGENT_ROW["id"], "skill_id": SKILL_ROW["id"],
-            "binding_kind": "api", "binding_id": "z", "params": {},
-        })
-        assert r.status_code == 501
+        for unsupported in ("rag", "tabular"):
+            r = app_client.post("/api/v1/workspace/invoke-binding-direct", json={
+                "agent_id": AGENT_ROW["id"], "skill_id": SKILL_ROW["id"],
+                "binding_kind": unsupported, "binding_id": "z", "params": {},
+            })
+            assert r.status_code == 501, f"{unsupported} should still be 501"
 
     def test_returns_404_for_unknown_binding_id(self, app_client, monkeypatch):
         self._patch_db(monkeypatch)
