@@ -237,6 +237,61 @@
                         <template x-if="lastTrace.trace?.evidence_count>0">
                             <div class="space-y-1.5">
                                 <div class="flex items-center justify-between rounded-lg bg-surface-50 px-3 py-2"><span class="text-[11px] text-surface-500">Score de confiança</span><div class="flex items-center gap-1.5"><div class="w-16 h-1.5 rounded-full bg-surface-200 overflow-hidden"><div class="h-full rounded-full" :class="lastTrace.evidence_score>=.7?'bg-emerald-500':lastTrace.evidence_score>=.3?'bg-amber-500':'bg-rose-500'" :style="'width:'+(lastTrace.evidence_score*100)+'%'"></div></div><span class="text-[11px] font-mono font-semibold" :class="lastTrace.evidence_score>=.7?'text-emerald-600':'text-amber-600'" x-text="(lastTrace.evidence_score*100).toFixed(0)+'%'"></span></div></div>
+                                <!-- ─── RAGAS heurístico: decomposição do Score de confiança ───
+                                     4 métricas estilo RAGAS sem custo de LLM extra. context_* sempre
+                                     disponíveis (heurística via relevance_score do retriever); faithfulness
+                                     e answer_relevancy vêm do MultiDimJudge quando o Verifier v2 rodou —
+                                     em fast profile mostram '—' com tooltip explicativo. -->
+                                <template x-if="lastTrace.trace?.ragas_metrics">
+                                    <div class="rounded-lg border border-brand-100 bg-brand-50/40 px-2.5 py-2">
+                                        <div class="flex items-center justify-between mb-1.5">
+                                            <span class="text-[9px] font-bold uppercase tracking-wider text-brand-600">RAGAS · decomposição</span>
+                                            <span class="text-[9px] text-surface-400" :title="'Threshold aplicado: ' + (lastTrace.trace.ragas_metrics._meta?.threshold_applied || 0).toFixed(2)">
+                                                threshold <span class="font-mono" x-text="(lastTrace.trace.ragas_metrics._meta?.threshold_applied || 0).toFixed(2)"></span>
+                                            </span>
+                                        </div>
+                                        <div class="grid grid-cols-2 gap-1.5">
+                                            <template x-for="m in [
+                                                {key:'context_relevancy',  label:'Context Relevancy'},
+                                                {key:'context_precision',  label:'Context Precision'},
+                                                {key:'faithfulness',       label:'Faithfulness'},
+                                                {key:'answer_relevancy',   label:'Answer Relevancy'},
+                                            ]" :key="m.key">
+                                                <div class="rounded-md bg-white px-2 py-1.5"
+                                                     :title="(lastTrace.trace.ragas_metrics[m.key]?.reason) || ''">
+                                                    <div class="flex items-center justify-between">
+                                                        <span class="text-[8.5px] font-semibold uppercase tracking-wider text-surface-400" x-text="m.label"></span>
+                                                        <span class="text-[8.5px] font-mono uppercase"
+                                                              :class="{
+                                                                  'text-teal-600': (lastTrace.trace.ragas_metrics[m.key]?.source) === 'heuristic',
+                                                                  'text-violet-600': (lastTrace.trace.ragas_metrics[m.key]?.source) === 'judge',
+                                                                  'text-surface-300': (lastTrace.trace.ragas_metrics[m.key]?.source) === 'unavailable',
+                                                              }"
+                                                              x-text="(lastTrace.trace.ragas_metrics[m.key]?.source) === 'heuristic' ? 'h' : ((lastTrace.trace.ragas_metrics[m.key]?.source) === 'judge' ? 'j' : '—')"></span>
+                                                    </div>
+                                                    <div class="mt-1 flex items-center gap-1.5">
+                                                        <div class="flex-1 h-1 rounded-full bg-surface-100 overflow-hidden">
+                                                            <div class="h-full rounded-full"
+                                                                 :class="{
+                                                                     'bg-emerald-500': (lastTrace.trace.ragas_metrics[m.key]?.score || 0) >= 0.7,
+                                                                     'bg-amber-500':   (lastTrace.trace.ragas_metrics[m.key]?.score || 0) >= 0.3 && (lastTrace.trace.ragas_metrics[m.key]?.score || 0) < 0.7,
+                                                                     'bg-rose-500':    (lastTrace.trace.ragas_metrics[m.key]?.score !== null) && (lastTrace.trace.ragas_metrics[m.key]?.score || 0) < 0.3,
+                                                                 }"
+                                                                 :style="lastTrace.trace.ragas_metrics[m.key]?.score !== null ? ('width:' + ((lastTrace.trace.ragas_metrics[m.key]?.score || 0) * 100) + '%') : 'width:0%'"></div>
+                                                        </div>
+                                                        <span class="text-[10px] font-mono font-bold text-brand-900 w-7 text-right"
+                                                              x-text="lastTrace.trace.ragas_metrics[m.key]?.score !== null ? ((lastTrace.trace.ragas_metrics[m.key]?.score || 0) * 100).toFixed(0) + '%' : '—'"></span>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                        <p class="mt-1.5 text-[9px] text-surface-400 leading-tight">
+                                            <span class="font-mono text-teal-600">h</span> = heurístico (sem LLM extra) ·
+                                            <span class="font-mono text-violet-600">j</span> = LLM-judge (Verifier v2) ·
+                                            <span class="text-surface-300">—</span> = indisponível em <code class="text-[8.5px] bg-white px-0.5 rounded">fast</code>
+                                        </p>
+                                    </div>
+                                </template>
                                 <template x-for="src in lastTrace.trace?.evidence_sources||[]" :key="src"><div class="flex items-center gap-2 rounded-lg bg-surface-50 px-3 py-2"><svg class="w-3.5 h-3.5 text-teal-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg><span class="text-[11px] text-surface-500 truncate" x-text="src"></span></div></template>
                             </div>
                         </template>
