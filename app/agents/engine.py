@@ -416,7 +416,7 @@ class DeepAgentHarness:
             primary = name.split()[0] if name else ""
             if primary and primary in workflow:
                 return True
-                return False
+        return False
 
     def _needs_reflection(self, response: AIMessage, state: AgentState) -> bool:
         """Decide se vale uma rodada extra de reflexão.
