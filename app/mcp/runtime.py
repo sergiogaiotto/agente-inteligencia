@@ -730,6 +730,114 @@ async def _discover_server_tools(client: "httpx.AsyncClient", endpoint: str, hea
         return []
 
 
+async def pre_discover_input_schemas(
+    mcp_tools: list[dict],
+    timeout: float = 5.0,
+    force_refresh: bool = False,
+) -> None:
+    """Onda B.2: pré-descobre tool.inputSchema via MCP tools/list em paralelo.
+
+    Complementa Onda B (que respeita SKILL ## Inputs explícito). Quando
+    SKILL não declara ## Inputs, build_openai_tools cai pra tool.inputSchema
+    — esta função popula isso a partir do MCP discovery, transformando
+    "fallback legacy {operation, query}" em "spec real do servidor".
+
+    Mutates `mcp_tools` in place: cada tool sem inputSchema ganha o schema
+    do server quando descoberta sucede. Defensivo — falhas são silenciosas
+    (caller continua com o que tem; build_openai_tools cai no legacy).
+
+    Skipped:
+    - Tools que já têm `inputSchema` setado (manual override / cache anterior)
+    - Endpoints stdio (não suportam tools/list HTTP padrão)
+    - Endpoints com OAuth2/mTLS (auth complexa — fora do escopo de B.2;
+      power user pode declarar ## Inputs como workaround)
+
+    Args:
+        mcp_tools: lista enriquecida (após match_with_registry).
+        timeout: segundos por endpoint (httpx client timeout).
+        force_refresh: ignora inputSchema existente — reusa cache do
+            _MCP_TOOLS_LIST_CACHE mesmo assim (caller pode limpar cache
+            manualmente se quiser refresh real).
+    """
+    if not mcp_tools:
+        return
+
+    # Agrupa por endpoint (1 chamada por endpoint, múltiplas tools podem usar)
+    by_endpoint: dict[str, list[dict]] = {}
+    for t in mcp_tools:
+        if not force_refresh and isinstance(t.get("inputSchema"), dict) and t["inputSchema"].get("properties"):
+            continue
+        endpoint = (t.get("mcp_server") or "").strip()
+        if not endpoint or not endpoint.startswith("http"):
+            continue
+        by_endpoint.setdefault(endpoint, []).append(t)
+
+    if not by_endpoint:
+        return
+
+    async def _discover_for_endpoint(endpoint: str, tools_for_ep: list[dict]) -> None:
+        # Headers + auth (basic: api_key OR bearer; OAuth2/mTLS skip)
+        from app.core.secrets import read_secret
+        headers = {**MCP_HEADERS}
+        first = tools_for_ep[0]
+        auth_type = (first.get('auth_requirements') or '').lower()
+        if auth_type in ('oauth2', 'mtls'):
+            # Skip — auth complexo. SKILL pode declarar ## Inputs explícito.
+            logger.info(f"pre_discover: skip {endpoint} (auth={auth_type} fora do escopo B.2)")
+            return
+        auth_token = (read_secret(first.get('auth_token', '')) or '').strip()
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                # Initialize (alguns servers exigem antes de tools/list)
+                try:
+                    await client.post(endpoint, json={
+                        "jsonrpc": "2.0", "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "AgenteInteligencia", "version": "1.0.0"},
+                        },
+                        "id": 0,
+                    }, headers=headers)
+                    await client.post(endpoint, json={
+                        "jsonrpc": "2.0", "method": "notifications/initialized",
+                        "params": {},
+                    }, headers=headers)
+                except Exception:
+                    pass  # initialize é best-effort
+                server_tools = await _discover_server_tools(client, endpoint, headers)
+        except Exception as e:
+            logger.info(f"pre_discover: {endpoint} falhou ({type(e).__name__}) — fallback legacy")
+            return
+
+        if not server_tools:
+            return
+
+        # Match cada tool local com server_tools por nome (fuzzy via _resolve_tool_name)
+        for t in tools_for_ep:
+            declared = t.get("name", "")
+            actual = _resolve_tool_name(declared, server_tools)
+            for st in server_tools:
+                if not isinstance(st, dict):
+                    continue
+                if st.get("name") == actual:
+                    schema = st.get("inputSchema")
+                    if isinstance(schema, dict) and isinstance(schema.get("properties"), dict):
+                        t["inputSchema"] = schema
+                        logger.info(
+                            f"pre_discover: {declared}@{endpoint} → {len(schema['properties'])} fields"
+                        )
+                    break
+
+    # Roda todas as descobertas em paralelo (asyncio.gather com return_exceptions
+    # pra 1 endpoint falhando não derrubar os outros)
+    tasks = [_discover_for_endpoint(ep, ts) for ep, ts in by_endpoint.items()]
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def _resolve_tool_name(declared: str, server_tools: list[dict]) -> str:
     """Mapeia nome declarado (ex: 'search') para nome real exposto
     pelo servidor (ex: 'tavily_search').

@@ -1286,6 +1286,19 @@ async def execute_interaction(
         # {operation, query}). skill_raw é o row do skills_repo carregado em
         # ~linha 1047. Fallback "" quando SKILL ausente (back-compat).
         skill_md_for_engine = (skill_raw or {}).get("raw_content") if skill_raw else ""
+
+        # Onda B.2: pre-descobre tool.inputSchema dos servidores MCP (em paralelo).
+        # Tools sem ## Inputs explícito ganham schema real do server ao invés
+        # de fallback {operation, query}. Defensivo: timeout 5s, falhas silenciosas
+        # mantêm fluxo. Cacheado por endpoint em _MCP_TOOLS_LIST_CACHE — segunda
+        # interação na mesma sessão é grátis.
+        if mcp_tools:
+            try:
+                from app.mcp.runtime import pre_discover_input_schemas
+                await pre_discover_input_schemas(mcp_tools, timeout=5.0)
+            except Exception as _pd_exc:
+                logger.warning(f"pre_discover_input_schemas falhou: {_pd_exc}")
+
         harness = DeepAgentHarness(
             agent, max_iterations=_max_iter, mcp_tools=mcp_tools,
             interaction_id=ctx.interaction_id, skill_md=skill_md_for_engine or "",
