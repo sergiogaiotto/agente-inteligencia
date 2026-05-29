@@ -1043,7 +1043,11 @@ async def list_available_models():
     ]
     return {
         "azure": openai_models,
-        "openai": openai_models,
+        "openai": openai_models,  # alias histórico (Azure)
+        # OpenAI público real (api.openai.com) — PR #194. Mesmo catálogo do
+        # Azure porque os modelos são os mesmos no provedor da OpenAI; só
+        # muda o endpoint (api.openai.com em vez de azure.com).
+        "openai_public": openai_models,
         "maritaca": [
             {"id": "sabia-4", "name": "Sabiá-4", "context": "128K", "tier": "flagship", "multimodal": False},
             {"id": "sabia-3", "name": "Sabiá-3", "context": "32K", "tier": "flagship", "multimodal": False},

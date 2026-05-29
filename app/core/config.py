@@ -49,11 +49,17 @@ class Settings(BaseSettings):
     azure_openai_embeddings_deployment: str = "text-embedding-3-small"
 
     # ── OpenAI (fallback) ──
-    # Onda 7 Wave 5: OPENAI_API_KEY pública removida. Provider "openai" foi
-    # transformado em alias de Azure OpenAI em llm_providers.get_provider —
-    # toda chamada usa AZURE_OPENAI_API_KEY. Para acesso direto ao OpenAI
-    # público (sem Azure), reabilitar reinstanciando OpenAIProvider e
-    # esta config; mas é raro o caso em produção empresarial.
+    # Onda 7 Wave 5: OPENAI_API_KEY pública foi virada alias de Azure (provider
+    # "openai" resolve pra Azure). Mantido como retrocompat de agentes legacy.
+    #
+    # MUDANÇA 2026-05-29 PR #194 (user pediu): OpenAI público REAL reintroduzido
+    # como provider separado `openai_public`. Não substitui o alias antigo —
+    # convive. Usado quando operador quer chamar api.openai.com diretamente
+    # (ex: rotear skill_generation pro gpt-4o público em vez do Azure pra
+    # comparar latência/custo).
+    openai_public_api_key: str = ""
+    openai_public_base_url: str = "https://api.openai.com/v1"
+    openai_public_model: str = "gpt-4o"
 
     # ── Maritaca AI ──
     maritaca_api_key: str = ""
@@ -293,6 +299,10 @@ _UI_TO_ENV_MAP = {
     # Ollama
     "ollama_url":    "OLLAMA_API_URL",
     "ollama_model":  "OLLAMA_MODEL",
+    # OpenAI público (api.openai.com) — PR #194
+    "openai_public_api_key":  "OPENAI_PUBLIC_API_KEY",
+    "openai_public_base_url": "OPENAI_PUBLIC_BASE_URL",
+    "openai_public_model":    "OPENAI_PUBLIC_MODEL",
     # GPT-OSS (open-weight via endpoint OpenAI-compatible)
     "oss120b_url":     "OSS120B_URL",
     "oss120b_model":   "OSS120B_MODEL",
