@@ -777,52 +777,182 @@ function workspacePage() {
             if (!text) return '';
             let html = this._esc(text);
 
-            // Code blocks
+            // Code blocks (precisa rodar antes da divisão por linha)
             html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
                 `<pre class="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2 my-2 text-[10px] font-mono overflow-x-auto text-brand-800"><code>${code.trim()}</code></pre>`
             );
 
+            // Tabelas — detecção em fase prévia porque depende de múltiplas linhas
+            // consecutivas. Padrão GFM: linha de header com `|`, linha separator
+            // com `---` (com `:` opcional pra alinhamento), linhas de dados.
+            // User reportou (2026-05-29) que respostas com tabela markdown
+            // apareciam como texto cru — agora rendem em <table> com Tailwind.
+            html = this._renderTables(html);
+
             const lines = html.split('\n');
             const out = [];
             let inList = false;
+            let listKind = null;  // 'ul' | 'ol'
+
+            const closeList = () => {
+                if (inList) {
+                    out.push(listKind === 'ol' ? '</ol>' : '</ul>');
+                    inList = false;
+                    listKind = null;
+                }
+            };
 
             for (const line of lines) {
+                // Tabela já renderizada (HTML inline) — passthrough
+                if (line.startsWith('<table') || line.startsWith('</table') ||
+                    line.startsWith('<thead') || line.startsWith('</thead') ||
+                    line.startsWith('<tbody') || line.startsWith('</tbody') ||
+                    line.startsWith('<tr') || line.startsWith('</tr') ||
+                    line.startsWith('<th') || line.startsWith('<td')) {
+                    closeList();
+                    out.push(line);
+                    continue;
+                }
                 // Headers
                 if (line.match(/^#{1,6}\s/)) {
-                    if (inList) { out.push('</ul>'); inList = false; }
+                    closeList();
                     const lvl = line.match(/^(#{1,6})\s/)[1].length;
                     const content = line.replace(/^#{1,6}\s+/, '');
-                    const cls = lvl <= 2 ? 'text-[14px] font-bold mt-3 mb-1' : 'text-[12px] font-semibold mt-2 mb-0.5';
+                    const cls = lvl <= 2
+                        ? 'text-[14px] font-bold mt-3 mb-1'
+                        : 'text-[12px] font-semibold mt-2 mb-0.5';
                     out.push(`<div class="${cls} text-brand-900">${this._inlineMd(content)}</div>`);
                     continue;
                 }
                 // HR
                 if (line.match(/^[-*_]{3,}\s*$/)) {
-                    if (inList) { out.push('</ul>'); inList = false; }
+                    closeList();
                     out.push('<hr class="my-2 border-surface-200">');
+                    continue;
+                }
+                // Blockquote
+                if (line.match(/^\s*>\s+/)) {
+                    closeList();
+                    const c = line.replace(/^\s*>\s+/, '');
+                    out.push(`<blockquote class="my-1 border-l-2 border-brand-300 bg-brand-50/40 pl-2.5 py-1 text-[12px] text-surface-600 italic">${this._inlineMd(c)}</blockquote>`);
                     continue;
                 }
                 // Unordered list
                 if (line.match(/^\s*[-*+]\s+/)) {
-                    if (!inList) { out.push('<ul class="my-1 space-y-0.5">'); inList = true; }
+                    if (!inList || listKind !== 'ul') {
+                        closeList();
+                        out.push('<ul class="my-1 space-y-0.5">');
+                        inList = true;
+                        listKind = 'ul';
+                    }
                     const c = line.replace(/^\s*[-*+]\s+/, '');
                     out.push(`<li class="flex gap-1.5 text-[12px] text-surface-600"><span class="text-brand-400 shrink-0">•</span><span>${this._inlineMd(c)}</span></li>`);
                     continue;
                 }
                 // Ordered list
                 if (line.match(/^\s*\d+[.)]\s+/)) {
-                    if (!inList) { out.push('<ol class="my-1 space-y-0.5 list-decimal list-inside text-[12px] text-surface-600">'); inList = true; }
+                    if (!inList || listKind !== 'ol') {
+                        closeList();
+                        out.push('<ol class="my-1 space-y-0.5 list-decimal list-inside text-[12px] text-surface-600">');
+                        inList = true;
+                        listKind = 'ol';
+                    }
                     const c = line.replace(/^\s*\d+[.)]\s+/, '');
                     out.push(`<li>${this._inlineMd(c)}</li>`);
                     continue;
                 }
-                if (inList && line.trim() === '') { out.push('</ul>'); inList = false; }
+                if (inList && line.trim() === '') { closeList(); }
                 if (line.trim() === '') { out.push('<div class="h-1.5"></div>'); continue; }
-                if (inList) { out.push('</ul>'); inList = false; }
+                if (inList) { closeList(); }
                 out.push(`<p class="text-[12px] text-surface-600 leading-relaxed">${this._inlineMd(line)}</p>`);
             }
-            if (inList) out.push('</ul>');
+            closeList();
             return out.join('\n');
+        },
+
+        _renderTables(html) {
+            // Procura sequências de linhas que formam tabela GFM:
+            //   | h1 | h2 |
+            //   |----|----|
+            //   | a  | b  |
+            //   | c  | d  |
+            // (linha header + linha separator com --- + 1+ linhas de dados)
+            //
+            // Limitações conhecidas (toleráveis pra renderização chat):
+            // - Não suporta tabelas aninhadas
+            // - Alinhamento (`:---:`, `---:`) é parsed mas só usa center/left
+            // - Cells com `|` literal não escapado quebram (rara em LLM output)
+            const lines = html.split('\n');
+            const out = [];
+            let i = 0;
+            while (i < lines.length) {
+                const header = lines[i];
+                const sep = lines[i + 1];
+                if (this._looksLikeTableRow(header) && this._looksLikeTableSeparator(sep)) {
+                    const headerCells = this._splitTableRow(header);
+                    const aligns = this._parseTableAlignments(sep);
+                    const bodyRows = [];
+                    let j = i + 2;
+                    while (j < lines.length && this._looksLikeTableRow(lines[j])) {
+                        bodyRows.push(this._splitTableRow(lines[j]));
+                        j++;
+                    }
+                    out.push(this._renderTableHtml(headerCells, bodyRows, aligns));
+                    i = j;
+                    continue;
+                }
+                out.push(header);
+                i++;
+            }
+            return out.join('\n');
+        },
+
+        _looksLikeTableRow(line) {
+            if (!line) return false;
+            const t = line.trim();
+            // Precisa começar e terminar com `|` (Markdown GFM canônico)
+            // e ter pelo menos 1 separador interno.
+            return t.startsWith('|') && t.endsWith('|') && t.indexOf('|', 1) < t.length - 1;
+        },
+
+        _looksLikeTableSeparator(line) {
+            if (!line) return false;
+            const t = line.trim();
+            if (!t.startsWith('|') || !t.endsWith('|')) return false;
+            // Cada célula precisa ser composta apenas de `-`, `:` e espaços.
+            const cells = t.slice(1, -1).split('|');
+            if (!cells.length) return false;
+            return cells.every(c => /^\s*:?-{3,}:?\s*$/.test(c));
+        },
+
+        _splitTableRow(line) {
+            // Remove `|` de borda e split por `|` interno
+            return line.trim().slice(1, -1).split('|').map(c => c.trim());
+        },
+
+        _parseTableAlignments(sepLine) {
+            return sepLine.trim().slice(1, -1).split('|').map(c => {
+                const t = c.trim();
+                const left = t.startsWith(':');
+                const right = t.endsWith(':');
+                if (left && right) return 'center';
+                if (right) return 'right';
+                return 'left';
+            });
+        },
+
+        _renderTableHtml(headerCells, bodyRows, aligns) {
+            const alignClass = (a) => a === 'center' ? 'text-center' : a === 'right' ? 'text-right' : 'text-left';
+            const thead = '<thead><tr>' + headerCells.map((c, k) =>
+                `<th class="${alignClass(aligns[k] || 'left')} px-2.5 py-1.5 text-[11px] font-semibold text-brand-900 bg-surface-50 border-b border-surface-200">${this._inlineMd(c)}</th>`
+            ).join('') + '</tr></thead>';
+            const tbody = '<tbody>' + bodyRows.map((row, ri) => {
+                const rowBg = ri % 2 === 0 ? 'bg-white' : 'bg-surface-50/50';
+                return `<tr class="${rowBg}">` + row.map((c, k) =>
+                    `<td class="${alignClass(aligns[k] || 'left')} px-2.5 py-1.5 text-[11px] text-surface-700 border-b border-surface-100 align-top">${this._inlineMd(c)}</td>`
+                ).join('') + '</tr>';
+            }).join('') + '</tbody>';
+            return `<div class="my-2 overflow-x-auto rounded-lg border border-surface-200"><table class="w-full border-collapse">${thead}${tbody}</table></div>`;
         },
 
         _inlineMd(t) {
@@ -1305,9 +1435,16 @@ function workspacePage() {
         // ─────────────────────────────────────
         scrollToBottom(){this.$nextTick(()=>{const el=this.$refs.chatContainer;if(el)el.scrollTop=el.scrollHeight})},
         formatMarkdown(t){
+            // Path default da bolha de chat (não-rich view). User reportou
+            // (2026-05-29) que tabelas markdown na resposta apareciam como
+            // texto cru com pipes (`| Área | ...`). Fix: delegar ao
+            // _renderRichMarkdown pra ganhar suporte completo (tabelas,
+            // headers, listas, blockquote, links). extractText preserva
+            // o behavior de desembrulhar JSON com chave `generated_content`
+            // ou `output` que algumas skills devolvem.
             if(!t)return '';
             const c=this.extractText(t);
-            return c.replace(/```(\w*)\n([\s\S]*?)```/g,'<pre class="rounded-lg bg-surface-50 border border-surface-100 p-3 my-2 text-[11px] font-mono overflow-x-auto"><code>$2</code></pre>').replace(/`([^`]+)`/g,'<code class="rounded bg-surface-100 px-1.5 py-0.5 text-[11px] font-mono text-brand-700">$1</code>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>');
+            return this._renderRichMarkdown(c);
         },
         extractText(t){
             if(!t)return '';
