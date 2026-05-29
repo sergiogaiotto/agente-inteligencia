@@ -236,21 +236,37 @@
                         <span>Comandos e Tools</span>
                         <span class="text-[9px] text-violet-400 normal-case">↑↓ navegar · Enter selecionar · Esc fechar</span>
                     </div>
-                    <template x-for="(cmd, idx) in filteredSlashCmds" :key="cmd.name+(cmd._kind||'')">
+                    <template x-for="(cmd, idx) in filteredSlashCmds" :key="cmd.name+(cmd._kind||'')+(cmd._isRecent?'-r':'')">
                         <button type="button" @click="runSlashCommand(cmd.name)"
                                 class="w-full text-left px-3 py-2 hover:bg-violet-50 transition-colors flex items-start gap-3 border-b border-surface-50 last:border-0"
-                                :class="idx === slashHighlight ? 'bg-violet-50' : ''">
-                            <code class="rounded px-1.5 py-0.5 text-[11px] font-mono font-bold shrink-0 mt-0.5"
-                                  :class="cmd._kind==='binding'?'bg-fuchsia-100 text-fuchsia-700':'bg-violet-100 text-violet-700'"
-                                  x-text="'/' + cmd.name"></code>
+                                :class="[
+                                    idx === slashHighlight ? 'bg-violet-50' : '',
+                                    cmd._isRecent ? 'bg-gradient-to-r from-amber-50/40 to-transparent' : ''
+                                ]">
+                            <!-- Onda A.4: ícone clock pra Recente; código /name pros demais -->
+                            <template x-if="cmd._isRecent">
+                                <span class="rounded px-1.5 py-0.5 text-[11px] font-bold shrink-0 mt-0.5 bg-amber-100 text-amber-700 inline-flex items-center gap-0.5" title="Você invocou antes">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                </span>
+                            </template>
+                            <template x-if="!cmd._isRecent">
+                                <code class="rounded px-1.5 py-0.5 text-[11px] font-mono font-bold shrink-0 mt-0.5"
+                                      :class="cmd._kind==='binding'?'bg-fuchsia-100 text-fuchsia-700':'bg-violet-100 text-violet-700'"
+                                      x-text="'/' + cmd.name"></code>
+                            </template>
                             <div class="min-w-0 flex-1">
                                 <div class="flex items-center gap-1.5">
                                     <span class="text-[12px] font-semibold text-brand-900" x-text="cmd.title"></span>
                                     <template x-if="cmd._kind==='binding'">
-                                        <span class="rounded-sm text-[8px] font-bold uppercase tracking-wider px-1 bg-fuchsia-50 text-fuchsia-600 border border-fuchsia-200" x-text="cmd._binding?.binding_kind||''"></span>
+                                        <span class="rounded-sm text-[8px] font-bold uppercase tracking-wider px-1"
+                                              :class="cmd._isRecent ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-fuchsia-50 text-fuchsia-600 border border-fuchsia-200'"
+                                              x-text="cmd._binding?.binding_kind||''"></span>
+                                    </template>
+                                    <template x-if="cmd._isRecent">
+                                        <span class="text-[8px] font-semibold uppercase tracking-wider text-amber-600">Recente</span>
                                     </template>
                                 </div>
-                                <div class="text-[10px] text-surface-500" x-text="cmd.desc"></div>
+                                <div class="text-[10px]" :class="cmd._isRecent ? 'text-amber-700' : 'text-surface-500'" x-text="cmd.desc"></div>
                             </div>
                         </button>
                     </template>
@@ -740,6 +756,14 @@ function workspacePage() {
         // de binding.
         bindingFormParams: {},
         bindingInvoking: false,
+        // Onda A.4: histórico/sugestões de slash invokes por agent.
+        // Persistido em localStorage por agent_id. Cap=20 entries.
+        // Cada entry: {kind, id, label, skill_id, ts, recent7d}.
+        // Recarregado a cada filteredSlashCmds — bareto em RAM e robusto a
+        // sessões cross-aba (próximo render lê o storage atualizado).
+        _SLASH_HISTORY_LIMIT: 20,
+        _SLASH_HISTORY_SHOW: 5,    // quantas Recentes aparecem no popover
+        _SLASH_HISTORY_PREFIX: 'maestro.slash.recent.',
         progressSteps:[], progressMinimized:false,
         liveLog:[], logMinimized:false, _logStart:0, _animTimers:[], _pulseInterval:null, _pulseCount:0,
         richViewMsgs:{},
@@ -1289,14 +1313,33 @@ function workspacePage() {
             const q=(this.input||'').trim();
             if(!q.startsWith('/')) return [];
             const term=q.slice(1).toLowerCase();
-            // Onda A.1: combina comandos estáticos + bindings dinâmicos
-            // (vindos do /skills-context do agente atual). Cada binding
-            // ganha um item com kind="binding" pra runSlashCommand decidir.
-            const all=[...this.slashCmds];
+            // Onda A.4: prepend "Recente" — bindings que o user já invocou
+            // antes neste agent. Aparece SEM term de busca (atalho ao topo);
+            // quando user digita pra filtrar, recents desaparecem pra não
+            // mostrar o mesmo item 2x (uma vez Recente, uma vez na lista geral).
+            const all=[];
+            const showingRecents = !term;
+            if(showingRecents){
+                const recents = this._recentSlashCmds();
+                for(const r of recents) all.push(r);
+            }
+            // Comandos estáticos sempre presentes
+            for(const cmd of this.slashCmds) all.push(cmd);
+            // Onda A.1: bindings dinâmicos do /skills-context do agente atual.
+            // Cada binding ganha um item com kind="binding" pra runSlashCommand decidir.
             const bctx=this.bindingsContext;
+            // Set pra evitar duplicar bindings já listados em Recente
+            const recentKeys = new Set();
+            if(showingRecents){
+                for(const r of all){
+                    if(r._isRecent) recentKeys.add(`${r._binding.binding_kind}::${r._binding.binding_id}`);
+                }
+            }
             if(bctx && Array.isArray(bctx.skills)){
                 for(const sk of bctx.skills){
                     for(const b of (sk.bindings||[])){
+                        const dedupKey = `${b.binding_kind}::${b.binding_id}`;
+                        if(recentKeys.has(dedupKey)) continue;
                         const label=b.binding_label||'(sem nome)';
                         const slug=label.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'').slice(0,40)||'tool';
                         all.push({
@@ -1424,6 +1467,107 @@ function workspacePage() {
             this.bindingFormParams={};
             this.bindingInvoking=false;
         },
+
+        // ════════════════════════════════════════════
+        // Onda A.4 — Histórico/sugestões de slash invokes
+        // ════════════════════════════════════════════
+        // localStorage por agent. Resiliente a JSON corrompido, ausência
+        // de localStorage (modo privado de alguns browsers), e migrations.
+        _slashHistoryKey(agentId){ return this._SLASH_HISTORY_PREFIX + (agentId||''); },
+        _readSlashHistory(agentId){
+            if(!agentId) return [];
+            try{
+                const raw = localStorage.getItem(this._slashHistoryKey(agentId));
+                if(!raw) return [];
+                const data = JSON.parse(raw);
+                if(!Array.isArray(data)) return [];
+                // Filtra entries malformadas defensivo
+                return data.filter(e => e && typeof e === 'object' && e.kind && e.id && e.label);
+            }catch(e){
+                console.warn('slash history corrompida:', e);
+                return [];
+            }
+        },
+        _writeSlashHistory(agentId, entries){
+            if(!agentId) return;
+            try{
+                localStorage.setItem(this._slashHistoryKey(agentId), JSON.stringify(entries));
+            }catch(e){
+                // localStorage cheio ou bloqueado — silencia. Histórico é
+                // melhor-esforço; não vale crash.
+                console.warn('slash history não salvou:', e);
+            }
+        },
+        _trackSlashInvoke(binding, skillId){
+            // Chamado após sucesso de invokeBindingDirect. Sobe a entry pro
+            // topo da lista, incrementa contador rolling 7-day, e trim ao cap.
+            if(!this.selectedAgentId || !binding) return;
+            const now = Date.now();
+            const oneWeek = 7 * 24 * 60 * 60 * 1000;
+            const existing = this._readSlashHistory(this.selectedAgentId);
+            // Procura entry existente pela tupla (kind, id) — kind+id é único
+            // por binding (MCP tool, declarative skill, RAG source)
+            const idx = existing.findIndex(e => e.kind === binding.binding_kind && e.id === binding.binding_id);
+            let entry;
+            if(idx >= 0){
+                entry = existing.splice(idx, 1)[0];
+                // Limpa timestamps fora da janela de 7 dias do counter
+                entry.timestamps = (entry.timestamps || []).filter(t => now - t < oneWeek);
+                entry.timestamps.push(now);
+            }else{
+                entry = {
+                    kind: binding.binding_kind,
+                    id: binding.binding_id,
+                    label: binding.binding_label,
+                    skill_id: skillId,
+                    timestamps: [now],
+                };
+            }
+            // Cap timestamps a 50 pra não inflar localStorage
+            if(entry.timestamps.length > 50) entry.timestamps = entry.timestamps.slice(-50);
+            entry.last_ts = now;
+            entry.recent7d = entry.timestamps.length;
+            // Prepend (mais recente primeiro), trim ao limit
+            existing.unshift(entry);
+            const trimmed = existing.slice(0, this._SLASH_HISTORY_LIMIT);
+            this._writeSlashHistory(this.selectedAgentId, trimmed);
+        },
+        // Getter usado pelo filteredSlashCmds pra montar a seção Recente.
+        // Devolve até N entries cruzadas com bindingsContext atual — uma
+        // entry só aparece se ainda existe (skill não foi removida do agente).
+        _recentSlashCmds(){
+            if(!this.selectedAgentId || !this.bindingsContext) return [];
+            const history = this._readSlashHistory(this.selectedAgentId);
+            if(!history.length) return [];
+            // Index do bindingsContext por (kind, id) pra cruzar com history
+            const ctxIndex = new Map();
+            for(const sk of (this.bindingsContext.skills || [])){
+                for(const b of (sk.bindings || [])){
+                    ctxIndex.set(`${b.binding_kind}::${b.binding_id}`, {binding: b, skill_id: sk.skill_id});
+                }
+            }
+            const out = [];
+            for(const entry of history){
+                if(out.length >= this._SLASH_HISTORY_SHOW) break;
+                const key = `${entry.kind}::${entry.id}`;
+                const ctx = ctxIndex.get(key);
+                if(!ctx) continue;  // binding sumiu — pula
+                const b = ctx.binding;
+                const slug = (b.binding_label||'tool').toLowerCase()
+                    .replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'').slice(0,40) || 'tool';
+                out.push({
+                    name: 'recent-' + slug,
+                    title: b.binding_label,
+                    desc: `${b.binding_kind.toUpperCase()} · `+
+                          (entry.recent7d > 1 ? `${entry.recent7d}× nos últimos 7d` : 'invocado antes'),
+                    _kind: 'binding',
+                    _binding: b,
+                    _skill_id: ctx.skill_id,
+                    _isRecent: true,
+                });
+            }
+            return out;
+        },
         bindingFormValidate(){
             // Validação leve no front (backend valida de novo). Retorna
             // lista de erros pra mostrar em vermelho abaixo do form.
@@ -1488,6 +1632,11 @@ function workspacePage() {
                 });
                 this.$nextTick(()=>this.scrollToBottom());
                 showToast(result.ok?'Invocação OK':'Tool retornou erro',result.ok?'success':'error');
+                // Onda A.4: registra invocação no histórico (mesmo se result.ok=false
+                // — operador quis usar essa tool, intenção é o sinal). Trackeia
+                // só sucesso de chamada (sem exception); falha de tool é parte do
+                // fluxo de uso.
+                try{ this._trackSlashInvoke(b, skillId); }catch(_){ /* defensivo */ }
                 this.cancelBindingForm();
             }catch(e){
                 let msg='Erro ao invocar: '+(e?.message||'desconhecido');
