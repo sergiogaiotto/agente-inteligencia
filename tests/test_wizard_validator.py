@@ -664,6 +664,94 @@ class TestRegressionRealContext7Skill:
         assert "G4.negative_source" not in rules
 
 
+class TestRegressionContext7DocumentFetcher:
+    """Regressão do 3º bug Context7 reportado (2026-05-29 #4): user gerou
+    nova SKILL 'Context7 Documentation Fetcher' (urn:...:context7-document-
+    fetch) sem operation no Workflow. Engine forçou operation arbitrária
+    via enum required do MCP function spec, Context7 retornou nada útil,
+    LLM tentou preencher Output Contract estrito → resposta VAZIA (bolha
+    em branco no chat).
+
+    Causa raiz: SKILL gerada ANTES do PR #186 mergear (validador no
+    endpoint), então omitiu operation sem ninguém pegar.
+
+    Esta regressão garante que se o LLM gerador errar igual de novo, o
+    validador atual (#188) pega via operation.missing.
+    """
+
+    FIXTURE = Path("tests/fixtures/context7_skill_document_fetcher.md")
+
+    def _bindings(self):
+        return {
+            "mcp_tools": [{
+                "id": "481c5fa3-36bc-4d05-97ff-d502d93521ff",
+                "name": "Context 7 MCP Server",
+                "description": "Plataforma Context7 para documentação atualizada",
+                "operations": "docs,code,prompt",
+            }],
+            "rag_sources": [],
+            "data_tables": [],
+            "api_endpoints": [],
+        }
+
+    def test_fixture_exists_and_workflow_has_no_operation(self):
+        assert self.FIXTURE.exists()
+        content = self.FIXTURE.read_text(encoding="utf-8")
+        # Sanity: Workflow tem 'query=' mas NÃO tem 'operation=' em parte alguma
+        # (essa é a essência do bug)
+        assert "query=" in content
+        # Procura apenas dentro da seção Workflow — Examples podem ter
+        # operation no marcador "Chamada à tool" mas Workflow não tem.
+        import re as _re
+        m = _re.search(r"## Workflow\s*\n([\s\S]*?)\n## ", content)
+        assert m
+        workflow_section = m.group(1)
+        assert "operation=" not in workflow_section, (
+            "fixture deveria ter Workflow SEM operation — esse é o bug"
+        )
+
+    def test_fetcher_skill_fails_with_operation_missing(self):
+        """Roda parse + validate na SKILL real. Deve detectar exatamente
+        operation.missing como crítico."""
+        from app.skill_parser.parser import parse_skill_md
+        skill_md = self.FIXTURE.read_text(encoding="utf-8")
+        parsed = parse_skill_md(skill_md)
+        result = validate_generated_skill(parsed, self._bindings())
+
+        assert not result.ok
+        # operation.missing é a regra esperada
+        rules = {v.rule for v in result.violations}
+        assert "operation.missing" in rules
+        # G1/G2/G4 NÃO devem disparar (Workflow imperativo + Evidence Policy
+        # correta + Examples com rastreabilidade — esses funcionaram)
+        assert "G1.passive_verb" not in rules
+        assert "G1.no_imperative" not in rules
+        assert "G2.internal_phrase" not in rules
+        assert "G4.negative_source" not in rules
+
+    def test_fetcher_suggestion_lists_valid_operations(self):
+        """Suggestion deve listar docs/code/prompt como opções pra retry."""
+        from app.skill_parser.parser import parse_skill_md
+        parsed = parse_skill_md(self.FIXTURE.read_text(encoding="utf-8"))
+        result = validate_generated_skill(parsed, self._bindings())
+
+        crit = next(v for v in result.violations if v.rule == "operation.missing")
+        for op in ("docs", "code", "prompt"):
+            assert op in crit.suggestion
+
+    def test_fetcher_explains_runtime_consequence(self):
+        """Mensagem precisa conectar a omissão com a consequência real
+        observada pelo user (tool não é chamada ou retorna vazia)."""
+        from app.skill_parser.parser import parse_skill_md
+        parsed = parse_skill_md(self.FIXTURE.read_text(encoding="utf-8"))
+        result = validate_generated_skill(parsed, self._bindings())
+
+        crit = next(v for v in result.violations if v.rule == "operation.missing")
+        low = crit.message.lower()
+        # Cita o sintoma: engine não saberá / tool não será chamada
+        assert "engine" in low and ("não sabe" in low or "tool não será" in low)
+
+
 # ───────────────────────────────────────────────────────────────
 # ValidationResult shape
 # ───────────────────────────────────────────────────────────────
