@@ -449,17 +449,37 @@ def _common_binding_rules_header() -> str:
 
 
 def _mcp_block(mcp_tools: list[dict]) -> str:
-    """Sub-bloco específico de MCP. Cobre o caso original do bug Context7."""
+    """Sub-bloco específico de MCP. Cobre o caso original do bug Context7.
+
+    Bug v2 (2026-05-29): mesmo com Workflow imperativo correto, SKILL gerada
+    pediu `operation=search` em Context7 (que só aceita docs/code/prompt).
+    Servidor MCP devolveu erro, LLM em runtime respondeu honestamente "não
+    consegui acessar". Causa: LLM gerador escolheu "search" como nome de
+    operation por sonoridade, em vez de usar uma das operations declaradas
+    no Registry. Fix: regra explícita listando operations + proibição de
+    inventar names que não estão na lista.
+    """
     tool_names = ", ".join(f"`{t['name']}`" for t in mcp_tools)
     first = mcp_tools[0]
     first_name = first["name"]
     import re as _re
-    _ops_match = _re.search(r"[a-zA-Z][a-zA-Z0-9_]*", str(first.get("operations") or ""))
+    _ops_raw = str(first.get("operations") or "").strip()
+    _ops_match = _re.search(r"[a-zA-Z][a-zA-Z0-9_]*", _ops_raw)
     first_op = _ops_match.group(0) if _ops_match else "search"
+    # Lista completa das operations da PRIMEIRA tool pra dar contexto ao LLM
+    # gerador. Pra skills com múltiplas tools, cada uma já aparece no
+    # obligatory_sections de ## Tool Bindings com suas operations.
+    ops_display = _ops_raw if _ops_raw else "(operations não declaradas no Registry)"
     return (
         "[MCP] **Tools registradas:** " + tool_names + ". "
         "Use os NOMES EXATOS dessas tools em Workflow e Examples.\n"
         f"  - Verbo recomendado: **Chame** / **Invoque**.\n"
+        f"  - **Operations disponíveis em `{first_name}`: `{ops_display}`**\n"
+        f"  - **REGRA CRÍTICA — operations:** Use APENAS uma operation listada "
+        f"acima (e em `## Tool Bindings` do bloco obrigatório). NUNCA invente "
+        f"nomes de operation como `search`, `query`, `fetch`, `get` se não "
+        f"estiverem declarados. O servidor MCP REJEITA operations inventadas "
+        f"e o LLM em runtime devolve erro ao usuário.\n"
         f"  - Exemplo no Workflow: \"Chame a tool `{first_name}` com "
         f"`operation={first_op}` e `query=<entrada do usuário>` ANTES de gerar a "
         "resposta.\"\n"
@@ -593,9 +613,25 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         # meio do nome da tool. 300 alinha com build_openai_tools/runtime.py:575
         # e _build_system_prompt/engine.py:402 — única descrição completa que o
         # LLM vê em runtime.
+        #
+        # MUDANÇA 2026-05-29 (bug runtime Context7 v2): SKILL gerada pediu
+        # `operation=search` mas servidor MCP Context7 só aceita docs/code/
+        # prompt. Em runtime gpt-oss-120b seguiu a SKILL e o servidor recusou.
+        # Causa raiz: obligatory_sections do MCP NÃO listava as operations
+        # declaradas no Registry — só id+name+description. LLM gerador via
+        # exemplo `operation=docs` no _mcp_block mas, sem lista oficial das
+        # operations no bloco obrigatório, escolheu "search" por sonoridade.
+        # Fix: incluir operations EXPLICITAMENTE em cada linha do bloco.
+        def _format_mcp_line(t):
+            line = f"- `{t['id']}` ({t['name']}) — {(t.get('description') or '').strip()[:300]}"
+            ops_raw = (t.get("operations") or "").strip()
+            if ops_raw:
+                line += (
+                    f"\n  **Operations declaradas (use APENAS estas):** `{ops_raw}`"
+                )
+            return line
         bindings_md = "\n".join(
-            f"- `{t['id']}` ({t['name']}) — {(t.get('description') or '').strip()[:300]}"
-            for t in bindings["mcp_tools"]
+            _format_mcp_line(t) for t in bindings["mcp_tools"]
         )
         obligatory_sections.append(
             "## Tool Bindings\n" + bindings_md

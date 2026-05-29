@@ -931,6 +931,135 @@ class TestRegressionContext7Bug:
         assert abs(idx_nunca - idx_frase) < 300
 
 
+class TestRegressionContext7BugV2:
+    """Regressão do bug v2 (2026-05-29 #2): mesmo após PR #180 corrigir o
+    Workflow passivo, SKILL gerada pediu `operation=search` em Context7
+    (que só aceita docs/code/prompt). Servidor MCP devolveu erro, LLM em
+    runtime respondeu "não consegui acessar".
+
+    Causa: `## Tool Bindings` no obligatory_sections NÃO listava as
+    operations declaradas no Registry — só id+name+description. LLM
+    gerador via exemplo `operation=docs` no _mcp_block mas, sem lista
+    oficial das operations no bloco obrigatório, escolheu "search" por
+    sonoridade ("search by pattern_type").
+
+    Fix: (a) incluir operations EXPLICITAMENTE em cada linha do bloco
+    `## Tool Bindings`, (b) regra crítica anti-invent no _mcp_block.
+    """
+
+    def _ctx7_bindings(self):
+        return {
+            "mcp_tools": [{
+                "id": "481c5fa3-36bc-4d05-97ff-d502d93521ff",
+                "name": "Context 7 MCP Server",
+                "description": "Plataforma Context7 para documentação atualizada de qualquer prompt",
+                "operations": "docs,code,prompt",
+            }],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+
+    def test_tool_bindings_block_lists_operations_explicitly(self):
+        """Cada tool no obligatory `## Tool Bindings` precisa listar suas
+        operations declaradas — sem isso, LLM gerador inventa nomes."""
+        req = WizardSkillRequest(
+            description="x",
+            mcp_tool_ids=["481c5fa3-36bc-4d05-97ff-d502d93521ff"],
+        )
+        system, _ = _build_wizard_prompt(req, self._ctx7_bindings(), "fast")
+        # Localiza o bloco obrigatório
+        start = system.find("=== SEÇÕES OBRIGATÓRIAS")
+        end = system.find("=== FIM DAS SEÇÕES OBRIGATÓRIAS")
+        obligatory = system[start:end]
+        # As 3 operations canônicas do Context7 precisam estar no bloco
+        assert "docs" in obligatory
+        assert "code" in obligatory
+        assert "prompt" in obligatory
+        # E com marcador "Operations" explícito (não só citadas no nome)
+        assert "Operations" in obligatory
+
+    def test_tool_bindings_uses_imperative_phrase_about_operations(self):
+        """A linha das operations precisa ser imperativa pra o LLM gerador
+        entender que NÃO pode inventar."""
+        req = WizardSkillRequest(
+            description="x",
+            mcp_tool_ids=["481c5fa3-36bc-4d05-97ff-d502d93521ff"],
+        )
+        system, _ = _build_wizard_prompt(req, self._ctx7_bindings(), "fast")
+        # Frase com "APENAS" ou "Use APENAS" perto das operations
+        assert "use APENAS" in system or "Use APENAS" in system
+
+    def test_mcp_block_has_critical_rule_about_inventing_operations(self):
+        """_mcp_block precisa ter regra crítica sobre não inventar operations
+        (search/query/fetch/get) que não estejam declaradas."""
+        req = WizardSkillRequest(
+            description="x",
+            mcp_tool_ids=["481c5fa3-36bc-4d05-97ff-d502d93521ff"],
+        )
+        system, _ = _build_wizard_prompt(req, self._ctx7_bindings(), "fast")
+        # Regra crítica explícita
+        assert "REGRA CRÍTICA" in system and "operations" in system
+        # Cita os nomes inventados comuns como proibidos
+        # (o LLM gerador no caso real escolheu 'search')
+        assert "search" in system  # citado como exemplo do que NÃO usar
+        # NUNCA invente
+        assert "NUNCA invente" in system or "nunca invente" in system.lower()
+
+    def test_mcp_block_lists_actual_operations_in_context(self):
+        """_mcp_block deve listar as operations REAIS da primeira tool
+        (não só citar o exemplo first_op). Sem isso, o LLM gerador só vê
+        1 operation no exemplo e não sabe das outras."""
+        req = WizardSkillRequest(
+            description="x",
+            mcp_tool_ids=["481c5fa3-36bc-4d05-97ff-d502d93521ff"],
+        )
+        system, _ = _build_wizard_prompt(req, self._ctx7_bindings(), "fast")
+        # Procura padrão "Operations disponíveis em `Context 7 MCP Server`:
+        # `docs,code,prompt`"
+        assert "Operations disponíveis em" in system
+        # As 3 operations todas presentes no _mcp_block (não só na primeira)
+        # Vai procurar na região do _mcp_block (após "[MCP]")
+        idx_mcp = system.find("[MCP]")
+        idx_rag = system.find("[RAG]")
+        end_mcp = idx_rag if idx_rag > idx_mcp else len(system)
+        mcp_section = system[idx_mcp:end_mcp]
+        assert "docs" in mcp_section
+        assert "code" in mcp_section
+        assert "prompt" in mcp_section
+
+    def test_warning_mentions_runtime_consequence(self):
+        """Pra o LLM gerador internalizar a regra, é útil explicar a
+        consequência: servidor MCP recusa + usuário vê erro. Isso conecta
+        a regra com a experiência ruim real reportada."""
+        req = WizardSkillRequest(
+            description="x",
+            mcp_tool_ids=["481c5fa3-36bc-4d05-97ff-d502d93521ff"],
+        )
+        system, _ = _build_wizard_prompt(req, self._ctx7_bindings(), "fast")
+        low = system.lower()
+        # Menção à consequência: servidor recusa
+        assert "rejeita" in low or "recusa" in low or "rejeitar" in low
+
+    def test_tool_without_declared_operations_falls_back_gracefully(self):
+        """Tool MCP cadastrada sem operations no Registry — bloco precisa
+        sobreviver (sem KeyError, sem texto vazio) e usar fallback."""
+        bindings = {
+            "mcp_tools": [{
+                "id": "no-ops",
+                "name": "Mystery Tool",
+                "description": "Tool registrada sem operations declaradas",
+                "operations": "",  # vazio explícito
+            }],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["no-ops"])
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        # Não deve estourar; _mcp_block deve indicar fallback
+        assert "Mystery Tool" in system
+        assert "[MCP]" in system
+        # Quando operations vazias, fallback display
+        assert "não declaradas" in system.lower() or "operations" in system.lower()
+
+
 # ═════════════════════════════════════════════════════════════════
 # Regressão de combos — garante que adição do mcp_invocation_rules
 # não quebra paths existentes de RAG/API/Tables/Output Shape/kind=router
