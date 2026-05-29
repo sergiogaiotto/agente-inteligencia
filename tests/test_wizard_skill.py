@@ -542,10 +542,11 @@ class TestResolveWizardLLM:
     sensato por rota. Retrocompat preserva legacy provider/model explícitos."""
 
     def test_default_task_types_per_route(self):
-        """Defaults documentados no módulo: skill→reasoning, agent→reasoning,
-        refine→instruct."""
+        """Defaults documentados no módulo: skill→skill_generation (desde
+        2026-05-29 — separado de reasoning após gpt-oss-120b errar 4x),
+        agent→reasoning, refine→instruct."""
         assert _DEFAULT_TASK_TYPE["agent"] == "reasoning"
-        assert _DEFAULT_TASK_TYPE["skill"] == "reasoning"
+        assert _DEFAULT_TASK_TYPE["skill"] == "skill_generation"
         assert _DEFAULT_TASK_TYPE["refine"] == "instruct"
 
     @pytest.mark.asyncio
@@ -589,9 +590,11 @@ class TestResolveWizardLLM:
 
         req = WizardSkillRequest(description="x")  # tudo default
         provider, model, task = await _resolve_wizard_llm(req, "skill")
-        # Default da rota /skill é "reasoning"
-        assert captured["task_type"] == "reasoning"
-        assert task == "reasoning"
+        # Default da rota /skill é "skill_generation" (separado de reasoning
+        # em 2026-05-29 — bugs Context7 #1-#4 mostraram que gpt-oss-120b vinha
+        # falhando consistentemente).
+        assert captured["task_type"] == "skill_generation"
+        assert task == "skill_generation"
         assert provider == "gpt-oss-120b"
 
     @pytest.mark.asyncio

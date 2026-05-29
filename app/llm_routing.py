@@ -38,13 +38,22 @@ logger = logging.getLogger(__name__)
 
 # ─── Catálogo ──────────────────────────────────────────────────────
 
-TASK_TYPES = ("tool_calling", "reasoning", "instruct", "classification")
+TASK_TYPES = ("tool_calling", "reasoning", "instruct", "classification",
+              "skill_generation")
 
 DEFAULT_ROUTING: dict[str, str] = {
     "tool_calling": "gpt-oss-120b/openai/gpt-oss-120b",
     "reasoning": "gpt-oss-120b/openai/gpt-oss-120b",
     "instruct": "gpt-oss-20b/openai/gpt-oss-20b",
     "classification": "gpt-oss-20b/openai/gpt-oss-20b",
+    # skill_generation (Onda 2026-05-29): tarefa específica de criar/alterar
+    # SKILL.md no Wizard. Separado de `reasoning` porque o gerador precisa
+    # seguir regras estruturais MUITO específicas (verbos imperativos,
+    # operations declaradas, frases proibidas) — gpt-oss-120b vinha errando
+    # consistentemente. Default azure/gpt-4o (instruction-following mais
+    # confiável + JSON Schema mais estável). Operador pode trocar via UI
+    # se quiser usar gpt-oss-120b ou outro modelo.
+    "skill_generation": "azure/gpt-4o",
     "multimodal_fallback": "azure/gpt-4o",
 }
 
