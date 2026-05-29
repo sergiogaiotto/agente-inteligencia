@@ -21,6 +21,7 @@ Testes cobrem:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -474,6 +475,81 @@ class TestRegressionContext7V2:
         # As 3 operations válidas estão na sugestão
         for op in ("docs", "code", "prompt"):
             assert op in crit.suggestion
+
+
+class TestRegressionRealContext7Skill:
+    """Regressão usando SKILL.md REAL que o user colou em 2026-05-29
+    (Context7 Design Pattern Generator v0.1.0, gerada antes de PR #185).
+
+    Diferente da TestRegressionContext7V2 que usa SKILL fictícia simplificada,
+    aqui rodamos parse_skill_md sobre o arquivo .md completo (com YAML
+    frontmatter, todas as 11 seções, examples reais) — garante que o
+    validador funciona ponta-a-ponta sobre output real do Wizard.
+    """
+
+    FIXTURE = Path("tests/fixtures/context7_skill_buggy.md")
+
+    def _bindings(self):
+        return {
+            "mcp_tools": [{
+                "id": "481c5fa3-36bc-4d05-97ff-d502d93521ff",
+                "name": "Context 7 MCP Server",
+                "description": "Plataforma Context7 para documentação atualizada",
+                "operations": "docs,code,prompt",
+            }],
+            "rag_sources": [],
+            "data_tables": [],
+            "api_endpoints": [],
+        }
+
+    def test_fixture_exists_and_has_buggy_operation(self):
+        """Sanity: a fixture realmente contém operation=search."""
+        assert self.FIXTURE.exists(), "fixture context7_skill_buggy.md ausente"
+        content = self.FIXTURE.read_text(encoding="utf-8")
+        assert "operation=search" in content
+        # E pelo menos 2 vezes (Workflow + Examples) — bug no fluxo todo
+        assert content.count("operation=search") >= 2
+
+    def test_real_context7_skill_fails_validation(self):
+        """Roda parser + validador na SKILL real do user. Deve detectar
+        exatamente 1 crítico (operation.invented) e 0 warning."""
+        from app.skill_parser.parser import parse_skill_md
+        skill_md = self.FIXTURE.read_text(encoding="utf-8")
+        parsed = parse_skill_md(skill_md)
+        result = validate_generated_skill(parsed, self._bindings())
+
+        assert not result.ok
+        assert result.critical_count == 1
+        rules = {v.rule for v in result.violations}
+        assert rules == {"operation.invented"}
+
+    def test_real_context7_violation_cites_search(self):
+        """A violation precisa identificar exatamente 'search' como inventada
+        e listar docs/code/prompt como válidas — pra retry instruction ser útil."""
+        from app.skill_parser.parser import parse_skill_md
+        parsed = parse_skill_md(self.FIXTURE.read_text(encoding="utf-8"))
+        result = validate_generated_skill(parsed, self._bindings())
+
+        crit = result.violations[0]
+        assert "search" in crit.message
+        assert "code" in crit.suggestion
+        assert "docs" in crit.suggestion
+        assert "prompt" in crit.suggestion
+
+    def test_real_context7_other_rules_pass(self):
+        """A SKILL real tem Workflow imperativo ('Chame'), Evidence Policy
+        correta ('única fonte autorizada'), Examples com rastreabilidade.
+        Validador NÃO deve flagar G1/G2/G4."""
+        from app.skill_parser.parser import parse_skill_md
+        parsed = parse_skill_md(self.FIXTURE.read_text(encoding="utf-8"))
+        result = validate_generated_skill(parsed, self._bindings())
+
+        rules = {v.rule for v in result.violations}
+        # Os PRs #180+#181+#185 corrigiram esses — não devem aparecer
+        assert "G1.passive_verb" not in rules
+        assert "G1.no_imperative" not in rules
+        assert "G2.internal_phrase" not in rules
+        assert "G4.negative_source" not in rules
 
 
 # ───────────────────────────────────────────────────────────────
