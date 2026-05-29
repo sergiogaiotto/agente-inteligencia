@@ -548,10 +548,65 @@
             </div>
             <textarea x-model="form.raw_content" rows="24" placeholder="---&#10;id: urn:skill:dominio:tipo:slug&#10;version: 0.1.0&#10;kind: subagent&#10;owner: equipe&#10;stability: alpha&#10;---&#10;&#10;# Nome da Skill&#10;&#10;## Purpose&#10;..."
                       class="w-full rounded-xl border border-surface-200 bg-white px-4 py-3 text-[12px] font-mono text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition resize-none leading-relaxed"></textarea>
+
+            <!-- ══════════ STATS: chars / tokens / custo estimado ══════════
+                 Mostra abaixo do textarea contagem em tempo real e estimativa
+                 de custo por invocação. SKILL.md vira parte do system_prompt
+                 de TODA invocação do agente — o consumo de tokens da skill é
+                 fixo por chamada. Custo input ≈ tokens × preço_por_1k_input.
+            -->
+            <div class="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div class="rounded-lg bg-surface-50 border border-surface-100 px-3 py-2">
+                    <div class="text-[9px] font-bold uppercase tracking-wider text-surface-400">Caracteres</div>
+                    <div class="text-[13px] font-mono font-semibold text-brand-900" x-text="skillStats.chars.toLocaleString('pt-BR')"></div>
+                </div>
+                <div class="rounded-lg bg-surface-50 border border-surface-100 px-3 py-2"
+                     :title="'Estimativa heurística: 1 token ≈ 3.2 chars em pt-BR. Real pode variar ±15%.'">
+                    <div class="text-[9px] font-bold uppercase tracking-wider text-surface-400">Tokens ≈</div>
+                    <div class="text-[13px] font-mono font-semibold text-brand-900"
+                         :class="skillStats.tokens > 8000 ? 'text-rose-600' : (skillStats.tokens > 4000 ? 'text-amber-600' : 'text-brand-900')"
+                         x-text="skillStats.tokens.toLocaleString('pt-BR')"></div>
+                </div>
+                <div class="rounded-lg bg-surface-50 border border-surface-100 px-3 py-2"
+                     :title="'Custo INPUT por chamada do agente (SKILL.md compõe o system_prompt em toda invocação). Preço de referência: ' + skillStats.priceLabel">
+                    <div class="text-[9px] font-bold uppercase tracking-wider text-surface-400">Custo/chamada</div>
+                    <div class="text-[13px] font-mono font-semibold text-brand-900"
+                         x-text="'US$ ' + skillStats.costPerCall.toFixed(5)"></div>
+                </div>
+                <div class="rounded-lg bg-violet-50 border border-violet-100 px-3 py-2"
+                     :title="'Custo INPUT projetado em ' + skillStats.projectionCalls.toLocaleString('pt-BR') + ' chamadas/mês. Não inclui tokens de output, evidências ou tool results.'">
+                    <div class="text-[9px] font-bold uppercase tracking-wider text-violet-600">Custo / mês *</div>
+                    <div class="text-[13px] font-mono font-semibold text-violet-700"
+                         x-text="'US$ ' + skillStats.costPerMonth.toFixed(2)"></div>
+                </div>
+            </div>
+            <div class="mt-1.5 text-[9.5px] text-surface-400 leading-tight">
+                * estimativa baseada em <span class="font-mono" x-text="skillStats.projectionCalls.toLocaleString('pt-BR')"></span> chamadas/mês ao preço de
+                <span class="font-mono" x-text="skillStats.priceLabel"></span>.
+                Considera SÓ o input do system_prompt (SKILL.md) — não inclui input do usuário,
+                output do LLM, evidências RAG, nem tool results MCP/API.
+                <button @click="skillStatsProjectionCalls = (skillStatsProjectionCalls === 1000 ? 10000 : (skillStatsProjectionCalls === 10000 ? 100000 : 1000))"
+                        type="button"
+                        class="ml-1 underline text-violet-600 hover:text-violet-700"
+                        title="Alterna entre 1k / 10k / 100k chamadas/mês">alternar volume</button>
+            </div>
         </div>
         <div>
-            <label class="text-[12px] font-semibold text-brand-900 mb-1.5 block">Tags</label>
+            <div class="flex items-center justify-between mb-1.5">
+                <label class="text-[12px] font-semibold text-brand-900">Tags</label>
+                <button @click="autoFillTags()" type="button"
+                        :disabled="!form.raw_content"
+                        class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-violet-50 to-fuchsia-50 border border-violet-200 px-2.5 py-1 text-[10px] font-medium text-violet-700 hover:from-violet-100 hover:to-fuchsia-100 disabled:opacity-40 transition-colors"
+                        title="Extrai tags do Purpose, Workflow, Tool Bindings e Activation Criteria">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/></svg>
+                    Sugerir tags
+                </button>
+            </div>
             <input x-model="form.tags" placeholder='["tag1","tag2"]' class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[12px] font-mono text-brand-900 placeholder:text-surface-300 outline-none focus:border-brand-400 transition">
+            <p class="mt-1 text-[10px] text-surface-400" x-show="!form.tags || form.tags === '[]'">
+                <span class="text-violet-600">Dica:</span> clique em
+                <span class="font-semibold text-violet-600">Sugerir tags</span> para extrair automaticamente do conteúdo.
+            </p>
         </div>
         <div class="flex items-center justify-end pt-2">
             <button @click="save()" :disabled="saving" class="rounded-xl bg-brand-500 px-6 py-2.5 text-[13px] font-semibold text-white shadow-sm hover:bg-brand-600 disabled:opacity-40 transition-all">
@@ -909,6 +964,151 @@ function skillForm(editId) {
                 }
             }
             return out;
+        },
+
+        // ══════════════════════════════════════════════════
+        // Stats: chars/tokens/custo estimado do SKILL.md
+        // ══════════════════════════════════════════════════
+        // SKILL.md vai no system_prompt de TODA invocação. Stats permite
+        // operador ver impacto de custo antes de salvar. Estimativa de
+        // tokens via heurística (1 token ≈ 3.2 chars em pt-BR, ≈ 4 em EN).
+        // Preço de referência: Azure GPT-4o-mini (US$0.15 por 1M input).
+        // Volume default: 1k chamadas/mês — operador alterna pra 10k / 100k.
+        //
+        // Limitações reconhecidas:
+        // - Tokens estimados podem variar ±15% do tokenizer real
+        // - Custo NÃO inclui output, evidências RAG, tool results MCP/API,
+        //   nem input do usuário a cada chamada
+        // - Preço é placeholder do GPT-4o-mini — não reflete o LLM do agente
+        //   (cada agente pode usar Azure/Maritaca/gpt-oss/Ollama)
+
+        // Mutable state pra alternar volume (não é getter)
+        skillStatsProjectionCalls: 1000,
+
+        get skillStats() {
+            const content = this.form.raw_content || '';
+            const chars = content.length;
+            // Heurística pt-BR: divisão pondera tokens compostos.
+            // Calibração: SKILL.md típica ~3000 chars → ~900 tokens reais.
+            const tokens = Math.round(chars / 3.2);
+            // Preço Azure GPT-4o-mini input: US$0.15 / 1M tokens
+            const PRICE_PER_1M_INPUT = 0.15;
+            const costPerCall = (tokens / 1_000_000) * PRICE_PER_1M_INPUT;
+            const projectionCalls = this.skillStatsProjectionCalls;
+            const costPerMonth = costPerCall * projectionCalls;
+            return {
+                chars,
+                tokens,
+                costPerCall,
+                costPerMonth,
+                projectionCalls,
+                priceLabel: 'US$0.15 / 1M tokens (GPT-4o-mini)',
+            };
+        },
+
+        // ══════════════════════════════════════════════════
+        // Auto-tags: extrai tags do conteúdo do SKILL.md
+        // ══════════════════════════════════════════════════
+        // Heurística determinística (sem LLM):
+        // 1. Coleta texto das seções mais ricas: Purpose, Workflow,
+        //    Tool Bindings, Activation Criteria, Inputs.title
+        // 2. Tokeniza por whitespace + pontuação. Lowercase.
+        // 3. Remove stopwords pt-BR + tokens curtos + números.
+        // 4. Conta frequência. Bonus para palavras que aparecem em
+        //    múltiplas seções (sinal de tema central).
+        // 5. Top 5-7 vão pras tags, exclui palavras tipo "skill", "tool",
+        //    "binding" (vocabulário da plataforma, não tema).
+
+        _TAG_STOPWORDS: new Set([
+            // pt-BR comuns
+            'a','o','as','os','um','uma','uns','umas','de','do','da','dos','das',
+            'em','no','na','nos','nas','para','pra','por','com','sem','sobre','até',
+            'que','qual','quais','quando','onde','como','quem','cujo','cuja',
+            'e','ou','mas','se','já','não','sim','também','muito','pouco','mais','menos',
+            'este','esta','esse','essa','isto','isso','aquele','aquela','aquilo',
+            'meu','minha','seu','sua','nosso','nossa','seus','suas',
+            'ser','estar','ter','haver','poder','dever','fazer','ir','vir','vir',
+            'é','são','foi','foram','será','serão','está','estão','tem','têm',
+            'pelo','pela','pelos','pelas','ao','à','aos','às',
+            'antes','depois','sempre','nunca','agora','hoje','amanhã','ontem',
+            // Vocabulário da plataforma (não vira tag) — evita lixo
+            'skill','skills','tool','tools','binding','bindings','agent','agente',
+            'agentes','workflow','workflows','purpose','propósito','proposito',
+            'rule','rules','regra','regras','seção','secao','section','sections',
+            'parameter','parametros','parâmetros','context','contexto','contexts',
+            'response','resposta','respostas','call','calls','chamada','chamadas',
+            'use','usa','usar','utilize','utiliza','utilizar','utilizando',
+            'gerar','gera','geração','geracao','retornar','retorna',
+            'output','input','entrada','saída','saida',
+            'pode','podem','deve','devem','deverá','deverão',
+            // EN comuns (skills bilingue)
+            'the','a','an','and','or','but','of','in','on','for','to','from','by',
+            'with','without','this','that','these','those','is','are','was','were',
+            'be','been','being','have','has','had','do','does','did','will','would',
+            'should','could','can','may','must','it','its','as','at','if','then',
+        ]),
+
+        autoFillTags() {
+            const content = this.form.raw_content || '';
+            if (!content.trim()) return;
+
+            // 1. Extrai seções relevantes
+            const sectionRe = /##\s+(Purpose|Activation Criteria|Workflow|Tool Bindings|Inputs|Output Contract)\s*\n([\s\S]*?)(?=\n##\s|$)/gi;
+            const sectionBlobs = {};
+            let m;
+            while ((m = sectionRe.exec(content)) !== null) {
+                sectionBlobs[m[1].toLowerCase()] = m[2];
+            }
+            // Pega o # Heading principal também (nome da skill)
+            const headingMatch = content.match(/^#\s+(.+)$/m);
+            if (headingMatch) sectionBlobs['_heading'] = headingMatch[1];
+
+            // 2. Tokeniza cada seção e conta com bonus por aparecer em múltiplas
+            const seenIn = {};  // word -> Set(sections)
+            const freq = {};    // word -> count
+            for (const [secName, text] of Object.entries(sectionBlobs)) {
+                // Remove markdown comum (fenced code, bold, italic, links)
+                const cleaned = text
+                    .replace(/```[\s\S]*?```/g, ' ')   // code fences
+                    .replace(/`[^`]*`/g, ' ')           // inline code
+                    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // [text](url) → text
+                    .replace(/[*_~]+/g, ' ')           // markdown markers
+                    .toLowerCase();
+                const tokens = cleaned.split(/[\s,;.:!?()\[\]{}"'<>\/\\|=+\-—–]+/);
+                for (const raw of tokens) {
+                    const w = raw.trim();
+                    if (!w || w.length < 3) continue;
+                    if (/^\d+$/.test(w)) continue;  // só dígitos
+                    if (this._TAG_STOPWORDS.has(w)) continue;
+                    if (!seenIn[w]) seenIn[w] = new Set();
+                    seenIn[w].add(secName);
+                    freq[w] = (freq[w] || 0) + 1;
+                }
+            }
+
+            // 3. Score: freq + bonus 50% por seção adicional onde aparece
+            const scored = Object.entries(freq).map(([w, count]) => ({
+                word: w,
+                score: count * (1 + 0.5 * (seenIn[w].size - 1)),
+                count,
+                sections: seenIn[w].size,
+            }));
+            scored.sort((a, b) => b.score - a.score);
+
+            // 4. Pega top 7 mas filtra duplicatas de prefixo (singleton/singletons)
+            const picked = [];
+            for (const item of scored) {
+                if (picked.length >= 7) break;
+                // Evita "singleton" + "singletons" (prefix overlap)
+                const dup = picked.find(p =>
+                    item.word.startsWith(p) || p.startsWith(item.word)
+                );
+                if (dup) continue;
+                picked.push(item.word);
+            }
+
+            // 5. Atualiza form.tags como JSON array
+            this.form.tags = JSON.stringify(picked);
         },
 
         // ══════════════════════════════════════════════════
