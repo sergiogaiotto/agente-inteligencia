@@ -793,34 +793,166 @@ function workspacePage() {
         },
 
         _renderObjectCard(obj) {
+            // Smart field rendering com detecção por nome + shape do valor.
+            // Antes (2026-05-29 bug): todos os campos viravam <span> simples —
+            // description sem markdown, diagram ASCII art colapsado, code_snippet
+            // numa linha só, arrays como JSON cru com aspas e colchetes.
+            //
+            // Agora cada tipo de field ganha tratamento próprio: code/diagram
+            // em <pre>, arrays como <ul> (com links se URLs), strings com
+            // markdown processado, labels capitalizadas, separação visual entre
+            // blocos.
             let html = `
-                <div class="mb-2 inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-violet-700">
+                <div class="mb-3 inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-violet-700">
                     <span class="inline-block h-1.5 w-1.5 rounded-full bg-violet-500"></span>
                     Estruturado
                 </div>
-                <div class="rounded-xl border border-surface-200 bg-white/90 p-4 space-y-2">
+                <div class="rounded-xl border border-surface-200 bg-white/90 p-4 space-y-3">
             `;
             for (const [k, v] of Object.entries(obj)) {
-                if (v === null || v === undefined) continue;
-                let valHtml;
-
-                if (typeof v === 'string') {
-                    valHtml = `<span class="text-brand-900">${this._esc(v.substring(0, 500))}</span>`;
-                } else if (Array.isArray(v)) {
-                    if (v.length && typeof v[0] === 'object') {
-                        valHtml = `<div class="mt-1">${this._renderResultCards(v)}</div>`;
-                    } else {
-                        valHtml = `<span class="font-mono text-brand-800">${this._esc(JSON.stringify(v))}</span>`;
-                    }
-                } else if (typeof v === 'object') {
-                    valHtml = `<pre class="mt-1 rounded bg-white border border-surface-100 p-2 text-[10px] font-mono overflow-x-auto">${this._esc(JSON.stringify(v, null, 2))}</pre>`;
-                } else {
-                    valHtml = `<span class="text-brand-900">${this._esc(String(v))}</span>`;
-                }
-                html += `<div class="text-[11px]"><span class="font-semibold text-surface-400">${this._esc(k)}:</span> ${valHtml}</div>`;
+                if (v === null || v === undefined || v === '') continue;
+                html += this._renderObjectField(k, v);
             }
             html += '</div>';
             return html;
+        },
+
+        _renderObjectField(key, value) {
+            // Detecta tipo de field e despacha pra renderer apropriado.
+            // Layout do bloco: label em cima (chip) + valor embaixo com padding.
+            const label = this._formatFieldLabel(key);
+            const valueHtml = this._renderFieldValue(key, value);
+            return `
+                <div class="space-y-1">
+                    <div class="text-[10px] font-bold uppercase tracking-wider text-violet-600">${label}</div>
+                    <div class="text-[12px] text-surface-700">${valueHtml}</div>
+                </div>
+            `;
+        },
+
+        _formatFieldLabel(key) {
+            // pattern_type → "Pattern Type" | best_practices → "Best Practices"
+            // Mantém termos consagrados em inglês porque outputs de skills costumam
+            // ser em EN; tradução vai precisar de mapeamento por skill (futuro).
+            return this._esc(
+                String(key)
+                    .replace(/_/g, ' ')
+                    .replace(/([a-z])([A-Z])/g, '$1 $2')
+                    .replace(/\b\w/g, c => c.toUpperCase())
+            );
+        },
+
+        _renderFieldValue(key, v) {
+            const lowKey = String(key).toLowerCase();
+
+            // ── Arrays ──
+            if (Array.isArray(v)) {
+                return this._renderArrayValue(lowKey, v);
+            }
+
+            // ── Objetos aninhados ──
+            if (typeof v === 'object') {
+                // Json formatado em <pre> — fallback seguro pra nested objects
+                return `<pre class="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2 text-[10px] font-mono overflow-x-auto text-brand-800">${this._esc(JSON.stringify(v, null, 2))}</pre>`;
+            }
+
+            // ── Números / booleans ──
+            if (typeof v !== 'string') {
+                return `<span class="font-mono text-brand-800">${this._esc(String(v))}</span>`;
+            }
+
+            // ── Strings: detecção por NOME do field + shape do conteúdo ──
+            const str = v.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+
+            // URL field → link clicável
+            if (/^(url|link|href|website|site)$/i.test(key) && /^https?:\/\//.test(str.trim())) {
+                return this._renderLinkValue(str.trim());
+            }
+
+            // Code field (code_snippet, code, source, example) → <pre><code>
+            // Heurística adicional: se tem `def `, `class `, `function`, `import ` E quebra de linha,
+            // mesmo que o nome do field não seja "code", trata como código.
+            const isCodeByName = /^(code|code_?snippet|snippet|source|example)$/i.test(key);
+            const looksLikeCode = /\n/.test(str) && /\b(def |class |function |import |from |const |var |let |#include|package )/.test(str);
+            if (isCodeByName || looksLikeCode) {
+                return this._renderCodeValue(str);
+            }
+
+            // Diagram / ASCII art (preserva whitespace, sem markdown)
+            if (/^(diagram|ascii|chart|figure|tree)$/i.test(key)) {
+                return `<pre class="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2 text-[11px] font-mono overflow-x-auto text-brand-800 leading-tight">${this._esc(str)}</pre>`;
+            }
+
+            // Textual field grande (description, summary, content, body, etc) → markdown rendering
+            // Aplica o renderer rico (que cobre tabelas, listas, headers, links, blockquote).
+            const isTextual = /^(description|summary|content|body|text|abstract|explanation|notes|details|overview|context|purpose|usage|when_to_use|why)$/i.test(key);
+            if (isTextual || str.length > 200 || /\n/.test(str)) {
+                // Render como markdown; se o resultado for só <p>, desembrulha
+                return this._renderRichMarkdown(str);
+            }
+
+            // String curta — markdown inline (bold/italic/code/links)
+            return `<span class="text-brand-900">${this._inlineMd(this._esc(str))}</span>`;
+        },
+
+        _renderLinkValue(url) {
+            const safe = this._esc(url);
+            return `<a href="${safe}" target="_blank" rel="noopener" class="text-brand-600 hover:text-violet-700 hover:underline break-all">${safe}</a>`;
+        },
+
+        _renderCodeValue(code) {
+            // Não detecta linguagem por enquanto (sem highlight.js). Apenas
+            // preserva whitespace + monospace + scroll horizontal.
+            return `<pre class="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2.5 text-[11px] font-mono overflow-x-auto text-brand-800 leading-relaxed"><code>${this._esc(code)}</code></pre>`;
+        },
+
+        _renderArrayValue(lowKey, arr) {
+            if (!arr.length) {
+                return `<span class="text-[11px] italic text-surface-400">(vazio)</span>`;
+            }
+
+            // Array de objetos com title/name → result cards (path existente)
+            if (arr.every(item => typeof item === 'object' && item !== null && (item.title || item.name))) {
+                return `<div class="mt-1">${this._renderResultCards(arr)}</div>`;
+            }
+
+            // Array de URLs (references, links, sources) → lista de links clicáveis
+            const isUrlField = /^(references|links?|urls?|sources?|see_also|related)$/.test(lowKey);
+            const allUrls = arr.every(item => typeof item === 'string' && /^https?:\/\//.test(item.trim()));
+            if (isUrlField || allUrls) {
+                let lis = '';
+                for (const item of arr) {
+                    const s = String(item).trim();
+                    if (/^https?:\/\//.test(s)) {
+                        const host = this._hostFromUrl(s);
+                        lis += `<li class="flex items-start gap-2"><svg class="w-3 h-3 mt-1 text-brand-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg><a href="${this._esc(s)}" target="_blank" rel="noopener" class="text-[11px] text-brand-600 hover:text-violet-700 hover:underline break-all">${this._esc(host || s)}</a></li>`;
+                    } else {
+                        lis += `<li class="flex items-start gap-2"><span class="text-brand-400 shrink-0">•</span><span class="text-[11px] text-surface-700">${this._inlineMd(this._esc(String(item)))}</span></li>`;
+                    }
+                }
+                return `<ul class="space-y-1">${lis}</ul>`;
+            }
+
+            // Array de strings simples (best_practices, steps, etc) → bullet list
+            if (arr.every(item => typeof item === 'string')) {
+                let lis = '';
+                for (const item of arr) {
+                    lis += `<li class="flex items-start gap-2"><span class="text-violet-400 shrink-0">•</span><span class="text-[12px] text-surface-700 leading-relaxed">${this._inlineMd(this._esc(item))}</span></li>`;
+                }
+                return `<ul class="space-y-1.5">${lis}</ul>`;
+            }
+
+            // Array de números/booleans → chips inline
+            if (arr.every(item => typeof item !== 'object')) {
+                let chips = '';
+                for (const item of arr) {
+                    chips += `<span class="inline-block rounded-full bg-surface-100 px-2 py-0.5 text-[10px] font-mono text-brand-700 mr-1 mb-1">${this._esc(String(item))}</span>`;
+                }
+                return `<div class="flex flex-wrap">${chips}</div>`;
+            }
+
+            // Array misto → fallback JSON pretty
+            return `<pre class="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2 text-[10px] font-mono overflow-x-auto text-brand-800">${this._esc(JSON.stringify(arr, null, 2))}</pre>`;
         },
 
         _hostFromUrl(url){
