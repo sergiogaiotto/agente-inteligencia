@@ -584,3 +584,290 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
         raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(500, f"Erro na execução: {str(e)}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Onda A.1 — Slash command universal: invocação direta de bindings
+# ═══════════════════════════════════════════════════════════════
+# User pediu (2026-05-29): "para funcionar o context7 mcp que tem
+# multiplos parametros o usuario deveria informar o valor de cada
+# parametro na sua chamada... pelo workspace, usar a / e aparecer
+# os parametros de contexto para preenchimento... deveria ser um
+# processo padrão, onde qualquer MCP, API que tenha multiplos
+# parametros os mesmos estejam disponiveis dado o contexto".
+#
+# Esta onda (A.1) atende MCP tools — resolve a causa raiz dos bugs
+# Context7 #1-#5 (compressão {action,subject,content} → {operation,query}
+# pelo LLM). Ondas A.2-A.4 (PRs futuras) generalizam pra API/RAG/Tabular.
+
+
+import logging  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+
+@router.get("/agents/{agent_id}/skills-context")
+async def get_agent_skills_context(agent_id: str, user: dict = Depends(require_user)):
+    """Devolve o contexto que dirige o slash command no workspace.
+
+    Pra cada SKILL ativa do agente, lista bindings disponíveis com
+    `CanonicalFormSchema` pronto. UI usa pra:
+    1. Autocomplete do `/` (lista bindings por SKILL)
+    2. Renderizar form inline com os fields canônicos
+    3. Enviar payload validado pro endpoint /invoke-binding-direct
+
+    Onda A.1: só MCP. Outros tipos retornam binding_kind="unsupported".
+
+    Returns:
+        {
+          "agent_id": str,
+          "agent_name": str,
+          "skills": [
+            {
+              "skill_id": str,
+              "skill_name": str,
+              "kind": str,           # subagent | router | aobd
+              "bindings": [CanonicalFormSchema, ...]
+            }
+          ]
+        }
+    """
+    from app.core.database import agents_repo, skills_repo, tools_repo
+    from app.mcp.runtime import parse_tool_bindings, match_with_registry
+    from app.skill_parser.parser import parse_skill_md
+    from app.workspace.binding_schema import normalize_mcp_binding
+
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agent '{agent_id}' não encontrado.")
+
+    # Hoje agent → 1 skill (column skill_id). Generalização futura:
+    # skill_ids list pra multi-skill por agente.
+    skill_ids: list[str] = []
+    if agent.get("skill_id"):
+        skill_ids.append(agent["skill_id"])
+
+    skills_out: list[dict] = []
+    for sid in skill_ids:
+        sk = await skills_repo.find_by_id(sid)
+        if not sk:
+            continue
+        raw_md = sk.get("raw_content") or ""
+        try:
+            parsed = parse_skill_md(raw_md)
+        except Exception as e:
+            logger.warning(f"skills_context: parse_skill_md falhou pra {sid}: {e}")
+            parsed = None
+
+        bindings_text = (parsed.tool_bindings if parsed else "") or ""
+        parsed_tools = parse_tool_bindings(bindings_text)
+        enriched = await match_with_registry(parsed_tools, tools_repo)
+
+        bindings_out: list[dict] = []
+        for tool in enriched:
+            # Só geramos schema canônico pra tools que casaram com o
+            # Registry — sem isso não temos id/auth/server pra invocar.
+            if not tool.get("db_id") and not tool.get("id"):
+                continue
+            bindings_out.append(normalize_mcp_binding(tool, skill_md=raw_md))
+
+        skills_out.append({
+            "skill_id": sid,
+            "skill_name": sk.get("name") or "",
+            "kind": sk.get("kind") or "",
+            "bindings": bindings_out,
+        })
+
+    return {
+        "agent_id": agent_id,
+        "agent_name": agent.get("name") or "",
+        "skills": skills_out,
+    }
+
+
+class _InvokeBindingRequest:
+    """Pydantic substituto leve — usamos pydantic.BaseModel real."""
+    pass
+
+
+from pydantic import BaseModel as _BaseModel, Field as _Field  # noqa: E402
+
+
+class InvokeBindingDirectRequest(_BaseModel):
+    """Payload do POST /workspace/invoke-binding-direct.
+
+    Identifica univocamente QUAL binding de QUAL skill de QUAL agente
+    deve ser invocado, e os params do user (já preenchidos via form).
+
+    Onda A.1: só `binding_kind="mcp"`. A.2+ adiciona "api"|"rag"|"tabular".
+    """
+    agent_id: str
+    skill_id: str
+    binding_kind: str = _Field(..., pattern=r"^(mcp|api|rag|tabular)$")
+    binding_id: str
+    operation: str = ""
+    params: dict = _Field(default_factory=dict)
+    timeout: int = 60
+
+
+@router.post("/invoke-binding-direct")
+async def invoke_binding_direct(
+    data: InvokeBindingDirectRequest,
+    user: dict = Depends(require_user),
+):
+    """Invoca um binding (Onda A.1: MCP) com payload do user, sem LLM.
+
+    Caminho:
+    1. Resolve agent → skill → tool_bindings → enriched tools
+    2. Localiza o binding pelo binding_id
+    3. Gera schema canônico e valida `data.params` contra ele
+    4. Roteia execução:
+       - MCP → app.mcp.runtime.execute_tool_call (passa params extras
+         direto — _build_call_arguments mapeia pro inputSchema do server)
+    5. Loga estruturado workspace.invoke_direct
+    6. Retorna {ok, result, schema, payload_sent, latency_ms}
+
+    Onda A.1: bindings A.2+ retornam 501 (Not Implemented).
+    """
+    import time
+    import json as _json
+    from app.core.database import agents_repo, skills_repo, tools_repo
+    from app.mcp.runtime import parse_tool_bindings, match_with_registry, execute_tool_call
+    from app.skill_parser.parser import parse_skill_md
+    from app.workspace.binding_schema import (
+        normalize_mcp_binding,
+        validate_params_against_schema,
+    )
+
+    if data.binding_kind != "mcp":
+        raise HTTPException(
+            501,
+            f"binding_kind '{data.binding_kind}' não suportado nesta onda. "
+            "Onda A.1 cobre apenas MCP; API/RAG/Tabular vêm em A.2-A.4.",
+        )
+
+    # 1. Resolve agent + skill
+    agent = await agents_repo.find_by_id(data.agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agent '{data.agent_id}' não encontrado.")
+    sk = await skills_repo.find_by_id(data.skill_id)
+    if not sk:
+        raise HTTPException(404, f"Skill '{data.skill_id}' não encontrada.")
+    raw_md = sk.get("raw_content") or ""
+    try:
+        parsed = parse_skill_md(raw_md)
+    except Exception as e:
+        raise HTTPException(400, f"SKILL.md inválido: {e}")
+
+    # 2. Resolve binding (MCP tool) pelo binding_id (= db_id no Registry)
+    bindings_text = (parsed.tool_bindings if parsed else "") or ""
+    parsed_tools = parse_tool_bindings(bindings_text)
+    enriched = await match_with_registry(parsed_tools, tools_repo)
+    tool = next(
+        (t for t in enriched if str(t.get("db_id") or t.get("id") or "") == data.binding_id),
+        None,
+    )
+    if not tool:
+        raise HTTPException(
+            404,
+            f"Binding '{data.binding_id}' não está em ## Tool Bindings da skill "
+            f"'{data.skill_id}'. Conferi ID no /tools e em ## Tool Bindings.",
+        )
+
+    # 3. Gera schema canônico e valida params
+    schema = normalize_mcp_binding(tool, skill_md=raw_md)
+    ok, errors = validate_params_against_schema(schema, data.params or {})
+    if not ok:
+        raise HTTPException(422, {"errors": errors, "schema": schema})
+
+    # 4. Monta arguments pro execute_tool_call. Critical: passa os params
+    # do user direto — _build_call_arguments do runtime mapeia pro
+    # inputSchema REAL do servidor MCP. Sem LLM compressing nada.
+    arguments: dict = {}
+    if data.operation:
+        arguments["operation"] = data.operation
+    elif schema.get("operations"):
+        arguments["operation"] = schema["operations"][0]
+    # Heurística pra preencher 'query' quando o user mandou só um campo
+    # textual — runtime espera 'query' como fallback. Se houver field
+    # explícito 'query', já vai.
+    arguments.update(data.params or {})
+    if "query" not in arguments:
+        # Pega o primeiro field string preenchido como query default —
+        # melhora compat com servidores MCP que esperam 'query' obrigatório
+        for f in schema.get("fields", []):
+            if f["name"] != "operation" and f["type"] in ("string", "enum"):
+                val = (data.params or {}).get(f["name"])
+                if isinstance(val, str) and val.strip():
+                    arguments["query"] = val
+                    break
+
+    # 5. Executa + mede latência
+    t0 = time.monotonic()
+    tool_name = tool.get("name") or "tool"
+    try:
+        result_raw = await execute_tool_call(
+            tool_name=tool_name,
+            arguments=arguments,
+            mcp_tools=enriched,
+            timeout=int(data.timeout or 60),
+        )
+        latency_ms = int((time.monotonic() - t0) * 1000)
+    except Exception as e:
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        logger.error(
+            "workspace.invoke_direct.error",
+            extra={
+                "event": "workspace.invoke_direct",
+                "agent_id": data.agent_id,
+                "skill_id": data.skill_id,
+                "binding_kind": data.binding_kind,
+                "binding_id": data.binding_id,
+                "tool_name": tool_name,
+                "operation": arguments.get("operation"),
+                "latency_ms": latency_ms,
+                "error": str(e)[:300],
+            },
+        )
+        raise HTTPException(500, f"Erro ao invocar tool: {str(e)[:300]}")
+
+    # 6. Parsing oportunista do JSON de retorno — se for JSON serializado,
+    # devolvemos o objeto pra UI poder renderizar bonito; senão devolve raw.
+    result_obj: object = result_raw
+    if isinstance(result_raw, str):
+        try:
+            result_obj = _json.loads(result_raw)
+        except (ValueError, TypeError):
+            result_obj = result_raw  # mantém string
+
+    # 7. Log estruturado (auditoria)
+    is_error = (
+        isinstance(result_obj, dict)
+        and ("error" in result_obj)
+    )
+    logger.info(
+        "workspace.invoke_direct.completed",
+        extra={
+            "event": "workspace.invoke_direct",
+            "agent_id": data.agent_id,
+            "skill_id": data.skill_id,
+            "binding_kind": data.binding_kind,
+            "binding_id": data.binding_id,
+            "tool_name": tool_name,
+            "operation": arguments.get("operation"),
+            "schema_source": schema.get("schema_source"),
+            "latency_ms": latency_ms,
+            "ok": not is_error,
+            "param_fields_sent": sorted(list((data.params or {}).keys())),
+        },
+    )
+
+    return {
+        "ok": not is_error,
+        "result": result_obj,
+        "result_raw": result_raw if isinstance(result_raw, str) else None,
+        "schema": schema,
+        "payload_sent": arguments,
+        "latency_ms": latency_ms,
+        "tool_name": tool_name,
+    }
