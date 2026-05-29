@@ -89,18 +89,51 @@ def _resolve_response_language(agent: dict, settings) -> str:
 def _build_response_language_directive(lang_tag: str) -> str:
     """Constrói bloco do system_prompt instruindo o LLM sobre idioma da resposta.
 
-    Texto imperativo curto — modelos open-weight (gpt-oss-120b) tendem a
-    espelhar idioma do contexto/evidência se não houver diretiva explícita.
-    Esta diretiva força a resposta no idioma escolhido mesmo quando RAG ou
-    tools MCP retornam conteúdo em outra língua.
+    Texto imperativo — modelos open-weight (gpt-oss-120b) tendem a espelhar
+    idioma do contexto/evidência se não houver diretiva explícita. Esta
+    diretiva força a resposta no idioma escolhido mesmo quando RAG ou tools
+    MCP retornam conteúdo em outra língua, INCLUSIVE quando o LLM está
+    preenchendo campos textuais de um JSON estruturado (Output Contract).
+
+    Enumera os campos típicos onde modelos costumam copiar do tool result
+    em vez de traduzir (title, content, snippet, summary, description) —
+    open-weight precisa do gatilho lexical pra atravessar o impulso de
+    passthrough.
     """
     label = _LANGUAGE_LABELS.get(lang_tag, lang_tag)
     return (
         "[IDIOMA DA RESPOSTA]\n"
         f"Sempre responda em {label}, mesmo quando o contexto, evidências de "
         "RAG ou resultados de tools MCP estiverem em outros idiomas. Traduza "
-        "ou adapte conteúdo recuperado quando necessário. Mantenha nomes "
-        "próprios, marcas, código-fonte e URLs no original."
+        "ou adapte TODO conteúdo textual recuperado para o idioma alvo — "
+        "INCLUSIVE quando estiver preenchendo campos de um JSON estruturado "
+        "(ex: `title`, `content`, `snippet`, `summary`, `description`, `text`, "
+        f"`body`). Títulos de artigos, manchetes e descrições devem aparecer "
+        f"em {label}, nunca copiados crus do tool result. "
+        "Preserve no idioma original APENAS: URLs, identificadores técnicos "
+        "(IDs, slugs, chaves), código-fonte, e nomes de marcas/produtos/"
+        "pessoas (ex: 'Uber', 'GPT-4', 'João Silva')."
+    )
+
+
+def _build_response_language_closing(lang_tag: str) -> str:
+    """Reminder curto colado ao FIM do system prompt (estratégia sanduíche).
+
+    Modelos open-weight grudam no que está mais próximo da geração — quando
+    o prompt cresce (Output Contract + MCP Tools catalog + Guardrails), a
+    diretiva inicial perde força. Este reminder de 1 linha no fim refresca
+    a instrução logo antes do LLM começar a gerar tokens.
+
+    Mantém-se curto de propósito: o detalhe está na diretiva inicial; aqui
+    só ancora a regra.
+    """
+    label = _LANGUAGE_LABELS.get(lang_tag, lang_tag)
+    return (
+        "[LEMBRETE FINAL — IDIOMA]\n"
+        f"Antes de gerar sua resposta: TODO texto que você produzir, "
+        f"inclusive em campos JSON, deve estar em {label}. Traduza títulos "
+        "e conteúdo do tool result; preserve apenas URLs, código e nomes "
+        "próprios."
     )
 
 
@@ -389,6 +422,7 @@ class DeepAgentHarness:
                 "listadas acima) e `query` (a consulta ou parâmetros em string). "
                 "Aguarde o retorno antes de gerar sua resposta final."
             )
+        parts.append(_build_response_language_closing(_lang))
         return "\n".join(parts)
 
     def _should_force_tool_call(self) -> bool:
