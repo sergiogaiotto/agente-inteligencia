@@ -675,10 +675,10 @@
                                     <div class="text-[10px] font-mono text-surface-400 truncate" x-text="t.id"></div>
                                     <div class="text-[10px] text-surface-500 mt-1">
                                         <span class="font-semibold">Operations:</span>
-                                        <template x-if="t.operations">
-                                            <span class="font-mono text-violet-700" x-text="t.operations"></span>
+                                        <template x-if="t.operationsList && t.operationsList.length > 0">
+                                            <span class="font-mono text-violet-700" x-text="t.operationsList.join(', ')"></span>
                                         </template>
-                                        <template x-if="!t.operations">
+                                        <template x-if="!t.operationsList || t.operationsList.length === 0">
                                             <span class="italic text-amber-600">(nenhuma declarada no Registry)</span>
                                         </template>
                                     </div>
@@ -690,23 +690,45 @@
                                     <span x-text="dryRunInFlight[t.id] ? 'Testando...' : 'Testar tool'"></span>
                                 </button>
                             </div>
-                            <!-- Inputs do teste -->
-                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                <div>
-                                    <label class="text-[9px] font-semibold text-surface-400 uppercase tracking-wider">Operation</label>
-                                    <select x-model="dryRunInputs[t.id].operation"
-                                            class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] font-mono outline-none focus:border-violet-400">
-                                        <option value="">(primeira do enum)</option>
-                                        <template x-for="op in (t.operations || '').split(',').map(s => s.trim()).filter(Boolean)" :key="op">
-                                            <option :value="op" x-text="op"></option>
+                            <!-- Inputs do teste — dinâmicos por function_spec.
+                                 Hoje o engine MCP sempre tem {operation enum, query string},
+                                 mas a UI lê o spec real (após primeira chamada de testar)
+                                 ou usa fallback estático antes da primeira chamada.
+                                 Suporta N campos: enum vira <select>, string com formato
+                                 multi-line vira <textarea>, demais vira <input>. -->
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <template x-for="(propMeta, propName) in dryRunFieldsFor(t)" :key="propName">
+                                    <div>
+                                        <label class="text-[9px] font-semibold text-surface-400 uppercase tracking-wider flex items-center gap-1">
+                                            <span x-text="propName"></span>
+                                            <span x-show="propMeta.required" class="text-rose-500" title="Obrigatório">*</span>
+                                            <span x-show="propMeta.type" class="text-surface-300 normal-case font-normal" x-text="'(' + propMeta.type + ')'"></span>
+                                        </label>
+                                        <!-- Enum → select -->
+                                        <template x-if="propMeta.enum && propMeta.enum.length > 0">
+                                            <select x-model="dryRunInputs[t.id].params[propName]"
+                                                    class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] font-mono outline-none focus:border-violet-400">
+                                                <option value="">(primeira do enum)</option>
+                                                <template x-for="opt in propMeta.enum" :key="opt">
+                                                    <option :value="opt" x-text="opt"></option>
+                                                </template>
+                                            </select>
                                         </template>
-                                    </select>
-                                </div>
-                                <div class="sm:col-span-2">
-                                    <label class="text-[9px] font-semibold text-surface-400 uppercase tracking-wider">Query (input de teste)</label>
-                                    <input x-model="dryRunInputs[t.id].sample_query" type="text" placeholder="exemplo de consulta"
-                                           class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-violet-400">
-                                </div>
+                                        <!-- String longa → textarea -->
+                                        <template x-if="(!propMeta.enum || propMeta.enum.length === 0) && propMeta.multiline">
+                                            <textarea x-model="dryRunInputs[t.id].params[propName]" rows="2"
+                                                      :placeholder="propMeta.description || ('valor de teste para ' + propName)"
+                                                      class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-violet-400 resize-none"></textarea>
+                                        </template>
+                                        <!-- String comum → input -->
+                                        <template x-if="(!propMeta.enum || propMeta.enum.length === 0) && !propMeta.multiline">
+                                            <input x-model="dryRunInputs[t.id].params[propName]" type="text"
+                                                   :placeholder="propMeta.description || ('valor de teste para ' + propName)"
+                                                   class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-violet-400">
+                                        </template>
+                                        <p x-show="propMeta.description" class="text-[9px] text-surface-400 mt-0.5 truncate" :title="propMeta.description" x-text="propMeta.description"></p>
+                                    </div>
+                                </template>
                             </div>
                             <!-- Resultado -->
                             <template x-if="dryRunResults[t.id]">
@@ -1241,6 +1263,25 @@ function skillForm(editId) {
         // catálogo this.mcpTools (já carregado), permite operador escolher
         // operation+query e chama POST /skills/dry-run-tool.
 
+        // Parse normalizado de operations vindo do Registry. O backend salva
+        // CSV ("docs,code,prompt") OU JSON list (`["docs","code","prompt"]`)
+        // dependendo do connector. UI precisa tratar os 2 sem deixar aspas no
+        // dropdown (bug visível pre-2026-05-29: dropdown mostrava `"docs"`
+        // literal com aspas porque split por ',' não lidava com JSON).
+        _parseOperations(raw) {
+            if (!raw) return [];
+            const s = String(raw).trim();
+            // JSON list — limpa aspas e colchetes
+            if (s.startsWith('[') && s.endsWith(']')) {
+                try {
+                    const arr = JSON.parse(s);
+                    return arr.map(x => String(x).trim()).filter(Boolean);
+                } catch {}
+            }
+            // CSV simples
+            return s.split(',').map(x => x.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+        },
+
         toolsDeclaredInSkill() {
             const raw = this.form.raw_content || '';
             // Extrai bloco ## Tool Bindings (até próxima seção ou EOF)
@@ -1255,29 +1296,96 @@ function skillForm(editId) {
             const out = [];
             for (const id of ids) {
                 const reg = (this.mcpTools || []).find(t => t.id === id);
+                const opsRaw = reg?.operations || '';
+                const opsParsed = this._parseOperations(opsRaw);
                 out.push({
                     id,
                     name: reg?.name || '',
-                    operations: reg?.operations || '',
+                    operations: opsRaw,           // raw pra exibição "Operations: ..."
+                    operationsList: opsParsed,    // array limpo (sem aspas/colchetes)
                 });
-                // Inicializa estado dos inputs lazy
+                // Inicializa estado dos inputs lazy. params{} é dict de campo→valor;
+                // populado via dryRunFieldsFor() quando o template renderiza.
                 if (!this.dryRunInputs[id]) {
-                    this.dryRunInputs[id] = {operation: '', sample_query: ''};
+                    this.dryRunInputs[id] = {params: {}};
                 }
             }
             return out;
         },
 
+        // Lê o function_spec do backend (após primeira chamada de testar) E
+        // expõe os parâmetros como dict { propName: {type, enum, description,
+        // required, multiline} }. Antes da primeira chamada, usa fallback
+        // estático que reflete o que o engine MCP cria hoje ({operation enum,
+        // query string}). Quando o engine evoluir e expor function_specs com
+        // N campos, a UI vai acompanhar sem mudança aqui.
+        dryRunFieldsFor(tool) {
+            const result = this.dryRunResults[tool.id];
+            const spec = result?.function_spec?.function?.parameters;
+            // Caso 1: já temos function_spec do backend — usa ele
+            if (spec?.properties) {
+                const required = new Set(spec.required || []);
+                const out = {};
+                for (const [name, meta] of Object.entries(spec.properties)) {
+                    const desc = String(meta.description || '');
+                    out[name] = {
+                        type: meta.type || 'string',
+                        enum: Array.isArray(meta.enum) ? meta.enum : null,
+                        description: desc,
+                        required: required.has(name),
+                        // Heurística pra textarea: descrição grande OU nome
+                        // do field sugerindo conteúdo longo (content/body/text/payload)
+                        multiline: desc.length > 80 || /content|body|text|payload|prompt/i.test(name),
+                    };
+                    // Garante key no dryRunInputs[t.id].params pro Alpine reagir
+                    if (this.dryRunInputs[tool.id].params[name] === undefined) {
+                        this.dryRunInputs[tool.id].params[name] = '';
+                    }
+                }
+                return out;
+            }
+            // Caso 2: fallback antes da primeira chamada — reflete o que o
+            // engine MCP constrói hoje em build_openai_tools
+            const ops = tool.operationsList || [];
+            const fallback = {
+                operation: {
+                    type: 'string',
+                    enum: ops.length > 0 ? ops : null,
+                    description: ops.length > 0 ? ('Operação a executar. Disponíveis: ' + ops.join(', ')) : 'Operação a executar.',
+                    required: true,
+                    multiline: false,
+                },
+                query: {
+                    type: 'string',
+                    enum: null,
+                    description: 'Consulta/parâmetros para a operação.',
+                    required: true,
+                    multiline: false,
+                },
+            };
+            // Inicializa keys
+            for (const k of Object.keys(fallback)) {
+                if (this.dryRunInputs[tool.id].params[k] === undefined) {
+                    this.dryRunInputs[tool.id].params[k] = '';
+                }
+            }
+            return fallback;
+        },
+
         async runDryRunTool(tool) {
-            const inputs = this.dryRunInputs[tool.id] || {operation: '', sample_query: ''};
+            const inputs = this.dryRunInputs[tool.id]?.params || {};
             this.dryRunInFlight[tool.id] = true;
             this.dryRunResults[tool.id] = null;
             try {
+                // Backend hoje aceita só operation_override + sample_query.
+                // Extraímos os 2 campos canônicos do dict de params pra manter
+                // contrato; campos adicionais já viajam pra adoção futura
+                // (campo extra_params no DryRunRequest pode entrar em Fase 2).
                 const r = await api.post('/api/v1/skills/dry-run-tool', {
                     skill_md: this.form.raw_content || '',
                     tool_id: tool.id,
                     operation_override: inputs.operation || '',
-                    sample_query: inputs.sample_query || 'exemplo de consulta',
+                    sample_query: inputs.query || inputs.sample_query || 'exemplo de consulta',
                 });
                 this.dryRunResults[tool.id] = r;
                 if (typeof showToast === 'function') {

@@ -276,6 +276,73 @@ class TestEndpoint:
 # ───────────────────────────────────────────────────────────────
 
 
+class TestUIDynamicParamsAndOperationsParsing:
+    """Cobertura do frontend (smoke estático): UI lê function_spec do
+    backend pra renderizar formulário dinâmico de N parâmetros + parser
+    de operations limpa aspas/colchetes JSON.
+
+    Bug visível no screenshot do user (2026-05-29): operações com JSON
+    list `["docs","code","prompt"]` apareciam com aspas literais no
+    dropdown. Causa: split(',') sem tratar JSON.
+    """
+
+    def test_skill_form_has_parse_operations_helper(self):
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        assert "_parseOperations(raw)" in html
+        # Trata JSON list E CSV
+        assert "JSON.parse" in html
+
+    def test_skill_form_has_dyn_fields_helper(self):
+        """dryRunFieldsFor(tool) deve existir — gera N campos do
+        function_spec do backend."""
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        assert "dryRunFieldsFor(tool)" in html
+
+    def test_skill_form_renders_enum_as_select(self):
+        """Campos enum viram <select>, demais input/textarea."""
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        # Branch enum
+        assert 'x-if="propMeta.enum && propMeta.enum.length > 0"' in html
+        # Branch multiline
+        assert "propMeta.multiline" in html
+
+    def test_skill_form_uses_operations_list_instead_of_raw(self):
+        """Display 'Operations: docs, code, prompt' deve usar a lista
+        parsed — não a string raw (que pode ter aspas/colchetes)."""
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        # Display usa operationsList.join, não o raw
+        assert "t.operationsList.join(', ')" in html
+
+    def test_skill_form_initializes_params_dict_per_tool(self):
+        """Estado dryRunInputs[tool.id] precisa ser {params: {}} pra
+        permitir N campos com nomes dinâmicos."""
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        assert "{params: {}}" in html
+
+    def test_runDryRunTool_extracts_canonical_fields_for_backend(self):
+        """Backend hoje aceita operation_override + sample_query. O
+        runDryRunTool extrai esses 2 do dict params, mantendo back-compat
+        enquanto a UI já trabalha com N campos."""
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        assert "inputs.operation || ''" in html
+        # query OU sample_query (compat)
+        assert "inputs.query || inputs.sample_query" in html
+
+    def test_skill_form_multiline_heuristic_covers_content_fields(self):
+        """Campos com nome content/body/text/payload viram textarea —
+        heurística pra payloads grandes."""
+        from pathlib import Path
+        html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        # Regex de detecção
+        assert "content|body|text|payload" in html
+
+
 class TestRegressionUserSkillContext7:
     """SKILL real do user (2026-05-29 #5): Workflow não cita operation=
     (passa action/subject/content como payload). Validador estático
