@@ -356,9 +356,17 @@ def validate_generated_skill(
                     evidence=section_text[:300],
                 ))
 
-    # ──── operation.invented (CRITICAL — Context7 v2 bug) ────
-    # Cruzar operations CITADAS no Workflow com operations DECLARADAS
-    # em cada tool MCP do bindings.
+    # ──── operation.invented / operation.missing / operation.contradicts_registry ────
+    # Bug Context7 v2 (2026-05-29): operation=search citada mas Registry só
+    # tem docs,code,prompt → operation.invented
+    #
+    # Bug Context7 v3 (2026-05-29 #3): Workflow nem cita operation, e Tool
+    # Bindings escreve texto inventado "nenhuma operação declarada" mesmo
+    # com Registry declarando operations. Engine em runtime não tem como
+    # decidir qual operation chamar — não invoca a tool.
+    #
+    # As 3 regras compartilham o mesmo cálculo de operations, então rodam
+    # juntas.
     if bindings.get("mcp_tools") and workflow:
         cited_ops = set(_extract_operations_from_workflow(workflow))
         declared_ops = set()
@@ -366,13 +374,10 @@ def validate_generated_skill(
             for op in _split_operations_csv(tool.get("operations") or ""):
                 declared_ops.add(op)
 
-        # Só valida quando há operations declaradas (tool nova sem ops
-        # cadastradas no Registry não pode disparar esse check)
         if declared_ops:
+            # ── operation.invented (CRITICAL) ──
             invented = sorted(cited_ops - declared_ops)
             if invented:
-                # Lista os nomes inventados; foco em "search" porque é o mais
-                # frequente. Mensagem detalha o que era válido.
                 violations.append(Violation(
                     rule="operation.invented",
                     severity="critical",
@@ -391,6 +396,67 @@ def validate_generated_skill(
                     ),
                     evidence=workflow[:300],
                 ))
+
+            # ── operation.missing (CRITICAL) ──
+            # Workflow não cita NENHUMA operation, mesmo com Registry
+            # declarando uma lista. Engine em runtime não saberá qual
+            # invocar — tool nunca é chamada.
+            elif not cited_ops:
+                violations.append(Violation(
+                    rule="operation.missing",
+                    severity="critical",
+                    section="Workflow",
+                    message=(
+                        "Workflow não cita NENHUMA operation MCP, mas o "
+                        f"Registry declara {sorted(declared_ops)} para a "
+                        "tool. Engine não sabe qual invocar — tool não "
+                        "será chamada em runtime."
+                    ),
+                    suggestion=(
+                        "Adicione `operation=X` no passo do Workflow que "
+                        f"chama a tool, escolhendo uma de: {sorted(declared_ops)}. "
+                        "Exemplo: \"Chame a tool ... com operation=docs e "
+                        "query=...\"."
+                    ),
+                    evidence=workflow[:300],
+                ))
+
+            # ── operation.contradicts_registry (CRITICAL) ──
+            # Tool Bindings escreve "nenhuma operação declarada" /
+            # "operations não declaradas" / "sem operações disponíveis"
+            # mesmo com Registry declarando operations. Sinal de LLM
+            # gerador inventando texto que contradiz dados estruturados.
+            if tool_bindings_section:
+                low_tb = _normalize(tool_bindings_section)
+                contradiction_phrases = (
+                    "nenhuma operação declarada",
+                    "nenhuma operacao declarada",
+                    "operações não declaradas",
+                    "operacoes nao declaradas",
+                    "sem operações disponíveis",
+                    "sem operacoes disponiveis",
+                    "operações não disponíveis",
+                    "operacoes nao disponiveis",
+                )
+                hit = next((p for p in contradiction_phrases if p in low_tb), None)
+                if hit:
+                    violations.append(Violation(
+                        rule="operation.contradicts_registry",
+                        severity="critical",
+                        section="Tool Bindings",
+                        message=(
+                            f"Tool Bindings escreve \"{hit}\" mas o Registry "
+                            f"declara as operations {sorted(declared_ops)} "
+                            "para esta tool. Texto inventado contradiz dados "
+                            "estruturados; LLM em runtime ignora a tool."
+                        ),
+                        suggestion=(
+                            f"Remova a frase \"{hit}\" do Tool Bindings. "
+                            "Liste as operations reais do Registry no formato: "
+                            f"\"**Operations declaradas:** {','.join(sorted(declared_ops))}\"."
+                        ),
+                        evidence=tool_bindings_section[:300],
+                    ))
 
     ok = all(v.severity != "critical" for v in violations)
     return ValidationResult(ok=ok, violations=violations)
