@@ -265,9 +265,14 @@ class AgentState(TypedDict):
 class DeepAgentHarness:
     """Harness para execução profunda com auto-reflexão e MCP tool calling."""
 
-    def __init__(self, agent_config: dict, max_iterations: int = 3, mcp_tools: list = None, interaction_id: str = ""):
+    def __init__(self, agent_config: dict, max_iterations: int = 3, mcp_tools: list = None, interaction_id: str = "", skill_md: str = ""):
         self.config = agent_config
         self.max_iterations = max_iterations
+        # Onda B (schema-aware): skill_md (raw markdown) é passado pra
+        # build_openai_tools que vai ler ## Inputs e expor schema custom
+        # pro LLM em vez do {operation, query} fixo. None/"" preserva
+        # comportamento legacy.
+        self.skill_md = skill_md or ""
         # interaction_id propagado pelo FSM (state_machine.run_intake) para que
         # cada tool_call seja persistida com FK válida em tool_calls.interaction_id.
         # Sem isso a métrica "MCP TOOLS" do painel de rastreabilidade não consegue
@@ -287,7 +292,9 @@ class DeepAgentHarness:
         self.openai_tools = []
         if self.mcp_tools:
             from app.mcp.runtime import build_openai_tools
-            self.openai_tools = build_openai_tools(self.mcp_tools)
+            # Onda B: passa skill_md pra build_openai_tools respeitar ## Inputs
+            # quando declarado. Resolve causa raiz dos bugs Context7 no NL path.
+            self.openai_tools = build_openai_tools(self.mcp_tools, skill_md=self.skill_md)
         # Wave Structured Output (PR atual): se SKILL.md tem Output Contract
         # com JSON Schema E provider suporta response_format, cacheia o
         # response_format aqui pra reusar em todas as chamadas ainvoke.
@@ -1274,7 +1281,15 @@ async def execute_interaction(
         # Execution Profile + reflexão adaptativa:
         # fast=1, standard=2 (2ª rodada apenas se heurística sinalizar), rigorous=3 idem.
         _max_iter = 1 if exec_profile == "fast" else (2 if exec_profile == "standard" else 3)
-        harness = DeepAgentHarness(agent, max_iterations=_max_iter, mcp_tools=mcp_tools, interaction_id=ctx.interaction_id)
+        # Onda B: passa raw markdown da SKILL pra harness — build_openai_tools
+        # vai ler ## Inputs e expor schema custom pro LLM (em vez de fixed
+        # {operation, query}). skill_raw é o row do skills_repo carregado em
+        # ~linha 1047. Fallback "" quando SKILL ausente (back-compat).
+        skill_md_for_engine = (skill_raw or {}).get("raw_content") if skill_raw else ""
+        harness = DeepAgentHarness(
+            agent, max_iterations=_max_iter, mcp_tools=mcp_tools,
+            interaction_id=ctx.interaction_id, skill_md=skill_md_for_engine or "",
+        )
         graph = harness.build_graph()
         state = {
             "messages": [HumanMessage(content=enriched_input)],

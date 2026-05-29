@@ -73,30 +73,10 @@ def _infer_multiline(name: str, description: str) -> bool:
 
 
 def _extract_inputs_schema(skill_md: str) -> Optional[dict]:
-    """Espelha app.routes.skill_dryrun._extract_inputs_schema (canônico).
-
-    Mantemos cópia local pra binding_schema ser autossuficiente em
-    contexto de import circular evitado. Lógica idêntica.
-    """
-    if not skill_md:
-        return None
-    m = re.search(r"##\s+Inputs\s*\n([\s\S]*?)(?=\n##\s|$)", skill_md)
-    if not m:
-        return None
-    block = m.group(1)
-    fence = re.search(r"```(?:json|JSON)?\s*\n([\s\S]*?)\n```", block)
-    if not fence:
-        return None
-    import json
-    try:
-        schema = json.loads(fence.group(1).strip())
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(schema, dict):
-        return None
-    if not isinstance(schema.get("properties"), dict):
-        return None
-    return schema
+    """Onda B: delega pro helper canônico app.skill_parser.inputs_schema.
+    Mantemos o nome local pra preservar back-compat dos callers existentes."""
+    from app.skill_parser.inputs_schema import extract_inputs_schema
+    return extract_inputs_schema(skill_md or "")
 
 
 # ───────────────────────────────────────────────────────────────
