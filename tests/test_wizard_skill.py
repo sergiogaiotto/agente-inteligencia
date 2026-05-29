@@ -629,3 +629,799 @@ class TestResolveWizardLLM:
         await _resolve_wizard_llm(req, "rota-inexistente")
         # Default global do dicionário: reasoning
         assert captured["task_type"] == "reasoning"
+
+
+# ═════════════════════════════════════════════════════════════════
+# Regras de invocação MCP — fix bug Context7 (2026-05-29)
+# ═════════════════════════════════════════════════════════════════
+#
+# Bug observado: Wizard gerou SKILL.md "Design Pattern Generator for Context 7"
+# com Workflow passivo ("enriquecimento com Context 7 usando o binding") +
+# Examples sem rastro de tool call + Evidence Policy ambígua ("nenhuma fonte
+# externa autorizada" contradizendo "informação provém do binding"). Em
+# runtime, gpt-oss-120b leu o conjunto como autorização pra responder de
+# cabeça e ignorou silenciosamente o tool_choice forçado.
+#
+# Fix em _build_wizard_prompt: novo bloco mcp_invocation_rules emitido SÓ
+# quando há tools MCP no bindings — instrui o LLM gerador a usar verbo
+# imperativo no Workflow, mostrar tool call nos Examples, e escrever
+# Evidence Policy coerente quando só há MCP (sem RAG).
+
+
+class TestMCPInvocationRules:
+    """Regras condicionais quando o bloco obrigatório tem MCP tools.
+
+    Garantia: nenhuma dessas regras aparece quando bindings["mcp_tools"]
+    é vazio — back-compat com skills sem MCP é preservada.
+    """
+
+    def _bindings_with_mcp(self, name: str = "Context 7 MCP Server",
+                           operations: str = "docs,code,prompt",
+                           description: str = ""):
+        return {
+            "mcp_tools": [{
+                "id": "tool-id-1",
+                "name": name,
+                "description": description or "Plataforma para documentação atualizada",
+                "operations": operations,
+            }],
+            "rag_sources": [],
+            "data_tables": [],
+            "api_endpoints": [],
+        }
+
+    def test_mcp_description_not_truncated_at_100_chars(self):
+        """Bug literal do user: descrição cortou em 'MCP Se' (100 chars).
+        Fix: truncamento agora é 300, alinhado com build_openai_tools e
+        engine._build_system_prompt."""
+        long_desc = (
+            "Plataforma Context7 para documentação e código atualizado de "
+            "qualquer prompt, disponível como MCP Server com operações docs/"
+            "code/prompt para enriquecer respostas com dados frescos da fonte."
+        )
+        assert len(long_desc) > 100  # sanity: a descrição original > 100
+        assert len(long_desc) < 300   # mas < 300, então não trunca no fix
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp(description=long_desc)
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        # A descrição completa precisa aparecer no bloco obrigatório
+        assert long_desc in system, (
+            "Descrição truncou — palavra final do bug original era 'fonte', "
+            "antes era 'MCP Se' (100 chars). Truncamento mudou pra 300."
+        )
+
+    def test_mcp_description_still_truncates_at_hard_limit(self):
+        """300 chars é o hard limit — descrições insanas ainda truncam pra
+        não inflar o prompt indefinidamente."""
+        huge = "A" * 500
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp(description=huge)
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        # 300 As contínuos aparecem
+        assert "A" * 300 in system
+        # 301 As contínuos NÃO aparecem (truncou)
+        assert "A" * 301 not in system
+
+    def test_mcp_rules_block_present_when_tools_declared(self):
+        """Cabeçalho geral + sub-bloco [MCP] devem estar presentes."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp()
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        assert "REGRAS DE INVOCAÇÃO DE BINDINGS" in system
+        assert "[MCP]" in system
+
+    def test_binding_rules_block_absent_when_no_bindings(self):
+        """Back-compat: skill puramente de raciocínio (sem nenhum binding)
+        NÃO recebe o bloco — evita poluir prompt em casos simples.
+        Skill com QUALQUER binding (incluindo RAG só) recebe."""
+        req = WizardSkillRequest(description="x")
+        bindings = {
+            "mcp_tools": [], "rag_sources": [],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        assert "REGRAS DE INVOCAÇÃO DE BINDINGS" not in system
+
+    def test_mcp_rule_A_demands_imperative_verb(self):
+        """Workflow precisa ter verbo imperativo (Chame/Consulte/etc).
+        Verbos passivos foram a causa do bug Context7."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp()
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        # Lista de verbos aceitos precisa estar visível
+        assert "Chame" in system
+        assert "Consulte" in system
+        # Lista de verbos REJEITADOS precisa estar visível (com o exato
+        # vocabulário que apareceu no bug — "enriquecimento", "usando o binding")
+        assert "enriquecimento" in system
+        assert "usando o binding" in system
+        # E precisa marcar como INSUFICIENTE pra ser claro
+        assert "INSUFICIENTES" in system
+
+    def test_mcp_rule_B_forbids_internal_template_phrases(self):
+        """Frases proibidas no Workflow: 'template interno', 'recursos internos'.
+        Eram a causa principal de gpt-oss-120b ignorar a tool no bug Context7."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp()
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        assert "template interno" in system
+        assert "recursos internos" in system
+        # Marcadas como proibidas
+        assert "NÃO use" in system or "NÃO escreva" in system
+
+    def test_mcp_rule_C_demands_tool_call_in_examples(self):
+        """Examples DEVE rastrear tool call antes do output final.
+        Padrão G3 (geral) + exemplo concreto [MCP]."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp()
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        # Padrão G3 geral
+        assert "Saída final" in system
+        # Sub-bloco MCP cita "Chamada à tool"
+        assert "Chamada à tool" in system
+        # Aviso explícito contra pular pra saída direto
+        assert "alucinar" in system.lower()
+
+    def test_mcp_rule_evidence_policy_text_when_no_rag(self):
+        """Quando só há MCP (sem RAG), Evidence Policy deve dizer
+        explicitamente 'única fonte autorizada é o binding X'.
+        Texto agora vive no sub-bloco [MCP] (não mais como regra D nomeada)."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp(name="Context 7 MCP Server")
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        # Texto obrigatório pra Evidence Policy quando só há MCP
+        assert "única fonte autorizada é o binding" in system
+        assert "Context 7 MCP Server" in system
+
+    def test_mcp_rule_uses_actual_tool_name_in_example(self):
+        """O exemplo de Workflow precisa usar o nome EXATO da tool, não
+        placeholder genérico — Wizard tem que fazer string interp."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp(name="Context 7 MCP Server")
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        # Nome literal aparece dentro de backticks no exemplo
+        assert "`Context 7 MCP Server`" in system
+
+    def test_mcp_rule_uses_first_operation_as_hint(self):
+        """Wizard pega a primeira operation como hint pro exemplo. Confirma
+        que a operation chega lá."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp(operations="docs,code,prompt")
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        # 'docs' é a primeira operation → vai pro hint
+        assert "operation=docs" in system or "operation=`docs`" in system
+
+    def test_mcp_rule_falls_back_to_generic_op_when_no_operations(self):
+        """Tool sem operations declaradas — exemplo usa fallback 'search'."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp(operations="")
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        assert "operation=search" in system or "operation=`search`" in system
+
+    def test_examples_template_warns_about_binding_interaction(self):
+        """Template do ## Examples deve avisar do tool call/binding
+        interaction quando há QUALQUER binding presente."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["tool-id-1"])
+        bindings = self._bindings_with_mcp()
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        # Frase aparece em 2 lugares (template canônico + sub-bloco MCP)
+        import re as _re
+        assert _re.search(r"rastrear\s+(a\s+interação\s+com\s+o\s+binding|a\s+chamada\s+da|o\s+tool\s+call)", system)
+
+    def test_examples_template_aviso_é_geral_pra_qualquer_binding(self):
+        """O aviso no template ## Examples cita 'QUALQUER binding' (não só
+        MCP) — vale igual pra RAG/API/Tabelas. Skill com RAG só também
+        recebe o aviso e respeita o padrão Entrada → Ação → Resposta → Saída."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        bindings = {
+            "mcp_tools": [],
+            "rag_sources": [{"id": "s1", "name": "Manuais", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # Aviso GERAL aparece (não específico de MCP)
+        assert "QUALQUER binding" in system
+        # E o sub-bloco [RAG] também é ativado pra essa skill
+        assert "[RAG]" in system
+
+    def test_multiple_tools_all_names_listed(self):
+        """Skill com 2+ tools: prompt cita todas no header das regras."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["t1", "t2"])
+        bindings = {
+            "mcp_tools": [
+                {"id": "t1", "name": "Tool Alpha", "description": "A", "operations": "search"},
+                {"id": "t2", "name": "Tool Beta",  "description": "B", "operations": "fetch"},
+            ],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "fast")
+        assert "`Tool Alpha`" in system
+        assert "`Tool Beta`" in system
+
+    def test_mcp_plus_rag_keeps_both_blocks(self):
+        """Skill mista (MCP + RAG): header geral + ambos sub-blocos
+        ([MCP] e [RAG]) são emitidos. E Evidence Policy do RAG segue
+        aparecendo no obligatory_block. Não há conflito — paths
+        independentes."""
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["t1"], source_ids=["s1"])
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "Tool X", "description": "Y", "operations": "search"}],
+            "rag_sources": [{"id": "s1", "name": "Bases", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        assert "REGRAS DE INVOCAÇÃO DE BINDINGS" in system
+        # Ambos sub-blocos ativos
+        assert "[MCP]" in system
+        assert "[RAG]" in system
+        # Evidence Policy do RAG segue aparecendo no obligatory_block
+        assert "## Evidence Policy" in system
+        assert "s1" in system
+
+
+class TestRegressionContext7Bug:
+    """Regressão direta do caso real reportado pelo user (2026-05-29).
+
+    SKILL gerada pelo Wizard pro "Design Pattern Generator for Context 7"
+    tinha 4 problemas que faziam gpt-oss-120b ignorar a tool em runtime.
+    Estes testes garantem que o prompt do Wizard NÃO produz mais SKILL
+    com esses gaps quando há MCP tool declarada.
+    """
+
+    def _ctx7_bindings(self):
+        return {
+            "mcp_tools": [{
+                "id": "481c5fa3-36bc-4d05-97ff-d502d93521ff",
+                "name": "Context 7 MCP Server",
+                "description": "Plataforma Context7 para documentação e código atualizado de qualquer prompt, disponível como MCP Server",
+                "operations": "docs,code,prompt",
+            }],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+
+    def test_context7_full_description_visible_in_prompt(self):
+        """Bug literal: 'MCP Se' truncado. Fix: 300 chars."""
+        req = WizardSkillRequest(
+            description="design pattern generator context 7",
+            mcp_tool_ids=["481c5fa3-36bc-4d05-97ff-d502d93521ff"],
+        )
+        system, _ = _build_wizard_prompt(req, self._ctx7_bindings(), "fast")
+        # A frase final que ANTES truncava deve aparecer inteira
+        assert "MCP Server" in system, (
+            "Descrição da tool ainda trunca antes do final — "
+            "o bug do user era exatamente 'MCP Se' cortado a 100 chars."
+        )
+
+    def test_context7_prompt_blocks_passive_workflow(self):
+        """SKILL gerada tinha 'Enriquecimento com Context 7 — incorpora
+        informações... usando o binding'. Wizard agora marca esses verbos
+        como insuficientes."""
+        req = WizardSkillRequest(
+            description="design pattern generator context 7",
+            mcp_tool_ids=["481c5fa3-36bc-4d05-97ff-d502d93521ff"],
+        )
+        system, _ = _build_wizard_prompt(req, self._ctx7_bindings(), "fast")
+        # Estas 2 palavras exatas estavam no SKILL ruim — agora precisam
+        # aparecer como AVISO no prompt do Wizard
+        assert "incorpora" in system or "usando o binding" in system
+        # E perto de "INSUFICIENTES" pra o LLM gerador não usar
+        idx_insuf = system.find("INSUFICIENTES")
+        idx_passive = max(system.find("incorpora"), system.find("usando o binding"))
+        assert idx_insuf > 0 and idx_passive > 0
+        # As 2 menções ficam num raio de 500 chars pra serem percebidas
+        # como bloco coerente, não citações desconexas
+        assert abs(idx_insuf - idx_passive) < 500
+
+    def test_context7_prompt_warns_against_nenhuma_fonte_externa(self):
+        """A SKILL ruim tinha 'Nenhuma fonte de conhecimento externa está
+        autorizada' — frase exata. Regra G4 generaliza pra qualquer binding
+        e cita variantes dessa frase como proibidas."""
+        req = WizardSkillRequest(
+            description="design pattern generator context 7",
+            mcp_tool_ids=["481c5fa3-36bc-4d05-97ff-d502d93521ff"],
+        )
+        system, _ = _build_wizard_prompt(req, self._ctx7_bindings(), "fast")
+        low = system.lower()
+        # Regra G4 cita a frase em minúsculo + variantes
+        assert "nenhuma fonte externa autorizada" in low
+        # Precisa estar no contexto de NUNCA escrever (G4)
+        idx_nunca = system.find("NUNCA escreva")
+        idx_frase = low.find("nenhuma fonte externa")
+        assert idx_nunca > 0 and idx_frase > 0
+        assert abs(idx_nunca - idx_frase) < 300
+
+
+# ═════════════════════════════════════════════════════════════════
+# Regressão de combos — garante que adição do mcp_invocation_rules
+# não quebra paths existentes de RAG/API/Tables/Output Shape/kind=router
+# ═════════════════════════════════════════════════════════════════
+#
+# Pergunta do user (2026-05-29): "considerou que esse Wizard precisa garantir
+# que tudo que estava funcionando se mantenha funcionando? chamada de outros
+# MCPs, chamada de API, uso de RAG entre outras?"
+#
+# Cobertura específica de combos. Cada teste roda _build_wizard_prompt com
+# uma combinação e valida:
+# - Cada path emite SUA seção obrigatória
+# - Nenhuma seção é duplicada
+# - Adição do mcp_invocation_rules não suprime nenhum outro path
+# - Ordem das seções permanece coerente
+
+
+# ═════════════════════════════════════════════════════════════════
+# Regras gerais comuns a QUALQUER binding (G1-G4) — pergunta do user
+# 2026-05-29: "plataforma é Skill-based, precisamos ser assertivos e
+# precisos — Skills chamam API ou RAG ou MCP ou Tabelas, é geral"
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestCommonBindingRulesAreGeneral:
+    """Regras G1-G4 (verbo imperativo, frases proibidas, rastreabilidade,
+    proibição de 'nenhuma fonte externa') aparecem pra QUALQUER binding —
+    não só MCP. Garantia de que generalização foi pra frente.
+    """
+
+    def _make_bindings(self, *, mcp=False, rag=False, api=False, tables=False):
+        return {
+            "mcp_tools": [{"id": "t1", "name": "Tool X", "description": "D", "operations": "search"}] if mcp else [],
+            "rag_sources": [{"id": "s1", "name": "Bases", "confidentiality_label": "internal"}] if rag else [],
+            "api_endpoints": [{"ep_id": "e1", "conn_id": "c1", "ep_name": "EP", "method": "GET", "url": "https://x/y"}] if api else [],
+            "data_tables": [{"urn": "urn:t:x", "name": "Tab", "row_count": 10, "schema_summary": "a,b"}] if tables else [],
+        }
+
+    @pytest.mark.parametrize("kind,kwargs,req_kwargs", [
+        ("mcp", {"mcp": True},     {"mcp_tool_ids": ["t1"]}),
+        ("rag", {"rag": True},     {"source_ids": ["s1"]}),
+        ("api", {"api": True},     {"api_keys": ["c1:e1"]}),
+        ("tab", {"tables": True},  {"table_ids": ["urn:t:x"]}),
+    ])
+    def test_g1_imperative_verb_required_for_any_binding(self, kind, kwargs, req_kwargs):
+        """G1: verbo imperativo é exigido pra qualquer binding."""
+        req = WizardSkillRequest(description="x", **req_kwargs)
+        system, _ = _build_wizard_prompt(req, self._make_bindings(**kwargs), "standard")
+        assert "VERBO IMPERATIVO" in system
+        # Lista de verbos aceitos visível (entre os imperativos canônicos)
+        for verb in ("Chame", "Consulte", "Execute"):
+            assert verb in system, f"verbo {verb!r} ausente pra binding={kind}"
+
+    @pytest.mark.parametrize("kind,kwargs,req_kwargs", [
+        ("mcp", {"mcp": True},     {"mcp_tool_ids": ["t1"]}),
+        ("rag", {"rag": True},     {"source_ids": ["s1"]}),
+        ("api", {"api": True},     {"api_keys": ["c1:e1"]}),
+        ("tab", {"tables": True},  {"table_ids": ["urn:t:x"]}),
+    ])
+    def test_g1_passive_verbs_listed_as_blocked(self, kind, kwargs, req_kwargs):
+        """G1: verbos passivos do bug Context7 marcados como proibidos
+        pra qualquer tipo de binding."""
+        req = WizardSkillRequest(description="x", **req_kwargs)
+        system, _ = _build_wizard_prompt(req, self._make_bindings(**kwargs), "standard")
+        # Subset dos verbos passivos críticos (não exaustivo, mas o do bug)
+        assert "enriquecimento" in system
+        assert "usando o binding" in system
+        assert "INSUFICIENTES" in system or "PROIBIDOS" in system
+
+    @pytest.mark.parametrize("kind,kwargs,req_kwargs", [
+        ("mcp", {"mcp": True},     {"mcp_tool_ids": ["t1"]}),
+        ("rag", {"rag": True},     {"source_ids": ["s1"]}),
+        ("api", {"api": True},     {"api_keys": ["c1:e1"]}),
+        ("tab", {"tables": True},  {"table_ids": ["urn:t:x"]}),
+    ])
+    def test_g2_internal_phrases_blocked_for_any_binding(self, kind, kwargs, req_kwargs):
+        """G2: frases tipo "template interno" / "conhecimento próprio"
+        proibidas pra qualquer binding."""
+        req = WizardSkillRequest(description="x", **req_kwargs)
+        system, _ = _build_wizard_prompt(req, self._make_bindings(**kwargs), "standard")
+        assert "template interno" in system
+        assert "conhecimento próprio" in system
+        assert "FRASES PROIBIDAS" in system
+
+    @pytest.mark.parametrize("kind,kwargs,req_kwargs", [
+        ("mcp", {"mcp": True},     {"mcp_tool_ids": ["t1"]}),
+        ("rag", {"rag": True},     {"source_ids": ["s1"]}),
+        ("api", {"api": True},     {"api_keys": ["c1:e1"]}),
+        ("tab", {"tables": True},  {"table_ids": ["urn:t:x"]}),
+    ])
+    def test_g3_traceability_pattern_visible_for_any_binding(self, kind, kwargs, req_kwargs):
+        """G3: padrão Entrada → Ação → Resposta → Saída final exigido em
+        Examples pra qualquer binding."""
+        req = WizardSkillRequest(description="x", **req_kwargs)
+        system, _ = _build_wizard_prompt(req, self._make_bindings(**kwargs), "standard")
+        assert "Entrada:" in system
+        assert "Saída final:" in system
+        assert "alucinar" in system.lower()
+
+    @pytest.mark.parametrize("kind,kwargs,req_kwargs", [
+        ("mcp", {"mcp": True},     {"mcp_tool_ids": ["t1"]}),
+        ("rag", {"rag": True},     {"source_ids": ["s1"]}),
+        ("api", {"api": True},     {"api_keys": ["c1:e1"]}),
+        ("tab", {"tables": True},  {"table_ids": ["urn:t:x"]}),
+    ])
+    def test_g4_no_external_source_phrase_blocked_for_any_binding(self, kind, kwargs, req_kwargs):
+        """G4: 'nenhuma fonte externa autorizada' proibida quando há
+        QUALQUER binding (não só MCP)."""
+        req = WizardSkillRequest(description="x", **req_kwargs)
+        system, _ = _build_wizard_prompt(req, self._make_bindings(**kwargs), "standard")
+        assert "nenhuma fonte externa autorizada" in system.lower()
+        assert "NUNCA escreva" in system
+
+
+# ═════════════════════════════════════════════════════════════════
+# Sub-blocos específicos por tipo de binding ([MCP], [RAG], [API], [TABLES])
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestRAGSubBlock:
+    """Sub-bloco [RAG]: documenta consulta RAG mesmo sabendo que engine
+    faz retrieval automático em RetrieveEvidence."""
+
+    def _rag_bindings(self):
+        return {
+            "mcp_tools": [],
+            "rag_sources": [
+                {"id": "s1", "name": "Manuais Internos", "confidentiality_label": "internal"},
+            ],
+            "data_tables": [], "api_endpoints": [],
+        }
+
+    def test_rag_block_present_when_rag_declared(self):
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        system, _ = _build_wizard_prompt(req, self._rag_bindings(), "standard")
+        assert "[RAG]" in system
+
+    def test_rag_block_cites_source_name(self):
+        """Nome exato da base deve aparecer no sub-bloco pra LLM gerador
+        construir Workflow nominalmente correto."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        system, _ = _build_wizard_prompt(req, self._rag_bindings(), "standard")
+        assert "Manuais Internos" in system
+
+    def test_rag_block_uses_consultative_verbs(self):
+        """RAG usa verbo 'Consulte'/'Recupere'/'Busque em' — não 'Chame'
+        (chamar é vocabulário de MCP/API)."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        system, _ = _build_wizard_prompt(req, self._rag_bindings(), "standard")
+        # Pelo menos um dos verbos canônicos de RAG
+        assert "Consulte" in system or "Recupere" in system or "Busque em" in system
+
+    def test_rag_block_mentions_engine_automatic_retrieval(self):
+        """LLM gerador precisa entender que engine faz retrieval automático
+        — Workflow documenta pra coerência semântica, não pra acionar."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        system, _ = _build_wizard_prompt(req, self._rag_bindings(), "standard")
+        assert "RetrieveEvidence" in system or "retrieval automatic" in system.lower() or "automaticamente" in system
+
+    def test_rag_block_forbids_hallucinated_facts(self):
+        """Sub-bloco RAG instrui LLM gerador a documentar que resposta
+        DEVE referenciar chunks recuperados — proteção contra alucinação."""
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        system, _ = _build_wizard_prompt(req, self._rag_bindings(), "standard")
+        assert "chunks recuperados" in system or "referenciar" in system
+
+    def test_rag_block_absent_when_no_rag(self):
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["t1"])
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "X", "description": "Y", "operations": "z"}],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        assert "[RAG]" not in system
+
+
+class TestAPISubBlock:
+    """Sub-bloco [API]: documenta execução de endpoint declarativo. Engine
+    executa sem LLM no caminho, mas SKILL.md precisa ser explícito pro
+    LLM saber referenciar a resposta da API."""
+
+    def _api_bindings(self):
+        return {
+            "mcp_tools": [], "rag_sources": [],
+            "data_tables": [],
+            "api_endpoints": [{
+                "ep_id": "ep-cep", "conn_id": "conn-correios",
+                "ep_name": "Consulta CEP", "method": "GET",
+                "url": "https://viacep.com.br/ws/{cep}/json",
+            }],
+        }
+
+    def test_api_block_present_when_endpoints_declared(self):
+        req = WizardSkillRequest(description="x", api_keys=["conn-correios:ep-cep"])
+        system, _ = _build_wizard_prompt(req, self._api_bindings(), "standard")
+        assert "[API]" in system
+
+    def test_api_block_cites_endpoint_name_and_method(self):
+        req = WizardSkillRequest(description="x", api_keys=["conn-correios:ep-cep"])
+        system, _ = _build_wizard_prompt(req, self._api_bindings(), "standard")
+        assert "Consulta CEP" in system
+        assert "GET" in system
+
+    def test_api_block_uses_execute_verbs(self):
+        """API usa 'Execute'/'Acione' — não 'Consulte' (vocabulário RAG)."""
+        req = WizardSkillRequest(description="x", api_keys=["conn-correios:ep-cep"])
+        system, _ = _build_wizard_prompt(req, self._api_bindings(), "standard")
+        assert "Execute" in system or "Acione" in system
+
+    def test_api_block_mentions_declarative_mode(self):
+        """LLM gerador precisa saber que execution_mode=declarative é
+        obrigatório no frontmatter pra essa skill."""
+        req = WizardSkillRequest(description="x", api_keys=["conn-correios:ep-cep"])
+        system, _ = _build_wizard_prompt(req, self._api_bindings(), "standard")
+        assert "execution_mode: declarative" in system or "declarativo" in system.lower()
+
+    def test_api_block_forbids_hallucinated_response_fields(self):
+        """Bug clássico: LLM inventa campos no Output Contract que a API
+        não retorna. Sub-bloco API alerta contra isso."""
+        req = WizardSkillRequest(description="x", api_keys=["conn-correios:ep-cep"])
+        system, _ = _build_wizard_prompt(req, self._api_bindings(), "standard")
+        assert "não inventar campos" in system or "Output Contract DEVE refletir" in system
+
+    def test_api_block_absent_when_no_api(self):
+        req = WizardSkillRequest(description="x", source_ids=["s1"])
+        bindings = {
+            "mcp_tools": [], "rag_sources": [{"id": "s1", "name": "X", "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        assert "[API]" not in system
+
+
+class TestTablesSubBlock:
+    """Sub-bloco [TABLES]: LLM gera SQL, engine executa via DuckDB. Sem
+    Workflow imperativo, LLM responde de cabeça (base nunca é consultada)."""
+
+    def _tables_bindings(self):
+        return {
+            "mcp_tools": [], "rag_sources": [], "api_endpoints": [],
+            "data_tables": [{
+                "urn": "urn:table:vendas-2026", "name": "Vendas 2026",
+                "row_count": 50000, "schema_summary": "data, cliente, valor, regiao",
+            }],
+        }
+
+    def test_tables_block_present_when_tables_declared(self):
+        req = WizardSkillRequest(description="x", table_ids=["urn:table:vendas-2026"])
+        system, _ = _build_wizard_prompt(req, self._tables_bindings(), "standard")
+        assert "[TABLES]" in system
+
+    def test_tables_block_cites_urn(self):
+        req = WizardSkillRequest(description="x", table_ids=["urn:table:vendas-2026"])
+        system, _ = _build_wizard_prompt(req, self._tables_bindings(), "standard")
+        assert "urn:table:vendas-2026" in system
+
+    def test_tables_block_uses_query_verbs(self):
+        """Tabelas: Consulte/Query/SELECT — não Chame (vocab MCP)."""
+        req = WizardSkillRequest(description="x", table_ids=["urn:table:vendas-2026"])
+        system, _ = _build_wizard_prompt(req, self._tables_bindings(), "standard")
+        assert "Consulte" in system or "Query" in system or "SELECT" in system
+
+    def test_tables_block_mentions_sql_generation(self):
+        """LLM precisa saber que ele GERA SQL e engine executa via DuckDB."""
+        req = WizardSkillRequest(description="x", table_ids=["urn:table:vendas-2026"])
+        system, _ = _build_wizard_prompt(req, self._tables_bindings(), "standard")
+        assert "SQL" in system
+        assert "DuckDB" in system
+
+    def test_tables_block_forbids_invented_columns(self):
+        """LLM tende a inventar colunas — sub-bloco protege citando
+        schema_summary como única fonte de nomes válidos."""
+        req = WizardSkillRequest(description="x", table_ids=["urn:table:vendas-2026"])
+        system, _ = _build_wizard_prompt(req, self._tables_bindings(), "standard")
+        assert "NÃO invente nomes de coluna" in system or "schema_summary" in system
+
+    def test_tables_block_absent_when_no_tables(self):
+        req = WizardSkillRequest(description="x", mcp_tool_ids=["t1"])
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "X", "description": "Y", "operations": "z"}],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        assert "[TABLES]" not in system
+
+
+class TestComboRegressions:
+    """Combos de bindings — proteção contra interação cruzada do
+    binding_invocation_rules com os outros paths.
+    """
+
+    def test_mcp_plus_api_emits_both_sections(self):
+        """Skill com MCP + API endpoints — ambas seções obrigatórias presentes,
+        execution_mode declarative ainda exigido pra API."""
+        req = WizardSkillRequest(
+            description="x", mcp_tool_ids=["t1"], api_keys=["conn-1:ep-1"],
+        )
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "MCP A", "description": "D", "operations": "search"}],
+            "rag_sources": [],
+            "data_tables": [],
+            "api_endpoints": [{
+                "ep_id": "ep-1", "conn_id": "conn-1", "ep_name": "Endpoint X",
+                "method": "GET", "url": "https://api.example.com/x",
+            }],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # MCP section
+        assert "## Tool Bindings" in system
+        assert "`MCP A`" in system or "MCP A" in system
+        # API section
+        assert "## API Bindings" in system
+        assert "ep-1" in system
+        assert "conn-1" in system
+        # Declarative mode obrigatório (API path)
+        assert "execution_mode: declarative" in system
+        # MCP rules emitidas
+        assert "REGRAS DE INVOCAÇÃO DE BINDINGS" in system
+
+    def test_mcp_plus_data_tables_emits_both_sections(self):
+        """MCP + Data Tables — ambas presentes, sem conflito."""
+        req = WizardSkillRequest(
+            description="x", mcp_tool_ids=["t1"], table_ids=["tbl-1"],
+        )
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "MCP A", "description": "D", "operations": "search"}],
+            "rag_sources": [],
+            "data_tables": [{
+                "urn": "urn:table:vendas", "name": "Vendas",
+                "row_count": 100, "schema_summary": "id, valor",
+            }],
+            "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # MCP section
+        assert "## Tool Bindings" in system
+        # Tables section
+        assert "## Data Tables" in system
+        assert "urn:table:vendas" in system
+        # MCP rules emitidas
+        assert "REGRAS DE INVOCAÇÃO DE BINDINGS" in system
+
+    def test_mcp_plus_output_shape_preset(self):
+        """MCP + length_preset — Output Shape emitido em adição ao MCP rules."""
+        req = WizardSkillRequest(
+            description="x", mcp_tool_ids=["t1"], length_preset="analysis",
+        )
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "MCP A", "description": "D", "operations": "search"}],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # MCP section + rules
+        assert "## Tool Bindings" in system
+        assert "REGRAS DE INVOCAÇÃO DE BINDINGS" in system
+        # Output Shape preset emitido
+        assert "## Output Shape" in system
+        assert "length_preset: analysis" in system
+
+    def test_router_kind_with_mcp_still_works(self):
+        """kind=router + MCP — header reflete router, MCP rules ativas, sem
+        regressão. Roteadores costumam declarar MCPs delegáveis aos subagentes."""
+        req = WizardSkillRequest(
+            description="x", kind="router", domain="financeiro",
+            mcp_tool_ids=["t1"],
+        )
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "MCP A", "description": "D", "operations": "route"}],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        # Kind correto no URN exemplo
+        assert "urn:skill:financeiro:router:" in system
+        assert "kind: router" in system
+        # MCP rules ativas
+        assert "REGRAS DE INVOCAÇÃO DE BINDINGS" in system
+
+    @staticmethod
+    def _extract_obligatory_block(system_prompt: str) -> str:
+        """Extrai o conteúdo entre os marcadores SEÇÕES OBRIGATÓRIAS.
+
+        O system_prompt tem 3 blocos que podem mencionar nomes de seções:
+        (1) anti_halluc_rules — cita ## Evidence Policy em proibições
+        (2) mcp_invocation_rules — cita ## Examples no formato de tool call
+        (3) template canônico — descreve cada seção do SKILL.md
+        (4) obligatory_block — entre marcadores ===, com YAMLs reais
+
+        Pra checar "seção foi REALMENTE emitida no bloco obrigatório",
+        precisa extrair (4) — só lá a ordem e a unicidade importam.
+        """
+        start_marker = "=== SEÇÕES OBRIGATÓRIAS A INCLUIR NO SKILL.md ==="
+        end_marker = "=== FIM DAS SEÇÕES OBRIGATÓRIAS ==="
+        i = system_prompt.find(start_marker)
+        j = system_prompt.find(end_marker)
+        assert i >= 0 and j > i, (
+            "marcadores de obligatory_block ausentes — refactor mudou estrutura?"
+        )
+        return system_prompt[i:j]
+
+    def test_all_bindings_combo_no_duplication(self):
+        """O combo MCP + RAG + API + Tables — todos os 4 paths emitem,
+        nenhum suprime o outro, mcp_invocation_rules não duplica nenhum.
+
+        Esta é a regressão mais ariscada: combinatorialmente, nenhum teste
+        anterior cobre isso. Mudança do mcp_invocation_rules poderia em
+        teoria interferir nas outras seções.
+        """
+        req = WizardSkillRequest(
+            description="skill que usa tudo",
+            mcp_tool_ids=["t1"],
+            source_ids=["s1"],
+            table_ids=["tbl-1"],
+            api_keys=["conn-1:ep-1"],
+            min_relevance=0.15,
+        )
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "Tool MCP", "description": "Desc MCP", "operations": "search"}],
+            "rag_sources": [{"id": "s1", "name": "Bases", "confidentiality_label": "internal"}],
+            "data_tables": [{
+                "urn": "urn:table:x", "name": "X",
+                "row_count": 50, "schema_summary": "col1",
+            }],
+            "api_endpoints": [{
+                "ep_id": "ep-1", "conn_id": "conn-1", "ep_name": "EP",
+                "method": "POST", "url": "https://api.x/y",
+            }],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        obligatory = self._extract_obligatory_block(system)
+
+        # Todas as 4 seções obrigatórias presentes NO BLOCO obrigatório
+        sections = ["## Tool Bindings", "## Evidence Policy", "## Data Tables", "## API Bindings"]
+        for sec in sections:
+            assert sec in obligatory, f"seção {sec!r} ausente no obligatory_block"
+
+        # Nenhuma seção duplica DENTRO do bloco obrigatório (cada path emite 1x)
+        for sec in sections:
+            count = obligatory.count(sec)
+            assert count == 1, (
+                f"seção {sec!r} duplicou ({count}x) dentro do obligatory_block — "
+                "concat path bugado, algum path emitiu 2x"
+            )
+
+        # MCP rules ativas (no system_prompt, fora do obligatory_block)
+        assert "REGRAS DE INVOCAÇÃO DE BINDINGS" in system
+
+        # IDs específicos preservados em cada seção (no obligatory_block)
+        assert "s1" in obligatory           # RAG
+        assert "ep-1" in obligatory         # API
+        assert "urn:table:x" in obligatory  # Tables
+        assert "t1" in obligatory           # MCP (UUID/id)
+
+        # Threshold do RAG preservado (mudança não quebrou path de min_relevance)
+        assert "min_relevance: 0.15" in obligatory
+
+        # Execution mode declarative (do API path) preservado
+        assert "execution_mode: declarative" in obligatory
+
+    def test_combo_section_ordering_stable_in_obligatory_block(self):
+        """Ordem das seções DENTRO do obligatory_block precisa permanecer
+        estável: Tool Bindings → Evidence Policy → Data Tables →
+        API Bindings → Execution Profile → Output Shape.
+
+        Mudança do mcp_invocation_rules NÃO deve alterar essa ordem (caso
+        contrário SKILLs geradas antes vs depois ficariam visualmente
+        diferentes em diff, dificultando code review).
+        """
+        req = WizardSkillRequest(
+            description="x", mcp_tool_ids=["t1"], source_ids=["s1"],
+            table_ids=["tbl-1"], api_keys=["conn-1:ep-1"],
+            length_preset="digest",
+        )
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "MCP A", "description": "D", "operations": "search"}],
+            "rag_sources": [{"id": "s1", "name": "Bases", "confidentiality_label": "internal"}],
+            "data_tables": [{"urn": "urn:t:x", "name": "X", "row_count": 1, "schema_summary": "a"}],
+            "api_endpoints": [{"ep_id": "ep-1", "conn_id": "conn-1", "ep_name": "EP", "method": "GET", "url": "https://x/y"}],
+        }
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        obligatory = self._extract_obligatory_block(system)
+
+        # Ordem esperada DENTRO do obligatory_block (ordem das chamadas append)
+        order = ["## Tool Bindings", "## Evidence Policy", "## Data Tables",
+                 "## API Bindings", "## Execution Profile", "## Output Shape"]
+        positions = [obligatory.find(s) for s in order]
+        # Nenhuma seção ausente
+        assert all(p > 0 for p in positions), (
+            f"alguma seção ausente do obligatory_block: {dict(zip(order, positions))}"
+        )
+        # Ordem monotônica crescente
+        assert positions == sorted(positions), (
+            f"ordem das seções no obligatory_block mudou — "
+            f"esperado {order}, posições {positions}"
+        )

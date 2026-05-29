@@ -388,6 +388,183 @@ async def _resolve_bindings_for_prompt(data: WizardSkillRequest) -> dict:
     return result
 
 
+# ───────────────────────────────────────────────────────────────
+# Regras de invocação de bindings (gerais — MCP, RAG, API, Tables)
+# ───────────────────────────────────────────────────────────────
+#
+# Plataforma Skill-based: skill pode declarar QUALQUER combinação de
+# bindings. O Workflow do SKILL.md precisa ter verbo imperativo nomeando
+# cada binding usado, e Examples precisa rastrear a interação (Entrada →
+# Ação → Resposta → Saída) — sem isso, LLM em runtime tende a alucinar.
+#
+# A motivação original foi MCP (bug Context7), mas o mesmo padrão de
+# instrução vale pra RAG, API declarativa e Data Tables.
+
+
+_PASSIVE_VERBS_BLOCKLIST = (
+    '"enriquecimento", "incorpora", "usando o binding", "com apoio de", '
+    '"a partir de", "se valendo de"'
+)
+_INTERNAL_PHRASES_BLOCKLIST = (
+    '"template interno", "recursos internos", "conhecimento próprio", '
+    '"base interna", "conhecimento prévio"'
+)
+
+
+def _common_binding_rules_header() -> str:
+    """Bloco comum a QUALQUER binding declarado.
+
+    Repete as proibições e o padrão de rastreabilidade — modelos open-weight
+    tendem a "esquecer" instruções específicas a cada bloco, então comum
+    primeiro + específicos depois funciona melhor que distribuído.
+    """
+    return (
+        "REGRAS DE INVOCAÇÃO DE BINDINGS (CRÍTICAS — esta skill TEM bindings):\n\n"
+        "Esta skill declara bindings (MCP, RAG, API ou Tabelas) que DEVEM ser "
+        "documentados como FONTE PRIMÁRIA no Workflow e nos Examples. Regras gerais:\n\n"
+        "**G1.** Workflow DEVE ter um passo numerado por binding declarado, com "
+        "VERBO IMPERATIVO direto (`Chame`, `Consulte`, `Execute`, `Acione`, "
+        "`Query`). Verbos passivos são INSUFICIENTES — modelos open-weight "
+        "(gpt-oss, llama, qwen) ignoram silenciosamente sem verbo imperativo.\n"
+        f"   VERBOS PASSIVOS PROIBIDOS no Workflow: {_PASSIVE_VERBS_BLOCKLIST}.\n\n"
+        "**G2.** NÃO use as frases abaixo no Workflow — dizem ao LLM \"você é "
+        "autônomo\" e ele ignora os bindings declarados:\n"
+        f"   FRASES PROIBIDAS: {_INTERNAL_PHRASES_BLOCKLIST}.\n\n"
+        "**G3.** A seção `## Examples` DEVE rastrear cada interação com binding "
+        "ANTES do output final. Padrão obrigatório por exemplo:\n"
+        "   ```\n"
+        "   ### Exemplo N — <título>\n"
+        "   **Entrada:** <input do usuário ou JSON>\n\n"
+        "   **<Ação no binding>:** <chamada concreta — ver sub-bloco do binding>\n"
+        "   **<Resposta do binding>:** <resumo do que voltou>\n\n"
+        "   **Saída final:** <JSON do Output Contract baseado na resposta do binding>\n"
+        "   ```\n"
+        "   Exemplo que pula direto pra saída ensina o LLM em runtime a alucinar.\n\n"
+        "**G4.** Quando há bindings declarados, NUNCA escreva frases como "
+        "\"nenhuma fonte externa autorizada\", \"sem fontes externas\", "
+        "\"toda informação vem de conhecimento interno\". A fonte autorizada "
+        "SÃO os bindings declarados — frases negativas contradizem e fazem "
+        "o LLM ignorar o binding."
+    )
+
+
+def _mcp_block(mcp_tools: list[dict]) -> str:
+    """Sub-bloco específico de MCP. Cobre o caso original do bug Context7."""
+    tool_names = ", ".join(f"`{t['name']}`" for t in mcp_tools)
+    first = mcp_tools[0]
+    first_name = first["name"]
+    import re as _re
+    _ops_match = _re.search(r"[a-zA-Z][a-zA-Z0-9_]*", str(first.get("operations") or ""))
+    first_op = _ops_match.group(0) if _ops_match else "search"
+    return (
+        "[MCP] **Tools registradas:** " + tool_names + ". "
+        "Use os NOMES EXATOS dessas tools em Workflow e Examples.\n"
+        f"  - Verbo recomendado: **Chame** / **Invoque**.\n"
+        f"  - Exemplo no Workflow: \"Chame a tool `{first_name}` com "
+        f"`operation={first_op}` e `query=<entrada do usuário>` ANTES de gerar a "
+        "resposta.\"\n"
+        f"  - Exemplo no Examples: `**Chamada à tool:** `{first_name}` "
+        f"operation=`{first_op}` query=`<...>``\n"
+        "  - Quando NÃO há ## Evidence Policy no bloco obrigatório (skill só "
+        "com MCP), a seção Evidence Policy deve dizer: \"_A única fonte "
+        f"autorizada é o binding **{first_name}** declarado em ## Tool Bindings._\""
+    )
+
+
+def _rag_block(rag_sources: list[dict]) -> str:
+    """Sub-bloco específico de RAG. Engine roda retrieval automático em
+    RetrieveEvidence, mas Workflow precisa documentar pra coerência semântica
+    (LLM precisa saber que evidências vão chegar)."""
+    source_names = ", ".join(f"`{s['name']}`" for s in rag_sources)
+    first_name = rag_sources[0]["name"]
+    return (
+        "[RAG] **Bases registradas:** " + source_names + ". "
+        "Engine executa retrieval automaticamente em RetrieveEvidence — Workflow "
+        "DEVE documentar a consulta pra coerência semântica.\n"
+        f"  - Verbo recomendado: **Consulte** / **Recupere** / **Busque em**.\n"
+        f"  - Exemplo no Workflow: \"Consulte as bases `{first_name}` com "
+        "`query=<reformulação semântica da pergunta>` ANTES de gerar a resposta. "
+        "Use APENAS evidências retornadas (não complete de cabeça).\"\n"
+        "  - Exemplo no Examples: `**Consulta RAG:** query=`<...>``  →  "
+        "`**Evidências recuperadas:** <resumo dos top-K chunks com score>`\n"
+        "  - Resposta DEVE referenciar os chunks recuperados (citação por "
+        "ordinal ou ID) — não inventar fatos sem suporte."
+    )
+
+
+def _api_block(endpoints: list[dict]) -> str:
+    """Sub-bloco específico de API declarativa. Engine executa o endpoint
+    sem LLM no caminho — mas Workflow precisa documentar pra LLM saber
+    referenciar a resposta corretamente."""
+    ep_names = ", ".join(f"`{ep['ep_name']}`" for ep in endpoints)
+    first = endpoints[0]
+    first_name = first["ep_name"]
+    first_method = first["method"]
+    return (
+        "[API] **Endpoints declarativos registrados:** " + ep_names + ". "
+        "Engine executa em modo DECLARATIVO (sem LLM no tool call) — Workflow "
+        "DEVE documentar a execução pra LLM saber referenciar o resultado.\n"
+        f"  - Verbo recomendado: **Execute** / **Acione**.\n"
+        f"  - Exemplo no Workflow: \"Execute o endpoint `{first_name}` "
+        f"({first_method}) com `<payload mapeado dos inputs>` ANTES de "
+        "compor a resposta.\"\n"
+        f"  - Exemplo no Examples: `**Execução do endpoint:** `{first_name}` "
+        f"{first_method} body=`<...>``  →  `**Resposta da API:** "
+        "<status_code + payload resumido>`\n"
+        "  - Output Contract DEVE refletir campos do payload de resposta — não "
+        "inventar campos que a API não retorna.\n"
+        "  - Frontmatter do SKILL.md DEVE ter `execution_mode: declarative`."
+    )
+
+
+def _tables_block(data_tables: list[dict]) -> str:
+    """Sub-bloco específico de Data Tables. LLM gera SQL, engine executa
+    via DuckDB. Sem verbo imperativo, LLM responde de cabeça (tabela nunca
+    é consultada)."""
+    table_refs = ", ".join(f"`{t['urn']}`" for t in data_tables)
+    first = data_tables[0]
+    first_urn = first["urn"]
+    first_name = first["name"]
+    return (
+        "[TABLES] **Tabelas registradas:** " + table_refs + ". "
+        "LLM gera SQL, engine executa via DuckDB.\n"
+        f"  - Verbo recomendado: **Consulte** / **Query** / **Execute SELECT em**.\n"
+        f"  - Exemplo no Workflow: \"Consulte a tabela `{first_urn}` "
+        f"({first_name}) via SQL com query como `SELECT ... FROM <tabela> WHERE "
+        "...` ANTES de gerar a resposta. Use os nomes de colunas EXATOS do "
+        "schema declarado.\"\n"
+        f"  - Exemplo no Examples: `**SQL gerado:** `SELECT ... FROM "
+        f"<tabela>...``  →  `**Resultado da query:** <linhas/contagem>`\n"
+        "  - NÃO invente nomes de coluna — só os do schema_summary do bloco "
+        "obrigatório."
+    )
+
+
+def _build_binding_invocation_rules(bindings: dict) -> str:
+    """Monta o bloco de regras condicionais por tipo de binding declarado.
+
+    Estrutura: header comum (regras G1-G4 que valem pra qualquer binding)
+    + sub-blocos específicos por tipo presente. Retorna "" quando nenhum
+    binding declarado (skill puramente de raciocínio — back-compat).
+    """
+    blocks: list[str] = []
+    if bindings.get("mcp_tools"):
+        blocks.append(_mcp_block(bindings["mcp_tools"]))
+    if bindings.get("rag_sources"):
+        blocks.append(_rag_block(bindings["rag_sources"]))
+    if bindings.get("api_endpoints"):
+        blocks.append(_api_block(bindings["api_endpoints"]))
+    if bindings.get("data_tables"):
+        blocks.append(_tables_block(bindings["data_tables"]))
+    if not blocks:
+        return ""
+    return (
+        "\n\n" + _common_binding_rules_header() +
+        "\n\nSUB-BLOCOS POR TIPO DE BINDING DECLARADO:\n\n" +
+        "\n\n".join(blocks)
+    )
+
+
 def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: str) -> tuple[str, str]:
     """Monta system + user prompts pro LLM gerar o SKILL.md.
 
@@ -412,8 +589,12 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
     obligatory_sections = []
 
     if bindings["mcp_tools"]:
+        # Trunc 300 chars (não 100): 100 era o bug do "MCP Se[rver]" cortado no
+        # meio do nome da tool. 300 alinha com build_openai_tools/runtime.py:575
+        # e _build_system_prompt/engine.py:402 — única descrição completa que o
+        # LLM vê em runtime.
         bindings_md = "\n".join(
-            f"- `{t['id']}` ({t['name']}) — {(t.get('description') or '').strip()[:100]}"
+            f"- `{t['id']}` ({t['name']}) — {(t.get('description') or '').strip()[:300]}"
             for t in bindings["mcp_tools"]
         )
         obligatory_sections.append(
@@ -540,6 +721,33 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         + threshold_rule
     )
 
+    # ─────────────────────────────────────────────────────────────────
+    # Regras de invocação de bindings — gerais.
+    #
+    # Plataforma é Skill-based: uma skill pode declarar QUALQUER combinação
+    # de bindings (MCP, RAG, API declarativa, Data Tables). O Workflow do
+    # SKILL.md afeta diretamente como o LLM em runtime invoca/usa cada um.
+    #
+    # Motivação cruzada (não é só MCP):
+    # - MCP: bug Context7 (2026-05-29) — Workflow passivo "enriquecimento com X
+    #   usando o binding" → gpt-oss-120b ignorou a tool, alucinou resposta.
+    # - RAG: engine faz retrieval automático em RetrieveEvidence, mas se o
+    #   Workflow não documenta a consulta, LLM tende a ignorar as evidências
+    #   recuperadas e responder de cabeça.
+    # - API declarativa: engine executa endpoints sem LLM no caminho, mas o
+    #   LLM recebe os resultados como contexto — Workflow precisa documentar
+    #   a chamada pra LLM saber referenciar.
+    # - Data Tables: LLM gera SQL que o engine executa via DuckDB. Sem
+    #   Workflow com verbo imperativo, LLM responde de cabeça (a base nem é
+    #   consultada).
+    #
+    # Padrão: cada tipo de binding ativa um sub-bloco específico (verbo
+    # imperativo próprio + formato de exemplo). Regras COMUNS valem pra
+    # qualquer binding (frases passivas proibidas, padrão de rastreabilidade
+    # nos Examples, proibição de "nenhuma fonte externa").
+    # ─────────────────────────────────────────────────────────────────
+    binding_invocation_rules = _build_binding_invocation_rules(bindings)
+
     obligatory_block = (
         "\n\n=== SEÇÕES OBRIGATÓRIAS A INCLUIR NO SKILL.md ===\n"
         "Você DEVE incluir EXATAMENTE estes blocos no SKILL.md gerado. "
@@ -552,7 +760,7 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
     system_prompt = f"""Você é um arquiteto de skills para plataforma multi-agente.
 Gere um SKILL.md completo seguindo a anatomia canônica.
 
-{anti_halluc_rules}
+{anti_halluc_rules}{binding_invocation_rules}
 
 O SKILL.md deve conter EXATAMENTE esta estrutura:
 
@@ -597,8 +805,13 @@ Use APENAS os IDs de knowledge_sources do bloco obrigatório.
 Políticas de conteúdo, PII, jurisdição.
 
 ## Examples
-Pares entrada/saída para avaliação. As tools/sources referenciadas nos
-exemplos DEVEM bater com o bloco obrigatório — sem invenções.
+Pares entrada/saída para avaliação. Os bindings (tools MCP, sources RAG,
+endpoints API, tabelas) referenciados nos exemplos DEVEM bater com o bloco
+obrigatório — sem invenções.
+Quando esta skill tem QUALQUER binding declarado (MCP, RAG, API, Tabelas),
+cada exemplo DEVE rastrear a interação com o binding (Entrada → Ação no
+binding → Resposta do binding → Saída final) antes do output final —
+exemplo que pula direto pra saída ensina o LLM em runtime a alucinar.
 
 IMPORTANTE: NÃO inclua a seção `## Budget` (limites de tokens, tempo ou custo).
 Restrições de budget devem ser definidas pelo operador depois, conscientemente —
