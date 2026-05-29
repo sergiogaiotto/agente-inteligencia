@@ -339,16 +339,68 @@ def _parse_openai_compatible_response(response, provider: str, model: str) -> di
     }
 
 
+# ───────────────────────────────────────────────────────────────
+# OpenAI público (api.openai.com) — PR #194 (2026-05-29)
+# Separado de "openai" (alias de Azure). Use quando quiser chamar
+# api.openai.com diretamente.
+# ───────────────────────────────────────────────────────────────
+class OpenAIPublicProvider(LLMProvider):
+    """Provedor OpenAI público (api.openai.com). NÃO confundir com 'openai'
+    (alias histórico de Azure).
+
+    Usa langchain_openai.ChatOpenAI sem azure_endpoint — vai pra api.openai.com
+    por default. Aceita response_format via .bind() (mesmo path do Azure).
+
+    Configuração mínima:
+    - OPENAI_PUBLIC_API_KEY (chave começa com 'sk-')
+    - OPENAI_PUBLIC_BASE_URL (default https://api.openai.com/v1)
+    - OPENAI_PUBLIC_MODEL (default gpt-4o)
+    """
+
+    supports_structured_output = True
+
+    def __init__(self, model: str | None = None, temperature: float = 0.7):
+        settings = get_settings()
+        self.model = model or settings.openai_public_model
+        self.temperature = temperature
+        self.base_url = settings.openai_public_base_url
+        self.api_key = settings.openai_public_api_key
+        if not self.api_key:
+            self._llm = None
+            return
+        self._llm = ChatOpenAI(
+            model=self.model,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            temperature=self.temperature,
+        )
+
+    def get_langchain_llm(self):
+        if self._llm is None:
+            raise RuntimeError(
+                "OpenAI público não configurado. Defina OPENAI_PUBLIC_API_KEY "
+                "em /settings → Plataforma."
+            )
+        return self._llm
+
+    async def generate(self, messages: list[dict], **kwargs) -> dict:
+        return await _generate_via_langchain(self, messages, **kwargs)
+
+
 def get_provider(provider_name: str = "azure", **kwargs) -> LLMProvider:
     """Factory de provedores. Default: azure (Azure OpenAI Service).
 
     'openai' é ALIAS de 'azure' (Onda 7 Wave 4) — toda chamada que vinha como
     "openai" resolve pra Azure usando azure_openai_api_key. Compatível com
     agentes legacy sem necessidade de migração.
+
+    'openai_public' (PR #194) chama api.openai.com diretamente — usado quando
+    operador quer comparar latência/qualidade do GPT-4o público vs Azure.
     """
     providers = {
         "azure": AzureOpenAIProvider,
-        "openai": AzureOpenAIProvider,  # alias
+        "openai": AzureOpenAIProvider,  # alias histórico
+        "openai_public": OpenAIPublicProvider,
         "maritaca": MaritacaProvider,
         "ollama": OllamaProvider,
     }

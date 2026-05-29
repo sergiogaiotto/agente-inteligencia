@@ -1700,6 +1700,12 @@ class SettingsSave(BaseModel):
     azure_embeddings_deployment: Optional[str] = "text-embedding-3-small"
     openai_key: Optional[str] = ""
     openai_model: Optional[str] = "gpt-4o"
+    # PR #194 (2026-05-29): OpenAI público real (api.openai.com) — separado
+    # do alias Azure. Usado quando operador quer rotear pra api.openai.com
+    # direto em vez do Azure (ex: comparar latência GPT-4o).
+    openai_public_api_key: Optional[str] = ""
+    openai_public_base_url: Optional[str] = "https://api.openai.com/v1"
+    openai_public_model: Optional[str] = "gpt-4o"
     maritaca_key: Optional[str] = ""
     maritaca_model: Optional[str] = "sabia-3"
     maritaca_url: Optional[str] = "https://chat.maritaca.ai/api"
@@ -1790,7 +1796,7 @@ async def test_provider(data: ProviderTestRequest):
     import time as _time
     import httpx
     provider = (data.provider or "").lower().strip()
-    valid_providers = {"azure", "openai", "maritaca", "ollama", "gpt-oss-20b", "gpt-oss-120b", "qwen3"}
+    valid_providers = {"azure", "openai", "openai_public", "maritaca", "ollama", "gpt-oss-20b", "gpt-oss-120b", "qwen3"}
     if provider not in valid_providers:
         raise HTTPException(400, f"Provedor inválido: {data.provider}")
     if not data.model:
@@ -1819,6 +1825,13 @@ async def test_provider(data: ProviderTestRequest):
         api_key = data.api_key or ""
         if not api_key:
             return {"ok": False, "error": "API Key obrigatória para OpenAI"}
+    elif provider == "openai_public":
+        # PR #194: OpenAI público real (api.openai.com).
+        base_url = (data.base_url or "https://api.openai.com/v1").rstrip("/")
+        chat_url = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
+        api_key = data.api_key or ""
+        if not api_key:
+            return {"ok": False, "error": "API Key obrigatória para OpenAI público"}
     elif provider == "maritaca":
         base_url = (data.base_url or "https://chat.maritaca.ai/api").rstrip("/")
         chat_url = f"{base_url}/v1/chat/completions"

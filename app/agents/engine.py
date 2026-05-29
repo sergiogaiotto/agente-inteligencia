@@ -171,6 +171,14 @@ def _resolve_provider_config(provider: str, settings) -> tuple[str, Optional[str
             return "", "API Key do Azure OpenAI não está configurada"
         return api_key, None
 
+    if provider == "openai_public":
+        # PR #194 (2026-05-29): OpenAI público real (api.openai.com). Key
+        # separada de Azure pra operador comparar latência/custo.
+        api_key = (settings.openai_public_api_key or "").strip()
+        if not api_key or api_key.startswith(PLACEHOLDER_PREFIXES):
+            return "", "API Key do OpenAI público não está configurada"
+        return api_key, None
+
     if provider == "maritaca":
         api_key = (settings.maritaca_api_key or "").strip()
         if not api_key or api_key.startswith(PLACEHOLDER_PREFIXES):
