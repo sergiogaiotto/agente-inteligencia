@@ -635,7 +635,10 @@ async def get_agent_skills_context(agent_id: str, user: dict = Depends(require_u
     from app.core.database import agents_repo, skills_repo, tools_repo
     from app.mcp.runtime import parse_tool_bindings, match_with_registry
     from app.skill_parser.parser import parse_skill_md
-    from app.workspace.binding_schema import normalize_mcp_binding
+    from app.workspace.binding_schema import (
+        normalize_mcp_binding,
+        normalize_api_binding_from_skill,
+    )
 
     agent = await agents_repo.find_by_id(agent_id)
     if not agent:
@@ -664,12 +667,25 @@ async def get_agent_skills_context(agent_id: str, user: dict = Depends(require_u
         enriched = await match_with_registry(parsed_tools, tools_repo)
 
         bindings_out: list[dict] = []
+
+        # ── MCP bindings: 1 item por tool ──
         for tool in enriched:
             # Só geramos schema canônico pra tools que casaram com o
             # Registry — sem isso não temos id/auth/server pra invocar.
             if not tool.get("db_id") and not tool.get("id"):
                 continue
             bindings_out.append(normalize_mcp_binding(tool, skill_md=raw_md))
+
+        # ── Onda A.2: API bindings — 1 item por SKILL declarativa ──
+        # Pq não 1 por binding? Porque api_bindings_parsed compartilham
+        # ## Inputs via Jinja2 — usuário preenche inputs uma vez e a SKILL
+        # roda como unidade (execute_declarative orquestra todos). Slash
+        # invoke pra API == invocação da SKILL inteira.
+        api_canonical = normalize_api_binding_from_skill(
+            skill=sk, skill_md=raw_md, parsed_skill=parsed,
+        )
+        if api_canonical:
+            bindings_out.append(api_canonical)
 
         skills_out.append({
             "skill_id": sid,
@@ -739,14 +755,14 @@ async def invoke_binding_direct(
         validate_params_against_schema,
     )
 
-    if data.binding_kind != "mcp":
+    if data.binding_kind not in ("mcp", "api"):
         raise HTTPException(
             501,
             f"binding_kind '{data.binding_kind}' não suportado nesta onda. "
-            "Onda A.1 cobre apenas MCP; API/RAG/Tabular vêm em A.2-A.4.",
+            "Ondas A.1+A.2 cobrem MCP+API; RAG/Tabular vêm em A.3.",
         )
 
-    # 1. Resolve agent + skill
+    # 1. Resolve agent + skill (comum aos 2 paths)
     agent = await agents_repo.find_by_id(data.agent_id)
     if not agent:
         raise HTTPException(404, f"Agent '{data.agent_id}' não encontrado.")
@@ -759,6 +775,17 @@ async def invoke_binding_direct(
     except Exception as e:
         raise HTTPException(400, f"SKILL.md inválido: {e}")
 
+    # ──────────────────────────────────────────────────────
+    # Branch: binding_kind == "api" — Onda A.2
+    # ──────────────────────────────────────────────────────
+    if data.binding_kind == "api":
+        return await _invoke_api_binding_direct(
+            data=data, agent=agent, skill=sk, parsed=parsed, raw_md=raw_md,
+        )
+
+    # ──────────────────────────────────────────────────────
+    # Branch: binding_kind == "mcp" — Onda A.1 (path original abaixo)
+    # ──────────────────────────────────────────────────────
     # 2. Resolve binding (MCP tool) pelo binding_id (= db_id no Registry)
     bindings_text = (parsed.tool_bindings if parsed else "") or ""
     parsed_tools = parse_tool_bindings(bindings_text)
@@ -870,4 +897,153 @@ async def invoke_binding_direct(
         "payload_sent": arguments,
         "latency_ms": latency_ms,
         "tool_name": tool_name,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Onda A.2 — Helper de invocação de API (declarativa)
+# ═══════════════════════════════════════════════════════════════
+
+
+async def _invoke_api_binding_direct(
+    *,
+    data: "InvokeBindingDirectRequest",
+    agent: dict,
+    skill: dict,
+    parsed,
+    raw_md: str,
+):
+    """Invoca SKILL declarativa via execute_declarative (sem LLM).
+
+    Diferente de MCP (1 tool por chamada), API roda a SKILL inteira —
+    todos os api_bindings_parsed são orquestrados pelo declarative_engine
+    com retry, output_mapping, compensation, etc. O user só fornece os
+    inputs (params), o engine cuida do resto.
+
+    Returns mesmo shape do MCP path: {ok, result, schema, payload_sent,
+    latency_ms, tool_name (= skill.name aqui), declarative (extras)}.
+    """
+    import time
+    from app.workspace.binding_schema import (
+        normalize_api_binding_from_skill,
+        validate_params_against_schema,
+    )
+
+    # 1. Confirma que skill_id casa com binding_id (single-skill aware)
+    if str(skill.get("id") or "") != data.binding_id:
+        raise HTTPException(
+            404,
+            f"Binding API '{data.binding_id}' não corresponde à skill "
+            f"'{data.skill_id}'. Em API, binding_id deve ser o skill_id.",
+        )
+
+    # 2. Gera schema canônico (revalida que skill é declarativa + tem bindings)
+    schema = normalize_api_binding_from_skill(skill, skill_md=raw_md, parsed_skill=parsed)
+    if not schema:
+        raise HTTPException(
+            422,
+            f"Skill '{data.skill_id}' não é declarativa OU não tem "
+            "## API Bindings parseável. Apenas declarativas suportam "
+            "invoke-binding-direct kind='api'.",
+        )
+
+    # 3. Valida params contra schema (required + enum)
+    ok, errors = validate_params_against_schema(schema, data.params or {})
+    if not ok:
+        raise HTTPException(422, {"errors": errors, "schema": schema})
+
+    # 4. Coerge inputs por tipo (engine declarativo é estrito)
+    inputs = dict(data.params or {})
+    inputs_schema_dict = _extract_inputs_schema(parsed.inputs or "")
+    if inputs_schema_dict:
+        inputs = _coerce_inputs_by_schema(inputs, inputs_schema_dict)
+
+    # 5. Executa declarativo
+    t0 = time.monotonic()
+    try:
+        from app.agents.declarative_engine import execute_declarative
+        decl = await execute_declarative(
+            agent=agent,
+            skill_parsed=parsed,
+            inputs=inputs,
+            context=None,
+            session_id="",  # slash invoke é stateless
+            dry_run=False,
+        )
+        latency_ms = int((time.monotonic() - t0) * 1000)
+    except Exception as e:
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        logger.error(
+            "workspace.invoke_direct.api_error",
+            extra={
+                "event": "workspace.invoke_direct",
+                "agent_id": data.agent_id,
+                "skill_id": data.skill_id,
+                "binding_kind": "api",
+                "latency_ms": latency_ms,
+                "error": str(e)[:300],
+            },
+        )
+        raise HTTPException(500, f"Erro ao executar SKILL declarativa: {str(e)[:300]}")
+
+    # 6. Adapta saída — mesma lógica do /chat declarativo (já testada)
+    import json as _json
+    ctx_dict = decl.get("context") or {}
+    has_mapping_overflow = any(
+        "excede max_bytes" in str(err or "") for err in (decl.get("errors") or [])
+    )
+    if has_mapping_overflow and decl.get("api_response") is not None:
+        api_resp = decl.get("api_response")
+        output_text = api_resp if isinstance(api_resp, str) else _json.dumps(api_resp, ensure_ascii=False, indent=2)
+        result_obj = api_resp
+    elif "resposta" in ctx_dict:
+        r = ctx_dict["resposta"]
+        output_text = r if isinstance(r, str) else _json.dumps(r, ensure_ascii=False, indent=2)
+        result_obj = r
+    elif decl.get("api_response") is not None:
+        api_resp = decl.get("api_response")
+        output_text = api_resp if isinstance(api_resp, str) else _json.dumps(api_resp, ensure_ascii=False, indent=2)
+        result_obj = api_resp
+    else:
+        output_text = decl.get("output", "")
+        result_obj = output_text
+
+    executed = decl.get("bindings_executed") or []
+    errors_out = decl.get("errors") or []
+    any_success = any(200 <= b.get("status", 0) < 300 for b in executed)
+    is_ok = bool(any_success and not errors_out)
+
+    # 7. Log estruturado (auditoria)
+    logger.info(
+        "workspace.invoke_direct.api_completed",
+        extra={
+            "event": "workspace.invoke_direct",
+            "agent_id": data.agent_id,
+            "skill_id": data.skill_id,
+            "binding_kind": "api",
+            "binding_id": data.binding_id,
+            "skill_name": skill.get("name") or "",
+            "schema_source": schema.get("schema_source"),
+            "latency_ms": latency_ms,
+            "ok": is_ok,
+            "bindings_executed_count": len(executed),
+            "errors_count": len(errors_out),
+            "param_fields_sent": sorted(list((data.params or {}).keys())),
+        },
+    )
+
+    return {
+        "ok": is_ok,
+        "result": result_obj,
+        "result_raw": output_text if isinstance(output_text, str) else None,
+        "schema": schema,
+        "payload_sent": inputs,
+        "latency_ms": latency_ms,
+        "tool_name": skill.get("name") or "",
+        # Extras do declarativo pra UI mostrar (opcionalmente)
+        "declarative": {
+            "bindings_executed": executed,
+            "errors": errors_out,
+            "final_state": decl.get("final_state", "completed"),
+        },
     }
