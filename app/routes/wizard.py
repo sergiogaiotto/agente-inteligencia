@@ -824,6 +824,28 @@ Gere o SKILL.md completo em formato markdown. Seja específico e detalhado.{obli
     return system_prompt, data.description
 
 
+# Limite de tentativas de regeneração quando o validador detecta crítico.
+# 1 retry é suficiente pra recuperar a maioria dos casos sem inflar latência;
+# 2+ raramente ajuda (se LLM gerador errou 2x com instrução corretiva, é
+# provável que o modelo subdimensionado pra a task).
+_WIZARD_MAX_RETRIES = 1
+
+
+def _build_retry_instruction(validation_result) -> str:
+    """Constrói prompt extra pro LLM regenerar SKILL.md corrigindo as
+    violações críticas detectadas pelo validador."""
+    suggestions = validation_result.critical_suggestions()
+    if not suggestions:
+        return ""
+    return (
+        "\n\n[CORREÇÕES OBRIGATÓRIAS — sua SKILL.md anterior violou estas regras]\n"
+        "Reescreva a SKILL.md aplicando as correções abaixo. NÃO ignore — "
+        "estas falhas fazem a skill quebrar em runtime:\n\n"
+        + "\n".join(suggestions)
+        + "\n\nRegere a SKILL.md COMPLETA com as correções aplicadas."
+    )
+
+
 @router.post("/skill")
 async def wizard_skill(data: WizardSkillRequest):
     """Wizard IA: gera SKILL.md canônico a partir de descrição + bindings estruturados.
@@ -834,6 +856,10 @@ async def wizard_skill(data: WizardSkillRequest):
     - Smart default: exec_mode inferido se vazio (RAG/API → standard, senão fast).
     - Retrocompat: clients antigos com só `description, kind, domain` continuam
       funcionando (apenas perdem o enriquecimento estruturado).
+
+    Wave Validator (2026-05-29): após LLM gerar SKILL.md, parseia e valida
+    contra regras G1-G4 + operations declaradas. Crítico → retry 1x com
+    instrução corretiva. Warning → retorna no response pro frontend mostrar.
     """
     try:
         bindings = await _resolve_bindings_for_prompt(data)
@@ -843,15 +869,75 @@ async def wizard_skill(data: WizardSkillRequest):
         # Wave Wizard Routing: usa task_type=reasoning (default) e roteamento global.
         provider, model, resolved_task = await _resolve_wizard_llm(data, "skill")
         llm = get_provider(provider, model=(model or None))
+
+        # ── Geração inicial ──
         response = await llm.generate([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ])
+        skill_md = response["content"]
+
+        # ── Validação pós-geração + retry com instrução corretiva ──
+        from app.skill_parser.parser import parse_skill_md
+        from app.skill_parser.wizard_validator import validate_generated_skill
+
+        retries_used = 0
+        validation_result = None
+        try:
+            parsed = parse_skill_md(skill_md)
+            validation_result = validate_generated_skill(parsed, bindings)
+        except Exception as _parse_err:
+            # Parser não conseguiu ler a SKILL — não dá pra validar.
+            # Loga e segue sem validação (não vamos bloquear por erro de parse
+            # do nosso lado — operador ainda recebe a SKILL pra ajustar).
+            logger.warning(
+                "wizard_skill: parser falhou pós-geração — segue sem validação",
+                extra={"event": "wizard.validation.parse_failed",
+                       "error_type": type(_parse_err).__name__},
+            )
+
+        if validation_result is not None and not validation_result.ok and _WIZARD_MAX_RETRIES > 0:
+            retry_instruction = _build_retry_instruction(validation_result)
+            logger.info(
+                "wizard_skill: validador detectou crítico, tentando regerar",
+                extra={
+                    "event": "wizard.validation.retry",
+                    "critical_count": validation_result.critical_count,
+                    "warning_count": validation_result.warning_count,
+                    "rules_hit": sorted({v.rule for v in validation_result.violations}),
+                },
+            )
+            try:
+                retry_response = await llm.generate([
+                    {"role": "system", "content": system_prompt + retry_instruction},
+                    {"role": "user", "content": user_prompt},
+                ])
+                retry_skill_md = retry_response["content"]
+                # Re-valida o retry — se também violar, mantém o RETRY (geralmente
+                # melhor que o original) mas devolve warnings pro operador
+                try:
+                    parsed_retry = parse_skill_md(retry_skill_md)
+                    retry_validation = validate_generated_skill(parsed_retry, bindings)
+                    skill_md = retry_skill_md
+                    validation_result = retry_validation
+                    retries_used = 1
+                except Exception:
+                    # Retry quebrou o parser — mantém SKILL original (que ao
+                    # menos parsea) e devolve validation_result original
+                    logger.warning(
+                        "wizard_skill: retry produziu SKILL com parse error — usando original",
+                        extra={"event": "wizard.validation.retry_unparseable"},
+                    )
+            except Exception as _retry_err:
+                logger.warning(
+                    f"wizard_skill: retry falhou ({type(_retry_err).__name__}) — usando SKILL original",
+                    extra={"event": "wizard.validation.retry_failed"},
+                )
 
         # Resumo do que foi resolvido — UI pode mostrar pra confirmar.
-        return {
+        result = {
             "status": "ok",
-            "skill_md": response["content"],
+            "skill_md": skill_md,
             "resolved": {
                 "exec_mode": exec_mode,
                 "mcp_count": len(bindings["mcp_tools"]),
@@ -864,6 +950,12 @@ async def wizard_skill(data: WizardSkillRequest):
                 "llm_task_type": resolved_task,
             },
         }
+        # Validação: só inclui quando rodou. UI pode mostrar warnings/crítico
+        # remanescentes pro operador revisar antes de salvar.
+        if validation_result is not None:
+            result["validation"] = validation_result.to_dict()
+            result["validation"]["retries_used"] = retries_used
+        return result
     except Exception as e:
         logger.exception("wizard_skill falhou")
         raise HTTPException(500, f"Erro no wizard: {str(e)}")
