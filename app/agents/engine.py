@@ -1654,6 +1654,19 @@ async def _build_result(
         })
 
     verification_dict = _serialize_verification(verification)
+
+    # ── RAGAS heurístico (Onda atual): decomposição visível do Score de
+    # confiança em 4 métricas estilo RAGAS, sem chamada LLM extra. As 2
+    # primeiras (context_*) sempre disponíveis; as 2 últimas (faithfulness,
+    # answer_relevancy) vêm do MultiDimJudge quando rodou — em fast profile
+    # ficam None com hint pra UI mostrar placeholder.
+    from app.verifier.ragas_metrics import compute_heuristic_ragas
+    ragas_metrics = compute_heuristic_ragas(
+        evidences=ctx.evidences or [],
+        verification=verification_dict,
+        threshold=_diag_min_relevance,
+    )
+
     if verification_dict:
         dims = verification_dict.get("dimensions") or {}
         fact = (dims.get("factuality") or {}).get("score")
@@ -1749,6 +1762,10 @@ async def _build_result(
             # diz se veio do ## Evidence Policy da skill ou default 0.3 do engine.
             "evidence_min_relevance": _diag_min_relevance,
             "evidence_min_relevance_source": _diag_threshold_source,
+            # RAGAS heurístico: decomposição do Score de confiança em 4
+            # métricas (context_relevancy, context_precision, faithfulness,
+            # answer_relevancy). UI renderiza grid 2x2 logo abaixo do score.
+            "ragas_metrics": ragas_metrics,
             "diagnostics": diagnostics,
             "journey": ctx.journey or "—",
             "channel": ctx.channel,
