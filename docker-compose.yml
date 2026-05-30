@@ -2,7 +2,7 @@
 # Maestro — docker-compose (VPS Hostinger ready)
 #
 # Profiles:
-#   - minimal (default): app + postgres + redis + qdrant   (~1.5 GB RAM)
+#   - minimal (default): app + postgres + redis            (~1 GB RAM)
 #   - full              : adiciona opa + tempo + loki + grafana (Onda 2)
 #
 # Como subir:
@@ -11,7 +11,7 @@
 #
 # Persistência: volumes nomeados (sobrevivem a recreate). Backups em
 # infra/scripts/backup.sh. Logs com rotação (max 10MB x 3 arquivos).
-# Apenas a porta 7000 do app fica exposta na host — postgres/redis/qdrant
+# Apenas a porta 7000 do app fica exposta na host — postgres/redis
 # ficam na rede privada `aimesh`.
 # ══════════════════════════════════════════════════════════════════
 
@@ -30,7 +30,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-agente}:${POSTGRES_PASSWORD:-agente}@postgres:5432/${POSTGRES_DB:-agente_inteligencia}
       REDIS_URL: redis://redis:6379/0
-      QDRANT_URL: http://qdrant:6333
+      # Onda Q (2026-05-30): QDRANT_URL removido. RAG vetorial agora em pgvector.
       # Onda 2: o usuário liga OTEL_ENABLED via .env. Se ligado E profile=full estiver
       # ativo, o app exporta traces para tempo:4317. Sem profile=full, OTLP exporter
       # falha em conectar mas app continua (graceful degradation em init_otel).
@@ -46,8 +46,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      qdrant:
-        condition: service_started
+      # Onda Q (2026-05-30): qdrant dependency removida — serviço deletado.
       # Onda 4a: started suficiente, app trata fallback (failsafe configurável).
       opa:
         condition: service_started
@@ -78,10 +77,9 @@ services:
   # Imagem oficial pgvector/pgvector pré-instala a extensão `vector`.
   # Drop-in replacement do postgres:16-alpine — mesmo PG_DATA layout,
   # mesma versão do Postgres 16. Volumes existentes funcionam sem migração.
-  # Onda RAG v3: pgvector substitui Qdrant como backend de embedding.
-  # Compat: enquanto Settings.rag_vector_backend=qdrant, esta extensão
-  # fica disponível mas ociosa. Migration `CREATE EXTENSION IF NOT EXISTS
-  # vector` em database.py é idempotente.
+  # Onda Q (2026-05-30): pgvector é o ÚNICO backend de RAG vetorial
+  # (Qdrant removido). Migration `CREATE EXTENSION IF NOT EXISTS vector`
+  # em database.py é idempotente.
   postgres:
     image: pgvector/pgvector:pg16
     container_name: agente_postgres
@@ -147,30 +145,9 @@ services:
         max-size: "5m"
         max-file: "2"
 
-  # ─── Qdrant (Vector DB) ──────────────────────────────────────────
-  qdrant:
-    image: qdrant/qdrant:v1.11.0
-    container_name: agente_qdrant
-    restart: unless-stopped
-    environment:
-      QDRANT__SERVICE__HTTP_PORT: 6333
-      QDRANT__SERVICE__GRPC_PORT: 6334
-      QDRANT__LOG_LEVEL: WARN
-    volumes:
-      # QDRANT_DATA_DIR=/var/lib/agente-persist/qdrant pra persistir em VPS.
-      - ${QDRANT_DATA_DIR:-qdrant_data}:/qdrant/storage
-    networks:
-      - aimesh
-    # Onda 3: porta exposta em 127.0.0.1 para permitir ingestão e diagnóstico
-    # do host (curl, dashboard Qdrant em http://localhost:6333/dashboard).
-    # Em produção, fechar de novo (Qdrant é alcançado via rede `aimesh` pelo app).
-    ports:
-      - "127.0.0.1:6333:6333"
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+  # Onda Q (2026-05-30): serviço Qdrant REMOVIDO. RAG vetorial agora em
+  # pgvector (extensão do Postgres). 1 serviço a menos rodando, 1 volume
+  # a menos pra fazer backup, $$ economizado em RAM.
 
   # ─── Caddy (Reverse proxy + TLS público — Onda 4c) ───────────────
   # Em paralelo com a porta :7000 do app (mantida para back-compat).
@@ -423,8 +400,9 @@ volumes:
     name: agente_postgres_data
   redis_data:
     name: agente_redis_data
-  qdrant_data:
-    name: agente_qdrant_data
+  # Onda Q (2026-05-30): qdrant_data volume removido — serviço deletado.
+  # Operadores em VPS podem `docker volume rm agente_qdrant_data` pra
+  # liberar espaço de chunks ingestos no backend antigo.
   # Onda 4c — TLS público (Caddy persiste certs Let's Encrypt aqui).
   # Volume sobrevive a `down` (sem -v) — evita re-emitir cert e bater rate-limit do LE.
   caddy_data:

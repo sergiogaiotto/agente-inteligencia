@@ -121,7 +121,9 @@ async def ingest_text(
         # 3. Replace: limpa state anterior (Postgres + vector store)
         pool = _get_pool()
         vector_store = _get_vector_store()
-        backend_name = (get_settings().rag_vector_backend or "qdrant").lower()
+        # Onda Q (2026-05-30): backend único pgvector — antes lia
+        # rag_vector_backend (removido em Q.3).
+        backend_name = "pgvector"
         span.set_attribute("rag.vector_backend", backend_name)
         if replace:
             with _tracer.start_as_current_span("ingest.delete_old"):

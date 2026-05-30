@@ -362,9 +362,10 @@ class TestEvidenceIngestEvents:
         assert result["partial"] is True
         rec = _find_event(caplog, "evidence.ingest.partial")
         assert rec is not None, "evento evidence.ingest.partial não emitido"
-        assert rec.rag_vector_backend == "qdrant"
+        # Onda Q (2026-05-30): backend único pgvector (era 'qdrant').
+        assert rec.rag_vector_backend == "pgvector"
         assert rec.source_id == "ks-1"
         assert rec.chunks_expected == 1
         assert rec.vector_upserted == 0
-        # hint orienta o operador
-        assert "qdrant" in rec.hint.lower()
+        # hint orienta o operador (mensagem pode citar pgvector ou só "vetores")
+        assert "pgvector" in rec.hint.lower() or "vetor" in rec.hint.lower()
