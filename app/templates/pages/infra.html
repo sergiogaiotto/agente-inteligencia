@@ -97,6 +97,156 @@
 
     <!-- ═══════════ NÍVEL 2: Detalhes ═══════════ -->
 
+    <!-- Onda P (2026-05-30): Database Health — health check abrangente do
+         Postgres. Substitui o `SELECT 1` simples por validação de pool +
+         extensões + tabelas + indexes + pgvector dim + tsvector + settings
+         store. Card colapsado por default; expande on click. -->
+    <div class="mt-6 rounded-xl border border-surface-200 bg-white">
+        <div class="flex items-center justify-between border-b border-surface-100 px-4 py-3 cursor-pointer hover:bg-surface-50" @click="dbHealthExpanded = !dbHealthExpanded">
+            <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-brand-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <h2 class="text-[13px] font-semibold text-brand-900">Database Health — Postgres</h2>
+                <template x-if="dbHealth">
+                    <span class="rounded-full px-2 py-0.5 text-[9px] font-bold uppercase"
+                          :class="dbHealth.ok ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'"
+                          x-text="dbHealth.ok ? 'OK' : 'FALHA'"></span>
+                </template>
+            </div>
+            <div class="flex items-center gap-2">
+                <button @click.stop="loadDbHealth()" type="button"
+                        class="rounded-md border border-surface-200 bg-white hover:bg-surface-50 px-2 py-1 text-[10px] font-semibold text-brand-700">
+                    <span x-show="!dbHealthLoading">Executar</span>
+                    <span x-show="dbHealthLoading">Verificando...</span>
+                </button>
+                <template x-if="dbHealth">
+                    <span class="text-[10px] text-surface-400 font-mono" x-text="dbHealth.duration_ms + 'ms'"></span>
+                </template>
+                <svg class="w-3.5 h-3.5 text-surface-400 transition-transform" :class="dbHealthExpanded ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7"/></svg>
+            </div>
+        </div>
+        <div x-show="dbHealthExpanded" x-transition.duration.200ms class="px-4 py-3">
+            <template x-if="!dbHealth">
+                <p class="text-[11px] text-surface-400 italic">Clique em "Executar" pra rodar o health check abrangente.</p>
+            </template>
+            <template x-if="dbHealth">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <!-- Pool -->
+                    <div class="rounded-md border px-2.5 py-2 text-[11px]"
+                         :class="dbHealth.checks.pool?.ok ? 'border-emerald-200 bg-emerald-50/40' : 'border-rose-200 bg-rose-50/40'">
+                        <div class="flex items-center justify-between mb-0.5">
+                            <span class="font-semibold text-brand-900">Connection Pool</span>
+                            <span x-text="dbHealth.checks.pool?.ok ? '✓' : '✗'"
+                                  :class="dbHealth.checks.pool?.ok ? 'text-emerald-600' : 'text-rose-600'"></span>
+                        </div>
+                        <div class="text-[10px] font-mono text-surface-600" x-show="dbHealth.checks.pool?.ok">
+                            min=<span x-text="dbHealth.checks.pool.min"></span> ·
+                            max=<span x-text="dbHealth.checks.pool.max"></span> ·
+                            active=<span x-text="dbHealth.checks.pool.active"></span> ·
+                            idle=<span x-text="dbHealth.checks.pool.idle"></span>
+                        </div>
+                        <div class="text-[10px] text-rose-600" x-show="!dbHealth.checks.pool?.ok" x-text="dbHealth.checks.pool?.error"></div>
+                    </div>
+
+                    <!-- Extensions -->
+                    <div class="rounded-md border px-2.5 py-2 text-[11px]"
+                         :class="dbHealth.checks.extensions?.ok ? 'border-emerald-200 bg-emerald-50/40' : 'border-rose-200 bg-rose-50/40'">
+                        <div class="flex items-center justify-between mb-0.5">
+                            <span class="font-semibold text-brand-900">Extensions</span>
+                            <span x-text="dbHealth.checks.extensions?.ok ? '✓' : '✗'"
+                                  :class="dbHealth.checks.extensions?.ok ? 'text-emerald-600' : 'text-rose-600'"></span>
+                        </div>
+                        <div class="text-[10px] font-mono text-surface-600" x-show="dbHealth.checks.extensions?.required">
+                            <template x-for="(ext, name) in dbHealth.checks.extensions.required" :key="name">
+                                <div>
+                                    <span x-text="ext.ok ? '✓' : '✗'" :class="ext.ok ? 'text-emerald-600' : 'text-rose-600'"></span>
+                                    <span x-text="name"></span>
+                                    <span class="text-surface-500" x-show="ext.version" x-text="' v' + ext.version"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Tables -->
+                    <div class="rounded-md border px-2.5 py-2 text-[11px]"
+                         :class="dbHealth.checks.tables?.ok ? 'border-emerald-200 bg-emerald-50/40' : 'border-rose-200 bg-rose-50/40'">
+                        <div class="flex items-center justify-between mb-0.5">
+                            <span class="font-semibold text-brand-900">Tabelas Críticas</span>
+                            <span x-text="dbHealth.checks.tables?.ok ? '✓' : '✗'"
+                                  :class="dbHealth.checks.tables?.ok ? 'text-emerald-600' : 'text-rose-600'"></span>
+                        </div>
+                        <div class="text-[10px] text-surface-600">
+                            <span x-text="dbHealth.checks.tables.present"></span>/<span x-text="dbHealth.checks.tables.expected"></span> presentes
+                            <span class="text-surface-400">· <span x-text="dbHealth.checks.tables.total_in_db"></span> total no DB</span>
+                        </div>
+                        <div class="text-[10px] text-rose-600 mt-0.5" x-show="dbHealth.checks.tables.missing?.length">
+                            faltam: <span x-text="(dbHealth.checks.tables.missing||[]).join(', ')"></span>
+                        </div>
+                    </div>
+
+                    <!-- Indexes -->
+                    <div class="rounded-md border px-2.5 py-2 text-[11px]"
+                         :class="dbHealth.checks.indexes?.ok ? 'border-emerald-200 bg-emerald-50/40' : 'border-rose-200 bg-rose-50/40'">
+                        <div class="flex items-center justify-between mb-0.5">
+                            <span class="font-semibold text-brand-900">Indexes Críticos</span>
+                            <span x-text="dbHealth.checks.indexes?.ok ? '✓' : '✗'"
+                                  :class="dbHealth.checks.indexes?.ok ? 'text-emerald-600' : 'text-rose-600'"></span>
+                        </div>
+                        <div class="text-[10px] font-mono text-surface-600">
+                            <template x-for="idx in dbHealth.checks.indexes?.indexes || []" :key="idx.name">
+                                <div>
+                                    <span x-text="idx.ok ? '✓' : '✗'" :class="idx.ok ? 'text-emerald-600' : 'text-rose-600'"></span>
+                                    <span x-text="idx.type"></span>: <span x-text="idx.purpose"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- pgvector dim -->
+                    <div class="rounded-md border px-2.5 py-2 text-[11px]"
+                         :class="dbHealth.checks.pgvector?.ok ? 'border-emerald-200 bg-emerald-50/40' : 'border-amber-200 bg-amber-50/40'">
+                        <div class="flex items-center justify-between mb-0.5">
+                            <span class="font-semibold text-brand-900">pgvector dim</span>
+                            <span x-text="dbHealth.checks.pgvector?.ok ? '✓' : '⚠'"
+                                  :class="dbHealth.checks.pgvector?.ok ? 'text-emerald-600' : 'text-amber-600'"></span>
+                        </div>
+                        <div class="text-[10px] font-mono text-surface-600">
+                            actual=<span x-text="dbHealth.checks.pgvector?.actual_dim"></span> ·
+                            expected=<span x-text="dbHealth.checks.pgvector?.expected_dim"></span> ·
+                            <span x-text="dbHealth.checks.pgvector?.points_count + ' pts'"></span>
+                        </div>
+                        <div x-show="!dbHealth.checks.pgvector?.ok" class="text-[10px] text-amber-700 mt-0.5">
+                            drift detected — rode <code>POST /api/v1/evidence/reindex</code>
+                        </div>
+                    </div>
+
+                    <!-- tsvector -->
+                    <div class="rounded-md border px-2.5 py-2 text-[11px]"
+                         :class="dbHealth.checks.tsvector?.ok ? 'border-emerald-200 bg-emerald-50/40' : 'border-rose-200 bg-rose-50/40'">
+                        <div class="flex items-center justify-between mb-0.5">
+                            <span class="font-semibold text-brand-900">tsvector (BM25)</span>
+                            <span x-text="dbHealth.checks.tsvector?.ok ? '✓' : '✗'"
+                                  :class="dbHealth.checks.tsvector?.ok ? 'text-emerald-600' : 'text-rose-600'"></span>
+                        </div>
+                        <div class="text-[10px] font-mono text-surface-600">
+                            <span x-text="dbHealth.checks.tsvector?.with_tsv"></span>/<span x-text="dbHealth.checks.tsvector?.with_text"></span> chunks com TSV
+                        </div>
+                    </div>
+
+                    <!-- Settings Store -->
+                    <div class="rounded-md border px-2.5 py-2 text-[11px] sm:col-span-2"
+                         :class="dbHealth.checks.settings_store?.ok ? 'border-emerald-200 bg-emerald-50/40' : 'border-rose-200 bg-rose-50/40'">
+                        <div class="flex items-center justify-between mb-0.5">
+                            <span class="font-semibold text-brand-900">Settings Store (R/W smoke)</span>
+                            <span x-text="dbHealth.checks.settings_store?.ok ? '✓' : '✗'"
+                                  :class="dbHealth.checks.settings_store?.ok ? 'text-emerald-600' : 'text-rose-600'"></span>
+                        </div>
+                        <div class="text-[10px] text-surface-600" x-text="dbHealth.checks.settings_store?.rw_test || dbHealth.checks.settings_store?.error"></div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
     <!-- Knowledge Ops — pgvector (RAG vetorial em Postgres).
          Onda Q (2026-05-30): Qdrant removido. Backend único pgvector.
          Endpoint /api/v1/infra/details serve `details.vector_store` (novo) +
@@ -318,6 +468,12 @@ function infraPage() {
         // Onda Q: campo qdrant preservado por compat com endpoint (alias do vector_store).
         details: { vector_store: null, qdrant: null, redis: null, postgres: null, duckdb: null },
         grafanaEmbed: false,
+        // Onda P (2026-05-30): Database Health abrangente.
+        // dbHealth = { ok, duration_ms, checks: {...} } ou null antes do 1º load.
+        // Colapsado por default; user clica pra expandir/executar.
+        dbHealth: null,
+        dbHealthExpanded: false,
+        dbHealthLoading: false,
 
         // True só quando Grafana respondeu OK no último /status. Se profile full
         // não está subido, esconde o card inteiro pra não poluir a UI.
@@ -344,6 +500,25 @@ function infraPage() {
                 this.details = await r.json();
             } catch(e) {
                 console.error('infra/details falhou', e);
+            }
+        },
+
+        // Onda P (2026-05-30): dispara health check abrangente do Postgres.
+        // Endpoint exercita pool + extensions + tables + indexes + pgvector
+        // + tsvector + settings store. ~50-100ms. Não roda no init pra
+        // economizar resource — só on demand via click do user.
+        async loadDbHealth() {
+            this.dbHealthLoading = true;
+            try {
+                const r = await fetch('/api/v1/health/database');
+                this.dbHealth = await r.json();
+                this.dbHealthExpanded = true;  // auto-expand após primeiro run
+            } catch(e) {
+                console.error('health/database falhou', e);
+                this.dbHealth = { ok: false, duration_ms: 0, checks: { pool: { ok: false, error: e.message } } };
+                this.dbHealthExpanded = true;
+            } finally {
+                this.dbHealthLoading = false;
             }
         },
 
