@@ -265,34 +265,302 @@
         </div>
     </div>
 
-    <!-- Modal: tail viewer -->
+    <!-- ══ Modal: Log Viewer 2.0 — busca, filtros, JSON tree, IA, auto-refresh ══ -->
     <div x-show="tailOpen" x-transition.opacity x-cloak
-         @keydown.escape.window="tailOpen=false"
+         @keydown.escape.window="if(!logView.aiOpen) tailOpen=false"
          class="fixed inset-0 z-[9995] bg-black/40 flex items-center justify-center p-4">
-        <div @click.away="tailOpen=false" class="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
+        <div @click.away="if(!logView.aiOpen) tailOpen=false" class="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[92vh] flex flex-col overflow-hidden">
+
+            <!-- Header -->
             <div class="flex items-center justify-between px-5 py-3 border-b border-surface-100">
-                <div>
-                    <p class="text-[10px] uppercase tracking-wider text-amber-600 font-semibold">Últimas linhas</p>
-                    <h3 class="text-[14px] font-bold text-brand-900 font-mono" x-text="tailFile"></h3>
+                <div class="flex items-center gap-3 min-w-0">
+                    <div>
+                        <p class="text-[10px] uppercase tracking-wider text-amber-600 font-semibold">Log Viewer</p>
+                        <h3 class="text-[14px] font-bold text-brand-900 font-mono truncate" x-text="tailFile"></h3>
+                    </div>
+                    <span x-show="logStats.total" class="text-[10px] text-surface-400 ml-2 hidden sm:inline" x-text="logStats.total + ' linhas · ' + logStats.filtered + ' filtradas'"></span>
                 </div>
                 <div class="flex items-center gap-2">
-                    <select x-model.number="tailLines" @change="loadTail(tailFile)" class="rounded border border-surface-200 px-2 py-1 text-[11px]">
+                    <!-- Auto-refresh toggle -->
+                    <button @click="toggleAutoRefresh()" :title="logView.autoRefresh ? 'Pausar auto-refresh' : 'Auto-refresh a cada ' + logView.autoRefreshSec + 's'"
+                            class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors"
+                            :class="logView.autoRefresh ? 'bg-emerald-100 text-emerald-700' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">
+                        <span class="flex h-1.5 w-1.5 rounded-full" :class="logView.autoRefresh ? 'bg-emerald-500 animate-pulse' : 'bg-surface-400'"></span>
+                        <span x-text="logView.autoRefresh ? 'Ao vivo · ' + logView.autoRefreshSec + 's' : 'Pausado'"></span>
+                    </button>
+                    <select x-model.number="tailLines" @change="loadTail(tailFile)" class="rounded border border-surface-200 px-2 py-1 text-[11px]" title="Quantas linhas buscar do servidor">
                         <option value="50">50</option>
                         <option value="100">100</option>
                         <option value="200">200</option>
                         <option value="500">500</option>
                         <option value="1000">1000</option>
                     </select>
-                    <button @click="loadTail(tailFile)" class="rounded border border-surface-200 px-2 py-1 text-[11px] text-surface-600 hover:bg-surface-50">↻</button>
-                    <button @click="tailOpen=false" class="p-1 rounded hover:bg-surface-100 text-surface-400" aria-label="Fechar">✕</button>
+                    <button @click="loadTail(tailFile)" :disabled="tailLoading"
+                            class="rounded border border-surface-200 px-2 py-1 text-[11px] text-surface-600 hover:bg-surface-50 disabled:opacity-40" title="Recarregar">
+                        <span x-show="!tailLoading">↻</span>
+                        <svg x-show="tailLoading" class="w-3 h-3 animate-spin inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    </button>
+                    <button @click="openLogAi('')" :disabled="logView.parsed.length === 0"
+                            class="inline-flex items-center gap-1 rounded-md bg-gradient-to-r from-red-500 to-rose-500 px-2.5 py-1 text-[10px] font-semibold text-white hover:from-red-600 hover:to-rose-600 disabled:opacity-40 disabled:from-surface-300 disabled:to-surface-300"
+                            title="Pedir análise da IA sobre as linhas filtradas">
+                        <span class="text-[11px]">🪄</span>
+                        <span>IA, me ajuda</span>
+                    </button>
+                    <button @click="tailOpen=false; stopAutoRefresh()" class="p-1 rounded hover:bg-surface-100 text-surface-400" aria-label="Fechar">✕</button>
                 </div>
             </div>
-            <div class="flex-1 overflow-auto bg-surface-50 p-3">
-                <pre class="text-[10px] font-mono leading-relaxed text-brand-900 whitespace-pre-wrap" x-text="tailContent || (tailLoading ? 'Carregando...' : '(vazio)')"></pre>
+
+            <!-- ══ TOOLBAR: filtros vivos ══ -->
+            <div class="border-b border-surface-100 bg-surface-50/50 px-5 py-2.5 space-y-2">
+                <div class="flex flex-wrap items-center gap-2">
+                    <!-- Time window -->
+                    <select x-model="logView.timeWindow" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[11px]" title="Janela de tempo (filtra por ts)">
+                        <option value="all">Tudo (na janela carregada)</option>
+                        <option value="5m">Últimos 5 min</option>
+                        <option value="15m">Últimos 15 min</option>
+                        <option value="30m">Últimos 30 min</option>
+                        <option value="1h">Última hora</option>
+                        <option value="6h">Últimas 6 horas</option>
+                        <option value="24h">Últimas 24 horas</option>
+                    </select>
+                    <!-- Level -->
+                    <select x-model="logView.levelFilter" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[11px]">
+                        <option value="">Todos níveis</option>
+                        <template x-for="lv in ['ERROR','WARNING','INFO','DEBUG']" :key="lv">
+                            <option :value="lv" x-text="lv"></option>
+                        </template>
+                    </select>
+                    <!-- Logger -->
+                    <select x-model="logView.loggerFilter" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[11px] max-w-[160px]">
+                        <option value="">Todos loggers</option>
+                        <template x-for="lg in logLoggers" :key="lg">
+                            <option :value="lg" x-text="lg"></option>
+                        </template>
+                    </select>
+                    <!-- Event -->
+                    <select x-show="logEvents.length > 0" x-model="logView.eventFilter" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[11px] max-w-[180px]">
+                        <option value="">Todos eventos</option>
+                        <template x-for="ev in logEvents" :key="ev">
+                            <option :value="ev" x-text="ev"></option>
+                        </template>
+                    </select>
+                    <!-- Busca -->
+                    <input x-model="logView.search" type="text" placeholder="🔍 Buscar (path, msg, trace_id, request_id, body)..."
+                           class="flex-1 min-w-[180px] rounded-md border border-surface-200 bg-white px-2 py-1 text-[11px]">
+                    <!-- Toggles -->
+                    <label class="flex items-center gap-1 text-[10px] text-surface-600 cursor-pointer">
+                        <input type="checkbox" x-model="logView.httpErrorsOnly" class="rounded">
+                        <span>HTTP ≥400</span>
+                    </label>
+                    <label class="flex items-center gap-1 text-[10px] text-surface-600 cursor-pointer">
+                        <input type="checkbox" x-model="logView.groupByTrace" class="rounded">
+                        <span>Agrupar por trace</span>
+                    </label>
+                    <button x-show="hasActiveFilters" @click="clearLogFilters()" class="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] text-amber-700 hover:bg-amber-100">
+                        Limpar filtros
+                    </button>
+                </div>
+
+                <!-- Filtro ativo por trace (chip) -->
+                <div x-show="logView.selectedTraceId" class="flex items-center gap-2">
+                    <span class="inline-flex items-center gap-1.5 rounded-full bg-brand-100 px-2.5 py-0.5 text-[10px] text-brand-700">
+                        trace_id: <code class="font-mono font-semibold" x-text="logView.selectedTraceId"></code>
+                        <button @click="logView.selectedTraceId=null" class="text-brand-500 hover:text-brand-700">✕</button>
+                    </span>
+                </div>
+
+                <!-- Sparkline + stats -->
+                <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-1.5 text-[10px] text-surface-500">
+                        <span x-text="logStats.filtered + '/' + logStats.total + ' linhas'"></span>
+                        <span x-show="logStats.errors > 0" class="rounded-full bg-rose-100 px-1.5 text-rose-700 font-semibold" x-text="logStats.errors + ' erros'"></span>
+                        <span x-show="logStats.warns > 0" class="rounded-full bg-amber-100 px-1.5 text-amber-700 font-semibold" x-text="logStats.warns + ' warns'"></span>
+                        <span x-show="logStats.traces > 0" class="text-surface-400" x-text="'· ' + logStats.traces + ' traces'"></span>
+                        <span x-show="logStats.avgDuration" class="text-surface-400" x-text="'· p50 ' + logStats.avgDuration + 'ms'"></span>
+                    </div>
+                    <!-- Sparkline ASCII-style (1 bloco por bucket) -->
+                    <div x-show="logSparkBuckets.length > 0" class="flex items-end gap-0.5 h-5" :title="'Distribuição temporal: ' + logSparkBuckets.length + ' buckets'">
+                        <template x-for="(b, i) in logSparkBuckets" :key="i">
+                            <div class="w-1 rounded-sm"
+                                 :class="b.hasError ? 'bg-rose-400' : (b.hasWarn ? 'bg-amber-400' : 'bg-brand-300')"
+                                 :style="'height: ' + Math.max(2, Math.round(b.norm * 20)) + 'px'"
+                                 :title="b.count + ' linhas em ' + b.label"></div>
+                        </template>
+                    </div>
+                </div>
             </div>
+
+            <!-- ══ BODY: lista de linhas com expand inline ══ -->
+            <div class="flex-1 overflow-y-auto bg-surface-50/30 scrollbar-thin">
+                <div x-show="tailLoading && logView.parsed.length === 0" class="p-8 text-center text-[12px] text-surface-400">
+                    <svg class="w-6 h-6 animate-spin inline mb-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <div>Carregando linhas...</div>
+                </div>
+                <div x-show="!tailLoading && logFiltered.length === 0" class="p-8 text-center text-[12px] text-surface-400">
+                    <span x-show="logView.parsed.length === 0">Nenhuma linha disponível ainda.</span>
+                    <span x-show="logView.parsed.length > 0">Nenhuma linha bate com os filtros atuais.</span>
+                </div>
+
+                <!-- Agrupado por trace -->
+                <template x-if="logView.groupByTrace && logFiltered.length > 0">
+                    <div class="divide-y divide-surface-100">
+                        <template x-for="g in logGrouped" :key="g.key">
+                            <div class="bg-white">
+                                <div class="px-3 py-1.5 bg-brand-50/40 border-l-2 border-brand-300 flex items-center gap-2">
+                                    <span class="text-[10px] font-mono text-brand-700 font-semibold" x-text="g.key === '_no_trace_' ? 'sem trace' : g.key"></span>
+                                    <span class="text-[9px] text-surface-400" x-text="g.lines.length + ' linhas'"></span>
+                                    <span x-show="g.duration" class="text-[9px] text-surface-400" x-text="'· ' + g.duration + 'ms'"></span>
+                                </div>
+                                <template x-for="(l, li) in g.lines" :key="l._idx">
+                                    <div :data-idx="l._idx">
+                                        <div class="group flex items-start gap-2 px-3 py-1 hover:bg-brand-50/30 cursor-pointer text-[10px] font-mono border-l-2"
+                                             :class="logLevelBorder(l)" @click="toggleLine(l._idx)">
+                                            <span class="shrink-0 text-surface-400" x-text="formatTs(l.json?.ts)"></span>
+                                            <span class="shrink-0 font-semibold w-12" :class="logLevelClass(l)" x-text="(l.json?.level||'?').substring(0,4)"></span>
+                                            <span class="shrink-0 text-surface-500 truncate max-w-[140px]" :title="l.json?.logger" x-text="l.json?.logger||'—'"></span>
+                                            <span class="flex-1 truncate text-brand-900" x-text="lineHeadline(l)"></span>
+                                            <span x-show="l.json?.duration_ms" class="shrink-0 text-[9px] font-mono" :class="durationClass(l.json?.duration_ms)" x-text="(l.json?.duration_ms|0) + 'ms'"></span>
+                                        </div>
+                                        <div x-show="logView.expandedIdx === l._idx" x-transition class="bg-surface-50 border-l-2 border-brand-300 px-4 py-2">
+                                            <div class="flex items-center gap-2 mb-2 text-[10px]">
+                                                <button @click="copyLine(l)" class="rounded border border-surface-200 bg-white px-2 py-0.5 hover:bg-surface-100">Copiar linha</button>
+                                                <button x-show="l.json?.trace_id" @click="filterByTrace(l.json.trace_id)" class="rounded border border-brand-200 bg-brand-50 px-2 py-0.5 text-brand-700 hover:bg-brand-100">
+                                                    Filtrar trace
+                                                </button>
+                                                <button x-show="l.json?.request_id" @click="logView.search = l.json.request_id" class="rounded border border-brand-200 bg-brand-50 px-2 py-0.5 text-brand-700 hover:bg-brand-100">
+                                                    Buscar request
+                                                </button>
+                                            </div>
+                                            <div class="text-[10px] font-mono" x-html="renderJsonTree(l.json)"></div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+
+                <!-- Plana (lista linear) -->
+                <template x-if="!logView.groupByTrace">
+                    <div class="divide-y divide-surface-100 bg-white">
+                        <template x-for="l in logFiltered" :key="l._idx">
+                            <div :data-idx="l._idx">
+                                <div class="group flex items-start gap-2 px-3 py-1 hover:bg-brand-50/30 cursor-pointer text-[10px] font-mono border-l-2"
+                                     :class="logLevelBorder(l)" @click="toggleLine(l._idx)">
+                                    <span class="shrink-0 text-surface-400" x-text="formatTs(l.json?.ts)"></span>
+                                    <span class="shrink-0 font-semibold w-12" :class="logLevelClass(l)" x-text="(l.json?.level||'?').substring(0,4)"></span>
+                                    <span class="shrink-0 text-surface-500 truncate max-w-[140px]" :title="l.json?.logger" x-text="l.json?.logger||'—'"></span>
+                                    <span class="flex-1 truncate text-brand-900" x-html="lineHeadlineHighlighted(l)"></span>
+                                    <span x-show="l.json?.duration_ms" class="shrink-0 text-[9px] font-mono" :class="durationClass(l.json?.duration_ms)" x-text="(l.json?.duration_ms|0) + 'ms'"></span>
+                                </div>
+                                <div x-show="logView.expandedIdx === l._idx" x-transition class="bg-surface-50 border-l-2 border-brand-300 px-4 py-2">
+                                    <div class="flex items-center gap-2 mb-2 text-[10px]">
+                                        <button @click="copyLine(l)" class="rounded border border-surface-200 bg-white px-2 py-0.5 hover:bg-surface-100">Copiar linha</button>
+                                        <button x-show="l.json?.trace_id" @click="filterByTrace(l.json.trace_id)" class="rounded border border-brand-200 bg-brand-50 px-2 py-0.5 text-brand-700 hover:bg-brand-100">
+                                            Filtrar trace
+                                        </button>
+                                        <button x-show="l.json?.request_id" @click="logView.search = l.json.request_id" class="rounded border border-brand-200 bg-brand-50 px-2 py-0.5 text-brand-700 hover:bg-brand-100">
+                                            Buscar request
+                                        </button>
+                                    </div>
+                                    <div class="text-[10px] font-mono" x-html="renderJsonTree(l.json)"></div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Footer -->
             <div class="px-5 py-2 border-t border-surface-100 flex items-center justify-between text-[10px] text-surface-500">
-                <span x-text="tailMeta ? (tailMeta.returned_lines + ' linhas · arquivo: ' + (tailMeta.total_size_bytes/1024).toFixed(1) + ' KB' + (tailMeta.truncated ? ' (truncado nos últimos 5MB)' : '')) : ''"></span>
-                <button x-show="tailContent" @click="copyText(tailContent)" class="text-brand-600 hover:text-brand-700">Copiar tudo</button>
+                <span x-text="tailMeta ? (tailMeta.returned_lines + ' do servidor · arquivo: ' + (tailMeta.total_size_bytes/1024).toFixed(1) + ' KB' + (tailMeta.truncated ? ' (truncado nos últimos 5MB)' : '')) : ''"></span>
+                <div class="flex items-center gap-3">
+                    <button @click="exportFiltered()" x-show="logFiltered.length > 0" class="text-brand-600 hover:text-brand-700">Exportar filtradas (JSON)</button>
+                    <button x-show="logFiltered.length > 0" @click="copyFiltered()" class="text-brand-600 hover:text-brand-700">Copiar filtradas</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ Modal IA: "Me ajuda a entender" ══ -->
+    <div x-show="logView.aiOpen" x-transition.opacity x-cloak
+         @keydown.escape.window="logView.aiOpen=false"
+         class="fixed inset-0 z-[9999] bg-black/50 flex items-center justify-center p-4">
+        <div @click.away="logView.aiOpen=false" class="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden">
+            <div class="flex items-center justify-between px-5 py-3 border-b border-surface-100 bg-gradient-to-r from-red-50 to-rose-50">
+                <div class="flex items-center gap-2">
+                    <span class="text-[20px]">🪄</span>
+                    <div>
+                        <p class="text-[10px] uppercase tracking-wider text-rose-600 font-semibold">IA, me ajuda</p>
+                        <h3 class="text-[14px] font-bold text-brand-900">Análise das linhas filtradas</h3>
+                    </div>
+                </div>
+                <button @click="logView.aiOpen=false" class="p-1 rounded hover:bg-white/50 text-surface-400">✕</button>
+            </div>
+
+            <div class="px-5 py-3 border-b border-surface-100 text-[11px] text-surface-600 flex items-center justify-between bg-surface-50/50">
+                <span><strong x-text="logFiltered.length"></strong> linhas selecionadas · <code class="bg-surface-100 px-1 rounded text-[10px]" x-text="tailFile"></code></span>
+                <span class="text-[10px] text-surface-400">Modelo primário da plataforma</span>
+            </div>
+
+            <div class="px-5 py-3 space-y-3">
+                <!-- Quick presets -->
+                <div>
+                    <p class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1.5">Análises rápidas</p>
+                    <div class="flex flex-wrap gap-1.5">
+                        <template x-for="p in [
+                            {key:'summary',label:'📋 Resumir',hint:'O que está acontecendo'},
+                            {key:'errors',label:'🚨 Erros',hint:'Categorizar erros'},
+                            {key:'anomalies',label:'📊 Anomalias',hint:'Padrões fora do normal'},
+                            {key:'hypothesis',label:'🔍 Hipóteses',hint:'Causa-raiz provável'}
+                        ]" :key="p.key">
+                            <button @click="logView.aiPreset = p.key; askAi()"
+                                    :disabled="logView.aiLoading || logFiltered.length === 0"
+                                    :title="p.hint"
+                                    class="inline-flex flex-col items-start gap-0.5 rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] hover:border-rose-300 hover:bg-rose-50/30 disabled:opacity-40"
+                                    :class="logView.aiPreset === p.key && logView.aiLoading ? 'border-rose-400 bg-rose-50' : ''">
+                                <span class="font-semibold" x-text="p.label"></span>
+                                <span class="text-[9px] text-surface-400" x-text="p.hint"></span>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Pergunta livre -->
+                <div>
+                    <p class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1.5">Ou pergunte algo específico</p>
+                    <div class="flex gap-2">
+                        <input x-model="logView.aiQuestion" @keydown.enter="askAi()"
+                               placeholder="ex: por que /api/v1/agents demorou tanto? Há algum padrão de erro?"
+                               class="flex-1 rounded-md border border-surface-200 px-3 py-1.5 text-[12px] outline-none focus:border-rose-400">
+                        <button @click="askAi()" :disabled="logView.aiLoading || logFiltered.length === 0 || !logView.aiQuestion.trim()"
+                                class="rounded-md bg-rose-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-rose-600 disabled:opacity-40">
+                            <span x-show="!logView.aiLoading">Perguntar →</span>
+                            <span x-show="logView.aiLoading">Pensando...</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Resposta -->
+            <div class="flex-1 overflow-y-auto px-5 py-4 bg-surface-50/30 border-t border-surface-100 scrollbar-thin">
+                <div x-show="logView.aiLoading" class="text-center py-6 text-[12px] text-surface-500">
+                    <svg class="w-6 h-6 animate-spin inline mb-2 text-rose-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <div>Analisando <span x-text="logFiltered.length"></span> linhas...</div>
+                </div>
+                <div x-show="!logView.aiLoading && !logView.aiAnswer && !logView.aiError" class="text-center py-6 text-[11px] text-surface-400">
+                    Escolha uma análise rápida ou faça uma pergunta para começar.
+                </div>
+                <div x-show="logView.aiError" class="rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-[11px] text-rose-700">
+                    <strong>Erro:</strong> <span x-text="logView.aiError"></span>
+                </div>
+                <div x-show="logView.aiAnswer" class="prose prose-sm max-w-none">
+                    <div class="text-[12px] text-brand-900 leading-relaxed log-ai-md" x-html="renderMarkdown(logView.aiAnswer)"></div>
+                </div>
+                <div x-show="logView.aiAnswer && logView.aiModel" class="mt-3 pt-3 border-t border-surface-200 text-[10px] text-surface-400 flex items-center justify-between">
+                    <span>Modelo: <code class="font-mono" x-text="logView.aiModel"></code></span>
+                    <button @click="copyText(logView.aiAnswer)" class="text-brand-600 hover:text-brand-700">Copiar análise</button>
+                </div>
             </div>
         </div>
     </div>
@@ -313,6 +581,30 @@ function observabilityPage() {
         logs: {}, logsLoading: false,
         tailOpen: false, tailFile: '', tailLines: 100,
         tailContent: '', tailMeta: null, tailLoading: false,
+        // ── Log Viewer 2.0 (PR pós-tools-console) ──
+        logView: {
+            parsed: [],            // [{_idx, raw, json}]
+            expandedIdx: null,
+            selectedTraceId: null,
+            timeWindow: 'all',     // '5m'|'15m'|'30m'|'1h'|'6h'|'24h'|'all'
+            levelFilter: '',
+            loggerFilter: '',
+            eventFilter: '',
+            search: '',
+            httpErrorsOnly: false,
+            groupByTrace: false,
+            autoRefresh: false,
+            autoRefreshSec: 5,
+            autoRefreshTimer: null,
+            // IA
+            aiOpen: false,
+            aiPreset: '',
+            aiQuestion: '',
+            aiLoading: false,
+            aiAnswer: '',
+            aiModel: '',
+            aiError: '',
+        },
         get totalPages() { return Math.max(1, Math.ceil(this.totalInteractions / this.pageSize)); },
 
         async load() {
@@ -340,20 +632,421 @@ function observabilityPage() {
         async loadTail(name) {
             const clean = name.replace(/\.log$/, '');
             this.tailLoading = true;
-            this.tailContent = '';
             try {
                 const r = await api.get('/api/v1/observability/logs/tail/' + encodeURIComponent(clean) + '?lines=' + this.tailLines);
                 this.tailMeta = r;
-                // Pretty-print: se for JSON, indenta cada linha
+                // Pretty-print bruto (legado, mantém pra "Copiar tudo" futuro)
                 this.tailContent = (r.lines || []).map(ln => {
                     try { return JSON.stringify(JSON.parse(ln), null, 2); }
                     catch { return ln; }
                 }).join('\n\n');
+                // Pipeline novo: parse JSON e popular logView.parsed
+                this.parseRawLines(r.lines || []);
             } catch(e) {
                 this.tailContent = '';
+                this.logView.parsed = [];
                 showToast('Erro: ' + (e.message||''), 'error');
             }
             this.tailLoading = false;
+        },
+
+        // ─── Log Viewer 2.0 ─────────────────────────────────────────
+        parseRawLines(rawLines) {
+            const parsed = [];
+            rawLines.forEach((raw, i) => {
+                let json = null;
+                try { json = JSON.parse(raw); }
+                catch { /* fica null — render trata */ }
+                parsed.push({ _idx: i, raw, json });
+            });
+            // Mais novo no topo? Logs vêm em ordem cronológica do tail; queremos
+            // mais recente em cima (mais útil para troubleshooting "ao vivo").
+            parsed.reverse();
+            this.logView.parsed = parsed;
+            this.logView.expandedIdx = null;
+        },
+
+        get logLoggers() {
+            const set = new Set();
+            for (const l of this.logView.parsed) {
+                if (l.json?.logger) set.add(l.json.logger);
+            }
+            return Array.from(set).sort();
+        },
+        get logEvents() {
+            const set = new Set();
+            for (const l of this.logView.parsed) {
+                if (l.json?.event) set.add(l.json.event);
+            }
+            return Array.from(set).sort();
+        },
+
+        _timeWindowMs() {
+            const map = { '5m': 5*60_000, '15m': 15*60_000, '30m': 30*60_000, '1h': 60*60_000, '6h': 6*60*60_000, '24h': 24*60*60_000 };
+            return map[this.logView.timeWindow] || null;
+        },
+
+        get logFiltered() {
+            const v = this.logView;
+            const windowMs = this._timeWindowMs();
+            const now = Date.now();
+            const q = (v.search || '').toLowerCase();
+            const out = [];
+            for (const l of v.parsed) {
+                const j = l.json;
+                // Time window
+                if (windowMs && j?.ts) {
+                    const t = Date.parse(j.ts);
+                    if (!isNaN(t) && (now - t) > windowMs) continue;
+                }
+                // Level
+                if (v.levelFilter) {
+                    const lv = (j?.level || '').toUpperCase();
+                    // WARNING e WARN tratados como sinônimos
+                    if (v.levelFilter === 'WARNING' && lv !== 'WARNING' && lv !== 'WARN') continue;
+                    if (v.levelFilter !== 'WARNING' && lv !== v.levelFilter) continue;
+                }
+                // Logger
+                if (v.loggerFilter && j?.logger !== v.loggerFilter) continue;
+                // Event
+                if (v.eventFilter && j?.event !== v.eventFilter) continue;
+                // Trace
+                if (v.selectedTraceId && j?.trace_id !== v.selectedTraceId) continue;
+                // HTTP errors
+                if (v.httpErrorsOnly) {
+                    const sc = j?.status_code | 0;
+                    if (!(sc >= 400)) continue;
+                }
+                // Full-text
+                if (q) {
+                    const hay = (l.raw || '').toLowerCase();
+                    if (!hay.includes(q)) continue;
+                }
+                out.push(l);
+            }
+            return out;
+        },
+
+        get logGrouped() {
+            const groups = new Map();
+            for (const l of this.logFiltered) {
+                const key = l.json?.trace_id || '_no_trace_';
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(l);
+            }
+            const result = [];
+            for (const [key, lines] of groups) {
+                // Soma duration_ms onde existir
+                let duration = 0;
+                for (const l of lines) {
+                    if (l.json?.duration_ms) duration += l.json.duration_ms;
+                }
+                result.push({ key, lines, duration: duration > 0 ? Math.round(duration) : null });
+            }
+            return result;
+        },
+
+        get logStats() {
+            const filtered = this.logFiltered;
+            let errors = 0, warns = 0;
+            const traces = new Set();
+            const durations = [];
+            for (const l of filtered) {
+                const lv = (l.json?.level || '').toUpperCase();
+                if (lv === 'ERROR' || lv === 'CRITICAL') errors++;
+                else if (lv === 'WARN' || lv === 'WARNING') warns++;
+                if (l.json?.trace_id) traces.add(l.json.trace_id);
+                if (typeof l.json?.duration_ms === 'number') durations.push(l.json.duration_ms);
+            }
+            let avgDuration = null;
+            if (durations.length > 0) {
+                durations.sort((a, b) => a - b);
+                avgDuration = Math.round(durations[Math.floor(durations.length / 2)]);
+            }
+            return {
+                total: this.logView.parsed.length,
+                filtered: filtered.length,
+                errors, warns,
+                traces: traces.size,
+                avgDuration,
+            };
+        },
+
+        get logSparkBuckets() {
+            const filtered = this.logFiltered;
+            if (filtered.length < 2) return [];
+            // 24 buckets fixos cobrindo a janela ts_max - ts_min
+            let tsMin = Infinity, tsMax = -Infinity;
+            for (const l of filtered) {
+                const t = Date.parse(l.json?.ts || '');
+                if (!isNaN(t)) { if (t < tsMin) tsMin = t; if (t > tsMax) tsMax = t; }
+            }
+            if (tsMin === Infinity || tsMax === tsMin) return [];
+            const N = 24;
+            const step = (tsMax - tsMin) / N;
+            const buckets = Array.from({length: N}, () => ({ count: 0, hasError: false, hasWarn: false }));
+            for (const l of filtered) {
+                const t = Date.parse(l.json?.ts || '');
+                if (isNaN(t)) continue;
+                let i = Math.min(N - 1, Math.floor((t - tsMin) / step));
+                buckets[i].count++;
+                const lv = (l.json?.level || '').toUpperCase();
+                if (lv === 'ERROR' || lv === 'CRITICAL') buckets[i].hasError = true;
+                else if (lv === 'WARN' || lv === 'WARNING') buckets[i].hasWarn = true;
+            }
+            const maxCount = Math.max(...buckets.map(b => b.count), 1);
+            buckets.forEach((b, i) => {
+                b.norm = b.count / maxCount;
+                const tBucket = new Date(tsMin + i * step);
+                b.label = tBucket.toISOString().substring(11, 19);
+            });
+            return buckets;
+        },
+
+        get hasActiveFilters() {
+            const v = this.logView;
+            return !!(v.timeWindow !== 'all' || v.levelFilter || v.loggerFilter ||
+                     v.eventFilter || v.search || v.httpErrorsOnly || v.selectedTraceId);
+        },
+
+        clearLogFilters() {
+            this.logView.timeWindow = 'all';
+            this.logView.levelFilter = '';
+            this.logView.loggerFilter = '';
+            this.logView.eventFilter = '';
+            this.logView.search = '';
+            this.logView.httpErrorsOnly = false;
+            this.logView.selectedTraceId = null;
+        },
+
+        toggleLine(idx) {
+            this.logView.expandedIdx = this.logView.expandedIdx === idx ? null : idx;
+        },
+
+        filterByTrace(traceId) {
+            this.logView.selectedTraceId = traceId;
+            this.logView.expandedIdx = null;
+            showToast('Filtrando por trace ' + traceId.substring(0, 12) + '...');
+        },
+
+        formatTs(ts) {
+            if (!ts) return '—';
+            // ISO -> HH:MM:SS.mmm local time
+            const d = new Date(ts);
+            if (isNaN(d.getTime())) return ts.substring(11, 23);
+            const pad = (n, w = 2) => String(n).padStart(w, '0');
+            return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + '.' + pad(d.getMilliseconds(), 3);
+        },
+
+        lineHeadline(l) {
+            const j = l.json;
+            if (!j) return (l.raw || '').substring(0, 200);
+            if (j.event === 'http.request' || j.event === 'http.response') {
+                const sc = j.status_code ? ' ' + j.status_code : '';
+                return (j.method || '') + sc + ' ' + (j.path || j.msg || '');
+            }
+            return j.msg || j.event || JSON.stringify(j).substring(0, 200);
+        },
+
+        lineHeadlineHighlighted(l) {
+            const text = this.lineHeadline(l);
+            const q = (this.logView.search || '').trim();
+            const escaped = this._htmlEscape(text);
+            if (!q) return escaped;
+            // Highlight matches
+            const qEsc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return escaped.replace(new RegExp('(' + qEsc + ')', 'gi'), '<mark class="bg-amber-200 text-brand-900 px-0.5 rounded">$1</mark>');
+        },
+
+        logLevelClass(l) {
+            const lv = (l.json?.level || '').toUpperCase();
+            if (lv === 'ERROR' || lv === 'CRITICAL') return 'text-rose-600';
+            if (lv === 'WARN' || lv === 'WARNING') return 'text-amber-600';
+            if (lv === 'INFO') return 'text-emerald-600';
+            if (lv === 'DEBUG') return 'text-surface-400';
+            return 'text-surface-500';
+        },
+
+        logLevelBorder(l) {
+            const lv = (l.json?.level || '').toUpperCase();
+            if (lv === 'ERROR' || lv === 'CRITICAL') return 'border-rose-400';
+            if (lv === 'WARN' || lv === 'WARNING') return 'border-amber-400';
+            return 'border-transparent';
+        },
+
+        durationClass(ms) {
+            if (typeof ms !== 'number') return 'text-surface-400';
+            if (ms > 1000) return 'text-rose-600 font-semibold';
+            if (ms > 300) return 'text-amber-600';
+            if (ms > 100) return 'text-amber-500';
+            return 'text-emerald-600';
+        },
+
+        _htmlEscape(s) {
+            return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        },
+
+        renderJsonTree(obj, depth = 0) {
+            if (obj === null) return '<span class="text-surface-400">null</span>';
+            if (typeof obj === 'boolean') return '<span class="text-rose-500 font-semibold">' + obj + '</span>';
+            if (typeof obj === 'number') {
+                // Special highlights
+                return '<span class="text-blue-600">' + obj + '</span>';
+            }
+            if (typeof obj === 'string') return '<span class="text-emerald-700">"' + this._htmlEscape(obj) + '"</span>';
+            const isArray = Array.isArray(obj);
+            const entries = isArray ? obj.map((v, i) => [i, v]) : Object.entries(obj);
+            if (entries.length === 0) return isArray ? '[]' : '{}';
+            const indent = '  '.repeat(depth + 1);
+            const closeIndent = '  '.repeat(depth);
+            const parts = entries.map(([k, v]) => {
+                let keyHtml = isArray
+                    ? '<span class="text-surface-400">' + k + '</span>'
+                    : '<span class="text-brand-700 font-semibold">"' + this._htmlEscape(k) + '"</span>';
+                // Semantic highlights por key
+                if (!isArray) {
+                    if (k === 'level' && (v === 'ERROR' || v === 'CRITICAL')) {
+                        return indent + keyHtml + ': <span class="text-rose-600 font-bold bg-rose-50 px-1 rounded">"' + v + '"</span>';
+                    }
+                    if (k === 'level' && (v === 'WARNING' || v === 'WARN')) {
+                        return indent + keyHtml + ': <span class="text-amber-600 font-bold">"' + v + '"</span>';
+                    }
+                    if (k === 'duration_ms' && typeof v === 'number') {
+                        const cls = this.durationClass(v);
+                        return indent + keyHtml + ': <span class="' + cls + '">' + v + '</span>';
+                    }
+                    if (k === 'status_code' && typeof v === 'number') {
+                        const cls = v >= 500 ? 'text-rose-600 font-bold' : (v >= 400 ? 'text-amber-600 font-semibold' : 'text-emerald-600');
+                        return indent + keyHtml + ': <span class="' + cls + '">' + v + '</span>';
+                    }
+                }
+                return indent + keyHtml + ': ' + this.renderJsonTree(v, depth + 1);
+            });
+            const open = isArray ? '[' : '{';
+            const close = isArray ? ']' : '}';
+            return open + '\n' + parts.join(',\n') + '\n' + closeIndent + close;
+        },
+
+        copyLine(l) {
+            const text = l.json ? JSON.stringify(l.json, null, 2) : (l.raw || '');
+            if (window.copyText) copyText(text).then(ok => showToast(ok ? 'Linha copiada' : 'Erro ao copiar', ok ? 'success' : 'error'));
+            else showToast('clipboard indisponível', 'error');
+        },
+
+        copyFiltered() {
+            const text = this.logFiltered.map(l => l.raw).join('\n');
+            if (window.copyText) copyText(text).then(ok => showToast(ok ? this.logFiltered.length + ' linhas copiadas' : 'Erro ao copiar', ok ? 'success' : 'error'));
+        },
+
+        exportFiltered() {
+            const text = this.logFiltered.map(l => l.raw).join('\n');
+            const blob = new Blob([text], { type: 'application/x-ndjson' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const tsTag = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+            a.download = (this.tailFile || 'log') + '.filtered.' + tsTag + '.jsonl';
+            a.click();
+            URL.revokeObjectURL(url);
+        },
+
+        toggleAutoRefresh() {
+            this.logView.autoRefresh = !this.logView.autoRefresh;
+            if (this.logView.autoRefresh) this.startAutoRefresh();
+            else this.stopAutoRefresh();
+        },
+
+        startAutoRefresh() {
+            this.stopAutoRefresh();
+            this.logView.autoRefreshTimer = setInterval(() => {
+                if (this.tailOpen && !this.tailLoading) this.loadTail(this.tailFile);
+            }, (this.logView.autoRefreshSec || 5) * 1000);
+        },
+
+        stopAutoRefresh() {
+            if (this.logView.autoRefreshTimer) clearInterval(this.logView.autoRefreshTimer);
+            this.logView.autoRefreshTimer = null;
+        },
+
+        openLogAi(preset) {
+            this.logView.aiOpen = true;
+            this.logView.aiPreset = preset || '';
+            this.logView.aiQuestion = '';
+            this.logView.aiAnswer = '';
+            this.logView.aiError = '';
+            this.logView.aiModel = '';
+            if (preset) this.askAi();
+        },
+
+        async askAi() {
+            const linesPayload = this.logFiltered.slice(0, 200).map(l => l.raw);
+            if (linesPayload.length === 0) {
+                this.logView.aiError = 'Nenhuma linha filtrada para analisar.';
+                return;
+            }
+            this.logView.aiLoading = true;
+            this.logView.aiError = '';
+            this.logView.aiAnswer = '';
+            try {
+                const r = await api.post('/api/v1/observability/logs/explain', {
+                    lines: linesPayload,
+                    question: this.logView.aiQuestion || '',
+                    preset: this.logView.aiPreset || '',
+                    file_name: this.tailFile || '',
+                });
+                this.logView.aiAnswer = r?.answer || '(resposta vazia)';
+                this.logView.aiModel = r?.model || '';
+            } catch (e) {
+                this.logView.aiError = e?.message || String(e);
+            }
+            this.logView.aiLoading = false;
+        },
+
+        renderMarkdown(text) {
+            if (!text) return '';
+            // Pipeline simples: escape → code blocks → headers → lists → bold/italic/inline code/links → paragraphs
+            let html = this._htmlEscape(text);
+            // Fenced code blocks
+            html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
+                '<pre class="rounded bg-surface-900 text-surface-100 px-3 py-2 my-2 text-[10px] font-mono overflow-x-auto"><code>' + code.trim() + '</code></pre>'
+            );
+            const lines = html.split('\n');
+            const out = [];
+            let inList = false;
+            for (const ln of lines) {
+                if (ln.match(/^#{1,6}\s/)) {
+                    if (inList) { out.push('</ul>'); inList = false; }
+                    const lvl = ln.match(/^(#{1,6})\s/)[1].length;
+                    const txt = ln.replace(/^#{1,6}\s+/, '');
+                    const sizes = {1:'text-[14px] font-bold mt-3 mb-1.5', 2:'text-[13px] font-bold mt-3 mb-1', 3:'text-[12px] font-semibold mt-2 mb-1'};
+                    const cls = sizes[lvl] || sizes[3];
+                    out.push('<div class="' + cls + ' text-brand-900">' + this._inlineMd(txt) + '</div>');
+                    continue;
+                }
+                if (ln.match(/^\s*[-*]\s+/)) {
+                    if (!inList) { out.push('<ul class="my-1.5 ml-3 space-y-0.5">'); inList = true; }
+                    out.push('<li class="text-surface-700">• ' + this._inlineMd(ln.replace(/^\s*[-*]\s+/, '')) + '</li>');
+                    continue;
+                }
+                if (ln.match(/^\s*\d+\.\s+/)) {
+                    if (!inList) { out.push('<ol class="my-1.5 ml-4 space-y-0.5 list-decimal">'); inList = true; }
+                    out.push('<li class="text-surface-700">' + this._inlineMd(ln.replace(/^\s*\d+\.\s+/, '')) + '</li>');
+                    continue;
+                }
+                if (inList && ln.trim() === '') { out.push('</ul>'); inList = false; }
+                if (ln.trim() === '') { out.push('<div class="h-1.5"></div>'); continue; }
+                if (ln.startsWith('<pre') || ln.startsWith('<div')) { out.push(ln); continue; }
+                out.push('<p class="text-surface-700 my-0.5">' + this._inlineMd(ln) + '</p>');
+            }
+            if (inList) out.push('</ul>');
+            return out.join('\n');
+        },
+
+        _inlineMd(t) {
+            return t
+                .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-brand-900">$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                .replace(/`([^`]+)`/g, '<code class="bg-surface-100 px-1 py-0.5 rounded text-[10px] font-mono text-rose-700">$1</code>');
         },
 
         async confirmClear(name) {
