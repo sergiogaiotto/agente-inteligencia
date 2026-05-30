@@ -6,7 +6,7 @@ Grafana/Loki **ou** via `jq` filtrando o `docker compose logs`.
 
 Quando reportar um problema, **prefira mandar saída de uma das queries abaixo**
 em vez de grep cego — o filtro por `event=` é determinístico e captura
-metadata estruturada (qdrant_url, source_id, error_type, traceback completo).
+metadata estruturada (rag_vector_backend, source_id, error_type, traceback completo).
 
 ---
 
@@ -16,23 +16,23 @@ metadata estruturada (qdrant_url, source_id, error_type, traceback completo).
 
 ```bash
 # Filtrar últimas N linhas por evento exato
-docker compose logs app --tail=2000 | jq 'select(.event == "qdrant.upsert.failed")'
+docker compose logs app --tail=2000 | jq 'select(.event == "pgvector.upsert.failed")'
 
 # Filtrar família de eventos (regex)
-docker compose logs app --tail=2000 | jq 'select(.event | startswith("qdrant."))'
+docker compose logs app --tail=2000 | jq 'select(.event | startswith("pgvector."))'
 
 # Só erros (level >= WARNING)
 docker compose logs app --tail=5000 | jq 'select(.level == "WARNING" or .level == "ERROR")'
 
-# Combinar: erros qdrant das últimas 10 min
-docker compose logs app --since=10m | jq 'select(.event | startswith("qdrant.") and .level == "ERROR")'
+# Combinar: erros do vetor (pgvector) das últimas 10 min
+docker compose logs app --since=10m | jq 'select(.event | startswith("pgvector.") and .level == "ERROR")'
 ```
 
 ### Via Grafana/Loki (prod com observabilidade ativa)
 
 ```logql
-# Todos eventos qdrant em erro
-{job="app"} | json | event=~"qdrant\\..*failed"
+# Todos eventos do vetor (pgvector) em erro
+{job="app"} | json | event=~"pgvector\\..*failed"
 
 # Retries do Verifier que falharam
 {job="app"} | json | event=~"verifier\\.contract\\.retry.*"
@@ -48,23 +48,25 @@ docker compose logs app --since=10m | jq 'select(.event | startswith("qdrant.") 
 
 ## Catálogo `sintoma → query`
 
-### Vector store (Qdrant / pgvector)
+### Vector store (pgvector)
+
+> O backend vetorial é **pgvector no Postgres** (coluna `evidence_chunks.embedding`).
+> Até a Onda Q era Qdrant; eventos `qdrant.*` não são mais emitidos.
 
 | Sintoma | Evento(s) | Causa típica |
 |---|---|---|
-| Banner UI *"Vetores divergentes"* após ingestão | `qdrant.upsert.failed`, `qdrant.upsert.aborted_no_collection`, `pgvector.upsert.failed`, `evidence.ingest.partial` | Qdrant offline, dim de embedding mudou, collection com dim errada |
-| Skill nova ingerida não aparece na busca | `evidence.ingest.completed` (confere `vector_upserted == chunks_created`), `qdrant.search.failed`, `pgvector.search.failed` | Vetor não foi gravado, ou busca falhou silencioso |
-| Drift de dim (trocou embedder no Settings) | `qdrant.collection.dim_mismatch`, `pgvector.column.dim_mismatch` | Provider trocou sem rodar `/api/v1/evidence/reindex` |
-| Qdrant offline / rede caiu | `qdrant.client.init_failed`, `qdrant.collection.ensure_failed` | Container down, network split, timeout |
-| Coluna pgvector não pôde ser criada | `pgvector.column.create_failed`, `pgvector.codec.register_failed` | Postgres sem extensão `vector` (imagem errada — precisa `pgvector/pgvector:pg16`) |
+| Banner UI *"Vetores divergentes"* após ingestão | `pgvector.upsert.failed`, `pgvector.upsert.aborted_no_column`, `evidence.ingest.partial` | Postgres indisponível, dim de embedding mudou, coluna com dim errada |
+| Skill nova ingerida não aparece na busca | `evidence.ingest.completed` (confere `vector_upserted == chunks_created`), `pgvector.search.failed` | Vetor não foi gravado, ou busca falhou silencioso |
+| Drift de dim (trocou embedder no Settings) | `pgvector.column.dim_mismatch` | Provider trocou sem rodar `/api/v1/evidence/reindex` |
+| Coluna pgvector não pôde ser criada/recriada | `pgvector.column.create_failed`, `pgvector.column.recreate_failed` | Postgres sem extensão `vector` (imagem errada — precisa `pgvector/pgvector:pg16`) |
 | Reindex global travou no meio | `evidence.reindex.batch_embed_failed`, `evidence.reindex.batch_embed_short`, `evidence.reindex.aborted` | Embedder offline, dim retornada ≠ esperada |
-| Re-ingest pra source não limpa antigos | `qdrant.delete.failed`, `pgvector.delete.failed` | Backend down — chunks novos coexistem com antigos |
+| Re-ingest pra source não limpa antigos | `pgvector.delete.failed` | Postgres down — chunks novos coexistem com antigos |
 
 **Query operacional:**
 
 ```bash
-# "Qual é o erro real do meu Qdrant?"
-docker compose logs app --since=15m | jq 'select(.event | startswith("qdrant.") and .level == "WARNING" or .level == "ERROR") | {ts, event, error_type, qdrant_url, source_ids}'
+# "Qual é o erro real do meu vetor (pgvector)?"
+docker compose logs app --since=15m | jq 'select(.event | startswith("pgvector.") and (.level == "WARNING" or .level == "ERROR")) | {ts, event, error_type, embedding_dim, source_ids}'
 ```
 
 ---
@@ -147,18 +149,18 @@ Quando você (ou eu) for adicionar `logger.warning(..., extra={"event": "x.y.z",
 
 Formato: `<dominio>.<componente>.<acao_ou_estado>`
 
-- `dominio`: módulo lógico (`qdrant`, `pgvector`, `wizard`, `verifier`, `evidence`, `http`, `engine`)
-- `componente`: sub-componente (`upsert`, `collection`, `contract`, `ingest`, `reindex`)
-- `acao_ou_estado`: o que aconteceu (`failed`, `succeeded`, `aborted_no_collection`, `dim_mismatch`)
+- `dominio`: módulo lógico (`pgvector`, `wizard`, `verifier`, `evidence`, `http`, `engine`)
+- `componente`: sub-componente (`upsert`, `column`, `contract`, `ingest`, `reindex`)
+- `acao_ou_estado`: o que aconteceu (`failed`, `succeeded`, `aborted_no_column`, `dim_mismatch`)
 
 Exemplos bons:
-- `qdrant.collection.dim_mismatch` ✓
+- `pgvector.column.dim_mismatch` ✓
 - `verifier.contract.retry_succeeded` ✓
 - `evidence.ingest.partial` ✓
 
 Exemplos ruins:
 - `error` ✗ (sem domínio)
-- `qdrant_failed` ✗ (sem componente; underscore no lugar errado)
+- `pgvector_failed` ✗ (sem componente; underscore no lugar errado)
 - `Upsert.Failed` ✗ (case inconsistente)
 
 ### 2. Extras estruturados
@@ -167,12 +169,11 @@ Toda metadata útil pro troubleshooter (URL do serviço, IDs, contagens, tipos d
 
 ```python
 logger.warning(
-    "qdrant upsert falhou — chunks ficaram só no Postgres",
+    "pgvector upsert_chunks falhou — embeddings não foram associados",
     extra={
-        "event": "qdrant.upsert.failed",
-        "qdrant_url": settings.qdrant_url,
-        "collection": settings.qdrant_collection,
+        "event": "pgvector.upsert.failed",
         "chunk_count": len(chunks),
+        "embedding_dim": len(chunks[0].get("embedding") or []) if chunks else None,
         "source_ids": list({c["source_id"] for c in chunks}),
         "error_type": type(e).__name__,
     },
@@ -180,28 +181,27 @@ logger.warning(
 )
 ```
 
-`JsonFormatter` (`app/core/logging_setup.py`) promove cada chave de `extra` pra top-level no JSON — `jq '.qdrant_url'` funciona direto. **PII (api_key, password, token) é redactado automaticamente** se a chave bater com `_SENSITIVE_KEYS`.
+`JsonFormatter` (`app/core/logging_setup.py`) promove cada chave de `extra` pra top-level no JSON — `jq '.embedding_dim'` funciona direto. **PII (api_key, password, token) é redactado automaticamente** se a chave bater com `_SENSITIVE_KEYS`.
 
 ### 3. Teste com `caplog`
 
-**Convenção pós este PR**: cada PR que adiciona/modifica `event=...` vem com pelo menos 1 teste asserindo o evento + extras críticos. Garante que se alguém quebrar o `event=` por typo (`qdrant.upsert.failed` → `qdrant.upsert.fail`), o teste pega.
+**Convenção pós este PR**: cada PR que adiciona/modifica `event=...` vem com pelo menos 1 teste asserindo o evento + extras críticos. Garante que se alguém quebrar o `event=` por typo (`pgvector.upsert.failed` → `pgvector.upsert.fail`), o teste pega.
 
 Template:
 
 ```python
-def test_emits_qdrant_upsert_failed_event(caplog):
+def test_emits_pgvector_upsert_failed_event(caplog):
     import logging
-    with caplog.at_level(logging.WARNING, logger="app.evidence.qdrant_store"):
+    with caplog.at_level(logging.WARNING, logger="app.evidence.pgvector_store"):
         # ... rodar código que dispara o log ...
-        await upsert_chunks_with_broken_provider()
+        await upsert_chunks_with_broken_connection()
 
     rec = next(
-        (r for r in caplog.records if getattr(r, "event", "") == "qdrant.upsert.failed"),
+        (r for r in caplog.records if getattr(r, "event", "") == "pgvector.upsert.failed"),
         None,
     )
-    assert rec is not None, "evento qdrant.upsert.failed não foi emitido"
-    assert rec.qdrant_url == "http://expected"
-    assert rec.error_type == "ConnectTimeout"
+    assert rec is not None, "evento pgvector.upsert.failed não foi emitido"
+    assert rec.error_type == "ConnectionDoesNotExistError"
     assert rec.chunk_count == 3
 ```
 
@@ -214,7 +214,7 @@ Atualizar a tabela `sintoma → query` apropriada deste arquivo com o novo event
 ## Anti-padrões
 
 - **NÃO** usar `print()` ou `logger.info(f"x={x}")` pra debug. Sai do JSON formatter, perde estrutura, não dá pra filtrar.
-- **NÃO** repetir o `event` no `msg` (`logger.warning("qdrant.upsert.failed: ...", extra={"event": "qdrant.upsert.failed"})`). Mensagem livre é pro humano lendo direto; `event` é pro filtro.
+- **NÃO** repetir o `event` no `msg` (`logger.warning("pgvector.upsert.failed: ...", extra={"event": "pgvector.upsert.failed"})`). Mensagem livre é pro humano lendo direto; `event` é pro filtro.
 - **NÃO** colocar PII em `msg` ou `extra` (api_key, senha, token literal). Redactor pega chaves óbvias mas não previne se você logar `f"key was {api_key}"` no msg.
 - **NÃO** logar dentro de loops apertados sem rate-limit. 1 erro = 1 log; não 1 erro = 10000 logs.
 

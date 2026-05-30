@@ -853,7 +853,7 @@ async def get_llm_routing():
             "reasoning": "Texto com raciocínio. Pra tarefas que exigem análise/explicação em PT-BR. Default: GPT-OSS-120B (open-weight via hub interno).",
             "instruct": "Apenas texto (instruction following). Inferência comum. **Aceita imagens** — quando input é multimodal, plataforma roteia automaticamente pro multimodal_fallback. Default: GPT-OSS-20B (open-weight via hub interno).",
             "classification": "Classificação e categorização. Estruturação de informações em labels/buckets fixos. Default: GPT-OSS-20B (open-weight via hub interno).",
-            "skill_generation": "Criação e alteração de SKILL.md no Wizard. Tarefa exige seguir regras estruturais rígidas (operations declaradas, verbos imperativos, frases proibidas) — separada de reasoning desde 2026-05-29 após gpt-oss-120b errar 4x consecutivas o mesmo padrão. Default: Azure GPT-4o (instruction-following mais confiável + JSON Schema mais estável).",
+            "skill_generation": "Criação e alteração de SKILL.md no Wizard. Como o SKILL.md precisa respeitar um formato rígido, escolha um modelo forte em seguir instruções e gerar saída estruturada (JSON). Default: Azure GPT-4o.",
             "multimodal_fallback": "Modelo usado quando o input contém imagem mas o modelo da task escolhida é text-only. Default: Azure GPT-4o (único multimodal nativo pronto pra produção).",
         },
     }

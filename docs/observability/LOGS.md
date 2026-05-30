@@ -193,7 +193,6 @@ Grafana e vê toda a trilha em segundos.
 | `LOG_FILE_ENABLED` | `1` (prod) / `0` (test) | Liga handlers de arquivo |
 | `LOG_CONSOLE_ENABLED` | `1` | Liga handler de stdout |
 | `GRAFANA_UI_URL` | `/grafana/` | URL do botão "Abrir UI" em /infra (path relativo = mesma origin via Caddy) |
-| `QDRANT_UI_URL` | `/qdrant/dashboard` | URL do dashboard do Qdrant em /infra |
 | `GRAFANA_ROOT_URL` | `%(protocol)s://%(domain)s:%(http_port)s/grafana/` | Subpath do Grafana (precisa bater com Caddy) |
 | `GRAFANA_SUB_PATH` | `true` | Grafana serve a partir do subpath /grafana |
 

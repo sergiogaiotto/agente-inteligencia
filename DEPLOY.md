@@ -51,21 +51,19 @@ echo '/swapfile none swap sw 0 0' >> /etc/fstab
 # ⚠ CRÍTICO: paths persistentes pra dados sobreviverem a redeploy.
 # Hostinger Deploy apaga volumes Docker no Redeploy automático — sem
 # isso, você perde TUDO (banco, evidências, contas) toda vez.
-mkdir -p /var/lib/agente-persist/{postgres,redis,qdrant,app}
+mkdir -p /var/lib/agente-persist/{postgres,redis,app}
 chown -R 999:999 /var/lib/agente-persist/postgres   # uid postgres
 chown -R 999:999 /var/lib/agente-persist/redis      # uid redis
-chown -R 1000:1000 /var/lib/agente-persist/qdrant   # uid qdrant
 chown -R 1000:1000 /var/lib/agente-persist/app      # uid app
 ```
 
 Depois, no Hostinger Panel → Environment Variables (ou no `.env` montado),
-adicione **as 4 linhas críticas** abaixo. Sem elas, o compose usa volumes
+adicione **as 3 linhas críticas** abaixo. Sem elas, o compose usa volumes
 Docker nomeados (que serão apagados no próximo Deploy):
 
 ```
 PG_DATA_DIR=/var/lib/agente-persist/postgres
 REDIS_DATA_DIR=/var/lib/agente-persist/redis
-QDRANT_DATA_DIR=/var/lib/agente-persist/qdrant
 APP_DATA_DIR=/var/lib/agente-persist/app
 ```
 
@@ -149,7 +147,7 @@ crontab -e
 ```
 
 Backups vão pra `./backups/agente-backup-YYYY-MM-DD-HHMM.tar.gz`.
-Retenção 30 dias por default. Inclui pg_dump + Qdrant + uploads + Caddy
+Retenção 30 dias por default. Inclui pg_dump + uploads + Caddy
 certs. Para mover off-site: rclone/aws-cli pra S3/Wasabi.
 
 ### Logs
@@ -169,7 +167,6 @@ loopback — `ssh -L 3000:127.0.0.1:3000 deploy@<VPS>` pra acessar).
 | App bind em loopback (`127.0.0.1:7000`) | ✓ Caddy é a única porta pública |
 | Postgres não exposto na host | ✓ |
 | Redis não exposto na host | ✓ |
-| Qdrant em loopback (debug only) | ✓ |
 | OPA em loopback | ✓ |
 | Grafana em loopback (profile full) | ✓ |
 | Healthchecks em todos serviços | ✓ |
@@ -231,10 +228,6 @@ ssh -L 3000:127.0.0.1:3000 deploy@<VPS>
 # App direto (sem Caddy)
 ssh -L 7000:127.0.0.1:7000 deploy@<VPS>
 # depois: http://localhost:7000
-
-# Qdrant dashboard
-ssh -L 6333:127.0.0.1:6333 deploy@<VPS>
-# http://localhost:6333/dashboard
 
 # OPA
 ssh -L 8181:127.0.0.1:8181 deploy@<VPS>
