@@ -1,7 +1,9 @@
-"""Backend pgvector para RAG vetorial (alternativa ao Qdrant).
+"""Backend pgvector para RAG vetorial (único backend desde Onda Q).
 
-Substitui app.evidence.qdrant_store quando Settings.rag_vector_backend="pgvector".
-Mesma interface pública — caller (ingest.py, runtime.py) chama via roteador.
+Histórico: existia também app.evidence.qdrant_store, removido em
+Onda Q (2026-05-30). pgvector cobre 100% dos casos sem 2º serviço
+(Postgres já está na infra). Caller (ingest.py, runtime.py) chama
+direto (sem roteador condicional).
 
 Modelagem:
 - Coluna `embedding vector(N)` adicionada dinamicamente em evidence_chunks
@@ -28,8 +30,10 @@ from typing import Optional
 
 from app.core.config import get_settings
 from app.core.database import _get_pool
-# Reusa get_active_embedding_dim do qdrant_store (mesma lógica, não duplicar).
-from app.evidence.qdrant_store import get_active_embedding_dim
+# Onda Q (2026-05-30): get_active_embedding_dim migrou de qdrant_store
+# pra embedder.py (lugar backend-neutral). Antes era importado do
+# qdrant — refactor histórico evitando duplicação.
+from app.evidence.embedder import get_active_embedding_dim
 
 logger = logging.getLogger(__name__)
 

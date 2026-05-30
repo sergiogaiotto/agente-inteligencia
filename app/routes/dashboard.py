@@ -1081,7 +1081,7 @@ async def list_source_chunks(ks_id: str, limit: int = 50, offset: int = 0):
 
 @router.get("/evidence/collection-info")
 async def evidence_collection_info():
-    """Diagnóstico do vector store ATIVO (qdrant ou pgvector via flag).
+    """Diagnóstico do vector store pgvector (único backend desde Onda Q).
 
     UI usa pra detectar o cenário "trocou provider sem reindexar" e oferecer
     o botão de reindex com contexto ("Collection dim=1536, provider espera 1024").
@@ -1091,26 +1091,22 @@ async def evidence_collection_info():
           "name": str,
           "exists": bool,
           "points_count": int | None,
-          "status": str,                # "green" | "missing" | "drift" (depende do backend)
+          "status": str,                # "green" | "missing" | "drift"
           "dim_actual": int | None,
           "dim_expected": int,
           "dim_match": bool,
-          "backend": "qdrant" | "pgvector",
+          "backend": "pgvector",
         }
-        ou 503 se backend inacessível.
+        ou 503 se pgvector inacessível.
+
+    Onda Q (2026-05-30): backend único pgvector. Antes havia branch
+    pra qdrant via `rag_vector_backend` — Qdrant removido.
     """
-    from app.core.config import get_settings as _get_settings
-    backend = (_get_settings().rag_vector_backend or "qdrant").lower()
-    if backend == "pgvector":
-        from app.evidence.pgvector_store import collection_info as _ci
-    else:
-        from app.evidence.qdrant_store import collection_info as _ci
+    from app.evidence.pgvector_store import collection_info as _ci
     info = await _ci()
     if info is None:
-        raise HTTPException(503, f"{backend} offline ou inacessível")
-    # qdrant_store.collection_info ainda não retorna o campo "backend".
-    # pgvector_store já retorna. Adiciona/garante aqui pra a UI sempre saber.
-    info.setdefault("backend", backend)
+        raise HTTPException(503, "pgvector offline ou inacessível")
+    info.setdefault("backend", "pgvector")
     return info
 
 
@@ -1194,11 +1190,18 @@ async def query_knowledge_source(ks_id: str, data: KBQueryRequest):
 
 @router.get("/rag/health")
 async def rag_health():
-    """Diagnóstico do stack RAG (Onda 3): Qdrant alive + collection info."""
-    from app.evidence.qdrant_store import collection_info
+    """Diagnóstico do stack RAG: pgvector collection info.
+
+    Onda Q (2026-05-30): backend único pgvector (Qdrant removido).
+    Resposta preserva `qdrant_collection` como nome do campo por compat
+    de clients antigos — valor agora vem do pgvector.
+    """
+    from app.evidence.pgvector_store import collection_info
     info = await collection_info()
     return {
-        "qdrant_collection": info,
+        "qdrant_collection": info,  # nome legacy preservado pra back-compat
+        "vector_collection": info,  # nome backend-neutro novo
+        "backend": "pgvector",
         "rag_available": info is not None,
     }
 

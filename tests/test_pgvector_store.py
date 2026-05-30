@@ -376,47 +376,38 @@ class TestCollectionInfo:
 
 
 class TestBackendRouter:
-    def test_ingest_resolves_pgvector_explicit(self, monkeypatch, fresh_settings):
-        monkeypatch.setenv("RAG_VECTOR_BACKEND", "pgvector")
-        from app.evidence import ingest
-        store = ingest._get_vector_store()
-        assert store.__name__.endswith("pgvector_store")
+    def test_ingest_always_resolves_pgvector(self, monkeypatch, fresh_settings):
+        """Onda Q (2026-05-30): backend único pgvector. Antes havia 4 testes
+        (default/explicit/qdrant opt-in/unknown) — colapsados em 1.
+        Qualquer valor de RAG_VECTOR_BACKEND (incluindo 'qdrant') cai em
+        pgvector — não há mais branch condicional."""
+        for val in ("pgvector", "qdrant", "milvus-faiss-pinecone", ""):
+            monkeypatch.setenv("RAG_VECTOR_BACKEND", val)
+            from app.evidence import ingest
+            store = ingest._get_vector_store()
+            assert store.__name__.endswith("pgvector_store"), (
+                f"Esperava pgvector pra RAG_VECTOR_BACKEND={val!r}, achou {store.__name__}"
+            )
 
-    def test_ingest_resolves_pgvector_by_default(self, monkeypatch, fresh_settings):
-        """PR E: default mudou de qdrant para pgvector."""
-        monkeypatch.delenv("RAG_VECTOR_BACKEND", raising=False)
-        from app.evidence import ingest
-        store = ingest._get_vector_store()
-        assert store.__name__.endswith("pgvector_store")
+    def test_qdrant_store_no_longer_importable(self):
+        """Regressão Onda Q: app.evidence.qdrant_store foi removido.
+        Tentativa de import deve falhar com ImportError/ModuleNotFoundError."""
+        with pytest.raises((ImportError, ModuleNotFoundError)):
+            from app.evidence import qdrant_store  # noqa: F401
 
-    def test_ingest_resolves_qdrant_opt_in(self, monkeypatch, fresh_settings):
-        """Qdrant continua disponível como opt-in explícito (rollback) até PR F."""
-        monkeypatch.setenv("RAG_VECTOR_BACKEND", "qdrant")
-        from app.evidence import ingest
-        store = ingest._get_vector_store()
-        assert store.__name__.endswith("qdrant_store")
-
-    def test_ingest_resolves_pgvector_on_unknown_value(self, monkeypatch, fresh_settings):
-        """Valor desconhecido (typo) cai em pgvector — default seguro da nova era."""
-        monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus-faiss-pinecone")
-        from app.evidence import ingest
-        store = ingest._get_vector_store()
-        assert store.__name__.endswith("pgvector_store")
-
-    def test_runtime_resolves_pgvector_by_default(self, monkeypatch, fresh_settings):
-        monkeypatch.delenv("RAG_VECTOR_BACKEND", raising=False)
+    def test_runtime_resolves_pgvector_always(self, monkeypatch, fresh_settings):
+        """Onda Q (2026-05-30): backend único pgvector. Antes havia 3 testes
+        (default, explicit, qdrant opt-in) — colapsados em 1 que confirma
+        pgvector é sempre o resolvido, independente de env var."""
         from app.evidence import runtime
         fn = runtime._get_vector_search_fn()
         assert fn.__module__ == "app.evidence.pgvector_store"
 
-    def test_runtime_resolves_pgvector_explicit(self, monkeypatch, fresh_settings):
-        monkeypatch.setenv("RAG_VECTOR_BACKEND", "pgvector")
-        from app.evidence import runtime
-        fn = runtime._get_vector_search_fn()
-        assert fn.__module__ == "app.evidence.pgvector_store"
-
-    def test_runtime_resolves_qdrant_opt_in(self, monkeypatch, fresh_settings):
-        monkeypatch.setenv("RAG_VECTOR_BACKEND", "qdrant")
-        from app.evidence import runtime
-        fn = runtime._get_vector_search_fn()
-        assert fn.__module__ == "app.evidence.qdrant_store"
+    def test_runtime_ignores_rag_vector_backend_env(self, monkeypatch, fresh_settings):
+        """Onda Q: env var RAG_VECTOR_BACKEND ignorada (qdrant removido).
+        Qualquer valor cai em pgvector — não há mais branch."""
+        for val in ("qdrant", "pgvector", "bogus", ""):
+            monkeypatch.setenv("RAG_VECTOR_BACKEND", val)
+            from app.evidence import runtime
+            fn = runtime._get_vector_search_fn()
+            assert fn.__module__ == "app.evidence.pgvector_store"

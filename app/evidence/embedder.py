@@ -23,6 +23,31 @@ logger = logging.getLogger(__name__)
 _embedder = None  # singleton
 
 
+def get_active_embedding_dim() -> int:
+    """Retorna a dimensão do embedder ATIVO conforme settings.
+
+    Não faz HTTP — infere da config. Provider Qwen3 com `qwen3_dimensions=0`
+    cai no default do modelo (1024 para Qwen3-Embedding-0.6B). Provider Azure
+    (text-embedding-3-small) é fixo em 1536.
+
+    Mudanças em settings só refletem aqui se settings forem recarregados
+    (get_settings() faz cache). Em ambiente de produção com mudança via UI,
+    o handler de settings deve invalidar o cache + chamar reindex no backend
+    de vetor ativo (pgvector_store.ensure_table) pra reconciliar dimensão.
+
+    Onda Q (2026-05-30): este helper vivia em qdrant_store.py historicamente.
+    Movido pra embedder.py porque é backend-AGNÓSTICO (só lê settings, não
+    depende de Qdrant nem pgvector). Esperado como home permanente.
+    """
+    settings = get_settings()
+    provider = (getattr(settings, "embedding_provider", "azure") or "azure").lower()
+    if provider == "qwen3":
+        configured = int(getattr(settings, "qwen3_dimensions", 0) or 0)
+        return configured or 1024  # default Qwen3-Embedding-0.6B
+    # Azure text-embedding-3-small (e qualquer provider desconhecido cai aqui).
+    return 1536
+
+
 class _EmbedderProtocol(Protocol):
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]: ...
     async def aembed_query(self, text: str) -> list[float]: ...

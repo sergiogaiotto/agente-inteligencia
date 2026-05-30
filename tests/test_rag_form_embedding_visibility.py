@@ -86,7 +86,8 @@ class TestSafeHelpers:
     def test_dim_helper_returns_zero_on_failure(self):
         from app.workspace import binding_schema
 
-        with patch("app.evidence.qdrant_store.get_active_embedding_dim", side_effect=Exception("boom")):
+        # Onda Q: helper migrou de qdrant_store pra embedder
+        with patch("app.evidence.embedder.get_active_embedding_dim", side_effect=Exception("boom")):
             result = binding_schema._safe_get_embedding_dim()
         assert result == 0
 

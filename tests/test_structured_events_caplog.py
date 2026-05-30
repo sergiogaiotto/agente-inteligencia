@@ -13,11 +13,13 @@ teste caplog na época. Eventos novos a partir daqui devem nascer com teste no
 arquivo de teste do próprio módulo (ver docs/troubleshooting.md).
 
 Cobertura inicial:
-- qdrant_store: dim_mismatch, upsert.failed, upsert.aborted_no_collection
 - pgvector_store: dim_mismatch, upsert.failed, column.recreated
 - wizard: llm.resolved (3 paths)
 - verifier: contract.retry_initiated, retry_succeeded, retry_failed_final
 - ingest: evidence.ingest.partial, evidence.ingest.completed
+
+Onda Q (2026-05-30): removida classe TestQdrantStoreEvents (qdrant_store
+deletado). Eventos qdrant.* não existem mais. pgvector continua coberto.
 """
 from __future__ import annotations
 
@@ -46,105 +48,10 @@ def _find_event(caplog, event_name: str):
 
 
 # ═════════════════════════════════════════════════════════════════
-# qdrant_store — PR #141
+# qdrant_store — REMOVIDO em Onda Q (2026-05-30)
+# Classe TestQdrantStoreEvents removida junto com o módulo.
+# Eventos qdrant.* não existem mais.
 # ═════════════════════════════════════════════════════════════════
-
-
-class TestQdrantStoreEvents:
-    @pytest.fixture(autouse=True)
-    def _reset_singletons(self):
-        from app.evidence import qdrant_store
-        qdrant_store._client = None
-        qdrant_store._collection_ready = False
-        yield
-        qdrant_store._client = None
-        qdrant_store._collection_ready = False
-
-    @pytest.mark.asyncio
-    async def test_dim_mismatch_emits_event_with_dim_fields(self, monkeypatch, fresh_settings, caplog):
-        """Drift de dim (Azure 1536 → Qwen3 1024 sem reindex) loga
-        event=qdrant.collection.dim_mismatch com dim_actual + dim_expected."""
-        monkeypatch.setenv("EMBEDDING_PROVIDER", "qwen3")
-        monkeypatch.setenv("QWEN3_DIMENSIONS", "0")
-        monkeypatch.setenv("QDRANT_COLLECTION", "agente_evidence")
-
-        from app.evidence import qdrant_store
-
-        client = MagicMock()
-        client.get_collections = AsyncMock(
-            return_value=SimpleNamespace(collections=[SimpleNamespace(name="agente_evidence")])
-        )
-        client.get_collection = AsyncMock(
-            return_value=SimpleNamespace(
-                config=SimpleNamespace(
-                    params=SimpleNamespace(vectors=SimpleNamespace(size=1536, distance="Cosine"))
-                ),
-                points_count=42,
-                status="green",
-            )
-        )
-        qdrant_store._client = client
-
-        with caplog.at_level(logging.ERROR, logger="app.evidence.qdrant_store"):
-            ok = await qdrant_store.ensure_collection()
-
-        assert ok is False
-        rec = _find_event(caplog, "qdrant.collection.dim_mismatch")
-        assert rec is not None, "evento qdrant.collection.dim_mismatch não foi emitido"
-        assert rec.dim_actual == 1536
-        assert rec.dim_expected == 1024
-        assert rec.collection == "agente_evidence"
-        # hint aponta operador pro fix correto
-        assert "reindex" in rec.hint.lower()
-
-    @pytest.mark.asyncio
-    async def test_upsert_failure_emits_event_with_error_type_and_traceback(
-        self, monkeypatch, fresh_settings, caplog
-    ):
-        """upsert_chunks com exceção real propaga: event=qdrant.upsert.failed
-        com error_type, source_ids, exception com traceback."""
-        monkeypatch.setenv("EMBEDDING_PROVIDER", "qwen3")
-        monkeypatch.setenv("QWEN3_DIMENSIONS", "0")
-        monkeypatch.setenv("QDRANT_COLLECTION", "agente_evidence")
-
-        from app.evidence import qdrant_store
-
-        client = MagicMock()
-        client.get_collections = AsyncMock(
-            return_value=SimpleNamespace(collections=[SimpleNamespace(name="agente_evidence")])
-        )
-        client.get_collection = AsyncMock(
-            return_value=SimpleNamespace(
-                config=SimpleNamespace(
-                    params=SimpleNamespace(vectors=SimpleNamespace(size=1024, distance="Cosine"))
-                ),
-                points_count=10,
-                status="green",
-            )
-        )
-
-        class _FakeNetworkError(Exception):
-            pass
-
-        client.upsert = AsyncMock(side_effect=_FakeNetworkError("connection reset"))
-        qdrant_store._client = client
-
-        chunks = [
-            {"id": "c1", "embedding": [0.1] * 1024, "source_id": "src-a", "ordinal": 0},
-            {"id": "c2", "embedding": [0.2] * 1024, "source_id": "src-a", "ordinal": 1},
-        ]
-        with caplog.at_level(logging.WARNING, logger="app.evidence.qdrant_store"):
-            n = await qdrant_store.upsert_chunks(chunks)
-
-        assert n == 0
-        rec = _find_event(caplog, "qdrant.upsert.failed")
-        assert rec is not None
-        assert rec.error_type == "_FakeNetworkError"
-        assert rec.chunk_count == 2
-        assert rec.embedding_dim == 1024
-        assert "src-a" in rec.source_ids
-        # exc_info=True foi passado → JsonFormatter vai gerar exception block
-        assert rec.exc_info is not None
 
 
 # ═════════════════════════════════════════════════════════════════
