@@ -314,44 +314,29 @@ async def _duckdb_details() -> dict:
     return out
 
 
-async def _qdrant_details() -> dict:
-    """Lista coleções Qdrant com points_count + dimensão dos vetores."""
-    qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333").rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            r = await client.get(f"{qdrant_url}/collections")
-            if r.status_code != 200:
-                return {"ok": False, "error": f"HTTP {r.status_code}", "collections": []}
-            cols = (r.json().get("result") or {}).get("collections") or []
-            # Para cada coleção, busca detalhes em paralelo
-            async def _one(name: str) -> dict:
-                try:
-                    rr = await client.get(f"{qdrant_url}/collections/{name}")
-                    if rr.status_code != 200:
-                        return {"name": name, "error": f"HTTP {rr.status_code}"}
-                    res = (rr.json().get("result") or {})
-                    vec = ((res.get("config") or {}).get("params") or {}).get("vectors") or {}
-                    # Qdrant pode retornar `vectors` como dict simples OU como dict de named vectors.
-                    # Para named vectors, pega o primeiro size disponível.
-                    size = vec.get("size")
-                    if size is None and isinstance(vec, dict):
-                        for v in vec.values():
-                            if isinstance(v, dict) and "size" in v:
-                                size = v["size"]
-                                break
-                    return {
-                        "name": name,
-                        "points_count": res.get("points_count", 0),
-                        "indexed_vectors_count": res.get("indexed_vectors_count", 0),
-                        "segments_count": res.get("segments_count", 0),
-                        "vector_size": size,
-                        "status": res.get("status", "unknown"),
-                    }
-                except Exception as e:
-                    return {"name": name, "error": f"{type(e).__name__}: {str(e)[:60]}"}
+async def _pgvector_details() -> dict:
+    """Lista collection do pgvector com points_count + dimensão.
 
-            details = await asyncio.gather(*[_one(c["name"]) for c in cols])
-            return {"ok": True, "collections": details}
+    Onda Q (2026-05-30): substitui _qdrant_details(). pgvector é o único
+    backend desde "PR E"; Qdrant removido. Consulta pgvector_store.collection_info
+    pra evitar duplicar lógica.
+    """
+    try:
+        from app.evidence.pgvector_store import collection_info
+        info = await collection_info()
+        if info is None:
+            return {"ok": False, "error": "pgvector offline", "collections": []}
+        # Adapta pro shape esperado pela UI (lista de collections — pgvector
+        # tem só 1 "collection lógica" = a coluna embedding da tabela evidence_chunks).
+        return {
+            "ok": True,
+            "collections": [{
+                "name": info.get("name", "evidence_chunks"),
+                "points_count": info.get("points_count", 0),
+                "vector_size": info.get("dim_actual"),
+                "status": info.get("status", "unknown"),
+            }],
+        }
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:80]}", "collections": []}
 
@@ -423,26 +408,29 @@ async def _postgres_details() -> dict:
 
 @router.get("/details")
 async def infra_details():
-    """Métricas detalhadas dos serviços de dados — vector store (Qdrant ou
-    pgvector), Redis INFO e contagens das tabelas Postgres principais.
+    """Métricas detalhadas dos serviços de dados — pgvector collection,
+    Redis INFO e contagens das tabelas Postgres principais.
 
     Diferente de /status (binário ok/error), /details traz contadores e
     configuração que mudam ao longo do uso.
 
-    Inclui `rag_vector_backend` no top-level pra UI decidir se mostra o
-    card de Qdrant (legado) ou agrega no card de Postgres (pgvector).
+    Onda Q (2026-05-30): backend único pgvector (Qdrant removido).
+    Campo `qdrant` no JSON preservado por compat com clients antigos —
+    valor agora vem do pgvector. Alias `vector_store` novo.
     """
-    from app.core.config import get_settings as _get_settings
-    backend = (_get_settings().rag_vector_backend or "qdrant").lower()
-    qdrant, redis, pg, duck = await asyncio.gather(
-        _qdrant_details(),
+    pgvector, redis, pg, duck = await asyncio.gather(
+        _pgvector_details(),
         _redis_details(),
         _postgres_details(),
         _duckdb_details(),
     )
     return {
-        "qdrant": qdrant, "redis": redis, "postgres": pg, "duckdb": duck,
-        "rag_vector_backend": backend,
+        "qdrant": pgvector,         # nome legacy preservado pra back-compat
+        "vector_store": pgvector,   # nome backend-neutro novo
+        "redis": redis,
+        "postgres": pg,
+        "duckdb": duck,
+        "rag_vector_backend": "pgvector",
     }
 
 
@@ -452,7 +440,6 @@ async def infra_status():
 
     Checa em paralelo (asyncio.gather) — total ~1.5s no pior caso (timeout).
     """
-    qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
     opa_url = os.environ.get("OPA_URL", "http://opa:8181")
 
     # UIs nativas — link clicado pelo browser do USUÁRIO (não do servidor).
@@ -460,12 +447,10 @@ async def infra_status():
     #
     # Desenvolvimento local (sem Caddy):
     #   GRAFANA_UI_URL=http://localhost:3000
-    #   QDRANT_UI_URL=http://localhost:6333/dashboard
     #
     # Produção atrás de Caddy (mesma origin, recomendado):
     #   GRAFANA_UI_URL=/grafana/                ← path relativo, browser resolve
-    #   QDRANT_UI_URL=/qdrant/dashboard
-    #   → Caddy faz reverse_proxy /grafana/* → grafana:3000 e /qdrant/* → qdrant:6333
+    #   → Caddy faz reverse_proxy /grafana/* → grafana:3000
     #     (ver infra/caddy/Caddyfile). Funciona em qualquer domínio sem mexer aqui.
     #
     # Acesso via VPN/SSH tunnel local:
@@ -473,7 +458,7 @@ async def infra_status():
     #
     # Defaults: path relativo (assume Caddy). Quem rodar `uvicorn` puro em dev
     # local deve sobrescrever no .env.
-    ui_qdrant = os.environ.get("QDRANT_UI_URL", "/qdrant/dashboard")
+    # Onda Q (2026-05-30): QDRANT_URL + QDRANT_UI_URL removidos (Qdrant deletado).
     ui_grafana = os.environ.get("GRAFANA_UI_URL", "/grafana/")
     # Deep links para Grafana Explore com datasource pré-selecionado.
     # Útil pra "Abrir UI" em Tempo/Loki ir DIRETO pra busca de traces/logs
@@ -489,15 +474,11 @@ async def infra_status():
         ui_grafana.rstrip("/") + '/explore?orgId=1&left=%7B%22datasource%22:%22loki%22,%22queries%22:%5B%7B%22expr%22:%22%7Bcontainer_name%3D~%5C%22.%2Aagente.%2A%5C%22%7D%22%7D%5D%7D',
     )
 
+    # Onda Q (2026-05-30): check do Qdrant removido. RAG vetorial agora
+    # roda em pgvector — covered pelo check do Postgres.
     checks = await asyncio.gather(
         _check_postgres(),
         _check_redis(),
-        _check_http(
-            "qdrant",
-            f"{qdrant_url}/healthz",
-            description="Vector DB para RAG (Onda 3)",
-            ui_url=ui_qdrant,
-        ),
         _check_duckdb(),
         _check_http(
             "opa",
