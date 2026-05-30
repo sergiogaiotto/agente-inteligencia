@@ -93,7 +93,7 @@
                                         <template x-for="be in (e._detail.binding_executions||[])" :key="be.id">
                                             <div class="rounded border border-surface-100 bg-surface-50/30 p-2 text-[10px]">
                                                 <div class="flex items-center gap-2 flex-wrap">
-                                                    <span class="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 font-mono" x-text="be.binding_id"></span>
+                                                    <span class="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 font-mono" x-text="be.binding_id"></span>
                                                     <span class="rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
                                                           :class="be.skipped_by_breaker?'bg-surface-200 text-surface-500':(be.status_code>=200&&be.status_code<300)?'bg-emerald-50 text-emerald-600':be.status_code>=400?'bg-rose-50 text-rose-600':'bg-amber-50 text-amber-600'"
                                                           x-text="be.skipped_by_breaker?'breaker open':(be.status_code||'—')"></span>

@@ -129,34 +129,44 @@ class TestRedPaletteApplied:
 
 
 # ────────────────────────────────────────────────────────────────
-# Escopo: NÃO afeta outras áreas
+# Pós PR #209 (bulk replace platform-wide): escopo expandiu pra toda
+# plataforma. User pediu literalmente "em toda plataforma". Tests aqui
+# agora invertem semântica: garantem que NENHUM violet/fuchsia/purple
+# sobrou no arquivo todo (não só no bloco do form).
 # ────────────────────────────────────────────────────────────────
 
 
-class TestScopeIsolation:
-    def test_slash_popover_still_uses_fuchsia(self, html):
-        """Slash command popover (separado do form) preserva paleta
-        violet/fuchsia — escopo da mudança é APENAS o form de invocação."""
-        # Busca a região do slash popover
-        slash_start = html.find("SLASH COMMAND POPOVER")
-        slash_end = html.find("</div>", slash_start + 5000)  # janela razoável
-        assert slash_start >= 0
-        slash_block = html[slash_start:slash_end]
-        # Confirma que ainda há violet/fuchsia no popover
-        has_violet = "violet-" in slash_block
-        has_fuchsia = "fuchsia-" in slash_block
-        # Pelo menos um (códigos /name fuchsia + bordas violet)
-        assert has_violet or has_fuchsia, (
-            "Escopo isolado: slash popover deveria manter violet/fuchsia"
-        )
+class TestPlatformWide:
+    def test_workspace_html_has_zero_violet(self, html):
+        """workspace.html inteiro não deve ter violet-* (PR #209 bulk)."""
+        import re
+        matches = re.findall(r"\bviolet-\d+(?:/\d+)?", html)
+        assert matches == [], f"Resíduo violet: {matches[:5]}"
 
-    def test_textarea_expand_modal_preserved(self, html):
-        """Modal expand do textarea (UX A.5) não toca."""
+    def test_workspace_html_has_zero_fuchsia(self, html):
+        import re
+        matches = re.findall(r"\bfuchsia-\d+(?:/\d+)?", html)
+        assert matches == [], f"Resíduo fuchsia: {matches[:5]}"
+
+    def test_workspace_html_has_zero_purple(self, html):
+        import re
+        matches = re.findall(r"\bpurple-\d+(?:/\d+)?", html)
+        assert matches == [], f"Resíduo purple: {matches[:5]}"
+
+    def test_slash_popover_now_uses_red(self, html):
+        """Slash popover agora também é vermelho (PR #209 platform-wide)."""
+        slash_start = html.find("SLASH COMMAND POPOVER")
+        assert slash_start >= 0
+        slash_block = html[slash_start:slash_start + 5000]
+        # Era violet/fuchsia em PR #208; agora red por causa do bulk
+        assert "red-" in slash_block
+
+    def test_textarea_expand_modal_brand_preserved(self, html):
+        """Modal expand do textarea: brand-* tones (azul) preservados —
+        não são roxo, então user não pediu pra trocar."""
         modal_start = html.find("MODAL EXPANDIDO DO TEXTAREA")
-        modal_end = html.find("</div>", modal_start + 3000)
         if modal_start < 0:
             pytest.skip("Modal expand não está no main yet")
-        # Brand/color do modal preservado
+        modal_end = html.find("</div>", modal_start + 3000)
         modal = html[modal_start:modal_end]
-        # Modal usa brand- tones, não red — escopo isolado
         assert "brand-500" in modal or "brand-900" in modal

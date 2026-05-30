@@ -111,7 +111,7 @@
                             <div class="flex items-center gap-1.5 flex-wrap">
                                 <span class="text-[12px] font-semibold text-brand-900 truncate" x-text="a.name"></span>
                                 <span class="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase shrink-0"
-                                      :class="a._kind === 'agent' ? 'bg-violet-50 text-violet-700' : 'bg-teal-50 text-teal-700'"
+                                      :class="a._kind === 'agent' ? 'bg-red-50 text-red-700' : 'bg-teal-50 text-teal-700'"
                                       x-text="a._kind"></span>
                                 <!-- Camada do agente (SA/AR/AOBD) — só aparece para agentes; skills não têm camada -->
                                 <span x-show="a._kind === 'agent' && a.kind"

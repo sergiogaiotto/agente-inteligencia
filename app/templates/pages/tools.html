@@ -121,7 +121,7 @@
                 <pre class="rounded-lg bg-brand-950 text-brand-200 p-4 text-[11px] font-mono overflow-x-auto whitespace-pre-wrap"
                      x-text="previewTool ? generateBinding(previewTool) : ''"></pre>
             </div>
-            <a :href="'/skills/new?mcp=' + previewId" class="flex items-center justify-center gap-2 w-full rounded-lg border-2 border-dashed border-violet-200 bg-violet-50/50 px-4 py-3 text-[12px] font-semibold text-violet-600 hover:bg-violet-100 hover:border-violet-300 transition-colors">
+            <a :href="'/skills/new?mcp=' + previewId" class="flex items-center justify-center gap-2 w-full rounded-lg border-2 border-dashed border-red-200 bg-red-50/50 px-4 py-3 text-[12px] font-semibold text-red-600 hover:bg-red-100 hover:border-red-300 transition-colors">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
                 Criar Skill com esta ferramenta
             </a>
@@ -143,7 +143,7 @@
                     </div>
                     <div class="flex items-center gap-2">
                         <button x-show="!editingId" @click="wizardOpen = !wizardOpen" class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-all"
-                                :class="wizardOpen ? 'bg-violet-100 text-violet-700 ring-1 ring-violet-200' : 'bg-violet-500 text-white hover:bg-violet-600'">
+                                :class="wizardOpen ? 'bg-red-100 text-red-700 ring-1 ring-red-200' : 'bg-red-500 text-white hover:bg-red-600'">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582"/></svg>
                             <span x-text="wizardOpen ? 'Fechar' : 'Descobrir MCP'"></span>
                         </button>
@@ -172,22 +172,22 @@
                 </div>
 
                 <!-- Wizard -->
-                <div x-show="wizardOpen" x-transition class="border-b border-violet-100 bg-gradient-to-r from-violet-50 to-brand-50 px-6 py-4">
+                <div x-show="wizardOpen" x-transition class="border-b border-red-100 bg-gradient-to-r from-red-50 to-brand-50 px-6 py-4">
                     <div class="flex gap-3 mb-3">
                         <input x-model="wizardQuery" @keydown.enter="searchMCP()" placeholder="Cole URL ou descreva (Slack, GitHub, PostgreSQL...)"
-                               class="flex-1 rounded-lg border border-violet-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-violet-400 placeholder:text-violet-300">
-                        <button @click="searchMCP()" :disabled="wizardSearching || !wizardQuery.trim()" class="rounded-lg bg-violet-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-violet-600 disabled:opacity-40 whitespace-nowrap">
+                               class="flex-1 rounded-lg border border-red-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-red-400 placeholder:text-red-300">
+                        <button @click="searchMCP()" :disabled="wizardSearching || !wizardQuery.trim()" class="rounded-lg bg-red-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-red-600 disabled:opacity-40 whitespace-nowrap">
                             <span x-text="wizardSearching ? 'Buscando...' : (wizardQuery.startsWith('http') ? 'Importar' : 'Buscar')"></span>
                         </button>
                     </div>
-                    <a href="https://mcpservers.org" target="_blank" class="text-[10px] text-violet-500 hover:text-violet-700 underline">mcpservers.org</a>
+                    <a href="https://mcpservers.org" target="_blank" class="text-[10px] text-red-500 hover:text-red-700 underline">mcpservers.org</a>
                     <div x-show="wizardResults.length > 0" class="space-y-2 mt-3">
                         <template x-for="(r, i) in wizardResults" :key="i">
-                            <div class="rounded-lg border border-violet-200 bg-white p-3 flex items-start justify-between gap-3">
+                            <div class="rounded-lg border border-red-200 bg-white p-3 flex items-start justify-between gap-3">
                                 <div class="min-w-0"><span class="text-[12px] font-bold font-mono text-brand-900" x-text="r.name"></span>
                                 <p class="text-[10px] text-surface-500 mt-0.5" x-text="r.description"></p>
                                 <span class="text-[9px] font-mono text-surface-400" x-text="r.endpoint"></span></div>
-                                <button @click="applyWizardResult(r)" class="shrink-0 rounded-lg bg-violet-500 px-3 py-1 text-[10px] font-semibold text-white hover:bg-violet-600">Aplicar</button>
+                                <button @click="applyWizardResult(r)" class="shrink-0 rounded-lg bg-red-500 px-3 py-1 text-[10px] font-semibold text-white hover:bg-red-600">Aplicar</button>
                             </div>
                         </template>
                     </div>
@@ -242,39 +242,39 @@
                     </div>
 
                     <!-- OAuth2 Client Credentials -->
-                    <div x-show="form.auth_requirements === 'oauth2'" x-transition class="rounded-lg border border-violet-200 bg-violet-50/30 px-4 py-3 space-y-3">
+                    <div x-show="form.auth_requirements === 'oauth2'" x-transition class="rounded-lg border border-red-200 bg-red-50/30 px-4 py-3 space-y-3">
                         <div class="flex items-center gap-2 mb-1">
-                            <svg class="w-4 h-4 text-violet-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
-                            <span class="text-[12px] font-semibold text-violet-800">OAuth2 — Client Credentials</span>
+                            <svg class="w-4 h-4 text-red-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+                            <span class="text-[12px] font-semibold text-red-800">OAuth2 — Client Credentials</span>
                         </div>
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-[10px] font-semibold text-violet-700 mb-1">Client ID *</label>
+                                <label class="block text-[10px] font-semibold text-red-700 mb-1">Client ID *</label>
                                 <input x-model="authConfig.client_id" placeholder="client_abc123"
-                                       class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400 placeholder:text-violet-300">
+                                       class="w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-red-400 placeholder:text-red-300">
                             </div>
                             <div>
-                                <label class="block text-[10px] font-semibold text-violet-700 mb-1">Client Secret *</label>
+                                <label class="block text-[10px] font-semibold text-red-700 mb-1">Client Secret *</label>
                                 <div class="flex gap-1.5">
                                     <input :type="showAuthToken ? 'text' : 'password'" x-model="authConfig.client_secret" placeholder="secret_..."
-                                           class="flex-1 rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400 placeholder:text-violet-300">
+                                           class="flex-1 rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-red-400 placeholder:text-red-300">
                                     <button @click="showAuthToken = !showAuthToken" type="button"
-                                            class="rounded-lg border border-violet-200 px-2 py-2 text-[10px] text-violet-600 hover:bg-violet-100"
+                                            class="rounded-lg border border-red-200 px-2 py-2 text-[10px] text-red-600 hover:bg-red-100"
                                             x-text="showAuthToken ? '🙈' : '👁'"></button>
                                 </div>
                             </div>
                         </div>
                         <div>
-                            <label class="block text-[10px] font-semibold text-violet-700 mb-1">Token URL *</label>
+                            <label class="block text-[10px] font-semibold text-red-700 mb-1">Token URL *</label>
                             <input x-model="authConfig.token_url" placeholder="https://auth.example.com/oauth2/token"
-                                   class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400 placeholder:text-violet-300">
+                                   class="w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-red-400 placeholder:text-red-300">
                         </div>
                         <div>
-                            <label class="block text-[10px] font-semibold text-violet-700 mb-1">Scope (opcional)</label>
+                            <label class="block text-[10px] font-semibold text-red-700 mb-1">Scope (opcional)</label>
                             <input x-model="authConfig.scope" placeholder="read write admin"
-                                   class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-violet-400 placeholder:text-violet-300">
+                                   class="w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-red-400 placeholder:text-red-300">
                         </div>
-                        <p class="text-[9px] text-violet-500">A plataforma busca um <code class="bg-violet-100 px-1 rounded">access_token</code> via grant <code class="bg-violet-100 px-1 rounded">client_credentials</code> antes de cada chamada. Tokens são cacheados até expiração.</p>
+                        <p class="text-[9px] text-red-500">A plataforma busca um <code class="bg-red-100 px-1 rounded">access_token</code> via grant <code class="bg-red-100 px-1 rounded">client_credentials</code> antes de cada chamada. Tokens são cacheados até expiração.</p>
                     </div>
 
                     <!-- mTLS -->
@@ -371,7 +371,7 @@
                                     </template>
 
                                     <button @click="executeTool()" :disabled="executing"
-                                            class="inline-flex items-center gap-1.5 rounded-lg bg-violet-500 px-3 py-1.5 text-[10px] font-semibold text-white hover:bg-violet-600 disabled:opacity-40 transition-colors">
+                                            class="inline-flex items-center gap-1.5 rounded-lg bg-red-500 px-3 py-1.5 text-[10px] font-semibold text-white hover:bg-red-600 disabled:opacity-40 transition-colors">
                                         <span x-text="executing ? 'Executando...' : 'Executar'"></span>
                                     </button>
                                     <div x-show="execResult !== null" x-transition class="rounded-lg overflow-hidden border" :class="execResult?.success ? 'border-emerald-200' : 'border-rose-200'">
@@ -384,7 +384,7 @@
                                             <div class="flex items-center gap-0.5">
                                                 <button @click="toggleExecFormat()" x-show="canFormatResult"
                                                         class="p-1 rounded hover:bg-white/20 transition-colors" :title="execFormatted ? 'Ver bruto' : 'Formatar'">
-                                                    <svg class="w-3.5 h-3.5" :class="execFormatted ? 'text-violet-500' : 'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5"/></svg>
+                                                    <svg class="w-3.5 h-3.5" :class="execFormatted ? 'text-red-500' : 'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5"/></svg>
                                                 </button>
                                                 <button @click="toggleExecExpand()"
                                                         class="p-1 rounded hover:bg-white/20 text-surface-400 transition-colors" :title="execExpanded ? 'Recolher' : 'Expandir'">
@@ -630,7 +630,7 @@ function toolsPage() {
         // Formatação inline: bold, italic, code, links
         _inlineMarkdown(text) {
             return text
-                .replace(/`([^`]+)`/g, '<code class="rounded bg-surface-100 px-1 py-0.5 text-[10px] font-mono text-violet-700">$1</code>')
+                .replace(/`([^`]+)`/g, '<code class="rounded bg-surface-100 px-1 py-0.5 text-[10px] font-mono text-red-700">$1</code>')
                 .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-brand-900">$1</strong>')
                 .replace(/\*(.+?)\*/g, '<em>$1</em>')
                 .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="text-brand-500 underline hover:text-brand-700">$1</a>');
