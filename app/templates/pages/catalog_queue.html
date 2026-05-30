@@ -457,7 +457,7 @@ function queuePage() {
                 qParams.set('limit', '100');
                 const [qResp, eResp] = await Promise.all([
                     fetch('/api/v1/catalog/submissions/queue?' + qParams).then(r => r.ok ? r.json() : {submissions: [], total: 0}),
-                    fetch('/api/v1/catalog/entries?limit=500').then(r => r.ok ? r.json() : {entries: []}),
+                    fetch('/api/v1/catalog/entries?limit=200').then(r => r.ok ? r.json() : {entries: []}),
                 ]);
                 this.submissions = qResp.submissions || [];
                 this.total = qResp.total || 0;
