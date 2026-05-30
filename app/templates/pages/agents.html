@@ -269,6 +269,108 @@
                 </template>
             </div>
 
+            <!-- ══ ONDA C.2 — STATS AGREGADOS ══ -->
+            <!-- Agrega 5 tabelas (interactions/turns/tool_calls/api_call_logs/binding_executions)
+                 numa visão única: invocações, success rate, tokens, latência p50/p99, custo,
+                 breakdown top-tools. Janela configurável (24h/7d/30d/all). -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider">Stats</h4>
+                    <select x-model="previewStatsWindow" @change="_refetchStats()"
+                            class="rounded-md border border-surface-200 bg-white px-1.5 py-0.5 text-[9px] font-mono text-brand-700 outline-none focus:border-violet-400">
+                        <option value="24h">24h</option>
+                        <option value="7d">7d</option>
+                        <option value="30d">30d</option>
+                        <option value="all">tudo</option>
+                    </select>
+                </div>
+                <div x-show="previewLoading && !previewStats" class="rounded-lg bg-surface-50 border border-surface-100 p-3 text-[11px] text-surface-400 italic">Carregando stats...</div>
+                <template x-if="!previewLoading && previewStats && previewStats.interactions.total === 0 && previewStats.tool_calls.total === 0 && previewStats.api_calls.total === 0">
+                    <div class="rounded-lg bg-surface-50 border border-surface-100 p-3 text-[11px] text-surface-500">
+                        Sem atividade no período. <button @click="previewStatsWindow='all'; _refetchStats()" class="text-brand-600 hover:underline">Ver tudo →</button>
+                    </div>
+                </template>
+                <template x-if="!previewLoading && previewStats && (previewStats.interactions.total > 0 || previewStats.tool_calls.total > 0 || previewStats.api_calls.total > 0)">
+                    <div class="space-y-2">
+                        <!-- Cards numéricos (grid 2x2) -->
+                        <div class="grid grid-cols-2 gap-1.5">
+                            <!-- Invocações + success rate -->
+                            <div class="rounded-lg border border-surface-200 bg-white px-2.5 py-2">
+                                <div class="text-[9px] font-bold text-surface-400 uppercase tracking-wider">Invocações</div>
+                                <div class="flex items-baseline gap-1.5 mt-0.5">
+                                    <span class="text-[18px] font-bold text-brand-900" x-text="_formatNumber(previewStats.interactions.total)"></span>
+                                    <span x-show="previewStats.interactions.success_rate !== null"
+                                          class="text-[10px] font-semibold"
+                                          :class="previewStats.interactions.success_rate >= 0.9 ? 'text-emerald-600' : previewStats.interactions.success_rate >= 0.5 ? 'text-amber-600' : 'text-rose-600'"
+                                          x-text="_formatPercent(previewStats.interactions.success_rate) + ' ok'"></span>
+                                </div>
+                                <div x-show="previewStats.interactions.errors > 0" class="text-[9px] text-rose-600 mt-0.5">
+                                    <span x-text="previewStats.interactions.errors"></span> erro(s)
+                                </div>
+                            </div>
+                            <!-- Tokens -->
+                            <div class="rounded-lg border border-surface-200 bg-white px-2.5 py-2">
+                                <div class="text-[9px] font-bold text-surface-400 uppercase tracking-wider">Tokens</div>
+                                <div class="text-[18px] font-bold text-brand-900 mt-0.5" x-text="_formatNumber(previewStats.tokens.total)"></div>
+                                <div class="text-[9px] text-surface-500 mt-0.5">
+                                    <span x-text="previewStats.tokens.turn_count"></span> turn(s)
+                                </div>
+                            </div>
+                            <!-- Latência p50/p99 -->
+                            <div class="rounded-lg border border-surface-200 bg-white px-2.5 py-2">
+                                <div class="text-[9px] font-bold text-surface-400 uppercase tracking-wider">Latência</div>
+                                <div class="text-[14px] font-bold text-brand-900 mt-0.5 font-mono">
+                                    <span x-text="previewStats.latency_ms.p50"></span><span class="text-[9px] font-normal text-surface-500">ms p50</span>
+                                </div>
+                                <div class="text-[9px] text-surface-500 mt-0.5 font-mono">
+                                    p99 <span x-text="previewStats.latency_ms.p99"></span>ms
+                                </div>
+                            </div>
+                            <!-- Custo -->
+                            <div class="rounded-lg border border-surface-200 bg-white px-2.5 py-2">
+                                <div class="text-[9px] font-bold text-surface-400 uppercase tracking-wider">Custo MCP</div>
+                                <div class="text-[18px] font-bold text-brand-900 mt-0.5" x-text="_formatCost(previewStats.estimated_cost_usd)"></div>
+                                <div class="text-[9px] text-surface-500 mt-0.5">tool calls</div>
+                            </div>
+                        </div>
+
+                        <!-- Breakdown por tool (top 5) -->
+                        <template x-if="previewStats.tool_calls.by_tool && previewStats.tool_calls.by_tool.length > 0">
+                            <div class="rounded-lg border border-surface-200 bg-white p-2.5">
+                                <div class="text-[9px] font-bold text-surface-400 uppercase tracking-wider mb-1.5">Top Tools</div>
+                                <div class="space-y-1">
+                                    <template x-for="t in (previewStats.tool_calls.by_tool || []).slice(0, 5)" :key="t.name">
+                                        <div class="flex items-center justify-between gap-2 text-[10px]">
+                                            <span class="font-mono text-brand-900 truncate" x-text="t.name"></span>
+                                            <span class="font-mono text-surface-500 shrink-0">
+                                                <span x-text="t.count"></span>×
+                                                · <span x-text="t.avg_latency_ms"></span>ms
+                                                <span x-show="t.cost_usd > 0">· <span x-text="_formatCost(t.cost_usd)"></span></span>
+                                            </span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- API + binding executions (linha compacta) -->
+                        <div x-show="previewStats.api_calls.total > 0 || previewStats.binding_executions.total > 0"
+                             class="grid grid-cols-2 gap-1.5">
+                            <div x-show="previewStats.api_calls.total > 0"
+                                 class="rounded-md bg-blue-50 border border-blue-200 px-2 py-1 text-[10px] text-blue-800">
+                                <span class="font-bold" x-text="previewStats.api_calls.total"></span> API call(s)
+                                <span x-show="previewStats.api_calls.errors > 0" class="text-rose-600">· <span x-text="previewStats.api_calls.errors"></span> erro(s)</span>
+                            </div>
+                            <div x-show="previewStats.binding_executions.total > 0"
+                                 class="rounded-md bg-violet-50 border border-violet-200 px-2 py-1 text-[10px] text-violet-800">
+                                <span class="font-bold" x-text="previewStats.binding_executions.total"></span> binding(s)
+                                <span x-show="previewStats.binding_executions.errors > 0" class="text-rose-600">· <span x-text="previewStats.binding_executions.errors"></span> erro(s)</span>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
             <!-- ══ ONDA C.1 — QUICK ACTIONS ══ -->
             <div>
                 <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Ações Rápidas</h4>
@@ -330,6 +432,8 @@ function agentsPage() {
         // (fetch de /workspace/agents/{id}/skills-context). null=carregando.
         previewCapabilities: null,
         previewLastActivity: null,  // {has_activity, last_ts, ok, ...}
+        previewStats: null,         // C.2: {window, interactions, tokens, ...}
+        previewStatsWindow: '7d',   // 24h | 7d | 30d | all
         previewLoading: false,
 
         // ══════════════════════════════════════════════
@@ -417,6 +521,7 @@ function agentsPage() {
             // têm placeholder com x-show baseado em previewLoading.
             this.previewCapabilities = null;
             this.previewLastActivity = null;
+            this.previewStats = null;
             this._fetchPreviewExtras(agent.id);
         },
 
@@ -426,18 +531,51 @@ function agentsPage() {
             this.previewLoading = true;
             const requestedId = agentId;
             try {
-                const [caps, activity] = await Promise.all([
+                const [caps, activity, stats] = await Promise.all([
                     api.get(`/api/v1/workspace/agents/${agentId}/skills-context`)
                         .catch(e => { console.warn('skills-context falhou:', e); return null; }),
                     api.get(`/api/v1/agents/${agentId}/last-activity`)
                         .catch(e => { console.warn('last-activity falhou:', e); return null; }),
+                    api.get(`/api/v1/agents/${agentId}/stats?window=${this.previewStatsWindow}`)
+                        .catch(e => { console.warn('stats falhou:', e); return null; }),
                 ]);
                 if (this.previewId !== requestedId) return;  // user mudou de agente
                 this.previewCapabilities = caps;
                 this.previewLastActivity = activity;
+                this.previewStats = stats;
             } finally {
                 if (this.previewId === requestedId) this.previewLoading = false;
             }
+        },
+
+        async _refetchStats() {
+            // Onda C.2: chamado quando user troca a janela (24h/7d/30d/all).
+            // Só re-fetcha stats — capacidades + atividade não mudam.
+            if (!this.previewId) return;
+            try {
+                const stats = await api.get(`/api/v1/agents/${this.previewId}/stats?window=${this.previewStatsWindow}`);
+                this.previewStats = stats;
+            } catch (e) { console.warn('refetch stats:', e); }
+        },
+
+        _formatNumber(n) {
+            // 1234 → "1.2k", 1234567 → "1.2M". Mantém ≤4 chars em compactos.
+            if (n === null || n === undefined) return '—';
+            if (n < 1000) return String(n);
+            if (n < 1_000_000) return (n / 1000).toFixed(n < 10000 ? 1 : 0) + 'k';
+            return (n / 1_000_000).toFixed(1) + 'M';
+        },
+
+        _formatCost(usd) {
+            if (usd === null || usd === undefined || usd === 0) return '$0';
+            if (usd < 0.01) return '< $0.01';
+            if (usd < 1) return '$' + usd.toFixed(3);
+            return '$' + usd.toFixed(2);
+        },
+
+        _formatPercent(rate) {
+            if (rate === null || rate === undefined) return '—';
+            return Math.round(rate * 100) + '%';
         },
 
         // ── Helpers de rendering Onda C.1 ──
