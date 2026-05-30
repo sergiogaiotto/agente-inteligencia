@@ -713,6 +713,75 @@ def _serialize_row(r: dict) -> dict:
     return {k: _iso(v) for k, v in r.items()}
 
 
+@router.get("/{agent_id}/last-activity")
+async def get_agent_last_activity(agent_id: str):
+    """Onda C.1: última invocação do agente — usado pelo painel de detalhe
+    pra mostrar "Última atividade: 2h atrás · OK · 1.4s".
+
+    Consulta interactions (tabela canonical de atividade NL) por agent_id,
+    ordena por created_at desc, pega 1.
+
+    Returns:
+        {has_activity: bool, last_ts, state, ok, duration_ms,
+         interaction_id, channel}
+        Quando agente nunca foi invocado, has_activity=False e demais campos
+        null/0 — UI mostra "Nunca invocado".
+
+    Definição de `ok`:
+        state in ('LogAndClose', 'completed', 'success') → True
+        state in ('Refuse', 'Failed', 'error') → False
+        Outros estados intermediários → None (em andamento ou inconclusivo)
+    """
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
+
+    # Pega a 1 mais recente
+    rows = await interactions_repo.find_all(
+        limit=1, offset=0, agent_id=agent_id,
+    )
+    if not rows:
+        return {
+            "has_activity": False,
+            "last_ts": None,
+            "state": None,
+            "ok": None,
+            "duration_ms": 0,
+            "interaction_id": None,
+            "channel": None,
+        }
+
+    r = rows[0]
+    state = (r.get("state") or "").strip()
+    ok: bool | None
+    if state in ("LogAndClose", "completed", "success"):
+        ok = True
+    elif state in ("Refuse", "Failed", "error", "failed"):
+        ok = False
+    else:
+        ok = None
+
+    # Duration: se temos started_at + ended_at, calcula; senão 0
+    duration_ms = 0
+    started = r.get("started_at")
+    ended = r.get("ended_at")
+    if started and ended and hasattr(started, "timestamp"):
+        try:
+            duration_ms = int((ended.timestamp() - started.timestamp()) * 1000)
+        except Exception:
+            duration_ms = 0
+
+    return {
+        "has_activity": True,
+        "last_ts": _iso(r.get("created_at")),
+        "state": state,
+        "ok": ok,
+        "duration_ms": duration_ms,
+        "interaction_id": r.get("id"),
+        "channel": r.get("channel") or "api",
+    }
+
+
 @router.get("/{agent_id}/invocations")
 async def list_agent_invocations(
     agent_id: str,
