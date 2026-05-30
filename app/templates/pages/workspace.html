@@ -220,7 +220,17 @@
                         </template>
                     </div>
                     <div class="px-3 py-2 border-t border-red-100 bg-red-50/50 flex items-center justify-between gap-2">
-                        <span class="text-[9px] text-surface-500 italic" title="Sem LLM de decisão/orquestração. Embeddings de RAG ainda são usados pra busca vetorial — isso é determinístico, não 'AI generativa'.">Sem LLM intermediário — payload exato vai pro motor</span>
+                        <span class="text-[9px] text-surface-500 italic flex items-center gap-1.5">
+                            <span title="Sem LLM de decisão/orquestração. Embeddings de RAG ainda são usados pra busca vetorial — isso é determinístico, não 'AI generativa'.">Sem LLM intermediário — payload exato vai pro motor</span>
+                            <!-- Pra binding RAG, mostra o embedding provider+dim ativo.
+                                 Crítico pra debug: user vê que vai usar qwen3 (1024d) e
+                                 entende que precisa bater com a collection do Qdrant. -->
+                            <template x-if="activeBindingForm?.binding?.binding_kind === 'rag' && activeBindingForm?.binding?.rag_meta?.embedding_provider">
+                                <span class="rounded bg-red-50 border border-red-200 text-red-700 px-1.5 py-0.5 text-[9px] font-mono not-italic"
+                                      :title="'Embedding provider configurado em /settings > Plataforma. Query é embedded com este modelo; deve bater com a collection do Qdrant. Mudança de provider exige POST /api/v1/evidence/reindex.'"
+                                      x-text="'embeddings: ' + activeBindingForm.binding.rag_meta.embedding_provider + ' (' + (activeBindingForm.binding.rag_meta.embedding_dim || '?') + 'd)'"></span>
+                            </template>
+                        </span>
                         <div class="flex items-center gap-1.5">
                             <button @click="cancelBindingForm()" type="button"
                                     class="rounded-md border border-surface-200 bg-white px-2.5 py-1 text-[11px] text-surface-600 hover:bg-surface-50">Cancelar</button>
