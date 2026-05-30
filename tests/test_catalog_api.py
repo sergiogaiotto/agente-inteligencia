@@ -494,6 +494,9 @@ class TestList:
         assert captured["offset"] == 20
 
     def test_list_rejects_limit_too_high(self, monkeypatch):
+        """limit > 200 → 422. Importa pro frontend: o dashboard pedia limit=500
+        e o card 'Catálogo Corporativo' zerava (api.get lança em não-2xx →
+        catch zera published/drafts/total). Clientes devem usar no máx. 200."""
         async def fake_list(user, **kwargs):
             return [], 0
 
@@ -504,6 +507,21 @@ class TestList:
         c = make_client({"id": "u1", "role": "comum"})
         r = c.get("/api/v1/catalog/entries?limit=500")
         assert r.status_code == 422
+
+    def test_list_accepts_limit_at_max_boundary(self, monkeypatch):
+        """limit=200 é o teto válido — o valor que dashboard, fila de revisão
+        e detalhe do catálogo usam pra carregar 'todas' as entries. Pinning do
+        boundary pra ninguém reintroduzir limit=500 (que volta a quebrar)."""
+        async def fake_list(user, **kwargs):
+            return [], 0
+
+        monkeypatch.setattr(
+            "app.routes.catalog.list_visible_entries",
+            fake_list,
+        )
+        c = make_client({"id": "u1", "role": "comum"})
+        r = c.get("/api/v1/catalog/entries?limit=200")
+        assert r.status_code == 200
 
 
 # ═════════════════════════════════════════════════════════════════

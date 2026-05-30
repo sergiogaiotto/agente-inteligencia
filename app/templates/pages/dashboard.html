@@ -328,7 +328,7 @@ function dashboardPage(){return{
             this.current_user_id = me.user?.id || '';
 
             // Carrega entries visíveis para o user atual (backend filtra por can_user_see)
-            const r = await api.get('/api/v1/catalog/entries?limit=500');
+            const r = await api.get('/api/v1/catalog/entries?limit=200');
             const entries = r.entries || [];
             this.catalog = {
                 total: r.total || entries.length,
