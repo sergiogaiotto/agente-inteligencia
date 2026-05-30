@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.core.auth import require_user
 from app.core.database import audit_repo
@@ -381,6 +382,134 @@ async def logs_delete_archives(
         "deleted_count": len(deleted),
         "freed_bytes": freed_bytes,
         "freed_human": _human_bytes(freed_bytes),
+    }
+
+
+# ─── IA-assistida: explicação de logs (Log Viewer 2.0) ───────────
+
+
+class ExplainRequest(BaseModel):
+    """Payload para análise das linhas selecionadas pelo LLM primário."""
+    lines: list[str] = Field(..., min_length=1, max_length=500)
+    question: str = Field("", max_length=1000)
+    preset: str = Field("", pattern=r"^(summary|errors|anomalies|hypothesis|)$")
+    file_name: str = Field("", max_length=100)
+
+
+_EXPLAIN_PRESETS = {
+    "summary": (
+        "Resuma o que aconteceu nestas linhas em até 5 bullets curtos. "
+        "Foque no fluxo: requisições recebidas, respostas, latências típicas."
+    ),
+    "errors": (
+        "Identifique e categorize todos os erros (level=ERROR/CRITICAL ou "
+        "status_code≥500 ou stack traces). Para cada categoria: quantas "
+        "ocorrências, sintoma, e onde apareceu (logger/path)."
+    ),
+    "anomalies": (
+        "Detecte padrões anormais: latências altas (duration_ms outlier), "
+        "rajadas de erros, repetição suspeita do mesmo evento, gaps no "
+        "timeline. Compare com a baseline da própria janela analisada."
+    ),
+    "hypothesis": (
+        "Proponha 1-3 hipóteses de causa-raiz para os problemas observados, "
+        "ordenadas por probabilidade. Para cada uma: evidência nas linhas, "
+        "próximo passo de verificação."
+    ),
+}
+
+
+@router.post("/explain")
+async def logs_explain(
+    payload: ExplainRequest,
+    user: dict = Depends(require_user),
+):
+    """Pede ao LLM primário uma análise semântica das linhas de log.
+
+    Usa o provider/modelo configurado em `settings.primary_provider/primary_model`
+    (UI: /settings → Plataforma → Modelo Primário). Fallback: `default_llm_provider`
+    (azure). Quando nenhum estiver configurado, devolve 503.
+
+    O backend é stateless — recebe as linhas já filtradas pelo frontend e
+    monta o prompt. Sem persistência da resposta (operador copia se quiser).
+    """
+    # Import lazy: evita carregar langchain quando a feature não é usada
+    from app.core.config import get_settings
+    from app.core.llm_providers import get_provider
+
+    settings = get_settings()
+    provider_name = (settings.primary_provider or settings.default_llm_provider or "azure").strip()
+    model = (settings.primary_model or "").strip() or None
+
+    system_prompt = (
+        "Você é um SRE/observability engineer experiente analisando logs de "
+        "aplicação Python (FastAPI). Os logs seguem o schema estruturado JSON: "
+        "ts, level, logger, msg, event, request_id, trace_id, user_id, method, "
+        "path, status_code, duration_ms.\n\n"
+        "Diretrizes:\n"
+        "- Responda em português brasileiro, em markdown.\n"
+        "- Seja objetivo: nada de preâmbulos ou disclaimers genéricos.\n"
+        "- Cite linhas específicas pelo timestamp (`ts`) quando relevante.\n"
+        "- Se não houver evidência para uma conclusão, diga 'não há evidência'.\n"
+        "- Não invente. Não generalize além do que as linhas mostram."
+    )
+
+    parts: list[str] = []
+    if payload.preset and payload.preset in _EXPLAIN_PRESETS:
+        parts.append(_EXPLAIN_PRESETS[payload.preset])
+    if payload.question.strip():
+        parts.append(f"Pergunta do operador: {payload.question.strip()}")
+    if not parts:
+        parts.append(_EXPLAIN_PRESETS["summary"])
+
+    parts.append(
+        f"\n## Linhas analisadas ({len(payload.lines)}"
+        f"{' de ' + payload.file_name if payload.file_name else ''}):"
+    )
+    parts.append("```")
+    parts.extend(payload.lines)
+    parts.append("```")
+
+    user_prompt = "\n\n".join(parts)
+
+    try:
+        if model:
+            provider = get_provider(provider_name, model=model)
+        else:
+            provider = get_provider(provider_name)
+    except Exception as e:
+        raise HTTPException(503, f"Provider '{provider_name}' não disponível: {e}")
+
+    try:
+        result = await provider.generate(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+    except Exception as e:
+        logger.error("logs.explain falhou", exc_info=True)
+        raise HTTPException(502, f"Erro ao chamar LLM ({provider_name}): {e}")
+
+    await _audit(
+        "logs.explain",
+        user.get("id", ""),
+        {
+            "file": payload.file_name,
+            "lines_count": len(payload.lines),
+            "preset": payload.preset,
+            "has_question": bool(payload.question.strip()),
+            "provider": provider_name,
+            "model": result.get("model"),
+        },
+    )
+
+    return {
+        "answer": result.get("content", ""),
+        "model": result.get("model") or model or provider_name,
+        "provider": provider_name,
+        "lines_analyzed": len(payload.lines),
+        "usage": result.get("usage", {}),
     }
 
 

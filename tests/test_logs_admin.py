@@ -225,3 +225,153 @@ class TestRotate:
         assert "rotated" in body
         assert "rotated_count" in body
         assert isinstance(body["rotated"], list)
+
+
+# ─── /explain (Log Viewer 2.0 — IA, me ajuda) ────────────────────
+
+
+class _FakeProvider:
+    """Captura messages enviadas e devolve resposta determinística."""
+    last_messages = None
+    last_kwargs = None
+
+    async def generate(self, messages, **kwargs):
+        _FakeProvider.last_messages = messages
+        _FakeProvider.last_kwargs = kwargs
+        return {
+            "content": "## Resumo\n- 1 erro detectado\n- nenhuma anomalia",
+            "model": "fake-primary-model",
+            "usage": {"total_tokens": 42},
+        }
+
+
+def _fake_get_provider(name, **kwargs):
+    """Override de get_provider que captura o nome solicitado."""
+    _fake_get_provider.last_name = name
+    _fake_get_provider.last_kwargs = kwargs
+    return _FakeProvider()
+
+
+class TestExplain:
+    """Endpoint POST /explain — análise IA das linhas filtradas."""
+
+    def test_explain_calls_llm_with_lines(self, isolated_logs, root_user, monkeypatch):
+        monkeypatch.setattr("app.core.llm_providers.get_provider", _fake_get_provider)
+        _FakeProvider.last_messages = None
+        client = TestClient(make_app(root_user))
+
+        payload = {
+            "lines": ['{"ts":"2026-05-30T20:00:00Z","level":"ERROR","msg":"boom"}'],
+            "preset": "errors",
+            "file_name": "app.log",
+        }
+        r = client.post("/api/v1/observability/logs/explain", json=payload)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "Resumo" in body["answer"]
+        assert body["lines_analyzed"] == 1
+        assert body["model"] == "fake-primary-model"
+        # Provider recebeu system + user com a linha embutida
+        msgs = _FakeProvider.last_messages
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "system"
+        assert msgs[1]["role"] == "user"
+        assert "boom" in msgs[1]["content"]
+
+    def test_explain_preset_injects_canned_prompt(self, isolated_logs, root_user, monkeypatch):
+        """Cada preset deve trazer instrução característica no prompt."""
+        monkeypatch.setattr("app.core.llm_providers.get_provider", _fake_get_provider)
+        client = TestClient(make_app(root_user))
+
+        for preset, marker in [
+            ("summary", "Resuma"),
+            ("errors", "Identifique"),
+            ("anomalies", "padrões anormais"),
+            ("hypothesis", "hipóteses"),
+        ]:
+            _FakeProvider.last_messages = None
+            r = client.post("/api/v1/observability/logs/explain", json={
+                "lines": ['{"level":"INFO"}'], "preset": preset, "file_name": "app.log",
+            })
+            assert r.status_code == 200
+            user_content = _FakeProvider.last_messages[1]["content"]
+            assert marker in user_content, f"preset={preset} sem marker '{marker}'"
+
+    def test_explain_falls_back_to_summary_when_no_preset_no_question(
+        self, isolated_logs, root_user, monkeypatch,
+    ):
+        monkeypatch.setattr("app.core.llm_providers.get_provider", _fake_get_provider)
+        _FakeProvider.last_messages = None
+        client = TestClient(make_app(root_user))
+
+        r = client.post("/api/v1/observability/logs/explain", json={
+            "lines": ['{"level":"INFO"}'],
+        })
+        assert r.status_code == 200
+        assert "Resuma" in _FakeProvider.last_messages[1]["content"]
+
+    def test_explain_free_question_passes_through(self, isolated_logs, root_user, monkeypatch):
+        monkeypatch.setattr("app.core.llm_providers.get_provider", _fake_get_provider)
+        _FakeProvider.last_messages = None
+        client = TestClient(make_app(root_user))
+
+        r = client.post("/api/v1/observability/logs/explain", json={
+            "lines": ['{"level":"INFO"}'],
+            "question": "Por que duration_ms aumentou às 14h?",
+        })
+        assert r.status_code == 200
+        assert "duration_ms aumentou" in _FakeProvider.last_messages[1]["content"]
+
+    def test_explain_rejects_empty_lines(self, isolated_logs, root_user):
+        client = TestClient(make_app(root_user))
+        r = client.post("/api/v1/observability/logs/explain", json={"lines": []})
+        assert r.status_code == 422
+
+    def test_explain_rejects_too_many_lines(self, isolated_logs, root_user):
+        client = TestClient(make_app(root_user))
+        r = client.post("/api/v1/observability/logs/explain", json={
+            "lines": ['{"x":1}'] * 501,
+        })
+        assert r.status_code == 422
+
+    def test_explain_rejects_invalid_preset(self, isolated_logs, root_user):
+        client = TestClient(make_app(root_user))
+        r = client.post("/api/v1/observability/logs/explain", json={
+            "lines": ['{"level":"INFO"}'],
+            "preset": "invalido",
+        })
+        assert r.status_code == 422
+
+    def test_explain_502_when_llm_fails(self, isolated_logs, root_user, monkeypatch):
+        """Erro do provider vira 502 para o cliente — não 500 — porque é
+        falha de upstream LLM, não bug da aplicação."""
+        class _BrokenProvider:
+            async def generate(self, messages, **kwargs):
+                raise RuntimeError("llm exploded")
+
+        monkeypatch.setattr(
+            "app.core.llm_providers.get_provider",
+            lambda name, **kw: _BrokenProvider(),
+        )
+        client = TestClient(make_app(root_user))
+        r = client.post("/api/v1/observability/logs/explain", json={
+            "lines": ['{"level":"INFO"}'],
+        })
+        assert r.status_code == 502
+        assert "llm exploded" in r.text
+
+    def test_explain_uses_primary_provider_from_settings(
+        self, isolated_logs, root_user, monkeypatch,
+    ):
+        """Provider solicitado segue settings.primary_provider quando definido."""
+        from app.core.config import get_settings
+        s = get_settings()
+        monkeypatch.setattr(s, "primary_provider", "azure", raising=False)
+        monkeypatch.setattr("app.core.llm_providers.get_provider", _fake_get_provider)
+
+        client = TestClient(make_app(root_user))
+        r = client.post("/api/v1/observability/logs/explain", json={
+            "lines": ['{"x":1}'],
+        })
+        assert r.status_code == 200
+        assert _fake_get_provider.last_name == "azure"
