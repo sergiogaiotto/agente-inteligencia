@@ -662,7 +662,9 @@
                      - Issues (incluindo operation.missing/invented detectados)
                      Encurta o loop de feedback de 6 passos pra 1 botão.
                 -->
-                <div x-show="toolsDeclaredInSkill().length > 0" class="space-y-2">
+                <div x-show="toolsDeclaredInSkill().length > 0"
+                     x-init="$watch('form.raw_content', () => _ensureDryRunState()); _ensureDryRunState()"
+                     class="space-y-2">
                     <h4 class="text-[10px] text-surface-400 font-semibold uppercase tracking-wider mt-4">
                         Tools MCP — dry-run (sem chamar servidor)
                     </h4>
@@ -683,12 +685,24 @@
                                         </template>
                                     </div>
                                 </div>
-                                <button @click="runDryRunTool(t)" :disabled="dryRunInFlight[t.id]" type="button"
-                                        class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-600 hover:to-fuchsia-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm disabled:opacity-50">
-                                    <svg x-show="!dryRunInFlight[t.id]" class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
-                                    <svg x-show="dryRunInFlight[t.id]" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                                    <span x-text="dryRunInFlight[t.id] ? 'Testando...' : 'Testar tool'"></span>
-                                </button>
+                                <!-- Onda D.1 (fix): botão Testar tool com validação explícita.
+                                     Antes: só ficava disabled durante dryRunInFlight. Faltava
+                                     feedback claro pra "preview não rodou" ou "fields vazios".
+                                     Hint sob o botão diz exatamente o que está faltando. -->
+                                <div class="flex flex-col items-end gap-0.5 shrink-0">
+                                    <button @click="runDryRunTool(t)" :disabled="!_dryRunCanRun(t)" type="button"
+                                            :title="_dryRunDisabledReason(t) || 'Executar dry-run desta tool'"
+                                            class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-600 hover:to-fuchsia-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <svg x-show="!dryRunInFlight[t.id]" class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
+                                        <svg x-show="dryRunInFlight[t.id]" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                                        <span x-text="dryRunInFlight[t.id] ? 'Testando...' : 'Testar tool'"></span>
+                                    </button>
+                                    <!-- Hint: aparece SÓ quando disabled e tem razão articulável.
+                                         Garante user nunca olhe botão faded sem entender o porquê. -->
+                                    <span x-show="!_dryRunCanRun(t) && _dryRunDisabledReason(t)"
+                                          class="text-[9px] text-amber-600 italic max-w-[180px] text-right leading-tight"
+                                          x-text="_dryRunDisabledReason(t)"></span>
+                                </div>
                             </div>
                             <!-- Inputs do teste — dinâmicos por function_spec.
                                  Hoje o engine MCP sempre tem {operation enum, query string},
@@ -1316,16 +1330,19 @@ function skillForm(editId) {
         },
 
         toolsDeclaredInSkill() {
+            // PURE getter: NÃO muta state (anti-pattern Alpine — mutar
+            // estado durante render dispara re-render → loops sutis ou
+            // bugs de reactivity como botão Testar tool aparecendo
+            // disabled mesmo com tudo OK).
+            // Init de dryRunInputs[id] vai por _ensureDryRunState (chamado
+            // via x-init no template + watch em form.raw_content).
             const raw = this.form.raw_content || '';
-            // Extrai bloco ## Tool Bindings (até próxima seção ou EOF)
             const m = raw.match(/##\s+Tool Bindings\s*\n([\s\S]*?)(?=\n##\s|$)/);
             if (!m) return [];
-            // UUIDs no formato `xxx-xxx-...`
             const uuidRe = /`([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})`/g;
             const ids = [];
             let match;
             while ((match = uuidRe.exec(m[1])) !== null) ids.push(match[1]);
-            // Resolve via this.mcpTools (já tem name+operations do registry)
             const out = [];
             for (const id of ids) {
                 const reg = (this.mcpTools || []).find(t => t.id === id);
@@ -1334,16 +1351,62 @@ function skillForm(editId) {
                 out.push({
                     id,
                     name: reg?.name || '',
-                    operations: opsRaw,           // raw pra exibição "Operations: ..."
-                    operationsList: opsParsed,    // array limpo (sem aspas/colchetes)
+                    operations: opsRaw,
+                    operationsList: opsParsed,
                 });
-                // Inicializa estado dos inputs lazy. params{} é dict de campo→valor;
-                // populado via dryRunFieldsFor() quando o template renderiza.
-                if (!this.dryRunInputs[id]) {
-                    this.dryRunInputs[id] = {params: {}};
-                }
             }
             return out;
+        },
+
+        // Onda D.1 (fix): chamado quando form.raw_content muda ou template
+        // renderiza pela primeira vez. Garante dryRunInputs[id] existe pra
+        // x-model funcionar sem precisar de mutação dentro de getter.
+        _ensureDryRunState() {
+            const tools = this.toolsDeclaredInSkill();
+            for (const t of tools) {
+                if (!this.dryRunInputs[t.id]) {
+                    this.dryRunInputs[t.id] = { params: {} };
+                }
+            }
+        },
+
+        // Onda D.1: validação explícita de campos required. Render mostra
+        // hint quando não satisfeito, e botão fica disabled com cursor claro.
+        // Returns {ok: bool, missing: [field_name]} pra UI mostrar exatamente
+        // o que está faltando.
+        _dryRunValidate(tool) {
+            const fields = this.dryRunFieldsFor(tool);
+            const params = this.dryRunInputs[tool.id]?.params || {};
+            const missing = [];
+            for (const [name, meta] of Object.entries(fields)) {
+                if (!meta.required) continue;
+                const v = params[name];
+                if (v === undefined || v === null || (typeof v === 'string' && !v.trim())) {
+                    missing.push(name);
+                }
+            }
+            return { ok: missing.length === 0, missing };
+        },
+
+        _dryRunCanRun(tool) {
+            // Pré-condições: parseResult disponível (preview rodou ao menos
+            // 1x), raw_content não-vazio, todos required preenchidos, não
+            // está em vôo (chamada anterior pendente).
+            if (this.dryRunInFlight[tool.id]) return false;
+            if (!this.form.raw_content) return false;
+            if (!this.parseResult) return false;
+            return this._dryRunValidate(tool).ok;
+        },
+
+        _dryRunDisabledReason(tool) {
+            // Mensagem humana pra hint sob o botão quando disabled.
+            // Ajuda user a entender por que não consegue clicar.
+            if (this.dryRunInFlight[tool.id]) return 'Testando...';
+            if (!this.form.raw_content) return 'Edite a SKILL primeiro';
+            if (!this.parseResult) return 'Aguardando preview/validação';
+            const v = this._dryRunValidate(tool);
+            if (!v.ok) return 'Preencha: ' + v.missing.join(', ');
+            return '';
         },
 
         // Lê o function_spec do backend (após primeira chamada de testar) E

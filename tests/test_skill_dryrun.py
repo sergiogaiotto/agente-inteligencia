@@ -319,10 +319,12 @@ class TestUIDynamicParamsAndOperationsParsing:
 
     def test_skill_form_initializes_params_dict_per_tool(self):
         """Estado dryRunInputs[tool.id] precisa ser {params: {}} pra
-        permitir N campos com nomes dinâmicos."""
+        permitir N campos com nomes dinâmicos. Aceita spacing variations
+        após fix do anti-pattern de mutação dentro do getter."""
         from pathlib import Path
         html = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
-        assert "{params: {}}" in html
+        # Aceita "{params: {}}" (original) OU "{ params: {} }" (fix Onda D.1)
+        assert "{params: {}}" in html or "{ params: {} }" in html
 
     def test_runDryRunTool_extracts_canonical_fields_for_backend(self):
         """Backend hoje aceita operation_override + sample_query. O
