@@ -446,9 +446,12 @@ def _safe_get_embedding_provider() -> str:
 
 
 def _safe_get_embedding_dim() -> int:
-    """Retorna dim do embedder ativo. Best-effort."""
+    """Retorna dim do embedder ativo. Best-effort.
+
+    Onda Q: helper migrou de qdrant_store pra embedder.py (backend-neutral).
+    """
     try:
-        from app.evidence.qdrant_store import get_active_embedding_dim
+        from app.evidence.embedder import get_active_embedding_dim
         return int(get_active_embedding_dim())
     except Exception:
         return 0

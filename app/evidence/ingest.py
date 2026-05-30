@@ -29,26 +29,13 @@ _tracer = get_tracer(__name__)
 
 
 def _get_vector_store():
-    """Resolve o módulo de vector store ativo conforme settings.
+    """Retorna o módulo pgvector_store (único backend desde Onda Q).
 
-    Os 2 módulos expõem a mesma interface pública (upsert_chunks, search,
-    delete_by_source, recreate_collection, collection_info, ensure_collection).
-    O roteamento é em runtime (não import-time) pra permitir trocar o
-    backend via env var sem restart.
-
-    Returns:
-        Módulo (não instância) — pgvector_store (default) ou qdrant_store
-        (legado, opt-in via RAG_VECTOR_BACKEND=qdrant até o PR F).
-
-    Valor desconhecido (ex: typo no .env) cai em pgvector — alinhado com
-    o "default seguro pra nova era". Qdrant fica como opt-in explícito
-    enquanto não é removido.
+    Histórico: até Onda Q (2026-05-30) existia branch pra qdrant_store via
+    `rag_vector_backend == "qdrant"`. Qdrant foi descontinuado — pgvector
+    cobre 100% dos casos com Postgres já presente na infra (sem 2º serviço).
+    Helper mantido por convenção/compat de chamadas existentes.
     """
-    backend = (get_settings().rag_vector_backend or "pgvector").lower()
-    if backend == "qdrant":
-        from app.evidence import qdrant_store
-        return qdrant_store
-    # default ("pgvector") + qualquer valor desconhecido cai em pgvector
     from app.evidence import pgvector_store
     return pgvector_store
 
@@ -303,13 +290,13 @@ async def reindex_all(
         upsert pontos. pgvector: DROP+ADD coluna embedding + UPDATE em batch.
         Mesma interface — caller não diferencia.
     """
-    # get_active_embedding_dim vive em qdrant_store por enquanto (PR D) — vai
-    # ficar lá mesmo após o cutover (é função de leitura de settings, não de
-    # backend). Os 2 stores importam de lá.
-    from app.evidence.qdrant_store import get_active_embedding_dim
+    # Onda Q (2026-05-30): get_active_embedding_dim migrou de qdrant_store
+    # pra embedder.py (backend-neutral, só lê settings). qdrant_store
+    # removido — backend agora é sempre pgvector.
+    from app.evidence.embedder import get_active_embedding_dim
 
     vector_store = _get_vector_store()
-    backend_name = (get_settings().rag_vector_backend or "qdrant").lower()
+    backend_name = "pgvector"  # Onda Q: backend único após remoção do Qdrant
 
     start = time.time()
     with _tracer.start_as_current_span("ingest.reindex_all") as span:

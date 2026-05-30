@@ -36,23 +36,13 @@ _tracer = get_tracer(__name__)
 
 
 def _get_vector_search_fn():
-    """Resolve a função search() do backend ativo.
+    """Retorna a função search() do pgvector_store (único backend desde Onda Q).
 
-    Default: pgvector (desde PR E). Qdrant é opt-in explícito via
-    RAG_VECTOR_BACKEND=qdrant até o PR F (que remove o módulo).
-
-    Não importa direto pra não acoplar runtime ao import-time do backend
-    inativo (cria singletons inúteis). Lazy via settings.
-
-    Nome com prefixo `_get_` para não colidir com `Retriever._vector_search()`
-    (método de instância) que delega aqui.
+    Onda Q (2026-05-30) removeu qdrant_store — antes havia conditional
+    por `rag_vector_backend`. pgvector cobre 100% dos casos sem 2º serviço.
+    Helper mantido por convenção/compat.
     """
-    backend = (get_settings().rag_vector_backend or "pgvector").lower()
-    if backend == "qdrant":
-        from app.evidence.qdrant_store import search as _s
-    else:
-        # default pgvector + qualquer valor desconhecido
-        from app.evidence.pgvector_store import search as _s
+    from app.evidence.pgvector_store import search as _s
     return _s
 
 
@@ -218,18 +208,15 @@ class Retriever:
 
     async def _vector_search(self, query: str, top_n: int,
                              allowed_source_ids: list[str] | None = None) -> list[dict]:
-        """Embeda a query e busca top_n vizinhos no vector store ativo.
+        """Embeda a query e busca top_n vizinhos no pgvector.
 
-        Backend (qdrant ou pgvector) é resolvido em runtime via
-        Settings.rag_vector_backend — caller (`Retriever.search`) não muda
-        com a troca. Filtro source_ids vai pro backend:
-        - Qdrant: FieldCondition + MatchAny (filter nativo).
-        - pgvector: WHERE knowledge_source_id = ANY($1) na própria SQL.
+        Onda Q (2026-05-30): backend único pgvector. Antes havia
+        conditional por `rag_vector_backend` (qdrant ou pgvector) —
+        Qdrant removido. Filtro source_ids: WHERE knowledge_source_id = ANY($1).
         """
-        backend = (get_settings().rag_vector_backend or "qdrant").lower()
         with _tracer.start_as_current_span("evidence.retrieve.vector") as span:
             span.set_attribute("vector.top_n", top_n)
-            span.set_attribute("rag.vector_backend", backend)
+            span.set_attribute("rag.vector_backend", "pgvector")
             if allowed_source_ids:
                 span.set_attribute("vector.allowed_sources", len(allowed_source_ids))
             qvec = await embed_query(query)
