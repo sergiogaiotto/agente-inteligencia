@@ -782,6 +782,159 @@ async def get_agent_last_activity(agent_id: str):
     }
 
 
+@router.get("/{agent_id}/stats")
+async def get_agent_stats(agent_id: str, window: str = "7d"):
+    """Onda C.2: stats agregados de uso do agente — usado pelo painel
+    de detalhe pra mostrar "42 invocações · 90% sucesso · 12k tokens · $0.42".
+
+    Agrega 5 tabelas em 1 só response: interactions (success rate),
+    turns (tokens + latência p50/p99), tool_calls (count + cost), api_call_logs
+    (count), binding_executions (count).
+
+    Args:
+        window: '24h' | '7d' | '30d' | 'all'. Inválido cai pra '7d'.
+
+    Returns:
+        {window, since, interactions, tokens, latency_ms, tool_calls,
+         api_calls, binding_executions, estimated_cost_usd}
+        Quando agente não tem atividade no período, todos counts = 0.
+    """
+    from datetime import datetime, timedelta, timezone
+    from app.core.database import _get_pool
+
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
+
+    # Resolve since
+    now = datetime.now(timezone.utc)
+    window_map = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
+    if window == "all":
+        since = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        window_norm = "all"
+    elif window in window_map:
+        since = now - window_map[window]
+        window_norm = window
+    else:
+        since = now - window_map["7d"]
+        window_norm = "7d"
+
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        # Q1: Interactions success rate
+        q1 = await con.fetchrow("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE state IN ('LogAndClose','completed','success')) AS ok,
+                COUNT(*) FILTER (WHERE state IN ('Refuse','Failed','error','failed')) AS errors,
+                COUNT(*) FILTER (WHERE state NOT IN ('LogAndClose','completed','success','Refuse','Failed','error','failed')) AS in_progress
+            FROM interactions
+            WHERE agent_id = $1 AND created_at >= $2
+        """, agent_id, since)
+
+        # Q2: Tokens + latency p50/p99 (turns JOINed com interactions)
+        q2 = await con.fetchrow("""
+            SELECT
+                COALESCE(SUM(t.tokens_used), 0) AS total_tokens,
+                COALESCE(AVG(t.latency_ms), 0)::float AS avg_latency,
+                COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.latency_ms), 0)::float AS p50_latency,
+                COALESCE(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY t.latency_ms), 0)::float AS p99_latency,
+                COUNT(*) AS turn_count
+            FROM turns t
+            JOIN interactions i ON t.interaction_id = i.id
+            WHERE i.agent_id = $1 AND i.created_at >= $2
+        """, agent_id, since)
+
+        # Q3: Tool calls breakdown (top tools)
+        q3 = await con.fetch("""
+            SELECT
+                tc.tool_name,
+                COUNT(*) AS count,
+                COALESCE(AVG(tc.latency_ms), 0)::float AS avg_latency,
+                COALESCE(SUM(tc.cost_usd), 0)::float AS cost_total
+            FROM tool_calls tc
+            JOIN interactions i ON tc.interaction_id = i.id
+            WHERE i.agent_id = $1 AND i.created_at >= $2
+            GROUP BY tc.tool_name
+            ORDER BY count DESC
+            LIMIT 10
+        """, agent_id, since)
+
+        # Q4: API calls
+        q4 = await con.fetchrow("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status_code BETWEEN 200 AND 299) AS ok,
+                COUNT(*) FILTER (WHERE status_code >= 400 OR status_code = 0) AS errors,
+                COALESCE(AVG(latency_ms), 0)::float AS avg_latency
+            FROM api_call_logs
+            WHERE agent_id = $1 AND created_at >= $2
+        """, agent_id, since)
+
+        # Q5: Binding executions (declarative engine)
+        q5 = await con.fetchrow("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status_code BETWEEN 200 AND 299) AS ok,
+                COUNT(*) FILTER (WHERE status_code >= 400 OR status_code = 0) AS errors
+            FROM binding_executions
+            WHERE agent_id = $1 AND created_at >= $2
+        """, agent_id, since)
+
+    # Build response
+    int_total = q1["total"] or 0
+    int_ok = q1["ok"] or 0
+    success_rate = (int_ok / int_total) if int_total > 0 else None
+
+    tool_calls_total = sum(r["count"] for r in q3) if q3 else 0
+    tool_calls_cost = sum(r["cost_total"] or 0 for r in q3) if q3 else 0.0
+
+    return {
+        "window": window_norm,
+        "since": since.isoformat(),
+        "interactions": {
+            "total": int_total,
+            "ok": int_ok,
+            "errors": q1["errors"] or 0,
+            "in_progress": q1["in_progress"] or 0,
+            "success_rate": success_rate,
+        },
+        "tokens": {
+            "total": int(q2["total_tokens"] or 0),
+            "turn_count": q2["turn_count"] or 0,
+        },
+        "latency_ms": {
+            "avg": int(q2["avg_latency"] or 0),
+            "p50": int(q2["p50_latency"] or 0),
+            "p99": int(q2["p99_latency"] or 0),
+        },
+        "tool_calls": {
+            "total": tool_calls_total,
+            "by_tool": [
+                {
+                    "name": r["tool_name"] or "(sem nome)",
+                    "count": r["count"],
+                    "avg_latency_ms": int(r["avg_latency"] or 0),
+                    "cost_usd": round(r["cost_total"] or 0, 4),
+                }
+                for r in q3
+            ],
+        },
+        "api_calls": {
+            "total": q4["total"] or 0,
+            "ok": q4["ok"] or 0,
+            "errors": q4["errors"] or 0,
+            "avg_latency_ms": int(q4["avg_latency"] or 0),
+        },
+        "binding_executions": {
+            "total": q5["total"] or 0,
+            "ok": q5["ok"] or 0,
+            "errors": q5["errors"] or 0,
+        },
+        "estimated_cost_usd": round(tool_calls_cost, 4),
+    }
+
+
 @router.get("/{agent_id}/invocations")
 async def list_agent_invocations(
     agent_id: str,
