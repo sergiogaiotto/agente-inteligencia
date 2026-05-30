@@ -842,18 +842,24 @@ class LLMRoutingUpdate(BaseModel):
 @router.get("/dashboard/llm-routing")
 async def get_llm_routing():
     """Retorna o routing config atual + defaults + lista de task types."""
-    from app.llm_routing import load_routing, DEFAULT_ROUTING, TASK_TYPES
+    from app.llm_routing import load_routing, DEFAULT_ROUTING, TASK_TYPES, global_primary_routing
     routing = await load_routing()
+    # skill_generation: default efetivo segue o Modelo Primário global da
+    # plataforma (não o hardcoded). Reflete no botão "padrões recomendados".
+    defaults = dict(DEFAULT_ROUTING)
+    gm = global_primary_routing()
+    if gm:
+        defaults["skill_generation"] = gm
     return {
         "routing": routing,
-        "defaults": DEFAULT_ROUTING,
+        "defaults": defaults,
         "task_types": list(TASK_TYPES),
         "task_descriptions": {
             "tool_calling": "Uso de ferramentas (function calls). Pra tarefas complexas que precisam invocar APIs/MCPs externas. Default: GPT-OSS-120B (open-weight via hub interno).",
             "reasoning": "Texto com raciocínio. Pra tarefas que exigem análise/explicação em PT-BR. Default: GPT-OSS-120B (open-weight via hub interno).",
             "instruct": "Apenas texto (instruction following). Inferência comum. **Aceita imagens** — quando input é multimodal, plataforma roteia automaticamente pro multimodal_fallback. Default: GPT-OSS-20B (open-weight via hub interno).",
             "classification": "Classificação e categorização. Estruturação de informações em labels/buckets fixos. Default: GPT-OSS-20B (open-weight via hub interno).",
-            "skill_generation": "Criação e alteração de SKILL.md no Wizard. Como o SKILL.md precisa respeitar um formato rígido, escolha um modelo forte em seguir instruções e gerar saída estruturada (JSON). Default: Azure GPT-4o.",
+            "skill_generation": "Criação e alteração de SKILL.md no Wizard. Como o SKILL.md precisa respeitar um formato rígido, escolha um modelo forte em seguir instruções e gerar saída estruturada (JSON). Default: o modelo global da plataforma (Modelo Primário) — você pode trocar aqui a qualquer momento.",
             "multimodal_fallback": "Modelo usado quando o input contém imagem mas o modelo da task escolhida é text-only. Default: Azure GPT-4o (único multimodal nativo pronto pra produção).",
         },
     }

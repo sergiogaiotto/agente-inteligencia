@@ -46,16 +46,36 @@ DEFAULT_ROUTING: dict[str, str] = {
     "reasoning": "gpt-oss-120b/openai/gpt-oss-120b",
     "instruct": "gpt-oss-20b/openai/gpt-oss-20b",
     "classification": "gpt-oss-20b/openai/gpt-oss-20b",
-    # skill_generation (Onda 2026-05-29): tarefa específica de criar/alterar
-    # SKILL.md no Wizard. Separado de `reasoning` porque o gerador precisa
-    # seguir regras estruturais MUITO específicas (verbos imperativos,
-    # operations declaradas, frases proibidas) — gpt-oss-120b vinha errando
-    # consistentemente. Default azure/gpt-4o (instruction-following mais
-    # confiável + JSON Schema mais estável). Operador pode trocar via UI
-    # se quiser usar gpt-oss-120b ou outro modelo.
+    # skill_generation: tarefa específica de criar/alterar SKILL.md no Wizard.
+    # Separado de `reasoning` porque o gerador precisa seguir regras estruturais
+    # MUITO específicas (verbos imperativos, operations declaradas, frases
+    # proibidas). Default EFETIVO segue o Modelo Primário global da plataforma
+    # (ver global_primary_routing + load_routing) — operador pode trocar via UI.
+    # O valor abaixo é só o ÚLTIMO recurso, quando nenhum Modelo Primário está
+    # configurado em platform_settings.
     "skill_generation": "azure/gpt-4o",
     "multimodal_fallback": "azure/gpt-4o",
 }
+
+
+def global_primary_routing() -> Optional[str]:
+    """Modelo Primário global da plataforma como string de roteamento
+    `provider/model`. Lê platform_settings (via get_settings, que reflete o
+    que o operador salvou em /settings). None quando não configurado.
+
+    Usado como default EFETIVO de `skill_generation` — "sempre o modelo global
+    como default, permitindo override do usuário".
+    """
+    try:
+        from app.core.config import get_settings
+        s = get_settings()
+    except Exception:
+        return None
+    p = (getattr(s, "primary_provider", "") or "").strip()
+    m = (getattr(s, "primary_model", "") or "").strip()
+    if p and m:
+        return f"{p}/{m}"
+    return None
 
 # Modelos sabidamente multimodais (visão). Atualizar manualmente quando
 # catálogo crescer. Lista é used por is_multimodal() pra decidir se
@@ -111,21 +131,39 @@ async def load_routing() -> dict[str, str]:
     from app.core.database import settings_store
 
     out = dict(DEFAULT_ROUTING)
+    explicit: set[str] = set()
     try:
         all_settings = await settings_store.get_all()
     except Exception as e:
         logger.warning(f"settings_store.get_all falhou: {e}; usando defaults")
-        return out
+        _apply_skill_generation_global_default(out, explicit)
+        return out  # não cacheia em erro — retenta no próximo load
 
     for key, value in all_settings.items():
         if key.startswith("llm_routing.") and value:
             short_key = key[len("llm_routing."):]
             if short_key in DEFAULT_ROUTING:
                 out[short_key] = value.strip()
+                explicit.add(short_key)
+
+    _apply_skill_generation_global_default(out, explicit)
 
     _routing_cache = dict(out)
     _routing_cache_at = now
     return out
+
+
+def _apply_skill_generation_global_default(
+    out: dict[str, str], explicit: set[str]
+) -> None:
+    """Quando o operador NÃO definiu rota explícita pra skill_generation, o
+    default segue o Modelo Primário global (não o hardcoded de DEFAULT_ROUTING).
+    Mutates `out` in place. No-op se não há Modelo Primário configurado."""
+    if "skill_generation" in explicit:
+        return
+    gm = global_primary_routing()
+    if gm:
+        out["skill_generation"] = gm
 
 
 async def save_routing(updates: dict[str, str]) -> dict[str, str]:

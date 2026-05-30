@@ -58,12 +58,11 @@ class TestDefaultRoutingContract:
         """Classification é o caso mais simples — 20B basta com folga."""
         assert DEFAULT_ROUTING["classification"] == "gpt-oss-20b/openai/gpt-oss-20b"
 
-    def test_skill_generation_default_azure_gpt4o(self):
-        """skill_generation roda o Wizard de criar/alterar SKILL.md. Gerador
-        precisa seguir regras estruturais rígidas (operations declaradas,
-        verbos imperativos, frases proibidas). Default Azure GPT-4o porque
-        gpt-oss-120b vinha errando consistentemente (bugs Context7 #1-#4).
-        Operador pode trocar via UI se quiser experimentar outro modelo."""
+    def test_skill_generation_fallback_ultimo_recurso_azure_gpt4o(self):
+        """skill_generation roda o Wizard de criar/alterar SKILL.md. O default
+        EFETIVO segue o Modelo Primário global (ver global_primary_routing +
+        load_routing). O valor em DEFAULT_ROUTING é só o ÚLTIMO recurso, usado
+        quando nenhum Modelo Primário está configurado em platform_settings."""
         assert DEFAULT_ROUTING["skill_generation"] == "azure/gpt-4o"
 
     def test_multimodal_fallback_continua_azure_gpt4o(self):
@@ -84,13 +83,17 @@ class TestDefaultRoutingContract:
 
 
 class TestLLMRoutingEndpoint:
-    def _client(self, monkeypatch):
+    def _client(self, monkeypatch, global_model=None):
         """Mock load_routing pra evitar dependência de banco. Endpoint deve
         retornar DEFAULT_ROUTING quando load_routing retorna mesma config
-        (caso 'ambiente novo sem nada salvo')."""
+        (caso 'ambiente novo sem nada salvo').
+
+        global_model: simula o Modelo Primário global. None = não configurado
+        (defaults batem com DEFAULT_ROUTING)."""
         async def fake_load_routing():
             return dict(DEFAULT_ROUTING)
         monkeypatch.setattr("app.llm_routing.load_routing", fake_load_routing)
+        monkeypatch.setattr("app.llm_routing.global_primary_routing", lambda: global_model)
         from app.routes.dashboard import router as dashboard_router
         app = FastAPI()
         app.include_router(dashboard_router)
@@ -122,11 +125,15 @@ class TestLLMRoutingEndpoint:
             assert "GPT-OSS" in descs[task], f"{task} descrição não menciona GPT-OSS: {descs[task]!r}"
         # Multimodal continua mencionando Azure GPT-4o
         assert "GPT-4o" in descs["multimodal_fallback"]
-        # skill_generation menciona Azure GPT-4o (default novo)
-        assert "GPT-4o" in descs["skill_generation"]
+        # skill_generation: default é o modelo global da plataforma — descrição
+        # NÃO deve fixar um modelo específico (azure/gpt-4o), e sim apontar pro
+        # Modelo Primário (operador troca via UI).
+        sg = descs["skill_generation"]
+        assert "global" in sg.lower(), f"skill_generation não menciona modelo global: {sg!r}"
+        assert "GPT-4o" not in sg, f"skill_generation ainda fixa Azure GPT-4o: {sg!r}"
         # Mensagem amigável: descreve o modo de uso, sem histórico do incidente
-        assert "Context7" not in descs["skill_generation"]
-        assert "4x" not in descs["skill_generation"]
+        assert "Context7" not in sg
+        assert "4x" not in sg
 
     def test_task_descriptions_nao_mencionam_modelo_obsoleto(self, monkeypatch):
         """Defesa: 'Maritaca Sabiá-4' e 'azure/gpt-4o' eram os defaults antigos
@@ -141,3 +148,83 @@ class TestLLMRoutingEndpoint:
             # Azure GPT-4o pode aparecer em multimodal_fallback (correto), mas
             # NÃO como default de tool_calling/reasoning/instruct/classification
             assert "Default: Azure" not in descs[task], f"{task} ainda menciona Azure como default principal"
+
+    def test_endpoint_defaults_skill_generation_usa_modelo_global(self, monkeypatch):
+        """Quando há Modelo Primário configurado, o `defaults` que vai pra UI
+        (botão "padrões recomendados") aponta skill_generation pro modelo global
+        — não pro hardcoded azure/gpt-4o."""
+        c = self._client(monkeypatch, global_model="gpt-oss-120b/openai/gpt-oss-120b")
+        body = c.get("/api/v1/dashboard/llm-routing").json()
+        assert body["defaults"]["skill_generation"] == "gpt-oss-120b/openai/gpt-oss-120b"
+        # Outros defaults seguem inalterados
+        assert body["defaults"]["reasoning"] == DEFAULT_ROUTING["reasoning"]
+
+
+# ─── Default global de skill_generation (modelo primário) ──────────
+
+
+class TestSkillGenerationGlobalDefault:
+    """skill_generation: "sempre usar o modelo global como default, permitindo
+    override do usuário". O modelo global é o Modelo Primário da plataforma
+    (primary_provider/primary_model)."""
+
+    def _patch_settings(self, monkeypatch, provider, model):
+        from types import SimpleNamespace
+        monkeypatch.setattr(
+            "app.core.config.get_settings",
+            lambda: SimpleNamespace(primary_provider=provider, primary_model=model),
+        )
+
+    def test_global_primary_routing_formata_provider_model(self, monkeypatch):
+        from app.llm_routing import global_primary_routing
+        self._patch_settings(monkeypatch, "azure", "gpt-4o")
+        assert global_primary_routing() == "azure/gpt-4o"
+
+    def test_global_primary_routing_none_quando_nao_configurado(self, monkeypatch):
+        from app.llm_routing import global_primary_routing
+        self._patch_settings(monkeypatch, "", "")
+        assert global_primary_routing() is None
+
+    def test_load_routing_skill_generation_segue_modelo_global(self, monkeypatch):
+        """Sem override explícito do operador, skill_generation resolve pro
+        Modelo Primário global (não pro hardcoded azure/gpt-4o)."""
+        import asyncio
+        import app.llm_routing as lr
+
+        async def fake_get_all():
+            return {}  # operador não salvou nenhum llm_routing.*
+        monkeypatch.setattr("app.core.database.settings_store.get_all", fake_get_all)
+        monkeypatch.setattr(lr, "global_primary_routing", lambda: "gpt-oss-120b/openai/gpt-oss-120b")
+        lr._routing_cache_at = 0.0  # força reload (ignora cache de testes anteriores)
+
+        routing = asyncio.run(lr.load_routing())
+        assert routing["skill_generation"] == "gpt-oss-120b/openai/gpt-oss-120b"
+
+    def test_load_routing_respeita_override_explicito_do_operador(self, monkeypatch):
+        """Quando o operador SALVOU skill_generation no /settings, esse valor
+        vence o modelo global — usuário sempre pode definir o modelo de uso."""
+        import asyncio
+        import app.llm_routing as lr
+
+        async def fake_get_all():
+            return {"llm_routing.skill_generation": "openai/gpt-4.1"}
+        monkeypatch.setattr("app.core.database.settings_store.get_all", fake_get_all)
+        monkeypatch.setattr(lr, "global_primary_routing", lambda: "gpt-oss-120b/openai/gpt-oss-120b")
+        lr._routing_cache_at = 0.0
+
+        routing = asyncio.run(lr.load_routing())
+        assert routing["skill_generation"] == "openai/gpt-4.1"
+
+    def test_load_routing_ultimo_recurso_quando_sem_modelo_global(self, monkeypatch):
+        """Sem override E sem Modelo Primário → cai no hardcoded de DEFAULT_ROUTING."""
+        import asyncio
+        import app.llm_routing as lr
+
+        async def fake_get_all():
+            return {}
+        monkeypatch.setattr("app.core.database.settings_store.get_all", fake_get_all)
+        monkeypatch.setattr(lr, "global_primary_routing", lambda: None)
+        lr._routing_cache_at = 0.0
+
+        routing = asyncio.run(lr.load_routing())
+        assert routing["skill_generation"] == DEFAULT_ROUTING["skill_generation"]
