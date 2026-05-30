@@ -86,12 +86,12 @@
                 </button>
                 <button type="button" @click="toggleStatFilter('low_reliability')"
                         class="text-left rounded-lg border px-3 py-2.5 transition-all"
-                        :class="activeStatFilter === 'low_reliability' ? 'bg-violet-100 border-violet-300 ring-2 ring-violet-200' : 'bg-violet-50 border-violet-100 hover:bg-violet-100/60'"
+                        :class="activeStatFilter === 'low_reliability' ? 'bg-red-100 border-red-300 ring-2 ring-red-200' : 'bg-red-50 border-red-100 hover:bg-red-100/60'"
                         :aria-pressed="activeStatFilter === 'low_reliability'"
                         :disabled="totals.low_reliability === 0">
-                    <div class="text-[9px] font-semibold uppercase text-violet-700">Baixa confiab.</div>
-                    <div class="text-[18px] font-bold text-violet-700 mt-0.5" x-text="totals.low_reliability"></div>
-                    <div class="text-[9px] text-violet-600">reliability &lt; 50%</div>
+                    <div class="text-[9px] font-semibold uppercase text-red-700">Baixa confiab.</div>
+                    <div class="text-[18px] font-bold text-red-700 mt-0.5" x-text="totals.low_reliability"></div>
+                    <div class="text-[9px] text-red-600">reliability &lt; 50%</div>
                 </button>
             </div>
 
@@ -172,7 +172,7 @@
                                     <div class="flex items-center gap-1 shrink-0">
                                         <span x-show="e.is_orphan" class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Owner inativo ou deletado">Órfã</span>
                                         <span x-show="e.is_stale" class="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Published sem uso há 30+ dias">Parada</span>
-                                        <span x-show="e.has_low_reliability" class="rounded-full bg-violet-100 text-violet-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Reliability < 50%">Baixa conf.</span>
+                                        <span x-show="e.has_low_reliability" class="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Reliability < 50%">Baixa conf.</span>
                                     </div>
                                     <!-- Ações Root -->
                                     <button x-show="viewerIsRoot" @click="openReassign(e)" class="text-[11px] text-brand-600 hover:underline shrink-0">Realocar</button>
@@ -312,7 +312,7 @@ function stewardshipPage() {
             return ({
                 orphan: 'bg-rose-50 border border-rose-200 text-rose-800',
                 stale: 'bg-amber-50 border border-amber-200 text-amber-800',
-                low_reliability: 'bg-violet-50 border border-violet-200 text-violet-800',
+                low_reliability: 'bg-red-50 border border-red-200 text-red-800',
             })[this.activeStatFilter] || 'bg-surface-50 border border-surface-200 text-surface-700';
         },
 
@@ -371,7 +371,7 @@ function stewardshipPage() {
         },
 
         kindBadgeClass(k) {
-            return ({agent:'bg-violet-50 text-violet-700', skill:'bg-teal-50 text-teal-700', recipe:'bg-brand-50 text-brand-700',
+            return ({agent:'bg-red-50 text-red-700', skill:'bg-teal-50 text-teal-700', recipe:'bg-brand-50 text-brand-700',
                      application:'bg-amber-50 text-amber-700', external_platform:'bg-rose-50 text-rose-700'})[k] || 'bg-surface-100 text-surface-600';
         },
         statusBadgeClass(s) {

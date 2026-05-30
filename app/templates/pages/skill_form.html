@@ -12,7 +12,7 @@
             <h2 class="text-[16px] font-bold text-brand-900" x-text="isEdit ? 'Editar Skill — SKILL.md §5' : 'Nova Skill — SKILL.md §5'"></h2>
             <button @click="showWizard = !showWizard"
                     class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-semibold transition-all"
-                    :class="showWizard ? 'bg-violet-100 text-violet-700 ring-2 ring-violet-200' : 'bg-gradient-to-r from-violet-500 to-brand-500 text-white shadow-md hover:shadow-lg hover:scale-[1.02]'">
+                    :class="showWizard ? 'bg-red-100 text-red-700 ring-2 ring-red-200' : 'bg-gradient-to-r from-red-500 to-brand-500 text-white shadow-md hover:shadow-lg hover:scale-[1.02]'">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
                 <span x-text="showWizard ? 'Fechar Wizard' : 'IA, me ajude'"></span>
             </button>
@@ -20,29 +20,29 @@
     </div>
 
     <!-- ══════════ WIZARD IA PANEL ══════════ -->
-    <div x-show="showWizard" x-transition.duration.300ms class="mb-8 rounded-2xl border-2 border-violet-200 bg-gradient-to-br from-violet-50 via-white to-brand-50 p-6 shadow-sm">
+    <div x-show="showWizard" x-transition.duration.300ms class="mb-8 rounded-2xl border-2 border-red-200 bg-gradient-to-br from-red-50 via-white to-brand-50 p-6 shadow-sm">
         <div class="flex items-center gap-3 mb-4">
-            <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500 text-white">
+            <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-red-500 text-white">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
             </div>
             <div>
-                <div class="text-[14px] font-bold text-violet-900">Wizard IA — Gerador de SKILL.md</div>
-                <div class="text-[11px] text-violet-500">Descreva a capacidade e a IA gera o SKILL.md canônico completo (§5)</div>
+                <div class="text-[14px] font-bold text-red-900">Wizard IA — Gerador de SKILL.md</div>
+                <div class="text-[11px] text-red-500">Descreva a capacidade e a IA gera o SKILL.md canônico completo (§5)</div>
             </div>
         </div>
         <div class="space-y-4">
             <div>
-                <label class="block text-[12px] font-semibold text-violet-800 mb-1.5">Descreva a skill que você precisa</label>
+                <label class="block text-[12px] font-semibold text-red-800 mb-1.5">Descreva a skill que você precisa</label>
                 <textarea x-model="wizardPrompt" rows="3" placeholder="Ex: Skill para consultar padrões de desenvolvimento via Context7 MCP..."
-                          class="w-full rounded-xl border border-violet-200 bg-white px-4 py-3 text-[13px] text-brand-900 placeholder:text-violet-300 focus:border-violet-400 focus:ring-2 focus:ring-violet-100 outline-none transition resize-none"></textarea>
+                          class="w-full rounded-xl border border-red-200 bg-white px-4 py-3 text-[13px] text-brand-900 placeholder:text-red-300 focus:border-red-400 focus:ring-2 focus:ring-red-100 outline-none transition resize-none"></textarea>
             </div>
             <!-- MCP selector -->
             <div x-show="mcpTools.length > 0">
-                <label class="block text-[11px] font-semibold text-violet-800 mb-1.5">Vincular Ferramentas MCP (Tool Bindings)</label>
+                <label class="block text-[11px] font-semibold text-red-800 mb-1.5">Vincular Ferramentas MCP (Tool Bindings)</label>
                 <div class="flex flex-wrap gap-1.5">
                     <template x-for="t in mcpTools" :key="t.id">
                         <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 cursor-pointer transition-colors text-[11px]"
-                               :class="wizardMcpIds.includes(t.id) ? 'bg-violet-100 border-violet-300 text-violet-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-violet-200'">
+                               :class="wizardMcpIds.includes(t.id) ? 'bg-red-100 border-red-300 text-red-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-red-200'">
                             <input type="checkbox" :checked="wizardMcpIds.includes(t.id)" @change="toggleWizardMcp(t.id)" class="hidden">
                             <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
                             <span x-text="t.name"></span>
@@ -53,13 +53,13 @@
             <!-- API endpoint selector -->
             <div x-show="apiEndpointsFlat.length > 0">
                 <div class="flex items-center justify-between mb-1.5">
-                    <label class="block text-[11px] font-semibold text-violet-800">Vincular API (endpoint) — modo declarativo</label>
-                    <a href="/api_connectors" target="_blank" class="text-[10px] text-violet-500 hover:text-violet-700">Gerenciar →</a>
+                    <label class="block text-[11px] font-semibold text-red-800">Vincular API (endpoint) — modo declarativo</label>
+                    <a href="/api_connectors" target="_blank" class="text-[10px] text-red-500 hover:text-red-700">Gerenciar →</a>
                 </div>
                 <div class="flex flex-wrap gap-1.5">
                     <template x-for="item in apiEndpointsFlat" :key="item.key">
                         <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 cursor-pointer transition-colors text-[11px]"
-                               :class="wizardApiKeys.includes(item.key) ? 'bg-fuchsia-100 border-fuchsia-300 text-fuchsia-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-fuchsia-200'">
+                               :class="wizardApiKeys.includes(item.key) ? 'bg-red-100 border-red-300 text-red-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-red-200'">
                             <input type="checkbox" :checked="wizardApiKeys.includes(item.key)" @change="toggleWizardApi(item.key)" class="hidden">
                             <span class="font-mono font-bold text-[9px]" x-text="item.method"></span>
                             <span x-text="item.ep_name"></span>
@@ -68,16 +68,16 @@
                     </template>
                 </div>
             </div>
-            <div x-show="apiEndpointsFlat.length === 0 && mcpTools.length > 0" class="rounded-lg border border-dashed border-violet-200 bg-violet-50/50 px-3 py-2 text-[10px] text-violet-600">
+            <div x-show="apiEndpointsFlat.length === 0 && mcpTools.length > 0" class="rounded-lg border border-dashed border-red-200 bg-red-50/50 px-3 py-2 text-[10px] text-red-600">
                 Nenhum endpoint de API cadastrado.
-                <a href="/api_connectors" target="_blank" class="font-semibold underline hover:text-violet-800">Cadastrar em API Connectors →</a>
+                <a href="/api_connectors" target="_blank" class="font-semibold underline hover:text-red-800">Cadastrar em API Connectors →</a>
             </div>
 
             <!-- Wave Wizard UX: Fontes RAG (knowledge_sources) — paridade com o Editor. -->
             <div x-show="availableSources.length > 0">
                 <div class="flex items-center justify-between mb-1.5">
-                    <label class="block text-[11px] font-semibold text-violet-800">Vincular Fontes RAG (Evidence Policy)</label>
-                    <a href="/rag" target="_blank" class="text-[10px] text-violet-500 hover:text-violet-700">Gerenciar →</a>
+                    <label class="block text-[11px] font-semibold text-red-800">Vincular Fontes RAG (Evidence Policy)</label>
+                    <a href="/rag" target="_blank" class="text-[10px] text-red-500 hover:text-red-700">Gerenciar →</a>
                 </div>
                 <div class="flex flex-wrap gap-1.5">
                     <template x-for="s in availableSources" :key="s.id">
@@ -95,11 +95,11 @@
                      selecionada — sem RAG, threshold não faz sentido. Empty string
                      = wizard não emite a chave; engine aplica default 0.3. -->
                 <div x-show="wizardSourceIds.length > 0" class="mt-2 flex items-center gap-2">
-                    <label class="text-[10px] font-medium text-violet-700 whitespace-nowrap" title="Score mínimo médio de evidência pro verifier aceitar a resposta. Default do engine: 0.30">
+                    <label class="text-[10px] font-medium text-red-700 whitespace-nowrap" title="Score mínimo médio de evidência pro verifier aceitar a resposta. Default do engine: 0.30">
                         Threshold mínimo de evidência
                     </label>
                     <input type="number" x-model="wizardMinRelevance" min="0" max="1" step="0.05" placeholder="0.30"
-                           class="w-20 rounded-md border border-violet-200 bg-white px-2 py-1 text-[11px] text-violet-900 outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-200">
+                           class="w-20 rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 outline-none focus:border-red-400 focus:ring-1 focus:ring-red-200">
                     <span class="text-[10px] text-surface-400">
                         opcional ·
                         <span x-show="!wizardMinRelevance">vazio = default 0.30 do engine</span>
@@ -113,8 +113,8 @@
             <!-- wizard só marca quais tabelas estão disponíveis pro LLM referenciar. -->
             <div x-show="availableTables.length > 0">
                 <div class="flex items-center justify-between mb-1.5">
-                    <label class="block text-[11px] font-semibold text-violet-800">Vincular Tabelas (Data Tables)</label>
-                    <a href="/rag" target="_blank" class="text-[10px] text-violet-500 hover:text-violet-700">Gerenciar →</a>
+                    <label class="block text-[11px] font-semibold text-red-800">Vincular Tabelas (Data Tables)</label>
+                    <a href="/rag" target="_blank" class="text-[10px] text-red-500 hover:text-red-700">Gerenciar →</a>
                 </div>
                 <div class="flex flex-wrap gap-1.5">
                     <template x-for="t in availableTables" :key="t.id">
@@ -133,8 +133,8 @@
             <!-- Auto-inferido pelo backend se nenhum card selecionado — preview indica. -->
             <div>
                 <div class="flex items-center justify-between mb-2">
-                    <label class="block text-[11px] font-semibold text-violet-800">Execution Profile</label>
-                    <span x-show="!wizardExecMode" class="rounded-full bg-violet-100 text-violet-700 px-2 py-0.5 text-[9px] font-medium">auto-inferido pelo backend</span>
+                    <label class="block text-[11px] font-semibold text-red-800">Execution Profile</label>
+                    <span x-show="!wizardExecMode" class="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-[9px] font-medium">auto-inferido pelo backend</span>
                 </div>
                 <div class="grid grid-cols-3 gap-2">
                     <button @click="wizardExecMode = wizardExecMode === 'fast' ? '' : 'fast'" type="button"
@@ -159,13 +159,13 @@
                     </button>
                     <button @click="wizardExecMode = wizardExecMode === 'rigorous' ? '' : 'rigorous'" type="button"
                             class="rounded-xl border-2 p-2.5 text-left transition-all"
-                            :class="wizardExecMode === 'rigorous' ? 'border-violet-400 bg-violet-50' : 'border-surface-200 bg-white hover:border-violet-200'">
+                            :class="wizardExecMode === 'rigorous' ? 'border-red-400 bg-red-50' : 'border-surface-200 bg-white hover:border-red-200'">
                         <div class="flex items-center gap-1.5 mb-1">
-                            <svg class="w-3.5 h-3.5 text-violet-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            <svg class="w-3.5 h-3.5 text-red-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                             <span class="text-[12px] font-semibold text-brand-900">Rigorous</span>
                         </div>
                         <p class="text-[10px] text-surface-500 leading-tight">3+ chamadas, reflexão completa, evidence via LLM.</p>
-                        <span class="text-[9px] text-violet-700 font-medium">~25-40s</span>
+                        <span class="text-[9px] text-red-700 font-medium">~25-40s</span>
                     </button>
                 </div>
             </div>
@@ -175,10 +175,10 @@
                  no system_prompt + truncate hard pós-LLM. -->
             <div>
                 <div class="flex items-center justify-between mb-1.5">
-                    <label class="block text-[11px] font-semibold text-violet-800">Formato da saída (tamanho)</label>
-                    <span x-show="!wizardLengthPreset" class="rounded-full bg-violet-100 text-violet-700 px-2 py-0.5 text-[9px] font-medium">opcional · sem preset = default 'digest' (1500 chars)</span>
+                    <label class="block text-[11px] font-semibold text-red-800">Formato da saída (tamanho)</label>
+                    <span x-show="!wizardLengthPreset" class="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-[9px] font-medium">opcional · sem preset = default 'digest' (1500 chars)</span>
                 </div>
-                <select x-model="wizardLengthPreset" class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none focus:border-violet-400">
+                <select x-model="wizardLengthPreset" class="w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none focus:border-red-400">
                     <option value="">— Sem preset (engine usa 'digest' ≤ 1500 chars) —</option>
                     <option value="intent">📌 Intenção · ≤ 600 chars · frase curta</option>
                     <option value="summary">📝 Resumo · ≤ 600 chars · síntese curta</option>
@@ -187,20 +187,20 @@
                     <option value="report">📚 Relatório · ≤ 8000 chars · texto longo</option>
                     <option value="unbounded">∞ Livre · sem corte · todo o texto preservado</option>
                 </select>
-                <p x-show="wizardLengthPreset" class="mt-1 text-[10px] text-violet-600" x-text="'Gera ## Output Shape com length_preset: ' + wizardLengthPreset + '. Engine trunca resposta se LLM exceder.'"></p>
+                <p x-show="wizardLengthPreset" class="mt-1 text-[10px] text-red-600" x-text="'Gera ## Output Shape com length_preset: ' + wizardLengthPreset + '. Engine trunca resposta se LLM exceder.'"></p>
             </div>
 
             <!-- Wave Wizard UX: Preview do que será gerado — atualiza em tempo real. -->
-            <div class="rounded-lg border border-violet-200 bg-violet-50/40 px-3 py-2.5">
-                <div class="text-[10px] font-semibold uppercase tracking-wider text-violet-600 mb-1.5">Vamos gerar</div>
-                <div class="flex items-center gap-3 flex-wrap text-[11px] text-violet-800">
+            <div class="rounded-lg border border-red-200 bg-red-50/40 px-3 py-2.5">
+                <div class="text-[10px] font-semibold uppercase tracking-wider text-red-600 mb-1.5">Vamos gerar</div>
+                <div class="flex items-center gap-3 flex-wrap text-[11px] text-red-800">
                     <span class="inline-flex items-center gap-1">
                         <span class="font-bold" x-text="wizardKind === 'subagent' ? 'Subagente' : (wizardKind === 'router' ? 'Roteador' : 'Orquestrador')"></span>
                     </span>
                     <span x-show="wizardDomain" class="inline-flex items-center gap-1">
                         · domínio <code class="bg-white px-1 rounded" x-text="wizardDomain"></code>
                     </span>
-                    <span x-show="wizardMcpIds.length > 0" class="inline-flex items-center gap-1 text-violet-700">
+                    <span x-show="wizardMcpIds.length > 0" class="inline-flex items-center gap-1 text-red-700">
                         · <strong x-text="wizardMcpIds.length"></strong> MCP<span x-show="wizardMcpIds.length > 1">s</span>
                     </span>
                     <span x-show="wizardSourceIds.length > 0" class="inline-flex items-center gap-1 text-emerald-700">
@@ -209,13 +209,13 @@
                     <span x-show="wizardTableIds.length > 0" class="inline-flex items-center gap-1 text-amber-700">
                         · <strong x-text="wizardTableIds.length"></strong> Tabela<span x-show="wizardTableIds.length > 1">s</span>
                     </span>
-                    <span x-show="wizardApiKeys.length > 0" class="inline-flex items-center gap-1 text-fuchsia-700">
+                    <span x-show="wizardApiKeys.length > 0" class="inline-flex items-center gap-1 text-red-700">
                         · <strong x-text="wizardApiKeys.length"></strong> API<span x-show="wizardApiKeys.length > 1">s</span> (declarativo)
                     </span>
                     <span class="inline-flex items-center gap-1">
                         · Execution Profile
                         <code class="bg-white px-1 rounded" x-text="wizardExecMode || _inferExecModePreview()"></code>
-                        <span x-show="!wizardExecMode" class="text-[9px] text-violet-500">(inferido)</span>
+                        <span x-show="!wizardExecMode" class="text-[9px] text-red-500">(inferido)</span>
                     </span>
                 </div>
             </div>
@@ -223,28 +223,28 @@
             <!-- Wave Wizard Routing: removido dropdown de provider/modelo. -->
             <!-- LLM é resolvido pelo backend via task_type=reasoning + Settings → Roteamento LLM. -->
             <!-- Info read-only mostra qual modelo será usado, com link pra mudar. -->
-            <div class="rounded-lg border border-violet-100 bg-white/60 px-3 py-2 flex items-center justify-between gap-3 flex-wrap text-[11px] text-violet-700">
+            <div class="rounded-lg border border-red-100 bg-white/60 px-3 py-2 flex items-center justify-between gap-3 flex-wrap text-[11px] text-red-700">
                 <div class="flex items-center gap-2">
-                    <svg class="w-3.5 h-3.5 text-violet-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+                    <svg class="w-3.5 h-3.5 text-red-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
                     <span>
                         Gerador:
-                        <span x-show="!wizardLLMInfo.provider" class="text-violet-400 italic">carregando...</span>
+                        <span x-show="!wizardLLMInfo.provider" class="text-red-400 italic">carregando...</span>
                         <span x-show="wizardLLMInfo.provider" class="font-mono font-semibold" x-text="(wizardLLMInfo.model || wizardLLMInfo.provider) + ''"></span>
-                        <span x-show="wizardLLMInfo.task_type" class="text-violet-400">· task <code class="px-1 bg-violet-100 rounded" x-text="wizardLLMInfo.task_type"></code></span>
+                        <span x-show="wizardLLMInfo.task_type" class="text-red-400">· task <code class="px-1 bg-red-100 rounded" x-text="wizardLLMInfo.task_type"></code></span>
                     </span>
                 </div>
-                <a href="/settings#llm-routing" target="_blank" class="text-[10px] text-violet-500 hover:text-violet-700 underline">configurar →</a>
+                <a href="/settings#llm-routing" target="_blank" class="text-[10px] text-red-500 hover:text-red-700 underline">configurar →</a>
             </div>
 
             <div class="flex items-center gap-3 flex-wrap">
-                <select x-model="wizardKind" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none">
+                <select x-model="wizardKind" class="rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] outline-none">
                     <option value="subagent">Subagente</option>
                     <option value="router">Roteador</option>
                     <option value="orchestrator">Orquestrador</option>
                 </select>
-                <input x-model="wizardDomain" placeholder="Domínio (ex: dev)" class="rounded-lg border border-violet-200 bg-white px-3 py-2 text-[12px] outline-none w-32">
+                <input x-model="wizardDomain" placeholder="Domínio (ex: dev)" class="rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] outline-none w-32">
                 <button @click="runWizardSkill()" :disabled="wizardLoading || !wizardPrompt.trim()"
-                        class="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-violet-600 disabled:opacity-40 transition-all">
+                        class="inline-flex items-center gap-2 rounded-xl bg-red-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-red-600 disabled:opacity-40 transition-all">
                     <svg x-show="wizardLoading" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                     <span x-text="wizardLoading ? 'Gerando SKILL.md...' : 'Gerar SKILL.md'"></span>
                 </button>
@@ -322,38 +322,38 @@
                     <div class="relative" x-data="{apiDropdown:false}">
                         <button @click="apiDropdown = !apiDropdown" type="button"
                                 :title="apiEndpointsFlat.length === 0 ? 'Nenhum endpoint cadastrado — clique para ver como cadastrar' : apiEndpointsFlat.length + ' endpoint(s) disponível(eis)'"
-                                class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-violet-50 to-fuchsia-50 border border-violet-200 px-2.5 py-1 text-[11px] font-medium text-violet-700 hover:from-violet-100 hover:to-fuchsia-100 transition-colors">
+                                class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-red-50 to-red-50 border border-red-200 px-2.5 py-1 text-[11px] font-medium text-red-700 hover:from-red-100 hover:to-red-100 transition-colors">
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg>
                             Inserir API
-                            <span x-show="apiEndpointsFlat.length > 0" class="rounded-full bg-violet-200 px-1.5 py-0.5 text-[9px] font-bold" x-text="apiEndpointsFlat.length"></span>
+                            <span x-show="apiEndpointsFlat.length > 0" class="rounded-full bg-red-200 px-1.5 py-0.5 text-[9px] font-bold" x-text="apiEndpointsFlat.length"></span>
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
                         </button>
                         <div x-show="apiDropdown" @click.away="apiDropdown=false" x-transition
-                             class="absolute right-0 top-full mt-1 w-96 rounded-xl bg-white border border-violet-200 shadow-lg z-50 py-1 max-h-80 overflow-y-auto">
-                            <div class="px-3 py-1.5 text-[9px] font-bold text-violet-400 uppercase tracking-wider">Selecione um endpoint</div>
-                            <div class="px-3 py-1 text-[10px] text-surface-500 border-b border-surface-100 bg-violet-50">
-                                Adiciona <code class="text-violet-700">## API Bindings</code> + define <code class="text-violet-700">execution_mode: declarative</code>
+                             class="absolute right-0 top-full mt-1 w-96 rounded-xl bg-white border border-red-200 shadow-lg z-50 py-1 max-h-80 overflow-y-auto">
+                            <div class="px-3 py-1.5 text-[9px] font-bold text-red-400 uppercase tracking-wider">Selecione um endpoint</div>
+                            <div class="px-3 py-1 text-[10px] text-surface-500 border-b border-surface-100 bg-red-50">
+                                Adiciona <code class="text-red-700">## API Bindings</code> + define <code class="text-red-700">execution_mode: declarative</code>
                             </div>
                             <template x-for="item in apiEndpointsFlat" :key="item.key">
                                 <button @click="insertApiBinding(item); apiDropdown=false" type="button"
                                         class="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors"
-                                        :class="isInsertedInRaw(item.ep_id) ? 'bg-violet-50/50 hover:bg-violet-50' : 'hover:bg-violet-50'"
+                                        :class="isInsertedInRaw(item.ep_id) ? 'bg-red-50/50 hover:bg-red-50' : 'hover:bg-red-50'"
                                         :title="isInsertedInRaw(item.ep_id) ? 'Endpoint já referenciado no SKILL.md — clique pra inserir novamente' : 'Inserir API Binding declarativo'">
                                     <div class="flex h-7 w-7 items-center justify-center rounded-lg shrink-0 font-mono text-[9px] font-bold"
-                                         :class="isInsertedInRaw(item.ep_id) ? 'bg-violet-200 text-violet-800' : 'bg-violet-100 text-violet-700'"
+                                         :class="isInsertedInRaw(item.ep_id) ? 'bg-red-200 text-red-800' : 'bg-red-100 text-red-700'"
                                          x-text="item.method"></div>
                                     <div class="min-w-0 flex-1">
                                         <div class="text-[11px] font-semibold text-brand-900 truncate flex items-center gap-1.5">
                                             <span x-text="item.ep_name"></span>
                                             <span x-show="isInsertedInRaw(item.ep_id)"
-                                                  class="inline-flex items-center gap-0.5 rounded-full bg-violet-100 px-1.5 py-0.5 text-[8px] font-bold text-violet-700"
+                                                  class="inline-flex items-center gap-0.5 rounded-full bg-red-100 px-1.5 py-0.5 text-[8px] font-bold text-red-700"
                                                   title="Endpoint já referenciado no SKILL.md atual">
                                                 <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
                                                 INSERIDO
                                             </span>
                                         </div>
                                         <div class="text-[9px] text-surface-400 truncate">
-                                            <span class="font-semibold text-violet-600" x-text="item.conn_name"></span>
+                                            <span class="font-semibold text-red-600" x-text="item.conn_name"></span>
                                             <span class="font-mono" x-text="' · ' + item.path"></span>
                                         </div>
                                     </div>
@@ -362,18 +362,18 @@
                             <!-- ══ Empty state ══ -->
                             <div x-show="apiEndpointsFlat.length === 0" class="px-4 py-4 space-y-2">
                                 <div class="flex items-start gap-2">
-                                    <svg class="w-5 h-5 text-violet-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                                    <svg class="w-5 h-5 text-red-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
                                     <div class="text-[11px] text-surface-700 leading-relaxed">
                                         <strong class="block text-brand-900 mb-0.5">Nenhum endpoint cadastrado</strong>
                                         Cadastre um connector com endpoints em <strong>API Connectors</strong> para usar este recurso.
                                     </div>
                                 </div>
                                 <a href="/api_connectors" target="_blank"
-                                   class="block w-full text-center rounded-lg bg-violet-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-violet-700">
+                                   class="block w-full text-center rounded-lg bg-red-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-red-700">
                                     Ir para API Connectors →
                                 </a>
                                 <button @click="_reloadApiConnectors(); apiDropdown=false" type="button"
-                                        class="block w-full text-center rounded-lg border border-violet-200 px-3 py-1 text-[10px] font-medium text-violet-700 hover:bg-violet-50">
+                                        class="block w-full text-center rounded-lg border border-red-200 px-3 py-1 text-[10px] font-medium text-red-700 hover:bg-red-50">
                                     ↻ Recarregar lista
                                 </button>
                             </div>
@@ -573,10 +573,10 @@
                     <div class="text-[13px] font-mono font-semibold text-brand-900"
                          x-text="'US$ ' + skillStats.costPerCall.toFixed(5)"></div>
                 </div>
-                <div class="rounded-lg bg-violet-50 border border-violet-100 px-3 py-2"
+                <div class="rounded-lg bg-red-50 border border-red-100 px-3 py-2"
                      :title="'Custo INPUT projetado em ' + skillStats.projectionCalls.toLocaleString('pt-BR') + ' chamadas/mês. Não inclui tokens de output, evidências ou tool results.'">
-                    <div class="text-[9px] font-bold uppercase tracking-wider text-violet-600">Custo / mês *</div>
-                    <div class="text-[13px] font-mono font-semibold text-violet-700"
+                    <div class="text-[9px] font-bold uppercase tracking-wider text-red-600">Custo / mês *</div>
+                    <div class="text-[13px] font-mono font-semibold text-red-700"
                          x-text="'US$ ' + skillStats.costPerMonth.toFixed(2)"></div>
                 </div>
             </div>
@@ -587,7 +587,7 @@
                 output do LLM, evidências RAG, nem tool results MCP/API.
                 <button @click="skillStatsProjectionCalls = (skillStatsProjectionCalls === 1000 ? 10000 : (skillStatsProjectionCalls === 10000 ? 100000 : 1000))"
                         type="button"
-                        class="ml-1 underline text-violet-600 hover:text-violet-700"
+                        class="ml-1 underline text-red-600 hover:text-red-700"
                         title="Alterna entre 1k / 10k / 100k chamadas/mês">alternar volume</button>
             </div>
         </div>
@@ -596,7 +596,7 @@
                 <label class="text-[12px] font-semibold text-brand-900">Tags</label>
                 <button @click="autoFillTags()" type="button"
                         :disabled="!form.raw_content"
-                        class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-violet-50 to-fuchsia-50 border border-violet-200 px-2.5 py-1 text-[10px] font-medium text-violet-700 hover:from-violet-100 hover:to-fuchsia-100 disabled:opacity-40 transition-colors"
+                        class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-red-50 to-red-50 border border-red-200 px-2.5 py-1 text-[10px] font-medium text-red-700 hover:from-red-100 hover:to-red-100 disabled:opacity-40 transition-colors"
                         title="Extrai tags do Purpose, Workflow, Tool Bindings e Activation Criteria">
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/></svg>
                     Sugerir tags
@@ -604,8 +604,8 @@
             </div>
             <input x-model="form.tags" placeholder='["tag1","tag2"]' class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[12px] font-mono text-brand-900 placeholder:text-surface-300 outline-none focus:border-brand-400 transition">
             <p class="mt-1 text-[10px] text-surface-400" x-show="!form.tags || form.tags === '[]'">
-                <span class="text-violet-600">Dica:</span> clique em
-                <span class="font-semibold text-violet-600">Sugerir tags</span> para extrair automaticamente do conteúdo.
+                <span class="text-red-600">Dica:</span> clique em
+                <span class="font-semibold text-red-600">Sugerir tags</span> para extrair automaticamente do conteúdo.
             </p>
         </div>
         <div class="flex items-center justify-end pt-2">
@@ -678,7 +678,7 @@
                                     <div class="text-[10px] text-surface-500 mt-1">
                                         <span class="font-semibold">Operations:</span>
                                         <template x-if="t.operationsList && t.operationsList.length > 0">
-                                            <span class="font-mono text-violet-700" x-text="t.operationsList.join(', ')"></span>
+                                            <span class="font-mono text-red-700" x-text="t.operationsList.join(', ')"></span>
                                         </template>
                                         <template x-if="!t.operationsList || t.operationsList.length === 0">
                                             <span class="italic text-amber-600">(nenhuma declarada no Registry)</span>
@@ -692,7 +692,7 @@
                                 <div class="flex flex-col items-end gap-0.5 shrink-0">
                                     <button @click="runDryRunTool(t)" :disabled="!_dryRunCanRun(t)" type="button"
                                             :title="_dryRunDisabledReason(t) || 'Executar dry-run desta tool'"
-                                            class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-600 hover:to-fuchsia-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                                            class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-red-500 to-red-500 hover:from-red-600 hover:to-red-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
                                         <svg x-show="!dryRunInFlight[t.id]" class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
                                         <svg x-show="dryRunInFlight[t.id]" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                                         <span x-text="dryRunInFlight[t.id] ? 'Testando...' : 'Testar tool'"></span>
@@ -712,7 +712,7 @@
                                  multi-line vira <textarea>, demais vira <input>.
                                  PR #197 (Fase 2): badge indica qual spec dirige o form. -->
                             <template x-if="dryRunResults[t.id]?.function_spec_skill_declared">
-                                <div class="flex items-center gap-1.5 text-[10px] text-violet-700 bg-violet-50 border border-violet-200 rounded-md px-2 py-1">
+                                <div class="flex items-center gap-1.5 text-[10px] text-red-700 bg-red-50 border border-red-200 rounded-md px-2 py-1">
                                     <span class="font-semibold">SKILL</span>
                                     <span>schema custom de <code class="font-mono">## Inputs</code> está dirigindo o form. Engine MCP atual ainda força <code class="font-mono">{operation, query}</code> — veja "Payload + function spec" abaixo.</span>
                                 </div>
@@ -728,7 +728,7 @@
                                         <!-- Enum → select -->
                                         <template x-if="propMeta.enum && propMeta.enum.length > 0">
                                             <select x-model="dryRunInputs[t.id].params[propName]"
-                                                    class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] font-mono outline-none focus:border-violet-400">
+                                                    class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] font-mono outline-none focus:border-red-400">
                                                 <option value="">(primeira do enum)</option>
                                                 <template x-for="opt in propMeta.enum" :key="opt">
                                                     <option :value="opt" x-text="opt"></option>
@@ -739,13 +739,13 @@
                                         <template x-if="(!propMeta.enum || propMeta.enum.length === 0) && propMeta.multiline">
                                             <textarea x-model="dryRunInputs[t.id].params[propName]" rows="2"
                                                       :placeholder="propMeta.description || ('valor de teste para ' + propName)"
-                                                      class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-violet-400 resize-none"></textarea>
+                                                      class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-red-400 resize-none"></textarea>
                                         </template>
                                         <!-- String comum → input -->
                                         <template x-if="(!propMeta.enum || propMeta.enum.length === 0) && !propMeta.multiline">
                                             <input x-model="dryRunInputs[t.id].params[propName]" type="text"
                                                    :placeholder="propMeta.description || ('valor de teste para ' + propName)"
-                                                   class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-violet-400">
+                                                   class="w-full rounded-md border border-surface-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-red-400">
                                         </template>
                                         <p x-show="propMeta.description" class="text-[9px] text-surface-400 mt-0.5 truncate" :title="propMeta.description" x-text="propMeta.description"></p>
                                     </div>
@@ -805,11 +805,11 @@
                                             <template x-if="dryRunResults[t.id].function_spec_skill_declared">
                                                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
                                                     <div>
-                                                        <div class="text-[9px] font-semibold text-violet-600 uppercase tracking-wider flex items-center gap-1">
-                                                            <span class="rounded-sm bg-violet-100 text-violet-700 px-1">SKILL</span>
+                                                        <div class="text-[9px] font-semibold text-red-600 uppercase tracking-wider flex items-center gap-1">
+                                                            <span class="rounded-sm bg-red-100 text-red-700 px-1">SKILL</span>
                                                             <span>Schema declarado em ## Inputs</span>
                                                         </div>
-                                                        <pre class="mt-1 rounded bg-white border border-violet-200 px-2 py-1 text-[10px] font-mono overflow-x-auto text-violet-900 max-h-48"
+                                                        <pre class="mt-1 rounded bg-white border border-red-200 px-2 py-1 text-[10px] font-mono overflow-x-auto text-red-900 max-h-48"
                                                              x-text="JSON.stringify(dryRunResults[t.id].function_spec_skill_declared, null, 2)"></pre>
                                                     </div>
                                                     <div>

@@ -39,7 +39,7 @@
                      @click="openPreview(skill)">
                     <!-- Icon -->
                     <div class="flex h-9 w-9 items-center justify-center rounded-lg shrink-0 text-[10px] font-bold"
-                         :class="skill.kind==='router'?'bg-brand-100 text-brand-600':skill.kind==='orchestrator'?'bg-violet-100 text-violet-600':'bg-teal-100 text-teal-600'"
+                         :class="skill.kind==='router'?'bg-brand-100 text-brand-600':skill.kind==='orchestrator'?'bg-red-100 text-red-600':'bg-teal-100 text-teal-600'"
                          x-text="(skill.name||'SK').substring(0,2).toUpperCase()"></div>
                     <!-- Info -->
                     <div class="flex-1 min-w-0">
@@ -48,11 +48,11 @@
                             <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-400 shrink-0" x-text="'v' + (skill.version || '0.1.0')"></span>
                         </div>
                         <div class="flex items-center gap-1.5 mt-0.5">
-                            <span x-show="skill.kind" class="text-[9px] font-bold uppercase" :class="skill.kind==='router'?'text-brand-500':skill.kind==='orchestrator'?'text-violet-500':'text-teal-500'" x-text="skill.kind"></span>
+                            <span x-show="skill.kind" class="text-[9px] font-bold uppercase" :class="skill.kind==='router'?'text-brand-500':skill.kind==='orchestrator'?'text-red-500':'text-teal-500'" x-text="skill.kind"></span>
                             <span x-show="skill.stability" class="text-[9px]"
                                   :class="skill.stability==='stable'?'text-emerald-500':skill.stability==='beta'?'text-amber-500':'text-surface-400'"
                                   x-text="skill.stability"></span>
-                            <span x-show="skill.domain" class="text-[9px] text-violet-500" x-text="skill.domain"></span>
+                            <span x-show="skill.domain" class="text-[9px] text-red-500" x-text="skill.domain"></span>
                         </div>
                     </div>
                     <!-- Actions -->
@@ -105,7 +105,7 @@
                 <span x-show="previewSkill?.stability" class="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
                       :class="previewSkill?.stability==='stable'?'bg-emerald-50 text-emerald-700':previewSkill?.stability==='beta'?'bg-amber-50 text-amber-700':'bg-surface-100 text-surface-500'"
                       x-text="previewSkill?.stability"></span>
-                <span x-show="previewSkill?.domain" class="rounded-full bg-violet-50 px-2.5 py-0.5 text-[10px] font-medium text-violet-600" x-text="previewSkill?.domain"></span>
+                <span x-show="previewSkill?.domain" class="rounded-full bg-red-50 px-2.5 py-0.5 text-[10px] font-medium text-red-600" x-text="previewSkill?.domain"></span>
                 <span x-show="previewSkill?.owner" class="rounded-full bg-surface-100 px-2.5 py-0.5 text-[10px] text-surface-500" x-text="previewSkill?.owner"></span>
             </div>
             <!-- Purpose -->

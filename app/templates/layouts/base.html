@@ -331,7 +331,7 @@
                     <!-- Guia Interativo dropdown -->
                     <div class="relative" x-data="{guideMenuOpen:false}">
                         <button @click="guideMenuOpen = !guideMenuOpen" id="tour-start-btn"
-                                class="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-violet-500 to-brand-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:shadow-md hover:scale-[1.02] transition-all">
+                                class="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-red-500 to-brand-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:shadow-md hover:scale-[1.02] transition-all">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4.26 10.147a60.438 60.438 0 00-.491 6.347A48.62 48.62 0 0112 20.904a48.62 48.62 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.636 50.636 0 00-2.658-.813A59.906 59.906 0 0112 3.493a59.903 59.903 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0112 13.489a50.702 50.702 0 017.74-3.342"/></svg>
                             Guia Interativo
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
@@ -361,7 +361,7 @@
                     <div class="relative" x-data="{userMenuOpen:false}">
                         <button @click="userMenuOpen = !userMenuOpen" class="flex items-center gap-1.5 rounded-full bg-surface-100 pl-1.5 pr-3 py-1 hover:bg-surface-200 transition-colors">
                             <div class="flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-white
-                                {% if current_user.role == 'root' %}bg-rose-500{% elif current_user.role == 'admin' %}bg-violet-500{% else %}bg-brand-500{% endif %}">
+                                {% if current_user.role == 'root' %}bg-rose-500{% elif current_user.role == 'admin' %}bg-red-500{% else %}bg-brand-500{% endif %}">
                                 {{ (current_user.display_name or current_user.username)[:2]|upper }}
                             </div>
                             <span class="text-[11px] font-medium text-surface-600 hidden md:inline">{{ current_user.display_name or current_user.username }}</span>
@@ -480,7 +480,7 @@
                                 <!-- Footer com botão IA -->
                                 <div class="border-t border-surface-100 px-5 py-3 shrink-0 bg-surface-50/50">
                                     <button @click="openHelpChat(selectedModule)"
-                                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-violet-500 to-brand-500 text-white px-4 py-2 text-[12px] font-semibold hover:shadow-md transition-all">
+                                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-red-500 to-brand-500 text-white px-4 py-2 text-[12px] font-semibold hover:shadow-md transition-all">
                                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/></svg>
                                         🤖 IA, me ajude!
                                     </button>
@@ -505,9 +505,9 @@
         <div class="fixed inset-0 z-[9985]">
             <div class="fixed inset-0 bg-black/40" @click="pageHelpOpen=false"></div>
             <aside class="fixed right-0 top-0 bottom-0 w-full sm:w-[640px] bg-white shadow-2xl flex flex-col">
-                <header class="flex items-center justify-between border-b border-surface-100 px-5 py-3 shrink-0 bg-gradient-to-r from-violet-50 to-brand-50">
+                <header class="flex items-center justify-between border-b border-surface-100 px-5 py-3 shrink-0 bg-gradient-to-r from-red-50 to-brand-50">
                     <div class="min-w-0 flex-1">
-                        <div class="text-[10px] font-semibold uppercase tracking-wider text-violet-600">Ajuda desta página</div>
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-red-600">Ajuda desta página</div>
                         <div class="text-[14px] font-bold text-brand-900" x-text="pageHelpV2 ? pageHelpV2.title : (pageHelpData.title || 'Página')"></div>
                         <div class="text-[11px] text-surface-500 mt-0.5 leading-snug"
                              x-text="pageHelpV2 ? (pageHelpV2.summary || '') : (pageHelpData.section || '')"></div>
@@ -626,7 +626,7 @@
                 <!-- Footer com botão IA -->
                 <div class="border-t border-surface-100 px-5 py-3 shrink-0 bg-surface-50/50">
                     <button @click="openHelpChatForPage()"
-                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-violet-500 to-brand-500 text-white px-4 py-2 text-[12px] font-semibold hover:shadow-md transition-all">
+                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-red-500 to-brand-500 text-white px-4 py-2 text-[12px] font-semibold hover:shadow-md transition-all">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
                         IA, me ajude com esta página!
                     </button>
@@ -642,9 +642,9 @@
         <div class="fixed inset-0 z-[9986]">
             <div class="fixed inset-0 bg-black/40" @click="helpChatOpen=false"></div>
             <aside class="fixed right-0 top-0 bottom-0 w-full sm:w-[480px] bg-white shadow-2xl flex flex-col">
-                <header class="flex items-center justify-between border-b border-surface-100 px-5 py-3 shrink-0 bg-gradient-to-r from-violet-50 to-brand-50">
+                <header class="flex items-center justify-between border-b border-surface-100 px-5 py-3 shrink-0 bg-gradient-to-r from-red-50 to-brand-50">
                     <div>
-                        <div class="text-[10px] font-semibold uppercase tracking-wider text-violet-600">🤖 IA, me ajude!</div>
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-red-600">🤖 IA, me ajude!</div>
                         <div class="text-[13px] font-bold text-brand-900" x-text="helpChatTitle"></div>
                     </div>
                     <button @click="helpChatOpen=false" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
@@ -765,7 +765,7 @@
                             <template x-for="r in searchResults" :key="r.id">
                                 <a :href="r.url" @click="searchOpen = false" class="flex items-center gap-3 px-4 py-2.5 hover:bg-brand-50 transition-colors cursor-pointer">
                                     <div class="flex h-8 w-8 items-center justify-center rounded-lg shrink-0 text-[11px] font-bold"
-                                         :class="{'bg-brand-100 text-brand-700': r.icon==='agent', 'bg-teal-100 text-teal-700': r.icon==='skill', 'bg-violet-100 text-violet-700': r.icon==='session', 'bg-amber-100 text-amber-700': r.icon==='prompt', 'bg-emerald-100 text-emerald-700': r.icon==='knowledge'}"
+                                         :class="{'bg-brand-100 text-brand-700': r.icon==='agent', 'bg-teal-100 text-teal-700': r.icon==='skill', 'bg-red-100 text-red-700': r.icon==='session', 'bg-amber-100 text-amber-700': r.icon==='prompt', 'bg-emerald-100 text-emerald-700': r.icon==='knowledge'}"
                                          x-text="r.type?.substring(0,2).toUpperCase()"></div>
                                     <div class="flex-1 min-w-0">
                                         <div class="text-[13px] font-medium text-brand-900 truncate" x-text="r.title"></div>

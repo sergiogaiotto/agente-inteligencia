@@ -574,7 +574,7 @@
                    role="dialog" aria-label="Inspecionar Base de Conhecimento" style="max-height: 100vh">
                 <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4 shrink-0 bg-gradient-to-br from-brand-50/40 to-white">
                     <div class="min-w-0 flex-1">
-                        <p class="text-[10px] font-semibold uppercase tracking-wider text-violet-600">Inspecionar Base</p>
+                        <p class="text-[10px] font-semibold uppercase tracking-wider text-red-600">Inspecionar Base</p>
                         <h3 class="text-[15px] font-bold text-brand-900 truncate" x-text="inspectSource?.name || '—'"></h3>
                         <p x-show="inspectSource?.id" class="text-[9px] font-mono text-surface-400 truncate" x-text="inspectSource?.id || ''"></p>
                     </div>
@@ -627,7 +627,7 @@
                             </div>
                             <div x-show="inspectSource?.description" class="text-[11px] text-surface-500 pt-2 border-t border-surface-100" x-text="inspectSource?.description"></div>
                         </div>
-                        <div class="rounded-lg border border-violet-100 bg-violet-50/40 px-4 py-3 text-[11px] text-violet-700 leading-relaxed">
+                        <div class="rounded-lg border border-red-100 bg-red-50/40 px-4 py-3 text-[11px] text-red-700 leading-relaxed">
                             <strong>Como funciona o RAG aqui:</strong> texto vai pra <code class="bg-white px-1 rounded">evidence_chunks</code> (Postgres + tsvector pra BM25)
                             e <code class="bg-white px-1 rounded">agente_evidence</code> (Qdrant pra similaridade vetorial). Busca híbrida com RRF
                             funde os dois rankings. Use a aba <strong>Test Query</strong> pra ver o que cada query traria de volta antes de cabear num agente.

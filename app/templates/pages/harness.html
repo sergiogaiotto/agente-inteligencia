@@ -63,7 +63,7 @@
                                   x-text="c.case_type"></span>
                             <span class="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-600" x-text="c.expected_state"></span>
                             <template x-if="c.category">
-                                <span class="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700" x-text="c.category"></span>
+                                <span class="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-700" x-text="c.category"></span>
                             </template>
                             <template x-if="c.weight && Number(c.weight) !== 1">
                                 <span class="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700"
@@ -357,7 +357,7 @@
                                         <span class="rounded-full px-2 py-0.5 text-[9px] font-bold"
                                               :class="d.regression ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'"
                                               x-text="d.regression ? 'regressão' : 'melhoria'"></span>
-                                        <span class="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700" x-text="d.category"></span>
+                                        <span class="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-700" x-text="d.category"></span>
                                         <span class="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-700" x-text="'esperado: ' + (d.expected_state || '?')"></span>
                                         <span class="text-[9px] text-surface-400 font-mono ml-auto" x-text="(d.case_id||'').substring(0,12)"></span>
                                     </div>

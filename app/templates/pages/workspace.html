@@ -37,19 +37,19 @@
         <div class="flex items-center gap-3 border-b border-surface-100 bg-white px-4 py-2.5">
             <div class="flex rounded-lg border border-surface-200 overflow-hidden shrink-0">
                 <button @click="execMode='agent';newSession()" class="px-3 py-1.5 text-[11px] font-medium transition-colors" :class="execMode==='agent'?'bg-brand-500 text-white':'bg-white text-surface-500 hover:bg-surface-50'">Agente</button>
-                <button @click="execMode='pipeline';newSession()" class="px-3 py-1.5 text-[11px] font-medium transition-colors" :class="execMode==='pipeline'?'bg-violet-500 text-white':'bg-white text-surface-500 hover:bg-surface-50'">Pipeline</button>
+                <button @click="execMode='pipeline';newSession()" class="px-3 py-1.5 text-[11px] font-medium transition-colors" :class="execMode==='pipeline'?'bg-red-500 text-white':'bg-white text-surface-500 hover:bg-surface-50'">Pipeline</button>
             </div>
             <select x-show="execMode==='agent'" x-model="selectedAgentId" @change="newSession()" class="rounded-lg border border-surface-200 bg-surface-50 px-3 py-1.5 text-[12px] text-brand-900 outline-none min-w-[200px]">
                 <option value="">Selecione um agente</option>
                 <option x-show="selectedAgentId && !agents.some(a=>a.id===selectedAgentId)" :value="selectedAgentId" x-text="selectedAgentFallbackLabel"></option>
                 <template x-for="a in agents" :key="a.id"><option :value="a.id" x-text="a.name+' (v'+(a.version||'1.0.0')+' · '+a.model+')'"></option></template>
             </select>
-            <select x-show="execMode==='pipeline'" x-model="selectedAgentId" @change="newSession()" class="rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-[12px] text-brand-900 outline-none min-w-[200px]">
+            <select x-show="execMode==='pipeline'" x-model="selectedAgentId" @change="newSession()" class="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-[12px] text-brand-900 outline-none min-w-[200px]">
                 <option value="">Selecione pipeline</option>
                 <option x-show="selectedAgentId && !pipelineRoots.some(p=>p.id===selectedAgentId)" :value="selectedAgentId" x-text="selectedPipelineFallbackLabel"></option>
                 <template x-for="p in pipelineRoots" :key="p.id"><option :value="p.id" x-text="p.name+' → '+p.chainLen+' agente(s)'"></option></template>
             </select>
-            <template x-if="selectedAgentId"><span class="flex items-center gap-1 text-[10px] font-medium" :class="execMode==='pipeline'?'text-violet-600':'text-emerald-600'"><span class="h-1.5 w-1.5 rounded-full pulse-dot" :class="execMode==='pipeline'?'bg-violet-400':'bg-emerald-400'"></span><span x-text="execMode==='pipeline'?'Pipeline':'Conectado'"></span></span></template>
+            <template x-if="selectedAgentId"><span class="flex items-center gap-1 text-[10px] font-medium" :class="execMode==='pipeline'?'text-red-600':'text-emerald-600'"><span class="h-1.5 w-1.5 rounded-full pulse-dot" :class="execMode==='pipeline'?'bg-red-400':'bg-emerald-400'"></span><span x-text="execMode==='pipeline'?'Pipeline':'Conectado'"></span></span></template>
             <div class="flex-1"></div>
             <button @click="showTrace=!showTrace" class="hidden xl:flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors" :class="showTrace?'bg-brand-500 text-white':'bg-surface-100 text-surface-500 hover:bg-surface-200'">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3"/></svg>
@@ -69,9 +69,9 @@
             <template x-for="(msg,i) in messages" :key="i">
                 <div class="flex gap-3" :class="msg.role==='user'?'justify-end':'justify-start'">
                     <template x-if="msg.role==='assistant'">
-                        <div @click="if(msg._trace){lastTrace=msg._trace;activeTraceIdx=i;}" class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white mt-1 transition-all" :class="msg._trace?(activeTraceIdx===i?'bg-violet-500 ring-2 ring-violet-200 scale-110 cursor-pointer':'bg-brand-500 hover:bg-violet-500 cursor-pointer'):'bg-brand-500'"><span x-text="msg._agentName?msg._agentName.substring(0,2).toUpperCase():'AI'"></span></div>
+                        <div @click="if(msg._trace){lastTrace=msg._trace;activeTraceIdx=i;}" class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white mt-1 transition-all" :class="msg._trace?(activeTraceIdx===i?'bg-red-500 ring-2 ring-red-200 scale-110 cursor-pointer':'bg-brand-500 hover:bg-red-500 cursor-pointer'):'bg-brand-500'"><span x-text="msg._agentName?msg._agentName.substring(0,2).toUpperCase():'AI'"></span></div>
                     </template>
-                    <div class="max-w-[75%] rounded-2xl px-4 py-3 text-[13px] leading-relaxed" :class="msg.role==='user'?'bg-brand-500 text-white rounded-br-md':(activeTraceIdx===i?'bg-white border-2 border-violet-300 text-brand-900 rounded-bl-md shadow-md':'bg-white border border-surface-200 text-brand-900 rounded-bl-md shadow-sm')">
+                    <div class="max-w-[75%] rounded-2xl px-4 py-3 text-[13px] leading-relaxed" :class="msg.role==='user'?'bg-brand-500 text-white rounded-br-md':(activeTraceIdx===i?'bg-white border-2 border-red-300 text-brand-900 rounded-bl-md shadow-md':'bg-white border border-surface-200 text-brand-900 rounded-bl-md shadow-sm')">
                         <template x-if="msg._agentName && msg.role==='assistant'">
                             <div class="flex items-center gap-2 mb-2 pb-1.5 border-b border-surface-100">
                                 <span class="rounded-full px-2 py-0.5 text-[9px] font-bold" :class="msg._agentKind==='aobd'?'bg-rose-50 text-rose-600':msg._agentKind==='router'?'bg-orange-50 text-orange-600':'bg-teal-50 text-teal-600'" x-text="msg._agentKind"></span>
@@ -82,14 +82,14 @@
                         <!-- ══ CONTENT: raw vs formatted toggle ══ -->
                         <div x-show="msg.role==='assistant' && msg._systemNote" x-html="msg.content"></div>
                         <div x-show="msg.role==='assistant' && !msg._systemNote && !richViewMsgs[i]" x-html="msg.role==='assistant'?formatMarkdown(msg.content):msg.content"></div>
-                        <div x-show="msg.role==='assistant' && !msg._systemNote && richViewMsgs[i]" class="rounded-xl border border-violet-200/80 bg-gradient-to-b from-violet-50/70 to-white p-3 shadow-sm" x-html="renderRichContent(msg.content)"></div>
+                        <div x-show="msg.role==='assistant' && !msg._systemNote && richViewMsgs[i]" class="rounded-xl border border-red-200/80 bg-gradient-to-b from-red-50/70 to-white p-3 shadow-sm" x-html="renderRichContent(msg.content)"></div>
                         <div x-show="msg.role==='user'" x-text="msg.content"></div>
                         <!-- ══ FOOTER ══ -->
                         <div x-show="msg.role==='assistant' && !msg._systemNote" class="flex items-center gap-1 mt-2 pt-1.5 border-t border-surface-100">
                             <span class="text-[10px] opacity-60 flex-1" x-text="msg.created_at?.replace('T',' ').substring(11,16)||''"></span>
                             <!-- Format toggle button -->
                             <button x-show="isStructuredContent(msg.content)" @click="richViewMsgs[i]=!richViewMsgs[i]"
-                                    class="p-1 rounded transition-colors" :class="richViewMsgs[i]?'bg-violet-100 text-violet-600 hover:bg-violet-200':'hover:bg-surface-100 text-surface-300 hover:text-violet-600'" :title="richViewMsgs[i]?'Ver original':'Visualizar formatado'">
+                                    class="p-1 rounded transition-colors" :class="richViewMsgs[i]?'bg-red-100 text-red-600 hover:bg-red-200':'hover:bg-surface-100 text-surface-300 hover:text-red-600'" :title="richViewMsgs[i]?'Ver original':'Visualizar formatado'">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5"/></svg>
                             </button>
                             <!-- Copy button -->
@@ -127,7 +127,7 @@
                         <span class="text-surface-300 shrink-0 w-[38px] text-right font-mono text-[9px] mt-px" x-text="e.time"></span>
                         <span class="shrink-0 w-4 text-center mt-px" x-text="e.icon"></span>
                         <span class="shrink-0 rounded px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-wider mt-px"
-                              :class="{'bg-violet-100 text-violet-600':e.cat==='agent','bg-blue-100 text-blue-600':e.cat==='prompt','bg-teal-100 text-teal-600':e.cat==='skill','bg-amber-100 text-amber-600':e.cat==='tools','bg-cyan-100 text-cyan-600':e.cat==='fsm','bg-emerald-100 text-emerald-600':e.cat==='evidence','bg-rose-100 text-rose-600':e.cat==='result','bg-indigo-100 text-indigo-600':e.cat==='pipeline','bg-purple-100 text-purple-600':e.cat==='llm','bg-sky-100 text-sky-600':e.cat==='dialog','bg-slate-100 text-slate-600':e.cat==='system','bg-orange-100 text-orange-600':e.cat==='error','bg-surface-200 text-surface-500':e.cat==='separator','bg-gray-100 text-gray-500':!['agent','prompt','skill','tools','fsm','evidence','result','pipeline','llm','dialog','system','error','separator'].includes(e.cat)}"
+                              :class="{'bg-red-100 text-red-600':e.cat==='agent','bg-blue-100 text-blue-600':e.cat==='prompt','bg-teal-100 text-teal-600':e.cat==='skill','bg-amber-100 text-amber-600':e.cat==='tools','bg-cyan-100 text-cyan-600':e.cat==='fsm','bg-emerald-100 text-emerald-600':e.cat==='evidence','bg-rose-100 text-rose-600':e.cat==='result','bg-indigo-100 text-indigo-600':e.cat==='pipeline','bg-red-100 text-red-600':e.cat==='llm','bg-sky-100 text-sky-600':e.cat==='dialog','bg-slate-100 text-slate-600':e.cat==='system','bg-orange-100 text-orange-600':e.cat==='error','bg-surface-200 text-surface-500':e.cat==='separator','bg-gray-100 text-gray-500':!['agent','prompt','skill','tools','fsm','evidence','result','pipeline','llm','dialog','system','error','separator'].includes(e.cat)}"
                               x-text="e.cat"></span>
                         <div class="flex-1 min-w-0">
                             <span class="font-semibold" :class="{'text-gray-900':e.level==='info','text-emerald-700':e.level==='success','text-amber-700':e.level==='warning','text-rose-700':e.level==='danger'}" x-text="e.title"></span>
@@ -235,16 +235,16 @@
                 </div>
                 <!-- ══ SLASH COMMAND POPOVER ══ -->
                 <div x-show="slashOpen && !activeBindingForm" x-transition.duration.150ms @click.away="slashOpen=false"
-                     class="absolute bottom-full left-12 right-12 mb-2 rounded-xl border border-violet-200 bg-white shadow-lg z-40 overflow-hidden">
-                    <div class="px-3 py-1.5 border-b border-violet-100 bg-violet-50 text-[9px] font-bold text-violet-700 uppercase tracking-wider flex items-center justify-between">
+                     class="absolute bottom-full left-12 right-12 mb-2 rounded-xl border border-red-200 bg-white shadow-lg z-40 overflow-hidden">
+                    <div class="px-3 py-1.5 border-b border-red-100 bg-red-50 text-[9px] font-bold text-red-700 uppercase tracking-wider flex items-center justify-between">
                         <span>Comandos e Tools</span>
-                        <span class="text-[9px] text-violet-400 normal-case">↑↓ navegar · Enter selecionar · Esc fechar</span>
+                        <span class="text-[9px] text-red-400 normal-case">↑↓ navegar · Enter selecionar · Esc fechar</span>
                     </div>
                     <template x-for="(cmd, idx) in filteredSlashCmds" :key="cmd.name+(cmd._kind||'')+(cmd._isRecent?'-r':'')">
                         <button type="button" @click="runSlashCommand(cmd.name)"
-                                class="w-full text-left px-3 py-2 hover:bg-violet-50 transition-colors flex items-start gap-3 border-b border-surface-50 last:border-0"
+                                class="w-full text-left px-3 py-2 hover:bg-red-50 transition-colors flex items-start gap-3 border-b border-surface-50 last:border-0"
                                 :class="[
-                                    idx === slashHighlight ? 'bg-violet-50' : '',
+                                    idx === slashHighlight ? 'bg-red-50' : '',
                                     cmd._isRecent ? 'bg-gradient-to-r from-amber-50/40 to-transparent' : ''
                                 ]">
                             <!-- Onda A.4: ícone clock pra Recente; código /name pros demais -->
@@ -255,7 +255,7 @@
                             </template>
                             <template x-if="!cmd._isRecent">
                                 <code class="rounded px-1.5 py-0.5 text-[11px] font-mono font-bold shrink-0 mt-0.5"
-                                      :class="cmd._kind==='binding'?'bg-fuchsia-100 text-fuchsia-700':'bg-violet-100 text-violet-700'"
+                                      :class="cmd._kind==='binding'?'bg-red-100 text-red-700':'bg-red-100 text-red-700'"
                                       x-text="'/' + cmd.name"></code>
                             </template>
                             <div class="min-w-0 flex-1">
@@ -263,7 +263,7 @@
                                     <span class="text-[12px] font-semibold text-brand-900" x-text="cmd.title"></span>
                                     <template x-if="cmd._kind==='binding'">
                                         <span class="rounded-sm text-[8px] font-bold uppercase tracking-wider px-1"
-                                              :class="cmd._isRecent ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-fuchsia-50 text-fuchsia-600 border border-fuchsia-200'"
+                                              :class="cmd._isRecent ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-red-50 text-red-600 border border-red-200'"
                                               x-text="cmd._binding?.binding_kind||''"></span>
                                     </template>
                                     <template x-if="cmd._isRecent">
@@ -445,7 +445,7 @@
                                                         <span class="text-[8.5px] font-mono uppercase"
                                                               :class="{
                                                                   'text-teal-600': (lastTrace.trace.ragas_metrics[m.key]?.source) === 'heuristic',
-                                                                  'text-violet-600': (lastTrace.trace.ragas_metrics[m.key]?.source) === 'judge',
+                                                                  'text-red-600': (lastTrace.trace.ragas_metrics[m.key]?.source) === 'judge',
                                                                   'text-surface-300': (lastTrace.trace.ragas_metrics[m.key]?.source) === 'unavailable',
                                                               }"
                                                               x-text="(lastTrace.trace.ragas_metrics[m.key]?.source) === 'heuristic' ? 'h' : ((lastTrace.trace.ragas_metrics[m.key]?.source) === 'judge' ? 'j' : '—')"></span>
@@ -468,7 +468,7 @@
                                         </div>
                                         <p class="mt-1.5 text-[9px] text-surface-400 leading-tight">
                                             <span class="font-mono text-teal-600">h</span> = heurístico (sem LLM extra) ·
-                                            <span class="font-mono text-violet-600">j</span> = LLM-judge (Verifier v2) ·
+                                            <span class="font-mono text-red-600">j</span> = LLM-judge (Verifier v2) ·
                                             <span class="text-surface-300">—</span> = indisponível em <code class="text-[8.5px] bg-white px-0.5 rounded">fast</code>
                                         </p>
                                     </div>
@@ -546,7 +546,7 @@
                                     <span class="text-surface-500">Contract</span>
                                     <div class="flex items-center gap-1.5">
                                         <span x-show="lastTrace.verification.contract_retried"
-                                              class="rounded-full bg-violet-100 text-violet-700 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+                                              class="rounded-full bg-red-100 text-red-700 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
                                               title="Verifier detectou violação no 1º attempt e re-chamou o LLM com instrução de correção">
                                             ↻ retry
                                         </span>
@@ -702,13 +702,13 @@
                             </div>
                             <!-- API TOOLS: clicável quando > 0, mostra binding_executions -->
                             <div class="rounded-lg bg-surface-50 px-3 py-2 text-center transition-colors"
-                                 :class="(lastTrace.trace?.api_tools_count||0) > 0 ? 'cursor-pointer hover:bg-fuchsia-50 ring-1 ring-transparent hover:ring-fuchsia-200' : ''"
+                                 :class="(lastTrace.trace?.api_tools_count||0) > 0 ? 'cursor-pointer hover:bg-red-50 ring-1 ring-transparent hover:ring-red-200' : ''"
                                  @click="if ((lastTrace.trace?.api_tools_count||0) > 0) metricExpanded = metricExpanded === 'api' ? '' : 'api'"
                                  :title="(lastTrace.trace?.api_tools_count||0) > 0 ? 'Clique pra ver as chamadas de API binding' : 'Nenhuma API binding foi executada'">
                                 <div class="text-[16px] font-bold text-brand-900" x-text="lastTrace.trace?.api_tools_count||0"></div>
                                 <div class="text-[9px] text-surface-400 uppercase flex items-center justify-center gap-1">
                                     <span>API Tools</span>
-                                    <span x-show="(lastTrace.trace?.api_tools_count||0) > 0" class="text-fuchsia-500" x-text="metricExpanded === 'api' ? '▴' : '▾'"></span>
+                                    <span x-show="(lastTrace.trace?.api_tools_count||0) > 0" class="text-red-500" x-text="metricExpanded === 'api' ? '▴' : '▾'"></span>
                                 </div>
                             </div>
                             <div class="rounded-lg bg-surface-50 px-3 py-2 text-center"
@@ -757,10 +757,10 @@
                         <!-- ── Painel de drilldown — API Tools ── -->
                         <div x-show="metricExpanded === 'api' && (lastTrace.trace?.api_tools?.length||0) > 0"
                              x-transition.duration.150ms
-                             class="mt-2 rounded-lg border border-fuchsia-200 bg-fuchsia-50/30 p-2 space-y-1.5">
-                            <div class="text-[9px] font-bold text-fuchsia-700 uppercase tracking-wider mb-1">API bindings executados</div>
+                             class="mt-2 rounded-lg border border-red-200 bg-red-50/30 p-2 space-y-1.5">
+                            <div class="text-[9px] font-bold text-red-700 uppercase tracking-wider mb-1">API bindings executados</div>
                             <template x-for="(a, i) in lastTrace.trace?.api_tools || []" :key="i">
-                                <div class="rounded bg-white border border-fuchsia-100 px-2 py-1.5">
+                                <div class="rounded bg-white border border-red-100 px-2 py-1.5">
                                     <div class="flex items-center justify-between gap-2">
                                         <span class="text-[10px] font-mono font-semibold text-brand-900" x-text="a.binding_id||'?'"></span>
                                         <span class="text-[9px] font-mono"
@@ -948,8 +948,8 @@ function workspacePage() {
         _renderResultCards(results) {
             let html = `
                 <div class="flex items-center justify-between mb-2.5">
-                    <div class="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-violet-700">
-                        <span class="inline-block h-1.5 w-1.5 rounded-full bg-violet-500"></span>
+                    <div class="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-red-700">
+                        <span class="inline-block h-1.5 w-1.5 rounded-full bg-red-500"></span>
                         ${results.length} resultado(s)
                     </div>
                     <span class="text-[10px] text-surface-400">Visualização formatada</span>
@@ -962,12 +962,12 @@ function workspacePage() {
                 const snippet = r.snippet || r.description || r.summary || r.abstract || r.text || '';
                 const domain = this._hostFromUrl(link);
 
-                html += `<div class="rounded-xl border border-surface-200 bg-white/90 p-3.5 shadow-[0_1px_0_rgba(15,23,42,0.03)] hover:shadow-md hover:border-violet-200 transition-all">`;
+                html += `<div class="rounded-xl border border-surface-200 bg-white/90 p-3.5 shadow-[0_1px_0_rgba(15,23,42,0.03)] hover:shadow-md hover:border-red-200 transition-all">`;
 
                 // Title (linked if URL available)
                 if (link) {
                     html += `
-                        <a href="${this._esc(link)}" target="_blank" rel="noopener" class="text-[13px] font-semibold text-brand-700 hover:text-violet-700 hover:underline leading-snug">
+                        <a href="${this._esc(link)}" target="_blank" rel="noopener" class="text-[13px] font-semibold text-brand-700 hover:text-red-700 hover:underline leading-snug">
                             ${this._esc(title)}
                         </a>
                         <div class="mt-1 flex items-center gap-2">
@@ -1012,8 +1012,8 @@ function workspacePage() {
             // markdown processado, labels capitalizadas, separação visual entre
             // blocos.
             let html = `
-                <div class="mb-3 inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-violet-700">
-                    <span class="inline-block h-1.5 w-1.5 rounded-full bg-violet-500"></span>
+                <div class="mb-3 inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-red-700">
+                    <span class="inline-block h-1.5 w-1.5 rounded-full bg-red-500"></span>
                     Estruturado
                 </div>
                 <div class="rounded-xl border border-surface-200 bg-white/90 p-4 space-y-3">
@@ -1033,7 +1033,7 @@ function workspacePage() {
             const valueHtml = this._renderFieldValue(key, value);
             return `
                 <div class="space-y-1">
-                    <div class="text-[10px] font-bold uppercase tracking-wider text-violet-600">${label}</div>
+                    <div class="text-[10px] font-bold uppercase tracking-wider text-red-600">${label}</div>
                     <div class="text-[12px] text-surface-700">${valueHtml}</div>
                 </div>
             `;
@@ -1106,7 +1106,7 @@ function workspacePage() {
 
         _renderLinkValue(url) {
             const safe = this._esc(url);
-            return `<a href="${safe}" target="_blank" rel="noopener" class="text-brand-600 hover:text-violet-700 hover:underline break-all">${safe}</a>`;
+            return `<a href="${safe}" target="_blank" rel="noopener" class="text-brand-600 hover:text-red-700 hover:underline break-all">${safe}</a>`;
         },
 
         _renderCodeValue(code) {
@@ -1134,7 +1134,7 @@ function workspacePage() {
                     const s = String(item).trim();
                     if (/^https?:\/\//.test(s)) {
                         const host = this._hostFromUrl(s);
-                        lis += `<li class="flex items-start gap-2"><svg class="w-3 h-3 mt-1 text-brand-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg><a href="${this._esc(s)}" target="_blank" rel="noopener" class="text-[11px] text-brand-600 hover:text-violet-700 hover:underline break-all">${this._esc(host || s)}</a></li>`;
+                        lis += `<li class="flex items-start gap-2"><svg class="w-3 h-3 mt-1 text-brand-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg><a href="${this._esc(s)}" target="_blank" rel="noopener" class="text-[11px] text-brand-600 hover:text-red-700 hover:underline break-all">${this._esc(host || s)}</a></li>`;
                     } else {
                         lis += `<li class="flex items-start gap-2"><span class="text-brand-400 shrink-0">•</span><span class="text-[11px] text-surface-700">${this._inlineMd(this._esc(String(item)))}</span></li>`;
                     }
@@ -1146,7 +1146,7 @@ function workspacePage() {
             if (arr.every(item => typeof item === 'string')) {
                 let lis = '';
                 for (const item of arr) {
-                    lis += `<li class="flex items-start gap-2"><span class="text-violet-400 shrink-0">•</span><span class="text-[12px] text-surface-700 leading-relaxed">${this._inlineMd(this._esc(item))}</span></li>`;
+                    lis += `<li class="flex items-start gap-2"><span class="text-red-400 shrink-0">•</span><span class="text-[12px] text-surface-700 leading-relaxed">${this._inlineMd(this._esc(item))}</span></li>`;
                 }
                 return `<ul class="space-y-1.5">${lis}</ul>`;
             }
@@ -1353,7 +1353,7 @@ function workspacePage() {
 
         _inlineMd(t) {
             return t
-                .replace(/`([^`]+)`/g, '<code class="rounded bg-surface-100 px-1 py-0.5 text-[10px] font-mono text-violet-700">$1</code>')
+                .replace(/`([^`]+)`/g, '<code class="rounded bg-surface-100 px-1 py-0.5 text-[10px] font-mono text-red-700">$1</code>')
                 .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-brand-900">$1</strong>')
                 .replace(/\*(.+?)\*/g, '<em>$1</em>')
                 .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="text-brand-500 underline hover:text-brand-700">$1</a>');
@@ -1859,8 +1859,8 @@ function workspacePage() {
     <span class="rounded-full bg-${modeColor}-50 px-2 py-0.5 text-${modeColor}-700 font-semibold">mode: ${this._esc(mode)}</span>
   </div>
   ${s?`<div class="rounded-lg bg-teal-50 border border-teal-100 px-3 py-2"><div class="text-[10px] font-bold text-teal-700 uppercase tracking-wider mb-0.5">Skill</div><div class="text-[12px] font-semibold text-teal-900">${this._esc(s.name)} <span class="font-mono text-[10px] text-teal-600">v${this._esc(s.version)}</span></div>${s.purpose?`<div class="text-[11px] text-teal-700 mt-1">${this._esc(s.purpose)}</div>`:''}</div>`:'<div class="text-[11px] text-surface-400 italic">Agente sem skill vinculada.</div>'}
-  ${bindings.length?`<div><div class="text-[10px] font-bold text-violet-700 uppercase tracking-wider mb-1">API Bindings (${bindings.length})</div><div class="space-y-1">${bindings.map(b=>`<div class="flex items-center gap-2 rounded bg-violet-50 border border-violet-100 px-2 py-1"><span class="font-mono text-[9px] font-bold text-violet-700 shrink-0">${this._esc(b.method)}</span><span class="font-mono text-[10px] text-brand-900 truncate">${this._esc(b.path)}</span><span class="text-[9px] text-surface-400 ml-auto">${this._esc(b.connector)}</span></div>`).join('')}</div></div>`:''}
-  <div class="pt-1 text-[11px] text-surface-500">Use <code class="rounded bg-surface-100 px-1 font-mono text-violet-700">/params</code> para ver inputs ou <code class="rounded bg-surface-100 px-1 font-mono text-violet-700">/template</code> para gerar um JSON pré-preenchido.</div>
+  ${bindings.length?`<div><div class="text-[10px] font-bold text-red-700 uppercase tracking-wider mb-1">API Bindings (${bindings.length})</div><div class="space-y-1">${bindings.map(b=>`<div class="flex items-center gap-2 rounded bg-red-50 border border-red-100 px-2 py-1"><span class="font-mono text-[9px] font-bold text-red-700 shrink-0">${this._esc(b.method)}</span><span class="font-mono text-[10px] text-brand-900 truncate">${this._esc(b.path)}</span><span class="text-[9px] text-surface-400 ml-auto">${this._esc(b.connector)}</span></div>`).join('')}</div></div>`:''}
+  <div class="pt-1 text-[11px] text-surface-500">Use <code class="rounded bg-surface-100 px-1 font-mono text-red-700">/params</code> para ver inputs ou <code class="rounded bg-surface-100 px-1 font-mono text-red-700">/template</code> para gerar um JSON pré-preenchido.</div>
 </div>`;
         },
         _renderParams(d){
@@ -1870,7 +1870,7 @@ function workspacePage() {
             const fromBindings=new Set(d?.inputs_referenced||[]);
             if(!names.length){
                 const _ob='{'+'{', _cb='}'+'}';
-                return '<div class="text-[12px] text-surface-500">Nenhum parâmetro de entrada estruturado foi declarado para este agente.<br><span class="text-[11px] text-surface-400">Adicione a seção <code class="font-mono text-violet-600">## Inputs</code> com JSON Schema na SKILL.md, ou use API Bindings com variáveis <code class="font-mono text-violet-600">'+_ob+' inputs.X '+_cb+'</code>.</span></div>';
+                return '<div class="text-[12px] text-surface-500">Nenhum parâmetro de entrada estruturado foi declarado para este agente.<br><span class="text-[11px] text-surface-400">Adicione a seção <code class="font-mono text-red-600">## Inputs</code> com JSON Schema na SKILL.md, ou use API Bindings com variáveis <code class="font-mono text-red-600">'+_ob+' inputs.X '+_cb+'</code>.</span></div>';
             }
             const rows=names.map(n=>{
                 const spec=props[n]||{};
@@ -1879,7 +1879,7 @@ function workspacePage() {
                 const fromB=fromBindings.has(n);
                 const desc=spec.description||(fromB?'Referenciado em API Bindings':'');
                 return `<tr class="border-b border-surface-100 last:border-0">
-  <td class="py-1.5 pr-2 align-top"><code class="font-mono text-[11px] text-violet-700 font-semibold">${this._esc(n)}</code>${isReq?'<span class="ml-1 text-rose-500" title="obrigatório">*</span>':''}</td>
+  <td class="py-1.5 pr-2 align-top"><code class="font-mono text-[11px] text-red-700 font-semibold">${this._esc(n)}</code>${isReq?'<span class="ml-1 text-rose-500" title="obrigatório">*</span>':''}</td>
   <td class="py-1.5 pr-2 align-top text-[10px] text-surface-500 font-mono">${this._esc(t)}</td>
   <td class="py-1.5 align-top text-[11px] text-surface-700">${this._esc(desc)}</td>
 </tr>`;
@@ -1891,7 +1891,7 @@ function workspacePage() {
     <thead><tr class="border-b border-surface-200"><th class="py-1 pr-2 text-[9px] font-bold text-surface-400 uppercase">Nome</th><th class="py-1 pr-2 text-[9px] font-bold text-surface-400 uppercase">Tipo</th><th class="py-1 text-[9px] font-bold text-surface-400 uppercase">Descrição</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
-  <div class="text-[10px] text-surface-400"><span class="text-rose-500">*</span> obrigatório · use <code class="rounded bg-surface-100 px-1 font-mono text-violet-700">/template</code> para inserir um JSON pré-preenchido</div>
+  <div class="text-[10px] text-surface-400"><span class="text-rose-500">*</span> obrigatório · use <code class="rounded bg-surface-100 px-1 font-mono text-red-700">/template</code> para inserir um JSON pré-preenchido</div>
 </div>`;
         },
 
@@ -2218,7 +2218,7 @@ function workspacePage() {
             }
             return t;
         },
-        fsmColor(s){return{'PolicyCheck':'bg-blue-100 text-blue-700','RetrieveEvidence':'bg-cyan-100 text-cyan-700','DraftAnswer':'bg-violet-100 text-violet-700','VerifyEvidence':'bg-amber-100 text-amber-700','Recommend':'bg-emerald-100 text-emerald-700','Refuse':'bg-rose-100 text-rose-700','Escalate':'bg-red-100 text-red-700','LogAndClose':'bg-surface-200 text-surface-600'}[s]||'bg-brand-100 text-brand-700'},
+        fsmColor(s){return{'PolicyCheck':'bg-blue-100 text-blue-700','RetrieveEvidence':'bg-cyan-100 text-cyan-700','DraftAnswer':'bg-red-100 text-red-700','VerifyEvidence':'bg-amber-100 text-amber-700','Recommend':'bg-emerald-100 text-emerald-700','Refuse':'bg-rose-100 text-rose-700','Escalate':'bg-red-100 text-red-700','LogAndClose':'bg-surface-200 text-surface-600'}[s]||'bg-brand-100 text-brand-700'},
         // Onda 6: helpers para painel Verifier multi-dim no trace.
         // dimColor: factuality/completeness/tone usam escala 0-5; safety usa 0|1.
         vfDimColor(score, max) {

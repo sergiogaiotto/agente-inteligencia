@@ -301,7 +301,7 @@
                             Empoderar skill
                         </button>
                         <button @click="refineField('system_prompt', 'Melhore este system prompt: torne-o mais específico, adicione formato de saída e guardrails')" :disabled="refining"
-                                class="inline-flex items-center gap-1 rounded-lg bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-600 hover:bg-violet-100 disabled:opacity-40 transition-colors">
+                                class="inline-flex items-center gap-1 rounded-lg bg-red-50 px-2.5 py-1 text-[11px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-40 transition-colors">
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
                             <span x-text="refining ? 'Refinando...' : 'IA, refine'"></span>
                         </button>
@@ -441,8 +441,8 @@
                                 :class="{
                                     'text-emerald-700': skillSummary.execution_mode === 'fast',
                                     'text-brand-700': skillSummary.execution_mode === 'standard',
-                                    'text-violet-700': skillSummary.execution_mode === 'rigorous',
-                                    'text-fuchsia-700': skillSummary.execution_mode === 'declarative',
+                                    'text-red-700': skillSummary.execution_mode === 'rigorous',
+                                    'text-red-700': skillSummary.execution_mode === 'declarative',
                                 }"
                                 x-text="skillSummary.execution_mode"></span>
                         </div>
@@ -457,7 +457,7 @@
                                 <div class="flex justify-between gap-2">
                                     <span class="text-[11px] text-surface-400">Threshold (min_relevance)</span>
                                     <span class="text-[11px] font-mono"
-                                        :class="skillSummary.evidence_policy_parsed.min_relevance !== undefined ? 'text-violet-700 font-semibold' : 'text-surface-400'"
+                                        :class="skillSummary.evidence_policy_parsed.min_relevance !== undefined ? 'text-red-700 font-semibold' : 'text-surface-400'"
                                         x-text="skillSummary.evidence_policy_parsed.min_relevance !== undefined
                                             ? skillSummary.evidence_policy_parsed.min_relevance.toFixed(2) + ' (skill)'
                                             : '0.30 (default do engine)'"></span>
@@ -484,7 +484,7 @@
                         </div>
                         <div class="flex justify-between gap-2" x-show="skillSummary.api_bindings_count > 0">
                             <span class="text-[11px] text-surface-400">API Bindings (declarativos)</span>
-                            <span class="text-[11px] font-medium text-fuchsia-700" x-text="skillSummary.api_bindings_count + ' endpoint(s)'"></span>
+                            <span class="text-[11px] font-medium text-red-700" x-text="skillSummary.api_bindings_count + ' endpoint(s)'"></span>
                         </div>
                         <div class="flex justify-between gap-2" x-show="skillSummary.data_tables_count > 0">
                             <span class="text-[11px] text-surface-400">Data Tables</span>
