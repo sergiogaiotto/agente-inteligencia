@@ -1,8 +1,8 @@
 # Deploy — VPS Hostinger (Docker)
 
 Guia passo a passo para subir o **agente-inteligencia** numa VPS da Hostinger
-(ou qualquer Linux com Docker). Cobre Onda 0 (PostgreSQL + Azure OpenAI +
-Redis + Qdrant). As Ondas seguintes adicionam serviços ao mesmo
+(ou qualquer Linux com Docker). Cobre Onda 0 (PostgreSQL + pgvector + Azure
+OpenAI + Redis). As Ondas seguintes adicionam serviços ao mesmo
 `docker-compose.yml` via *profile* `full`.
 
 ## 1. Pré-requisitos na VPS
@@ -59,7 +59,7 @@ nano .env
 ## 3. Subir a stack mínima
 
 ```bash
-docker compose pull          # imagens externas (postgres, redis, qdrant)
+docker compose pull          # imagens externas (postgres/pgvector, redis)
 docker compose build app     # imagem do app
 docker compose up -d
 docker compose ps            # confirme que tudo está healthy
@@ -193,11 +193,16 @@ docker compose --profile full stop grafana tempo loki promtail   # só pausa
 
 ---
 
-## 9. RAG real com Qdrant (Onda 3)
+## 9. RAG real — híbrido BM25 + vetorial (Onda 3)
 
 Substitui a busca textual ingênua original (match em metadados) por busca
 **híbrida BM25 + vetorial** com fusão por Reciprocal Rank Fusion (RRF) e
 reranker LLM opcional.
+
+> **Nota de migração:** a perna vetorial nasceu na Onda 3 sobre Qdrant; na
+> Onda Q foi migrada para **pgvector no próprio Postgres** (um banco a menos
+> pra operar). Alguns campos de resposta da API ainda usam o nome legacy
+> `qdrant_*` por retrocompat — o nome backend-agnóstico é `vector_*`.
 
 ### 9.1. Componentes
 
@@ -206,7 +211,7 @@ reranker LLM opcional.
 | Embeddings | Azure OpenAI `text-embedding-3-small` (1536 dims) |
 | Chunker | `tiktoken cl100k_base`, 500 tokens/50 overlap |
 | BM25 | Postgres `tsvector` + GIN index, `plainto_tsquery('simple', ...)` |
-| Vetorial | Qdrant collection `agente_evidence`, distância cosine |
+| Vetorial | pgvector no Postgres — coluna `evidence_chunks.embedding` `vector(1536)`, distância cosine |
 | Fusão | RRF com k=60 |
 | Reranker | LLM (Azure GPT-4o) com fallback heurístico |
 
@@ -235,12 +240,14 @@ SRC=$(curl -s -X POST http://localhost:7000/api/v1/knowledge-sources \
 curl -X POST "http://localhost:7000/api/v1/knowledge-sources/$SRC/ingest" \
   -H "Content-Type: application/json" \
   -d '{"text": "Aqui vai o conteúdo cru do documento. Pode ter parágrafos. ..."}'
-# → {"chunks_created": N, "tokens_total": N, "qdrant_upserted": N, "duration_ms": N, "partial": false}
+# → {"chunks_created": N, "tokens_total": N, "vector_upserted": N, "qdrant_upserted": N, "rag_vector_backend": "pgvector", "duration_ms": N, "partial": false}
+#   (qdrant_upserted == vector_upserted; mantido só por retrocompat)
 
 # 3. Verifica
 curl "http://localhost:7000/api/v1/knowledge-sources/$SRC/chunks?limit=10"
 curl http://localhost:7000/api/v1/rag/health
-# → {"qdrant_collection":{"points_count":N,"status":"green"},"rag_available":true}
+# → {"qdrant_collection":{"name":"evidence_chunks.embedding","points_count":N,"status":"green","backend":"pgvector"},"rag_available":true}
+#   (qdrant_collection é nome de campo legacy — o conteúdo é a coluna pgvector)
 
 # 4. Re-ingerir (apaga chunks/pontos anteriores e refaz)
 curl -X POST "http://localhost:7000/api/v1/knowledge-sources/$SRC/ingest" \
@@ -263,8 +270,8 @@ Com `text-embedding-3-small` ($0.02/M tokens):
 |---|---|
 | `RAG_V2_ENABLED=false` | Retriever cai no legacy (busca em metadados de knowledge_sources) |
 | Nenhuma source com chunks ainda | Retriever cai no legacy automaticamente |
-| Qdrant offline durante ingestão | Postgres recebe chunks; resposta marca `partial=true`; usuário re-roda ingest quando Qdrant voltar |
-| Qdrant offline durante search | Cai em BM25-only no Postgres (vetorial vazio na fusão) |
+| Upsert vetorial parcial (menos vetores que chunks) | Postgres tem todos os chunks; resposta marca `partial=true`; usuário re-roda o ingest |
+| Coluna `embedding` ausente/divergente (dim drift) | `rag/health` marca `status` `missing`/`drift`; search vetorial cai vazia, BM25 segue |
 | Azure embeddings offline | Ingest falha com 503 explícito; search vetorial cai vazia, BM25 segue |
 | LLM-reranker falha | Fallback automático para heurística de overlap |
 
@@ -285,7 +292,7 @@ Durante ingestão:
 ingest.text  (atributos: source.id, chunks.count, chunks.tokens_total)
 ├── ingest.embed
 ├── ingest.delete_old            (só quando replace=true)
-└── ingest.qdrant_upsert         (atributo qdrant.upserted)
+└── ingest.vector_upsert         (atributos rag.vector_backend, vector.upserted)
 ```
 
 ### 9.7. Escopo escudado nesta Onda (limites conhecidos)
@@ -559,7 +566,7 @@ foi **untracked e removido do disco** nesta release. Status:
 
 - **Onda 1** ✅ segurança (rate-limit, PII redaction, secrets cifrados, prompt guard)
 - **Onda 2** ✅ observabilidade (OTel + Tempo + Loki + Grafana) — seção 8
-- **Onda 3** ✅ RAG real (Qdrant + embeddings + híbrido BM25+vetorial) — seção 9
+- **Onda 3** ✅ RAG real (embeddings + híbrido BM25+vetorial; vetor migrado pra pgvector na Onda Q) — seção 9
 - **Onda 4b** ⏪ Roteamento LLM (LiteLLM removido — gateway oco no app) — seção 10
 - **Onda 4a** ✅ Policy as Code (OPA + 3 policies + PEP) — seção 11
 - **Onda 4c.1** ✅ TLS público com Caddy — seção 12

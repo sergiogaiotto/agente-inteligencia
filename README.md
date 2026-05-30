@@ -505,7 +505,7 @@ def apply_context_delta(current_context, delta):
 
 Busca híbrida em bases autorizadas de conhecimento:
 
-- **Busca híbrida BM25 + vetorial** (Onda 3) — BM25 nativo via Postgres `tsvector` + GIN index; vetorial via Qdrant + Azure embeddings; fusão por Reciprocal Rank Fusion (RRF, k=60).
+- **Busca híbrida BM25 + vetorial** (Onda 3) — BM25 nativo via Postgres `tsvector` + GIN index; vetorial via pgvector no Postgres + Azure embeddings; fusão por Reciprocal Rank Fusion (RRF, k=60).
 - **Reranker LLM** — pós-RRF, top candidatos passam por GPT-4o que reordena com justificativa (toggle `RAG_RERANK_WITH_LLM`).
 - **Filtro** — apenas bases com `authorized=1`.
 - **Top-N** — retorna as 5 evidências mais relevantes para o LLM final.
