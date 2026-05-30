@@ -850,6 +850,18 @@ _IDEMPOTENT_MIGRATIONS = [
     # que sabe a dim do provider de embedding ativo em runtime
     # (Azure 1536, Qwen3 1024 etc.). Mudar provider = /reindex recria coluna.
     "CREATE EXTENSION IF NOT EXISTS vector",
+
+    # Onda P (2026-05-30): índices em FKs de alta cardinalidade.
+    # Audit identificou queries WHERE agent_id/interaction_id fazendo
+    # seq scan em tabelas com milhares de linhas. Idempotente.
+    "CREATE INDEX IF NOT EXISTS idx_agent_bindings_agent_id ON agent_bindings(agent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_envelopes_origin_agent_id ON envelopes(origin_agent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_envelopes_target_agent_id ON envelopes(target_agent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_turns_interaction_id ON turns(interaction_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tool_calls_interaction_id ON tool_calls(interaction_id)",
+    "CREATE INDEX IF NOT EXISTS idx_interactions_agent_id ON interactions(agent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_api_call_logs_agent_id ON api_call_logs(agent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_binding_executions_agent_id ON binding_executions(agent_id)",
 ]
 
 
