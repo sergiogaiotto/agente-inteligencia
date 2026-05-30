@@ -57,17 +57,14 @@ itsdangerous>=2.2.0
 jsonpath-ng>=1.6.0
 jinja2>=3.1.0
 
-# === RAG v2 (Onda 3 — Qdrant + embeddings reais) ===
-# qdrant-client traz `AsyncQdrantClient` (modo async, gRPC ou HTTP).
+# === RAG (Onda Q: backend único pgvector) ===
 # tiktoken: tokenizer da OpenAI/Azure (cl100k_base) para chunking preciso.
-qdrant-client>=1.11.0
-tiktoken>=0.7.0
-
-# === RAG v3 (Onda pgvector — substituirá Qdrant nas próximas ondas) ===
 # pgvector: tipo `vector` + operadores de similaridade (<=> cosine, <-> L2,
 # <#> inner) + index HNSW/IVFFlat no Postgres. Lib Python registra codec
-# asyncpg automático (register_vector). Convive com qdrant-client enquanto
-# Settings.rag_vector_backend permitir os 2; remoção do qdrant fica no PR F.
+# asyncpg automático (register_vector).
+#
+# Onda Q (2026-05-30): qdrant-client REMOVIDO. Qdrant deletado da plataforma.
+tiktoken>=0.7.0
 pgvector>=0.3.0
 
 # === Verifier v2 (§14.2 — judge multi-dim + ContractValidator) ===

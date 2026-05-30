@@ -36,10 +36,7 @@
 		}
 	}
 
-	# Dashboard nativo do Qdrant (opcional, debug).
-	handle_path /qdrant/* {
-		reverse_proxy qdrant:6333
-	}
+	# Onda Q (2026-05-30): reverse_proxy /qdrant/* removido — Qdrant deletado.
 
 	# Loki API (debug — útil pra rodar curl direto sem expor porta).
 	# Acesso protegido pela mesma camada do app (cookie/api key).
