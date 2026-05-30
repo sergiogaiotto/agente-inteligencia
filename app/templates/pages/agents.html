@@ -189,6 +189,113 @@
                 <p x-show="!previewAgent?._skill_name" class="text-[11px] text-surface-400">Nenhuma skill vinculada</p>
             </div>
 
+            <!-- ══ ONDA C.1 — CAPACIDADES ══ -->
+            <!-- Bindings (MCP/API/RAG/Tabular) do agente, com schema source visível.
+                 Operador vê de cara: tem tools? Quais ops? Schema é confiável
+                 (skill_inputs/tool_input_schema verde) ou legado (âmbar)? -->
+            <div>
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Capacidades</h4>
+                <!-- Loading -->
+                <div x-show="previewLoading && !previewCapabilities" class="rounded-lg bg-surface-50 border border-surface-100 p-3 text-[11px] text-surface-400 italic">Carregando bindings...</div>
+                <!-- No skill at all -->
+                <div x-show="!previewLoading && (!previewCapabilities || _allBindings().length === 0)" class="rounded-lg bg-surface-50 border border-surface-100 p-3 text-[11px] text-surface-500">
+                    Sem bindings declarados. Agente roda apenas com o System Prompt + LLM.
+                </div>
+                <!-- Bindings list -->
+                <template x-if="previewCapabilities && _allBindings().length > 0">
+                    <div class="space-y-1.5">
+                        <template x-for="b in _allBindings()" :key="b.binding_kind+'::'+b.binding_id">
+                            <div class="rounded-lg border p-2.5 text-[11px]" :class="_bindingKindColor(b.binding_kind)">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0 flex-1">
+                                        <div class="flex items-center gap-1.5 flex-wrap">
+                                            <span class="rounded-sm text-[8px] font-bold uppercase tracking-wider px-1 bg-white/60" x-text="b.binding_kind"></span>
+                                            <span class="font-semibold text-brand-900 truncate" x-text="b.binding_label"></span>
+                                        </div>
+                                        <!-- Operations (MCP) -->
+                                        <div x-show="b.operations && b.operations.length > 0" class="text-[9px] mt-1 font-mono opacity-80">
+                                            ops: <span x-text="(b.operations||[]).join(', ')"></span>
+                                        </div>
+                                        <!-- Field count -->
+                                        <div class="text-[9px] mt-0.5 opacity-70">
+                                            <span x-text="(b.fields||[]).length"></span> campo(s)
+                                            <template x-if="b.api_meta && (b.api_meta.binding_count + b.api_meta.tables_count) > 0">
+                                                <span>· <span x-text="b.api_meta.binding_count"></span> bindings, <span x-text="b.api_meta.tables_count"></span> tables</span>
+                                            </template>
+                                        </div>
+                                    </div>
+                                    <!-- Schema source badge -->
+                                    <span class="shrink-0 rounded-sm text-[8px] font-semibold uppercase tracking-wider px-1.5 py-0.5 border whitespace-nowrap"
+                                          :class="_schemaSourceClass(b.schema_source)"
+                                          :title="'Schema origin: ' + b.schema_source"
+                                          x-text="_schemaSourceLabel(b.schema_source)"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+            </div>
+
+            <!-- ══ ONDA C.1 — ATIVIDADE ══ -->
+            <div>
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Atividade</h4>
+                <div x-show="previewLoading && !previewLastActivity" class="rounded-lg bg-surface-50 border border-surface-100 p-3 text-[11px] text-surface-400 italic">Carregando...</div>
+                <template x-if="!previewLoading && previewLastActivity && !previewLastActivity.has_activity">
+                    <div class="rounded-lg bg-surface-50 border border-surface-100 p-3 text-[11px] text-surface-500">
+                        Nunca foi invocado. <a :href="'/workspace?agent=' + previewId" class="text-brand-600 hover:underline">Testar agora →</a>
+                    </div>
+                </template>
+                <template x-if="!previewLoading && previewLastActivity && previewLastActivity.has_activity">
+                    <div class="rounded-lg border p-3 text-[11px]"
+                         :class="previewLastActivity.ok === true ? 'bg-emerald-50 border-emerald-200' : previewLastActivity.ok === false ? 'bg-rose-50 border-rose-200' : 'bg-amber-50 border-amber-200'">
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[14px]" x-text="previewLastActivity.ok === true ? '✓' : previewLastActivity.ok === false ? '✗' : '◷'"></span>
+                                <span class="font-semibold"
+                                      :class="previewLastActivity.ok === true ? 'text-emerald-800' : previewLastActivity.ok === false ? 'text-rose-800' : 'text-amber-800'"
+                                      x-text="_relativeTime(previewLastActivity.last_ts)"></span>
+                            </div>
+                            <span class="text-[10px] font-mono opacity-70">
+                                <span x-show="previewLastActivity.duration_ms" x-text="previewLastActivity.duration_ms + 'ms'"></span>
+                                <span x-show="previewLastActivity.channel" class="ml-1.5 rounded-sm bg-white/60 px-1" x-text="previewLastActivity.channel"></span>
+                            </span>
+                        </div>
+                        <div class="text-[10px] mt-1 opacity-80"
+                             :class="previewLastActivity.ok === true ? 'text-emerald-700' : previewLastActivity.ok === false ? 'text-rose-700' : 'text-amber-700'">
+                            State: <span class="font-mono" x-text="previewLastActivity.state || '—'"></span>
+                            <a :href="'/agents/' + previewId + '/invocations/' + previewLastActivity.interaction_id" class="ml-2 underline hover:no-underline">Ver detalhe</a>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- ══ ONDA C.1 — QUICK ACTIONS ══ -->
+            <div>
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Ações Rápidas</h4>
+                <div class="grid grid-cols-2 gap-1.5">
+                    <a :href="'/workspace?agent=' + previewId" x-show="previewAgent?.status==='active'"
+                       class="rounded-md border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-2 text-[11px] font-semibold text-emerald-700 flex items-center justify-center gap-1.5">
+                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
+                        Testar no Workspace
+                    </a>
+                    <a :href="'/skills/' + previewAgent?.skill_id + '/edit'" x-show="previewAgent?.skill_id"
+                       class="rounded-md border border-teal-200 bg-teal-50 hover:bg-teal-100 px-2.5 py-2 text-[11px] font-semibold text-teal-700 flex items-center justify-center gap-1.5">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                        Dry-run SKILL
+                    </a>
+                    <a :href="'/agents/' + previewId + '/invocations'"
+                       class="rounded-md border border-surface-200 bg-white hover:bg-surface-50 px-2.5 py-2 text-[11px] font-semibold text-brand-700 flex items-center justify-center gap-1.5">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                        Ver invocações
+                    </a>
+                    <a :href="'/mcp-diagnostics?agent=' + previewId" x-show="_hasMcpBindings()"
+                       class="rounded-md border border-fuchsia-200 bg-fuchsia-50 hover:bg-fuchsia-100 px-2.5 py-2 text-[11px] font-semibold text-fuchsia-700 flex items-center justify-center gap-1.5">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        Probe MCP
+                    </a>
+                </div>
+            </div>
+
             <!-- System Prompt -->
             <div>
                 <div class="flex items-center justify-between mb-1">
@@ -218,6 +325,12 @@ function agentsPage() {
         allDomains: [],
         previewId: null, previewAgent: null,
         allSkills: [],
+        // ── Onda C.1 — Hub do agente no painel de detalhe ──
+        // previewCapabilities: skills + bindings + schema_source de cada
+        // (fetch de /workspace/agents/{id}/skills-context). null=carregando.
+        previewCapabilities: null,
+        previewLastActivity: null,  // {has_activity, last_ts, ok, ...}
+        previewLoading: false,
 
         // ══════════════════════════════════════════════
         // Pass-through detection — mirrors engine.py logic
@@ -296,7 +409,101 @@ function agentsPage() {
             this.agents = this.allAgents.filter(a => (a.domain||'').split(',').map(d=>d.trim()).includes(this.filterDomain));
         },
 
-        openPreview(agent) { this.previewId = agent.id; this.previewAgent = agent; },
+        openPreview(agent) {
+            this.previewId = agent.id;
+            this.previewAgent = agent;
+            // Onda C.1: dispara fetch das info extras (paralelo, async). Painel
+            // mostra metadata enquanto carrega; cards de Capacidades + Atividade
+            // têm placeholder com x-show baseado em previewLoading.
+            this.previewCapabilities = null;
+            this.previewLastActivity = null;
+            this._fetchPreviewExtras(agent.id);
+        },
+
+        async _fetchPreviewExtras(agentId) {
+            // Race condition guard: se user trocou de agente no meio,
+            // ignora resposta desta chamada.
+            this.previewLoading = true;
+            const requestedId = agentId;
+            try {
+                const [caps, activity] = await Promise.all([
+                    api.get(`/api/v1/workspace/agents/${agentId}/skills-context`)
+                        .catch(e => { console.warn('skills-context falhou:', e); return null; }),
+                    api.get(`/api/v1/agents/${agentId}/last-activity`)
+                        .catch(e => { console.warn('last-activity falhou:', e); return null; }),
+                ]);
+                if (this.previewId !== requestedId) return;  // user mudou de agente
+                this.previewCapabilities = caps;
+                this.previewLastActivity = activity;
+            } finally {
+                if (this.previewId === requestedId) this.previewLoading = false;
+            }
+        },
+
+        // ── Helpers de rendering Onda C.1 ──
+        _allBindings() {
+            // Achata bindings de todas as skills do agente em 1 array,
+            // anotando com skill_id pra ações que precisam dele.
+            if (!this.previewCapabilities?.skills) return [];
+            const out = [];
+            for (const sk of this.previewCapabilities.skills) {
+                for (const b of (sk.bindings || [])) {
+                    out.push({ ...b, _skill_id: sk.skill_id, _skill_name: sk.skill_name });
+                }
+            }
+            return out;
+        },
+        _bindingsByKind(kind) {
+            return this._allBindings().filter(b => b.binding_kind === kind);
+        },
+        _hasMcpBindings() { return this._bindingsByKind('mcp').length > 0; },
+        _schemaSourceLabel(source) {
+            // Tooltips humanos pro operador entender o que cada origem significa
+            const labels = {
+                'skill_inputs': 'SKILL define',
+                'tool_input_schema': 'server descobre',
+                'legacy_operation_query': 'legacy {operation, query}',
+                'legacy_fallback': 'legacy {operation, query}',
+                'rag_fixed': 'schema RAG fixo',
+                'template_vars': 'inferido de Jinja2',
+            };
+            return labels[source] || source;
+        },
+        _schemaSourceClass(source) {
+            // Cores semafóricas: verde=ótimo (SKILL ou server real), âmbar=legacy
+            if (source === 'skill_inputs' || source === 'tool_input_schema' || source === 'rag_fixed') {
+                return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+            }
+            if (source === 'legacy_operation_query' || source === 'legacy_fallback') {
+                return 'bg-amber-50 text-amber-700 border-amber-200';
+            }
+            return 'bg-surface-50 text-surface-600 border-surface-200';
+        },
+        _bindingKindColor(kind) {
+            const colors = {
+                'mcp': 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200',
+                'api': 'bg-blue-50 text-blue-700 border-blue-200',
+                'rag': 'bg-teal-50 text-teal-700 border-teal-200',
+                'tabular': 'bg-violet-50 text-violet-700 border-violet-200',
+            };
+            return colors[kind] || 'bg-surface-50 text-surface-600 border-surface-200';
+        },
+        _relativeTime(iso) {
+            if (!iso) return '—';
+            try {
+                const then = new Date(iso).getTime();
+                const now = Date.now();
+                const secs = Math.max(0, Math.floor((now - then) / 1000));
+                if (secs < 60) return secs + 's atrás';
+                const mins = Math.floor(secs / 60);
+                if (mins < 60) return mins + 'min atrás';
+                const hours = Math.floor(mins / 60);
+                if (hours < 24) return hours + 'h atrás';
+                const days = Math.floor(hours / 24);
+                if (days < 30) return days + 'd atrás';
+                return iso.replace('T', ' ').substring(0, 16);
+            } catch { return iso; }
+        },
 
         async toggleStatus(agent) {
             const newStatus = agent.status === 'active' ? 'inactive' : 'active';
