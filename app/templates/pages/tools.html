@@ -71,8 +71,8 @@
         </div>
     </div>
 
-    <!-- ══ RIGHT: Preview panel ══ -->
-    <aside x-show="previewId" x-transition.duration.200ms class="hidden lg:flex w-[400px] flex-col border-l border-surface-200 bg-white shrink-0 overflow-hidden">
+    <!-- ══ RIGHT: Operational console ══ -->
+    <aside x-show="previewId" x-transition.duration.200ms class="hidden lg:flex w-[440px] flex-col border-l border-surface-200 bg-white shrink-0 overflow-hidden">
         <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3">
             <span class="text-[12px] font-semibold text-brand-900 font-mono truncate" x-text="previewTool?.name"></span>
             <div class="flex items-center gap-1">
@@ -87,6 +87,35 @@
                 </button>
             </div>
         </div>
+
+        <!-- ══ STATUS BAR — sinal vivo + Testar agora ══ -->
+        <div class="border-b border-surface-100 bg-surface-50/50 px-5 py-3">
+            <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <span class="flex h-2 w-2 rounded-full shrink-0" :class="opStatusDot"
+                          :title="ops.testing ? 'Testando...' : (ops.testResult ? (ops.testResult.success ? 'Conectado' : 'Falhou') : 'Não testado')"></span>
+                    <span class="text-[11px] font-semibold truncate" :class="opStatusTextClass" x-text="opStatusLabel"></span>
+                    <span x-show="ops.testResult?.latency" class="text-[10px] font-mono text-surface-400" x-text="ops.testResult?.latency + 'ms'"></span>
+                    <span x-show="ops.testResult?.server_name" class="text-[10px] text-surface-400 truncate" x-text="'· ' + ops.testResult?.server_name"></span>
+                    <span x-show="ops.testedAt && !ops.testing" class="text-[9px] text-surface-300 ml-auto pl-1 shrink-0" x-text="opAgoLabel"></span>
+                </div>
+                <button @click="testPreview()" :disabled="ops.testing || !previewTool?.mcp_server"
+                        class="shrink-0 inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-semibold transition-colors disabled:opacity-40"
+                        :class="ops.testing ? 'bg-amber-100 text-amber-700' : 'bg-emerald-500 text-white hover:bg-emerald-600'">
+                    <svg x-show="ops.testing" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <svg x-show="!ops.testing" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+                    <span x-text="ops.testing ? 'Testando' : (ops.testResult ? 'Re-testar' : 'Testar agora')"></span>
+                </button>
+            </div>
+            <!-- Erro / recomendações expansíveis -->
+            <div x-show="ops.testResult && !ops.testResult.success" x-transition class="mt-2 rounded-md bg-rose-50 border border-rose-100 px-2.5 py-2 text-[10px] text-rose-700 space-y-1">
+                <div class="font-semibold break-words" x-text="ops.testResult?.details || 'Falha na conexão'"></div>
+                <template x-for="(rec, ri) in (ops.testResult?.recommendations || [])" :key="ri">
+                    <div class="flex gap-1.5"><span class="shrink-0 text-rose-400">→</span><span class="break-words" x-text="rec"></span></div>
+                </template>
+            </div>
+        </div>
+
         <div class="flex-1 overflow-y-auto scrollbar-thin p-5 space-y-4">
             <div class="flex flex-wrap gap-1.5">
                 <span class="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
@@ -102,20 +131,121 @@
             <div>
                 <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Configuração</h4>
                 <div class="rounded-lg bg-surface-50 border border-surface-100 p-3 space-y-2 text-[11px]">
-                    <div class="flex justify-between"><span class="text-surface-400">MCP Server</span><span class="font-mono font-medium text-brand-900 truncate max-w-[200px]" x-text="previewTool?.mcp_server || '—'"></span></div>
+                    <div class="flex justify-between"><span class="text-surface-400">MCP Server</span><span class="font-mono font-medium text-brand-900 truncate max-w-[240px]" x-text="previewTool?.mcp_server || '—'" :title="previewTool?.mcp_server"></span></div>
                     <div class="flex justify-between"><span class="text-surface-400">Custo</span><span class="font-medium text-brand-900" x-text="(previewTool?.cost_per_call||0) > 0 ? '$' + previewTool?.cost_per_call?.toFixed(4) : 'Gratuito'"></span></div>
                     <div class="flex justify-between"><span class="text-surface-400">Trusted Context</span><span class="font-medium" :class="previewTool?.requires_trusted_context?'text-rose-600':'text-surface-400'" x-text="previewTool?.requires_trusted_context ? 'Obrigatório' : 'Não'"></span></div>
                 </div>
             </div>
+
+            <!-- ══ OPERAÇÕES — chips clicáveis + playground inline ══ -->
             <div>
-                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Operações</h4>
-                <div class="flex flex-wrap gap-1.5">
-                    <template x-for="op in (function(){ try{return JSON.parse(previewTool?.operations||'[]')}catch{return[]} })()" :key="op">
-                        <span class="rounded-lg bg-brand-50 border border-brand-100 px-2.5 py-1 text-[11px] font-mono text-brand-700" x-text="op"></span>
+                <div class="flex items-center justify-between mb-2">
+                    <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider">Operações</h4>
+                    <span x-show="ops.discovered.length > 0 && previewOps.length > 0" class="text-[9px] text-surface-300" x-text="opsDiscoveryHint"></span>
+                </div>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <template x-for="op in previewOps" :key="op">
+                        <button @click="selectOp(op)"
+                                class="rounded-lg border px-2.5 py-1 text-[11px] font-mono transition-colors"
+                                :class="ops.selected?.name === op
+                                    ? 'bg-brand-500 border-brand-500 text-white'
+                                    : (opIsDiscovered(op) ? 'bg-brand-50 border-brand-100 text-brand-700 hover:border-brand-300'
+                                                          : 'bg-white border-surface-200 text-surface-500 hover:border-brand-300')">
+                            <span x-text="op"></span>
+                        </button>
                     </template>
-                    <span x-show="!(function(){ try{return JSON.parse(previewTool?.operations||'[]').length}catch{return 0} })()" class="text-[11px] text-surface-400">Nenhuma operação definida</span>
+                    <span x-show="previewOps.length === 0" class="text-[11px] text-surface-400">Nenhuma operação definida</span>
+                </div>
+
+                <!-- Painel da operação selecionada -->
+                <div x-show="ops.selected" x-transition class="rounded-lg border border-brand-200 bg-brand-50/30 p-3 space-y-2">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                            <div class="text-[11px] font-bold font-mono text-brand-900" x-text="ops.selected?.name"></div>
+                            <p x-show="ops.selected?.description" class="text-[10px] text-surface-500 mt-0.5" x-text="ops.selected?.description"></p>
+                        </div>
+                        <button @click="ops.selected = null; ops.execResult = null" class="shrink-0 p-0.5 rounded text-surface-400 hover:text-brand-700" title="Fechar">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+
+                    <!-- Aviso quando ainda não conectou ou op não foi descoberta -->
+                    <div x-show="ops.selected && !ops.testResult" class="rounded bg-amber-50 border border-amber-100 px-2 py-1.5 text-[10px] text-amber-700">
+                        Clique em <strong>Testar agora</strong> acima para descobrir o schema desta operação.
+                    </div>
+                    <div x-show="ops.selected && ops.testResult?.success && ops.selected?._undiscovered" class="rounded bg-amber-50 border border-amber-100 px-2 py-1.5 text-[10px] text-amber-700">
+                        Operação <span class="font-mono font-semibold" x-text="ops.selected?.name"></span> não foi descoberta no servidor. Use argumento livre abaixo.
+                    </div>
+
+                    <!-- Campos por schema -->
+                    <template x-if="opSchemaProps.length > 0">
+                        <div class="space-y-2">
+                            <template x-for="prop in opSchemaProps" :key="prop.name">
+                                <div>
+                                    <label class="flex items-center gap-1.5 text-[10px] font-semibold text-surface-500 mb-0.5">
+                                        <span x-text="prop.name"></span>
+                                        <span x-show="prop.required" class="text-rose-400">*</span>
+                                        <span class="font-normal text-surface-300" x-text="prop.type ? '(' + prop.type + ')' : ''"></span>
+                                    </label>
+                                    <input x-model="ops.params[prop.name]"
+                                           :placeholder="prop.description || prop.name"
+                                           class="w-full rounded border border-surface-200 px-2 py-1.5 text-[11px] font-mono outline-none focus:border-brand-400">
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+
+                    <!-- Fallback livre -->
+                    <template x-if="ops.selected && opSchemaProps.length === 0 && (ops.selected?._undiscovered || !ops.testResult)">
+                        <div>
+                            <label class="text-[10px] font-semibold text-surface-400 block mb-0.5">Argumento (JSON ou texto)</label>
+                            <input x-model="ops.freeParam" placeholder='{"query": "..."}' class="w-full rounded border border-surface-200 px-2 py-1.5 text-[11px] font-mono outline-none focus:border-brand-400">
+                        </div>
+                    </template>
+
+                    <button @click="executeSelected()" :disabled="ops.executing || !ops.testResult?.success"
+                            class="inline-flex items-center gap-1.5 rounded-lg bg-red-500 px-3 py-1.5 text-[10px] font-semibold text-white hover:bg-red-600 disabled:opacity-40 transition-colors">
+                        <svg x-show="ops.executing" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                        <span x-text="ops.executing ? 'Executando...' : 'Executar'"></span>
+                    </button>
+
+                    <!-- Resultado da execução -->
+                    <div x-show="ops.execResult !== null" x-transition class="rounded-lg overflow-hidden border" :class="ops.execResult?.success ? 'border-emerald-200' : 'border-rose-200'">
+                        <div class="flex items-center justify-between px-2 py-1" :class="ops.execResult?.success ? 'bg-emerald-50' : 'bg-rose-50'">
+                            <div class="flex items-center gap-2">
+                                <span class="text-[9px] font-semibold" :class="ops.execResult?.success ? 'text-emerald-600' : 'text-rose-600'" x-text="ops.execResult?.success ? 'Sucesso' : 'Erro'"></span>
+                                <span x-show="ops.execResult?.latency" class="text-[9px] font-mono text-surface-400" x-text="ops.execResult?.latency + 'ms'"></span>
+                                <span x-show="opExecResultSize" class="text-[9px] font-mono text-surface-300" x-text="opExecResultSize"></span>
+                            </div>
+                            <div class="flex items-center gap-0.5">
+                                <button @click="ops.execFormatted = !ops.execFormatted" x-show="opCanFormatResult"
+                                        class="p-1 rounded hover:bg-white/30 transition-colors" :title="ops.execFormatted ? 'Ver bruto' : 'Formatar'">
+                                    <svg class="w-3.5 h-3.5" :class="ops.execFormatted ? 'text-red-500' : 'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5"/></svg>
+                                </button>
+                                <button @click="ops.execExpanded = !ops.execExpanded"
+                                        class="p-1 rounded hover:bg-white/30 text-surface-400 transition-colors" :title="ops.execExpanded ? 'Recolher' : 'Expandir'">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                        <path x-show="!ops.execExpanded" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/>
+                                        <path x-show="ops.execExpanded" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25"/>
+                                    </svg>
+                                </button>
+                                <button @click="copyOpResult()"
+                                        class="p-1 rounded hover:bg-white/30 text-surface-400 hover:text-emerald-500 transition-colors" title="Copiar resultado">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <pre x-show="!ops.execFormatted" class="px-3 py-2 text-[9px] font-mono overflow-auto whitespace-pre-wrap bg-brand-950 text-brand-200 scrollbar-thin transition-all"
+                             :class="ops.execExpanded ? 'max-h-[60vh]' : 'max-h-40'"
+                             x-text="ops.execResult?.data || ops.execResult?.error || '—'"></pre>
+                        <div x-show="ops.execFormatted" class="overflow-auto scrollbar-thin transition-all bg-white border-t border-surface-100"
+                             :class="ops.execExpanded ? 'max-h-[60vh]' : 'max-h-40'">
+                            <div class="px-4 py-3 text-[11px] text-brand-900 leading-relaxed exec-fmt" x-html="opExecFormattedHtml"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
+
             <div>
                 <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Tool Binding (SKILL.md)</h4>
                 <pre class="rounded-lg bg-brand-950 text-brand-200 p-4 text-[11px] font-mono overflow-x-auto whitespace-pre-wrap"
@@ -448,6 +578,14 @@ function toolsPage() {
         discoveredTools: [], selectedTool: null,
         execParams: {}, execFreeParam: '', executing: false, execResult: null,
         execFormatted: false, execExpanded: false,
+        // Console operacional do painel preview (independente do playground do modal)
+        ops: {
+            testing: false, testResult: null, testedAt: null,
+            discovered: [], selected: null,
+            params: {}, freeParam: '',
+            executing: false, execResult: null,
+            execFormatted: false, execExpanded: false,
+        },
         showAuthToken: false,
         authConfig: { client_id: '', client_secret: '', token_url: '', scope: '', client_cert: '', client_key: '', ca_cert: '' },
         form: { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'' },
@@ -652,7 +790,192 @@ function toolsPage() {
             else showToast('Erro ao copiar', 'error');
         },
 
-        openPreview(tool) { this.previewId=tool.id; this.previewTool=tool; },
+        openPreview(tool) {
+            this.previewId = tool.id;
+            this.previewTool = tool;
+            // Reset do console operacional ao trocar de tool
+            this.ops = {
+                testing: false, testResult: null, testedAt: null,
+                discovered: [], selected: null,
+                params: {}, freeParam: '',
+                executing: false, execResult: null,
+                execFormatted: false, execExpanded: false,
+            };
+        },
+
+        // ══════════════════════════════════════════════════════════
+        // Console operacional — getters reativos do painel preview
+        // ══════════════════════════════════════════════════════════
+        get previewOps() {
+            try { const a = JSON.parse(this.previewTool?.operations || '[]'); return Array.isArray(a) ? a : []; }
+            catch { return []; }
+        },
+        get opStatusDot() {
+            if (this.ops.testing) return 'bg-amber-400 animate-pulse';
+            if (!this.ops.testResult) return 'bg-surface-300';
+            return this.ops.testResult.success ? 'bg-emerald-400' : 'bg-rose-400';
+        },
+        get opStatusLabel() {
+            if (this.ops.testing) return 'Testando...';
+            if (!this.ops.testResult) return 'Não testado';
+            return this.ops.testResult.success ? 'Conectado' : 'Desconectado';
+        },
+        get opStatusTextClass() {
+            if (this.ops.testing) return 'text-amber-700';
+            if (!this.ops.testResult) return 'text-surface-500';
+            return this.ops.testResult.success ? 'text-emerald-700' : 'text-rose-700';
+        },
+        get opAgoLabel() {
+            if (!this.ops.testedAt) return '';
+            const diff = Math.floor((Date.now() - this.ops.testedAt) / 1000);
+            if (diff < 5) return 'agora';
+            if (diff < 60) return diff + 's atrás';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm atrás';
+            return Math.floor(diff / 3600) + 'h atrás';
+        },
+        get opsDiscoveryHint() {
+            const declared = this.previewOps.length;
+            const discovered = this.ops.discovered.length;
+            if (!this.ops.testResult?.success) return '';
+            if (discovered === 0) return 'nenhuma descoberta';
+            return discovered + ' descoberta(s) no servidor';
+        },
+        opIsDiscovered(opName) {
+            return this.ops.discovered.some(d => d.name === opName);
+        },
+        get opSchemaProps() {
+            if (!this.ops.selected?.inputSchema?.properties) return [];
+            const props = this.ops.selected.inputSchema.properties;
+            const required = this.ops.selected.inputSchema.required || [];
+            return Object.entries(props).map(([name, schema]) => ({
+                name,
+                type: schema.type || '',
+                description: schema.description || '',
+                required: required.includes(name),
+            }));
+        },
+
+        async testPreview() {
+            if (!this.previewTool?.mcp_server) return;
+            this.ops.testing = true;
+            this.ops.execResult = null;
+            try {
+                const t = this.previewTool;
+                const r = await api.post('/api/v1/tools/test', {
+                    endpoint: t.mcp_server,
+                    name: t.name,
+                    operations: t.operations,
+                    auth_type: t.auth_requirements,
+                    auth_token: t.auth_token,
+                    auth_config: t.auth_config || '{}',
+                });
+                this.ops.testResult = r || { success: false, details: 'Resposta vazia' };
+                this.ops.testedAt = Date.now();
+                this.ops.discovered = r?.discovered_tools || [];
+                // Se já tem op selecionada, refresca o schema agora que descobriu
+                if (this.ops.selected?.name) {
+                    this._matchOp(this.ops.selected.name);
+                }
+            } catch (e) {
+                this.ops.testResult = {
+                    success: false,
+                    details: e.message || 'Erro desconhecido',
+                    recommendations: ['Verifique se o endpoint está acessível', 'Confira o token de autenticação'],
+                };
+                this.ops.testedAt = Date.now();
+                this.ops.discovered = [];
+            }
+            this.ops.testing = false;
+        },
+
+        selectOp(opName) {
+            // Placeholder enquanto o test descobre schema (ou definitivo se já testado)
+            this.ops.selected = { name: opName, _undiscovered: false };
+            if (!this.ops.testResult) {
+                // testPreview chama _matchOp no fim se selected.name estiver setado
+                this.testPreview();
+            } else {
+                this._matchOp(opName);
+            }
+        },
+
+        _matchOp(opName) {
+            const dt = this.ops.discovered.find(d => d.name === opName);
+            this.ops.selected = dt || { name: opName, _undiscovered: true };
+            this.ops.params = {};
+            this.ops.freeParam = '';
+            this.ops.execResult = null;
+            this.ops.execFormatted = false;
+            this.ops.execExpanded = false;
+            if (dt?.inputSchema?.properties) {
+                for (const [k, v] of Object.entries(dt.inputSchema.properties)) {
+                    this.ops.params[k] = v.default || '';
+                }
+            }
+        },
+
+        async executeSelected() {
+            if (!this.ops.selected || !this.ops.testResult?.success) return;
+            this.ops.executing = true;
+            this.ops.execResult = null;
+            this.ops.execFormatted = false;
+            this.ops.execExpanded = false;
+
+            let args = {};
+            if (this.opSchemaProps.length > 0) {
+                args = {...this.ops.params};
+            } else if (this.ops.freeParam.trim()) {
+                try { args = JSON.parse(this.ops.freeParam); }
+                catch { args = { query: this.ops.freeParam }; }
+            }
+
+            try {
+                const t = this.previewTool;
+                const r = await api.post('/api/v1/tools/execute', {
+                    endpoint: t.mcp_server,
+                    tool_name: this.ops.selected.name,
+                    arguments: args,
+                    auth_type: t.auth_requirements,
+                    auth_token: t.auth_token,
+                    auth_config: t.auth_config || '{}',
+                });
+                this.ops.execResult = r;
+            } catch (e) {
+                this.ops.execResult = { success: false, error: e.message };
+            }
+            this.ops.executing = false;
+        },
+
+        get opExecResultSize() {
+            const raw = this.ops.execResult?.data || this.ops.execResult?.error || '';
+            if (!raw) return '';
+            const bytes = new Blob([raw]).size;
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        },
+        get opCanFormatResult() {
+            const raw = this.ops.execResult?.data || this.ops.execResult?.error || '';
+            if (!raw || raw.length < 20) return false;
+            const t = raw.trim();
+            if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) return true;
+            return raw.includes('\\n') || raw.includes('\n');
+        },
+        get opExecFormattedHtml() {
+            const raw = this.ops.execResult?.data || this.ops.execResult?.error || '';
+            return this._renderMarkdown(this._extractContent(raw));
+        },
+        get opExecFormattedText() {
+            const raw = this.ops.execResult?.data || this.ops.execResult?.error || '';
+            return this._extractContent(raw);
+        },
+        async copyOpResult() {
+            const text = this.ops.execFormatted
+                ? this.opExecFormattedText
+                : (this.ops.execResult?.data || this.ops.execResult?.error || '');
+            if (await copyText(text)) showToast('Resultado copiado');
+            else showToast('Erro ao copiar', 'error');
+        },
 
         // ══════════════════════════════════════════════════════════
         // schemaProps — propriedades do inputSchema da tool selecionada
