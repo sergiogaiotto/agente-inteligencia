@@ -424,8 +424,34 @@ def normalize_rag_binding(source: dict) -> dict:
             "confidentiality": source.get("confidentiality_label") or "internal",
             "kb_mode": source.get("kb_mode") or "hybrid",
             "authorized": bool(source.get("authorized", 0)),
+            # Embedding info: user precisa saber qual model/dim está ativo
+            # pra debugar quando RAG vetorial não devolve nada (ex: collection
+            # criada com dim antiga, ou provider trocado em /settings sem reindex).
+            # Best-effort: se settings/qdrant não disponíveis (import circular,
+            # ambiente de teste), cai pra '?'/0 sem quebrar.
+            "embedding_provider": _safe_get_embedding_provider(),
+            "embedding_dim": _safe_get_embedding_dim(),
         },
     }
+
+
+def _safe_get_embedding_provider() -> str:
+    """Retorna o embedding provider ativo (qwen3/azure/etc.) sem propagar
+    exception. Caller usa pra UX info; falha não pode derrubar render."""
+    try:
+        from app.core.config import get_settings
+        return (get_settings().embedding_provider or "azure").lower()
+    except Exception:
+        return "?"
+
+
+def _safe_get_embedding_dim() -> int:
+    """Retorna dim do embedder ativo. Best-effort."""
+    try:
+        from app.evidence.qdrant_store import get_active_embedding_dim
+        return int(get_active_embedding_dim())
+    except Exception:
+        return 0
 
 
 # ───────────────────────────────────────────────────────────────
