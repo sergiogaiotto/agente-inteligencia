@@ -124,8 +124,9 @@ class TestLLMRoutingEndpoint:
         assert "GPT-4o" in descs["multimodal_fallback"]
         # skill_generation menciona Azure GPT-4o (default novo)
         assert "GPT-4o" in descs["skill_generation"]
-        # E explica POR QUE foi separado (contexto pro operador)
-        assert "Context7" in descs["skill_generation"] or "4x" in descs["skill_generation"]
+        # Mensagem amigável: descreve o modo de uso, sem histórico do incidente
+        assert "Context7" not in descs["skill_generation"]
+        assert "4x" not in descs["skill_generation"]
 
     def test_task_descriptions_nao_mencionam_modelo_obsoleto(self, monkeypatch):
         """Defesa: 'Maritaca Sabiá-4' e 'azure/gpt-4o' eram os defaults antigos
