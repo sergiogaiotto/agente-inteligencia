@@ -1,64 +1,46 @@
 # Handoff — Próxima Sessão
 
-> **Última atualização**: 2026-05-26, **Onda RAG v3 — pgvector substitui Qdrant** (PRs #139, #140, #141, #142, PR E em curso).
+> **Última atualização**: 2026-05-30, sessão de **polimento (Skill Generation friendly message + sweep de docs Qdrant→pgvector)** sobre a branch `feat/postgres-health-audit` (Onda P).
 > **Como usar**: leia este documento primeiro na próxima sessão, depois decida por onde começar.
 
 ---
 
-## ⚡ Onda RAG v3 — pgvector como backend padrão (2026-05-26)
+## ⚡ AÇÃO PENDENTE — branch `feat/postgres-health-audit` sem PR
 
-Substituição estrutural do Qdrant pelo pgvector. Resolve a fricção operacional que custou 2 PRs de mitigação esta semana (divergência Postgres↔Qdrant, drift de dim ao trocar provider).
+A branch atual tem **3 commits não-mergeados e ainda SEM PR aberto**:
 
-### Estado dos PRs
+| Commit | Tema |
+|---|---|
+| `98bac17` | Onda P — health check Postgres abrangente + FK indexes + UI card |
+| `27327b7` | mensagem amigável do card Skill Generation em Roteamento LLM (esta sessão) |
+| `eb7e3cd` | sweep de docs Qdrant→pgvector nos arquivos operacionais (esta sessão) |
+
+**Próximo passo óbvio**: abrir PR de `feat/postgres-health-audit` → `main` (`--base main`). CI verde nos pushes. Depois disso a branch some do radar.
+
+---
+
+## ✅ Qdrant REMOVIDO (Onda Q — concluída em main)
+
+A migração Qdrant→pgvector está **100% finalizada e em main**:
 
 | PR | Título | Status |
 |---|---|---|
-| #139 | logs estruturados Qdrant | merged |
-| #140 | /reindex + dim dinâmica | merged |
-| #141 | pgvector como backend alternativo (PR D, dual-write) | merged |
-| #142 | UI mensagens backend-agnósticas (PR G) | open |
-| PR E | default vira pgvector (esta sessão) | open |
-| PR F | remove qdrant_store, serviço docker, deps (pendente) | não criado |
+| #212 | Onda Q.1 — remove `qdrant_store.py`, migra helper pra `embedder.py` | merged |
+| #213 | Onda Q.2 — limpa routes residuais Qdrant + UI infra.html | merged |
+| #214 | Onda Q.3 — limpa config + deps + docker + env | merged |
 
-### O que muda em prod ao deployar PR E (necessita ação manual no VPS)
-
-1. Pull do main → restart do app
-2. App sobe com `RAG_VECTOR_BACKEND=pgvector` por default
-3. **Primeira ação manual obrigatória**: `curl -X POST http://app/api/v1/evidence/reindex`
-   - Cria coluna `embedding vector(N)` em `evidence_chunks` na dim do provider ativo (Qwen3=1024)
-   - Cria index HNSW (cosine)
-   - Repopula a partir dos chunks do Postgres + embedder
-4. Confirmar: `GET /api/v1/evidence/collection-info` → `backend=pgvector, dim_match=true, points_count=43`
-5. Banner UI fica verde a partir daí
-
-### Rollback de emergência
-
-```bash
-# .env (no VPS):
-RAG_VECTOR_BACKEND=qdrant
-# restart do app — sem deploy
-```
-
-Qdrant continua rodando até o PR F. Dados antigos lá ainda existem.
-
-### Próximo PR (F — cleanup)
-
-Quando pgvector estabilizar 1-2 semanas em prod:
-- Remove `app/evidence/qdrant_store.py`, `tests/test_qdrant_reindex.py`
-- Remove flag `RAG_VECTOR_BACKEND` (pgvector único)
-- Remove serviço `qdrant` do `docker-compose.yml` + volume `qdrant_data`
-- Remove `qdrant-client` do `requirements.txt`
-- Remove `handle_path /qdrant/*` do Caddy + entrada em `app/routes/infra.py`
-- ADR: `docs/adr/0001-pgvector-replaces-qdrant.md`
+- **pgvector é o backend vetorial único** (coluna `evidence_chunks.embedding`). Não há mais flag `RAG_VECTOR_BACKEND`, serviço docker `qdrant`, nem `qdrant-client`.
+- Campos de API `qdrant_upserted`/`qdrant_collection` **preservados só por retrocompat** — o nome backend-neutro é `vector_*`. Eventos de log agora são `pgvector.*` (não `qdrant.*`).
+- Esta sessão fechou o resíduo em **docs**: DEPLOY.md, infra/README.md §9, docs/troubleshooting.md (queries/eventos), README.md, .env.example, docs/observability/LOGS.md. Deixados intactos de propósito: RELEASE.md (release congelada v2.1.0), especificacao_funcional_AI.md (spec neutro, Qdrant como opção), `.planning/` (histórico).
 
 ---
 
 ## Estado atual da plataforma
 
-- **~99 PRs em main** (após Onda Tabular base #110/#114/#115/#116 + #118 infra + #119 help submenu + #120/#121 fix XLSX multi-aba + #122/#123 help RAG+Tabelas + #124 UX defensiva)
-- **686 testes verdes** (`pytest tests/`) — +18 desde o handoff anterior
-- **Última atividade**: hardening da Onda Tabular após bug reportado pelo user (XLSX 2 abas + header mergeado não funcionava). Backend ganhou auto-detect de header_row + listagem de abas via openpyxl; frontend ganhou modal persistente fora do modal de ingest, seletor de aba, toast sempre presente, botão manual "Analisar planilha agora" como fallback. Ajuda contextual `/rag` reescrita para explicar RAG E Tabelas como técnicas distintas/complementares (#122/#123). Tela `/infra` ganha card+painel DuckDB (#118). Submenu Catálogo: cada sub-item tem help dedicado (#119).
-- **Smoke manual em homolog pendente** — re-testar upload de XLSX multi-aba com header mergeado (deveria abrir modal próprio com 2 abas + auto-detect ativo).
+- **~214 PRs em main** (último: #214 Onda Q.3). Desde o handoff anterior entraram, entre outras: Onda A (workspace/slash invoke), Onda C (painel de agents), Onda Q (remoção Qdrant), paleta vermelho+branco platform-wide.
+- **1606 testes unit verdes** (`pytest -m "not integration"`, ~43s) + suíte de integração com Postgres real na CI.
+- **CI ativa**: [.github/workflows/test.yml](../.github/workflows/test.yml) roda unit + integração (Postgres pgvector real) em todo push de `main`/`feat/**`/`fix/**`/`chore/**` e PR contra main.
+- **Onda P (na branch, não em main)**: health check Postgres abrangente + FK indexes + card de UID. Aguardando PR.
 
 ### Onde olhar para contexto rápido
 
@@ -272,14 +254,15 @@ Decisões aprendidas em 84 PRs que devem ser respeitadas em PRs futuros — extr
 
 Copie-cole isto na primeira mensagem da próxima sessão:
 
-> Continue de onde paramos. Leia `docs/HANDOFF_NEXT_SESSION.md` para contexto. Estado atual: ~99 PRs em main, 686 testes verdes. Onda Tabular entregue 2026-05-23 (#110/#114/#115/#116) + 7 PRs de polimento (#118-#124). Smoke manual em homolog ainda pendente (10 passos listados na seção A0). Próximos candidatos: (a) smoke da Onda Tabular, (b) Onda Tabular 2+ (JOIN cross-table / AND-OR grouping / dashboard de queries), (c) A2 SimpleCookie fallback do API Connectors, (d) Roadmap Onda 5+ do Catálogo (Pricing editável via UI = leve). Qual prioridade?
+> Continue de onde paramos. Leia `docs/HANDOFF_NEXT_SESSION.md` para contexto. Estado atual: ~214 PRs em main, 1606 testes unit verdes. Qdrant 100% removido (Onda Q, #212-#214). **Pendência imediata**: a branch `feat/postgres-health-audit` tem 3 commits (Onda P health check + 2 de polimento desta sessão) ainda SEM PR — abrir PR `--base main`. Depois, candidatos: (a) smoke da Onda Tabular em homolog, (b) Onda Tabular 2+ (JOIN cross-table / AND-OR grouping / dashboard de queries), (c) A2/A3/A4 do API Connectors, (d) Roadmap Onda 5+ do Catálogo (Pricing editável via UI = leve). Qual prioridade?
 
 A primeira sessão saberá:
 - Estado atual sem precisar reconstruir
+- Que a branch `feat/postgres-health-audit` precisa virar PR
 - Onda Tabular entregue + smoke test pendente
 - 3 gaps restantes do API Connectors (A2/A3/A4) com plano técnico
 - 8 itens da Onda 5+ se quiser pivotar
-- Convenções a manter (incluindo nova: cuidado com stacked PRs + auto-merge)
+- Convenções a manter (incluindo: cuidado com stacked PRs + auto-merge)
 
 ---
 
@@ -293,6 +276,8 @@ A primeira sessão saberá:
 
 | Data | Sessão | PRs entregues | Próximo |
 |---|---|---|---|
+| 2026-05-30 | Polimento: card Skill Generation amigável + sweep docs Qdrant→pgvector (sobre branch Onda P) | nenhum mergeado — `feat/postgres-health-audit` com 3 commits sem PR | Abrir PR da branch → main |
+| 2026-05-26→29 | Onda Q — remoção total do Qdrant (pgvector único) | #212/#213/#214 | Onda P (health check) + abrir PR |
 | 2026-05-23 (noite) | Polimento da Onda Tabular pós-bug report | #118-#124 (7 PRs, +18 testes) | Smoke manual em homolog |
 
 | Data | Sessão | PRs entregues | Próximo |
