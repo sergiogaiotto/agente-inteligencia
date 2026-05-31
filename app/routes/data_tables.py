@@ -47,6 +47,8 @@ from app.evidence.tabular import (
     TabularError,
     analyze_tabular,
     append_to_table,
+    delete_all_tables_for_ks,
+    delete_table,
     execute_query,
     promote_to_table,
 )
@@ -248,6 +250,80 @@ async def get_data_table_endpoint(
     if not can_user_see(user, row):
         raise HTTPException(403, "Sem permissão para acessar esta tabela.")
     return row
+
+
+@router.delete("/data-tables/{table_id}")
+async def delete_data_table_endpoint(
+    table_id: str,
+    user: dict = Depends(require_user),
+):
+    """Apaga uma tabela individual (arquivo .duckdb + linha em data_tables).
+
+    Visibility: 403 se o user não puder VER a tabela. Idempotente: 404 se
+    a tabela já não existir. Audit registra ação + usuário + KS.
+
+    Não há "soft delete" — o registro é removido para sempre (re-upload do
+    mesmo arquivo gera nova versão via slug+version).
+    """
+    row = await find_by_id_with_ks(table_id)
+    if not row:
+        raise HTTPException(404, f"data_table '{table_id}' não encontrada.")
+    if not can_user_see(user, row):
+        raise HTTPException(403, "Sem permissão para excluir esta tabela.")
+
+    try:
+        result = await delete_table(table_id, deleted_by=user.get("id"))
+    except Exception as e:
+        logger.error("data_table delete falhou", exc_info=True)
+        raise HTTPException(500, f"Erro ao deletar tabela: {e}")
+
+    await _audit(
+        "data_table.delete",
+        table_id,
+        user.get("id", ""),
+        {
+            "name": result.get("name", ""),
+            "ks_id": result.get("ks_id", ""),
+            "size_freed_bytes": result.get("size_freed_bytes", 0),
+        },
+    )
+    return result
+
+
+@router.delete("/knowledge-sources/{ks_id}/tables")
+async def delete_all_tables_for_ks_endpoint(
+    ks_id: str,
+    user: dict = Depends(require_user),
+):
+    """Apaga TODAS as tabelas visíveis ao user nesta KB.
+
+    Equivalente tabular de `DELETE /knowledge-sources/{ks_id}/chunks`.
+    Mantém a fonte registrada — só limpa as tabelas. Útil quando o operador
+    quer "começar do zero" sem desfazer o cadastro da KB.
+
+    Visibility: respeita `list_for_user` — root apaga tudo, user comum só
+    apaga o que pode ver. Idempotente: KB sem tabelas retorna
+    `{deleted: 0, freed_bytes: 0}`.
+    """
+    try:
+        result = await delete_all_tables_for_ks(
+            ks_id, user, deleted_by=user.get("id")
+        )
+    except Exception as e:
+        logger.error("data_tables bulk delete falhou", exc_info=True)
+        raise HTTPException(500, f"Erro ao deletar tabelas: {e}")
+
+    await _audit(
+        "data_table.delete_all",
+        ks_id,
+        user.get("id", ""),
+        {
+            "ks_id": ks_id,
+            "deleted_count": result.get("deleted", 0),
+            "freed_bytes": result.get("freed_bytes", 0),
+        },
+    )
+    return result
 
 
 @router.post("/data-tables/{table_id}/query")
