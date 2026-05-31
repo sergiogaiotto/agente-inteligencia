@@ -76,11 +76,17 @@ class TestEvidenceDetailRendering:
         assert "0.03" in chunks[2]["title"]
 
     def test_low_score_chunks_marked_warning(self):
-        """Score < 0.3 marca como warning visualmente pro user identificar
-        chunks que estão puxando o agregado pra baixo."""
+        """Score abaixo do threshold marca chunk como warning visualmente —
+        ajuda user a identificar chunks que estão puxando o agregado pra baixo.
+
+        PR #238: default mudou para 0.0 (sem filtro). Este teste agora passa
+        threshold=0.3 explicitamente para preservar a invariante "score < threshold
+        vira warning"."""
         args = _base_args()
         args["evidence_count"] = 2
         args["evidence_score"] = 0.5
+        args["evidence_min_relevance"] = 0.3  # explicitamente, para esta semântica
+        args["evidence_min_relevance_source"] = "skill"
         args["evidence_detail"] = [
             {"ordinal": 1, "score": 0.85, "source": "S", "text_preview": "high", "text_full_len": 4},
             {"ordinal": 2, "score": 0.15, "source": "S", "text_preview": "low",  "text_full_len": 3},
@@ -143,12 +149,15 @@ class TestEvidenceThresholdInLog:
     """Threshold de evidência (## Evidence Policy: min_relevance) exposto no log.
 
     Bug observado: user viu Refuse com score 0.07 mas o log não mostrava o
-    threshold efetivo (default 0.3) nem se era declarativo na skill. Sem
-    isso o user não sabe POR QUE caiu em Refuse nem como ajustar.
+    threshold efetivo (default 0.3 na época) nem se era declarativo na skill.
+    Sem isso o user não sabe POR QUE caiu em Refuse nem como ajustar.
+
+    PR #238: default mudou para 0.0 (filtro mínimo vira opt-in). Asserts
+    abaixo refletem o novo default.
     """
 
     def test_default_threshold_shown(self):
-        """Sem min_relevance na skill, header cita default 0.3."""
+        """Sem min_relevance na skill, header cita default 0.00 (PR #238 — era 0.30)."""
         args = _base_args()
         args["evidence_count"] = 1
         args["evidence_score"] = 0.5
@@ -158,7 +167,7 @@ class TestEvidenceThresholdInLog:
         ]
         log = _build_execution_log(**args)
         header = next(r for r in log if r["title"].startswith("1 evidência"))
-        assert "Threshold: 0.30" in header["detail"]
+        assert "Threshold: 0.00" in header["detail"]
         assert "(default)" in header["detail"]
 
     def test_skill_min_relevance_shown_with_source(self):
@@ -178,8 +187,9 @@ class TestEvidenceThresholdInLog:
         assert "(skill)" in header["detail"]
 
     def test_chunk_coloring_respects_skill_threshold(self):
-        """Skill threshold=0.15 → score 0.20 vira info (não warning como seria
-        com default 0.3). Coloring do chunk segue a regra do verifier."""
+        """Skill threshold=0.15 → score 0.20 vira info (passa).
+        Score 0.10 vira warning. Coloring do chunk segue a regra do verifier
+        (com o threshold da skill, não com o default do engine)."""
         args = _base_args()
         args["evidence_count"] = 2
         args["evidence_score"] = 0.4

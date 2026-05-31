@@ -1436,10 +1436,13 @@ async def execute_interaction(
 
     # Threshold de evidência: lê min_relevance do ## Evidence Policy da skill
     # (parser já extrai pra _evidence_policy_parsed.min_relevance). Quando
-    # ausente, default 0.3 — comportamento histórico. Faixa válida [0..1]
-    # garantida pelo parser. Single source of truth pros 3 caminhos
-    # heurísticos abaixo (production_async, v2_fallback, standard).
-    _DEFAULT_MIN_RELEVANCE = 0.3
+    # ausente, default 0.0 desde PR #238 (antes era 0.3 — comportamento
+    # histórico). Mudança a pedido do operador: filtro mínimo de qualidade
+    # vira opt-in. Skills que querem filtrar evidências fracas devem
+    # declarar `min_relevance: 0.3` (ou outro valor) no ## Evidence Policy.
+    # Faixa válida [0..1] garantida pelo parser. Single source of truth pros
+    # 3 caminhos heurísticos abaixo (production_async, v2_fallback, standard).
+    _DEFAULT_MIN_RELEVANCE = 0.0
     _ev_policy_for_threshold = (skill_data.get("_evidence_policy_parsed") or {}) if skill_data else {}
     _raw_mr = _ev_policy_for_threshold.get("min_relevance")
     _min_relevance = float(_raw_mr) if isinstance(_raw_mr, (int, float)) else _DEFAULT_MIN_RELEVANCE
@@ -1679,7 +1682,8 @@ async def _build_result(
     # Threshold efetivo aplicado ao verifier — vem do ctx.metadata setado
     # antes da fase Verify. Diagnóstico cita o threshold pra user entender
     # POR QUE caiu em Refuse (e poder ajustar min_relevance na skill).
-    _diag_min_relevance = float(ctx.metadata.get("evidence_min_relevance") or 0.3)
+    # PR #238: default 0.0 (era 0.3); alinha com _DEFAULT_MIN_RELEVANCE acima.
+    _diag_min_relevance = float(ctx.metadata.get("evidence_min_relevance") or 0.0)
     _diag_threshold_source = ctx.metadata.get("evidence_min_relevance_source") or "default"
     _diag_threshold_label = f"{_diag_min_relevance:.2f} ({_diag_threshold_source})"
 
@@ -1888,7 +1892,8 @@ def _build_execution_log(
     evidence_count: int, evidence_sources: list,
     evidence_score: float, duration: float, final_state: str,
     evidence_detail: list | None = None,
-    evidence_min_relevance: float = 0.3,
+    # PR #238: default alinhado com _DEFAULT_MIN_RELEVANCE (era 0.3).
+    evidence_min_relevance: float = 0.0,
     evidence_min_relevance_source: str = "default",
     mcp_tools_declared_count: int = 0,
     mcp_tools_unmatched: list[str] | None = None,

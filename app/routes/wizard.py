@@ -703,7 +703,8 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
             for s in bindings["rag_sources"]
         )
         # min_relevance opcional — só emite quando user setou explicitamente.
-        # Quando ausente, o engine usa default 0.3 (engine.py:_DEFAULT_MIN_RELEVANCE).
+        # Quando ausente, o engine usa default 0.0 desde PR #238 (era 0.3 antes;
+        # ver engine.py:_DEFAULT_MIN_RELEVANCE). Filtro de qualidade vira opt-in.
         # Faixa válida [0..1] garantida pelo Pydantic (Field ge/le).
         threshold_yaml = ""
         if data.min_relevance is not None:

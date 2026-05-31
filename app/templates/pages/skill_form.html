@@ -93,16 +93,17 @@
                 <!-- min_relevance: threshold de evidência (## Evidence Policy →
                      min_relevance no SKILL.md gerado). Só aparece quando há fonte
                      selecionada — sem RAG, threshold não faz sentido. Empty string
-                     = wizard não emite a chave; engine aplica default 0.3. -->
+                     = wizard não emite a chave; engine aplica default 0.0 desde
+                     PR #238 (antes era 0.3; filtro mínimo vira opt-in). -->
                 <div x-show="wizardSourceIds.length > 0" class="mt-2 flex items-center gap-2">
-                    <label class="text-[10px] font-medium text-red-700 whitespace-nowrap" title="Score mínimo médio de evidência pro verifier aceitar a resposta. Default do engine: 0.30">
+                    <label class="text-[10px] font-medium text-red-700 whitespace-nowrap" title="Score mínimo médio de evidência pro verifier aceitar a resposta. Default do engine: 0.00 (filtro desligado — toda evidência passa, a menos que skill declare valor maior)">
                         Threshold mínimo de evidência
                     </label>
-                    <input type="number" x-model="wizardMinRelevance" min="0" max="1" step="0.05" placeholder="0.30"
+                    <input type="number" x-model="wizardMinRelevance" min="0" max="1" step="0.05" placeholder="0.00"
                            class="w-20 rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] text-red-900 outline-none focus:border-red-400 focus:ring-1 focus:ring-red-200">
                     <span class="text-[10px] text-surface-400">
                         opcional ·
-                        <span x-show="!wizardMinRelevance">vazio = default 0.30 do engine</span>
+                        <span x-show="!wizardMinRelevance">vazio = default 0.00 do engine (sem filtro)</span>
                         <span x-show="wizardMinRelevance" x-text="'gera min_relevance: ' + wizardMinRelevance + ' no ## Evidence Policy'"></span>
                     </span>
                 </div>
@@ -1112,7 +1113,8 @@ function skillForm(editId) {
         wizardTableIds: [],
         // Threshold de evidência (## Evidence Policy → min_relevance). String
         // pra permitir input vazio = backend não emite a chave; engine usa
-        // default 0.3. Convertido pra float no submit (ou null se vazio).
+        // default 0.0 desde PR #238 (era 0.3). Convertido pra float no submit
+        // (ou null se vazio).
         wizardMinRelevance: '',
         // Onda 1 Output Shape: preset de tamanho. Vazio = backend não emite
         // ## Output Shape; engine usa default 'digest' (1500 chars).
