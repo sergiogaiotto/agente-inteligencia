@@ -1219,6 +1219,11 @@ function evidencePage() {
                 }
                 // Recarrega lista de tabelas da KB para refletir na tab "Tabelas"
                 if (this.loadTablesForSource) await this.loadTablesForSource(sid);
+                // PR #228: invalida stats do card esquerdo também. Sem isso o
+                // card mostra contagem antiga (race: painel direito atualiza,
+                // card fica stale até reload manual). refreshStatsFor é
+                // single-KB e mais leve que loadAllStats.
+                if (this.refreshStatsFor) await this.refreshStatsFor(sid);
             } catch(e) {
                 this.tabularPromote.loading = false;
                 this.tabularPromote.error = e.message || 'falha na promoção';
@@ -1307,6 +1312,10 @@ function evidencePage() {
                 this.tabularPromote.currentSheet = null;
                 showToast(`+${result.rows_added} linhas adicionadas (total: ${result.row_count_after})`, 'success');
                 if (this.loadTablesForSource) await this.loadTablesForSource(this.ingestSourceId);
+                // PR #228: invalida stats do card. Append não muda tables_count
+                // mas muda tables_rows_total e last_table_at — card precisa
+                // refletir sem reload manual.
+                if (this.refreshStatsFor) await this.refreshStatsFor(this.ingestSourceId);
             } catch(e) {
                 this.tabularPromote.loading = false;
                 this.tabularPromote.error = e.message || 'falha no append';
