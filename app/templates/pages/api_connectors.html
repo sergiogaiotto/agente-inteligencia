@@ -684,6 +684,39 @@
                     </div>
                 </template>
                 <div class="px-6 py-5 space-y-4">
+                    <!-- ═ IA, me ajude (PR #235) — sugere os 5 campos a partir de path ou descrição ═ -->
+                    <div x-show="!editingEndpointId" class="rounded-xl border border-rose-200 bg-gradient-to-r from-rose-50 to-amber-50 px-4 py-3 space-y-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-[16px]">🪄</span>
+                            <span class="text-[12px] font-semibold text-rose-800">IA, me ajude</span>
+                            <span class="text-[10px] text-rose-600">— descreva ou cole o path; preencho tudo</span>
+                            <button x-show="aiSuggestExpanded" @click="aiSuggestExpanded = false" type="button"
+                                    class="ml-auto text-[10px] text-rose-500 hover:text-rose-700 underline">Fechar</button>
+                            <button x-show="!aiSuggestExpanded" @click="aiSuggestExpanded = true; $nextTick(() => $refs.aiSuggestInput?.focus())" type="button"
+                                    class="ml-auto rounded-md bg-rose-500 px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-rose-600">
+                                Abrir
+                            </button>
+                        </div>
+                        <div x-show="aiSuggestExpanded" x-transition class="space-y-2">
+                            <textarea x-ref="aiSuggestInput" x-model="aiSuggestText" rows="2"
+                                      @keydown.enter.prevent="!$event.shiftKey && askAiSuggest()"
+                                      placeholder="Ex: /api/ddd/v1/{ddd}  OU  quero consultar info de DDD do Brasil"
+                                      class="w-full rounded-lg border border-rose-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-rose-400 resize-none"></textarea>
+                            <div class="flex items-center gap-2">
+                                <button @click="askAiSuggest()" :disabled="aiSuggestLoading || !aiSuggestText.trim()" type="button"
+                                        class="inline-flex items-center gap-1.5 rounded-md bg-rose-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-rose-600 disabled:opacity-40">
+                                    <svg x-show="aiSuggestLoading" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                                    <span x-text="aiSuggestLoading ? 'Pensando...' : 'Gerar'"></span>
+                                </button>
+                                <span x-show="aiSuggestModel && !aiSuggestError" class="text-[9px] text-rose-500" x-text="'modelo: ' + aiSuggestModel"></span>
+                                <span x-show="aiSuggestError" class="text-[10px] text-rose-700" x-text="aiSuggestError"></span>
+                            </div>
+                            <p x-show="aiSuggestApplied" class="rounded-md bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 text-[10px] text-emerald-700">
+                                ✓ Sugestão aplicada nos campos abaixo. Revise antes de clicar em Criar.
+                            </p>
+                        </div>
+                    </div>
+
                     <!-- ═ Combobox Nome (com descoberta via OpenAPI) ═ -->
                     <div class="grid grid-cols-3 gap-3">
                         <div class="col-span-2 relative" x-data="{focused:false}">
@@ -817,6 +850,10 @@ function apiConnectorsPage() {
         epDiscoverError: '',
         // Testar endpoint antes de salvar (PR #17)
         epTesting: false, epTestResult: null,
+        // IA, me ajude — PR #235
+        aiSuggestExpanded: false, aiSuggestText: '',
+        aiSuggestLoading: false, aiSuggestError: '',
+        aiSuggestModel: '', aiSuggestApplied: false,
 
         // ── Connector detail view (quando connector selecionado sem endpoint) ──
         get connectorRegisteredEndpoints() {
@@ -1460,6 +1497,38 @@ function apiConnectorsPage() {
                 showToast('Erro: ' + e.message, 'error');
             }
             this.epTesting = false;
+        },
+
+        // ── PR #235: IA, me ajude — sugere os 5 campos do form a partir
+        // de path ou descrição em linguagem natural. Backend usa o LLM
+        // primário da plataforma + contexto do connector pai.
+        async askAiSuggest() {
+            const text = (this.aiSuggestText || '').trim();
+            if (!text) return;
+            this.aiSuggestLoading = true;
+            this.aiSuggestError = '';
+            this.aiSuggestApplied = false;
+            try {
+                const r = await api.post('/api/v1/api-connectors/suggest-endpoint', {
+                    free_text: text,
+                    method_hint: this.epForm.method || 'GET',
+                    connector_id: this.editingConnIdForEp || null,
+                });
+                const s = r?.suggestion || {};
+                // Aplica nos campos do form (operador revisa antes de Criar)
+                if (s.name) this.epForm.name = s.name;
+                if (s.method) this.epForm.method = s.method;
+                if (s.path) this.epForm.path = s.path;
+                if (s.category) this.epForm.category = s.category;
+                if (s.description) this.epForm.description = s.description;
+                if (s.sample_body) this.epForm.sample_body = s.sample_body;
+                this.aiSuggestModel = r?.model || '';
+                this.aiSuggestApplied = true;
+                showToast('Sugestão aplicada — revise antes de criar');
+            } catch (e) {
+                this.aiSuggestError = (e?.message || 'Erro ao gerar sugestão').slice(0, 200);
+            }
+            this.aiSuggestLoading = false;
         },
 
         // ── Discovery: chama /introspect e popula as sugestões ──

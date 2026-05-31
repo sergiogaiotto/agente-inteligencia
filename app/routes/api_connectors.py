@@ -1018,6 +1018,164 @@ async def introspect(data: IntrospectRequest):
     }
 
 
+# ═══════════════════════════════════════════════════════
+# IA, me ajude — sugere metadados de endpoint (PR #235)
+# ═══════════════════════════════════════════════════════
+
+
+class EndpointSuggestRequest(BaseModel):
+    """Payload para o helper IA do modal Novo Endpoint."""
+    free_text: str = ""             # path ou descrição em linguagem natural
+    method_hint: Optional[str] = "GET"
+    connector_id: Optional[str] = None  # contexto: base_url, name, description
+
+
+_SUGGEST_SYSTEM_PROMPT = (
+    "Você ajuda operadores LEIGOS a cadastrar endpoints REST. Dado um "
+    "path ou descrição em português, sugira os 6 campos do form. "
+    "Responda APENAS em JSON válido, sem markdown, sem texto antes ou "
+    "depois. Categorias úteis em PT-BR: 'geral', 'fiscal', 'cadastro', "
+    "'consulta', 'telefonia', 'financeiro', 'autenticação'."
+)
+
+
+@router.post("/suggest-endpoint")
+async def suggest_endpoint(data: EndpointSuggestRequest):
+    """Pede ao LLM primário uma sugestão estruturada para o form de novo
+    endpoint. Operador leigo digita 'quero consultar info de DDD' ou
+    '/api/ddd/v1/{ddd}' e a IA preenche method, name, category, description,
+    sample_body com base no contexto do connector (base_url, nome).
+
+    Usa o provider/modelo de `settings.primary_provider/primary_model` (UI:
+    /settings → Plataforma → Modelo Primário). Stateless: nada é persistido.
+    Operador revisa os campos preenchidos e clica Criar — fluxo normal.
+
+    Returns:
+      {
+        "suggestion": {
+          "name": str, "method": str, "path": str, "category": str,
+          "description": str, "sample_body": str
+        },
+        "model": str, "provider": str
+      }
+    """
+    import json as _json
+    free = (data.free_text or "").strip()
+    if not free:
+        raise HTTPException(400, "free_text é obrigatório (cole o path ou descreva o que faz).")
+
+    # Contexto do connector (opcional mas melhora muito a sugestão)
+    ctx = ""
+    if data.connector_id:
+        conn_repo, _, _ = _repos()
+        conn = await conn_repo.find_by_id(data.connector_id)
+        if conn:
+            parts = []
+            if conn.get("name"):
+                parts.append(f"Nome do connector: {conn['name']}")
+            if conn.get("base_url"):
+                parts.append(f"base_url: {conn['base_url']}")
+            if conn.get("description"):
+                parts.append(f"Descrição: {conn['description'][:200]}")
+            ctx = "\n".join(parts)
+
+    user_prompt = ""
+    if ctx:
+        user_prompt += f"## Contexto do connector\n{ctx}\n\n"
+    user_prompt += (
+        f"## Entrada do operador (path ou descrição)\n{free[:500]}\n\n"
+        f"## Método hint do form\n{data.method_hint or 'GET'}\n\n"
+        "## Formato da resposta (JSON estrito)\n"
+        "{\n"
+        '  "name": "Nome curto em PT-BR (ex: Consultar DDD)",\n'
+        '  "method": "GET|POST|PUT|PATCH|DELETE",\n'
+        '  "path": "/api/... com placeholders {x} preservados",\n'
+        '  "category": "categoria curta em PT-BR",\n'
+        '  "description": "1 frase curta em PT-BR sobre o que faz",\n'
+        '  "sample_body": "JSON-string. \\"{}\\" para GET. Para POST/PUT, '
+        'shape esperado."\n'
+        "}"
+    )
+
+    from app.core.config import get_settings
+    from app.core.llm_providers import get_provider
+
+    settings = get_settings()
+    provider_name = (settings.primary_provider or settings.default_llm_provider or "azure").strip()
+    model = (settings.primary_model or "").strip() or None
+
+    try:
+        provider = get_provider(provider_name, model=model) if model else get_provider(provider_name)
+    except Exception as e:
+        raise HTTPException(503, f"Provider '{provider_name}' não disponível: {e}")
+
+    try:
+        result = await provider.generate(
+            messages=[
+                {"role": "system", "content": _SUGGEST_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+    except Exception as e:
+        logger.error("suggest_endpoint LLM falhou", exc_info=True)
+        raise HTTPException(502, f"Erro ao chamar LLM ({provider_name}): {e}")
+
+    content = (result.get("content") or "").strip()
+    # Remove cerca de markdown se LLM adicionou
+    content = re.sub(r"^```(?:json)?\s*", "", content)
+    content = re.sub(r"\s*```$", "", content)
+
+    try:
+        raw = _json.loads(content)
+    except _json.JSONDecodeError as e:
+        logger.warning(f"suggest_endpoint: LLM não devolveu JSON ({e}). Content: {content[:200]!r}")
+        raise HTTPException(502, "Modelo não devolveu JSON válido. Tente reformular a descrição.")
+
+    if not isinstance(raw, dict):
+        raise HTTPException(502, "Modelo devolveu JSON que não é objeto.")
+
+    # Sanitização defensiva (limites + tipos) — operador nunca cria nada
+    # direto deste output; ainda assim, controle o que aparece na UI.
+    allowed_methods = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+    method = str(raw.get("method", "GET")).upper().strip()
+    if method not in allowed_methods:
+        method = "GET"
+    sample_body = raw.get("sample_body", "{}")
+    if not isinstance(sample_body, str):
+        try:
+            sample_body = _json.dumps(sample_body, ensure_ascii=False)
+        except Exception:
+            sample_body = "{}"
+
+    suggestion = {
+        "name": str(raw.get("name", ""))[:100],
+        "method": method,
+        "path": str(raw.get("path", ""))[:300],
+        "category": str(raw.get("category", "geral"))[:50],
+        "description": str(raw.get("description", ""))[:300],
+        "sample_body": sample_body[:2000],
+    }
+
+    logger.info(
+        "api_connector.suggest_endpoint.completed",
+        extra={
+            "event": "api_connector.suggest_endpoint.completed",
+            "connector_id": data.connector_id or "",
+            "free_text_len": len(free),
+            "suggested_method": suggestion["method"],
+            "suggested_path_len": len(suggestion["path"]),
+            "provider": provider_name,
+            "model": result.get("model") or model or provider_name,
+        },
+    )
+
+    return {
+        "suggestion": suggestion,
+        "model": result.get("model") or model or provider_name,
+        "provider": provider_name,
+    }
+
+
 def _extract_openapi_url_from_html(html: str, origin: str) -> Optional[str]:
     """Detecta a URL do openapi.json num HTML de Swagger UI / ReDoc.
 
