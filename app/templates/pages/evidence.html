@@ -222,7 +222,7 @@
                     <div x-show="ingestTab === 'text'">
                         <label class="block text-[11px] font-semibold text-surface-500 mb-1">Conteúdo (texto / markdown)</label>
                         <textarea x-model="ingestForm.text" rows="10"
-                                  placeholder="Cole o texto bruto ou markdown aqui — manuais, FAQs, políticas, contratos transcritos, etc.&#10;&#10;Será segmentado em chunks (~500 tokens cada) e indexado no Postgres BM25 + Qdrant vetorial."
+                                  placeholder="Cole o texto bruto ou markdown aqui — manuais, FAQs, políticas, contratos transcritos, etc.&#10;&#10;Será segmentado em chunks (~500 tokens cada) e indexado no Postgres BM25 + pgvector (vetorial)."
                                   class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-[12px] text-brand-900 outline-none focus:border-brand-400 resize-y font-mono min-h-[12rem]"></textarea>
                         <p class="text-[10px] text-surface-400 mt-1" x-show="ingestForm.text"
                            x-text="ingestForm.text.length.toLocaleString() + ' caracteres · ~' + Math.ceil(ingestForm.text.length / 4).toLocaleString() + ' tokens estimados'"></p>
@@ -623,13 +623,13 @@
                                 <div><span class="text-surface-400">ID:</span> <span class="font-mono text-brand-900" x-text="inspectSource?.id || '—'"></span></div>
                                 <div><span class="text-surface-400">Tipo:</span> <span x-text="inspectSource?.source_type || '—'"></span></div>
                                 <div><span class="text-surface-400">Classificação:</span> <span x-text="inspectSource?.confidentiality_label || '—'"></span></div>
-                                <div><span class="text-surface-400">Coleção Qdrant:</span> <span class="font-mono">agente_evidence</span></div>
+                                <div><span class="text-surface-400">Coleção vetorial:</span> <span class="font-mono">agente_evidence</span> <span class="text-surface-400">(pgvector)</span></div>
                             </div>
                             <div x-show="inspectSource?.description" class="text-[11px] text-surface-500 pt-2 border-t border-surface-100" x-text="inspectSource?.description"></div>
                         </div>
                         <div class="rounded-lg border border-red-100 bg-red-50/40 px-4 py-3 text-[11px] text-red-700 leading-relaxed">
                             <strong>Como funciona o RAG aqui:</strong> texto vai pra <code class="bg-white px-1 rounded">evidence_chunks</code> (Postgres + tsvector pra BM25)
-                            e <code class="bg-white px-1 rounded">agente_evidence</code> (Qdrant pra similaridade vetorial). Busca híbrida com RRF
+                            e <code class="bg-white px-1 rounded">agente_evidence</code> (pgvector pra similaridade vetorial). Busca híbrida com RRF
                             funde os dois rankings. Use a aba <strong>Test Query</strong> pra ver o que cada query traria de volta antes de cabear num agente.
                         </div>
                     </div>
@@ -766,8 +766,8 @@
                             </button>
                         </div>
                         <p class="text-[10px] text-surface-500">
-                            Executa BM25 (Postgres tsvector) + similaridade vetorial (Qdrant) <strong>restritos a esta KB</strong>, fundidos via RRF.
-                            Replica o que um agente real faria — useful para validar antes de promover pro produção.
+                            Executa BM25 (Postgres tsvector) + similaridade vetorial (pgvector) <strong>restritos a esta KB</strong>, fundidos via RRF.
+                            Replica o que um agente real faria — útil para validar antes de promover pro produção.
                         </p>
                         <div x-show="inspectQueryError" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700"
                              x-text="inspectQueryError"></div>

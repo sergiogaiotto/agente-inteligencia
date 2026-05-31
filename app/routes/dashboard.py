@@ -1172,7 +1172,11 @@ async def query_knowledge_source(ks_id: str, data: KBQueryRequest):
         raise HTTPException(400, "Query vazia")
 
     retriever = Retriever()
-    results = await retriever.retrieve(
+    # Onda Q (2026-05-30): Retriever expõe `search()` (consistente com
+    # _bm25_search / _vector_search / _legacy_search internos). Caller original
+    # chamava `.retrieve()` que nunca existiu — bug latente desde a Onda 3
+    # porque o endpoint não tinha teste. PR #222 corrigiu.
+    results = await retriever.search(
         query=data.query.strip(),
         top_n=max(1, min(data.top_n, 20)),
         allowed_source_ids=[ks_id],  # filtra só nesta KB
