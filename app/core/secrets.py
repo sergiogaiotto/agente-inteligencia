@@ -62,9 +62,24 @@ def _get_fernet() -> Fernet:
 
 
 def encrypt(plaintext: str) -> str:
-    """Cifra `plaintext` e retorna string com prefixo `fernet:`."""
+    """Cifra `plaintext` e retorna string com prefixo `fernet:`.
+
+    **Idempotente** (PR #229): se o valor já está cifrado (começa com
+    `fernet:`), retorna sem recifrar. Defesa em profundidade contra o bug
+    recorrente da UI de Tools, onde o input mostrava o ciphertext lido do
+    banco e o caller reenviava o ciphertext no PUT — o backend, sem essa
+    proteção, recifrava transformando o valor em "fernet:fernet:..." (duplo
+    cifrado). Próxima leitura decifrava uma vez e devolvia o ciphertext
+    interno como se fosse plaintext, mandando `Authorization: Bearer
+    fernet:...` ao MCP — 401.
+
+    Sintoma reportado por operador: "as chaves dos MCPs não estão sendo
+    mantidas e parecem estar trocando entre tools" (PR #229).
+    """
     if not plaintext:
         return ""
+    if plaintext.startswith(_CIPHER_PREFIX):
+        return plaintext
     f = _get_fernet()
     token = f.encrypt(plaintext.encode("utf-8")).decode("ascii")
     return f"{_CIPHER_PREFIX}{token}"

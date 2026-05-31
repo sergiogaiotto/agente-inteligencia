@@ -1292,17 +1292,56 @@ async def rag_health():
 
 
 # ═══ Tools / Tool Registry §10 ═══
+def _strip_secrets_from_tool(t: dict) -> dict:
+    """Remove credenciais (auth_token e secrets em auth_config) da response.
+
+    PR #229: o GET retornava `auth_token` cifrado (`fernet:gAAAA...`) e a UI
+    reenviava no PUT sem editar, causando duplo cifragem no banco e quebra
+    silenciosa do MCP (401). Solução: nunca emitir o ciphertext na rede.
+
+    Em vez de remover o campo (quebraria clients antigos), substitui por
+    string vazia e adiciona flags `has_auth_token` / `has_auth_config_secrets`
+    para a UI mostrar "(token armazenado)" sem expor o conteúdo.
+
+    auth_config pode ter client_secret/client_key/ca_cert (OAuth2/mTLS).
+    Esses campos são removidos do JSON mas o resto da config (client_id,
+    token_url, scope) permanece para a UI rehidratar.
+    """
+    import json as _json
+    out = dict(t)
+    token = out.get("auth_token") or ""
+    out["has_auth_token"] = bool(token)
+    out["auth_token"] = ""
+    cfg_raw = out.get("auth_config") or "{}"
+    try:
+        cfg = _json.loads(cfg_raw) if isinstance(cfg_raw, str) else dict(cfg_raw)
+    except (ValueError, TypeError):
+        cfg = {}
+    SECRET_KEYS = ("client_secret", "client_key", "ca_cert")
+    has_secrets = any(cfg.get(k) for k in SECRET_KEYS)
+    for k in SECRET_KEYS:
+        if k in cfg:
+            cfg[k] = ""
+    out["auth_config"] = _json.dumps(cfg, ensure_ascii=False)
+    out["has_auth_config_secrets"] = has_secrets
+    return out
+
+
 @router.get("/tools")
 async def list_tools(limit: int = 50, sensitivity: str = None):
     f = {}
     if sensitivity: f["sensitivity"] = sensitivity
-    return {"tools": await tools_repo.find_all(limit=limit, **f), "total": await tools_repo.count(**f)}
+    rows = await tools_repo.find_all(limit=limit, **f)
+    return {
+        "tools": [_strip_secrets_from_tool(t) for t in rows],
+        "total": await tools_repo.count(**f),
+    }
 
 @router.get("/tools/{tool_id}")
 async def get_tool(tool_id: str):
     t = await tools_repo.find_by_id(tool_id)
     if not t: raise HTTPException(404, "Tool não encontrada")
-    return t
+    return _strip_secrets_from_tool(t)
 
 @router.post("/tools", status_code=201)
 async def create_tool(data: ToolCreate):
@@ -1350,10 +1389,40 @@ async def update_tool(tool_id: str, data: ToolUpdate):
     if "requires_trusted_context" in upd:
         upd["requires_trusted_context"] = 1 if upd["requires_trusted_context"] else 0
 
-    # Cifra credencial em repouso quando o cliente enviou um novo token
+    # PR #229: preserva auth_token existente se o cliente mandou vazio.
+    # UI hoje envia auth_token="" quando o user não editou o campo (porque
+    # o GET passou a mascarar o ciphertext). Sem esta proteção, o PUT
+    # zeraria o token armazenado mesmo sem o operador querer. Para LIMPAR
+    # explicitamente o token, mandar `null` (exclude_unset captura, mas o
+    # filtro `v is not None` acima já remove None — caller deve usar
+    # endpoint dedicado /tools/{id}/auth se quiser exposição explícita).
+    if "auth_token" in upd and not upd["auth_token"]:
+        upd.pop("auth_token", None)
+
+    # Cifra credencial em repouso quando o cliente enviou um novo token.
+    # encrypt() é idempotente (PR #229): valor já cifrado passa direto.
     if upd.get("auth_token"):
         from app.core.secrets import write_secret
         upd["auth_token"] = write_secret(upd["auth_token"])
+
+    # PR #229: preserva auth_config existente se vier sem secrets (UI
+    # também mascara client_secret/client_key/ca_cert). Se o operador
+    # SUBSTITUIU um secret, o novo valor está no payload e segue normal.
+    if "auth_config" in upd:
+        import json as _json
+        try:
+            new_cfg = _json.loads(upd["auth_config"]) if isinstance(upd["auth_config"], str) else dict(upd["auth_config"])
+        except (ValueError, TypeError):
+            new_cfg = {}
+        try:
+            existing_cfg = _json.loads(existing.get("auth_config") or "{}")
+        except (ValueError, TypeError):
+            existing_cfg = {}
+        for k in ("client_secret", "client_key", "ca_cert"):
+            # Se UI enviou vazio mas existing tinha valor, preserva.
+            if not new_cfg.get(k) and existing_cfg.get(k):
+                new_cfg[k] = existing_cfg[k]
+        upd["auth_config"] = _json.dumps(new_cfg, ensure_ascii=False)
 
     if not upd:
         logger.warning(f"update_tool {tool_id}: nenhum campo válido para atualizar")
