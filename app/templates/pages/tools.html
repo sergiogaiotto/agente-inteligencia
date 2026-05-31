@@ -881,6 +881,9 @@ function toolsPage() {
             this.ops.execResult = null;
             try {
                 const t = this.previewTool;
+                // PR #232: envia tool_id para o backend resolver o auth_token
+                // armazenado. Sem isso, t.auth_token vem "" (PR #229 mascarou)
+                // e o teste falha com 401 silencioso contra o MCP real.
                 const r = await api.post('/api/v1/tools/test', {
                     endpoint: t.mcp_server,
                     name: t.name,
@@ -888,6 +891,7 @@ function toolsPage() {
                     auth_type: t.auth_requirements,
                     auth_token: t.auth_token,
                     auth_config: t.auth_config || '{}',
+                    tool_id: t.id,
                 });
                 this.ops.testResult = r || { success: false, details: 'Resposta vazia' };
                 this.ops.testedAt = Date.now();
@@ -958,6 +962,7 @@ function toolsPage() {
                     auth_type: t.auth_requirements,
                     auth_token: t.auth_token,
                     auth_config: t.auth_config || '{}',
+                    tool_id: t.id,  // PR #232: backend resolve token armazenado
                 });
                 this.ops.execResult = r;
             } catch (e) {
@@ -1188,7 +1193,10 @@ function toolsPage() {
             if (!this.form.mcp_server.trim()) return;
             this.testing = true; this.testResult = null; this.discoveredTools = []; this.selectedTool = null; this.execResult = null; this.execFormatted = false; this.execExpanded = false;
             try {
-                const r = await api.post('/api/v1/tools/test', { endpoint: this.form.mcp_server, name: this.form.name, operations: this.form.operations, auth_type: this.form.auth_requirements, auth_token: this.form.auth_token, auth_config: JSON.stringify(this.authConfig || {}) });
+                // PR #232: passa editingId como tool_id pra resolver token
+                // armazenado quando o operador testa em modo "Editar" sem
+                // ter colado novo token.
+                const r = await api.post('/api/v1/tools/test', { endpoint: this.form.mcp_server, name: this.form.name, operations: this.form.operations, auth_type: this.form.auth_requirements, auth_token: this.form.auth_token, auth_config: JSON.stringify(this.authConfig || {}), tool_id: this.editingId || null });
                 this.testResult = r || { success: false, details: 'Resposta vazia' };
                 this.discoveredTools = r?.discovered_tools || [];
             } catch(e) {
@@ -1250,6 +1258,7 @@ function toolsPage() {
                     auth_type: this.form.auth_requirements,
                     auth_token: this.form.auth_token,
                     auth_config: JSON.stringify(this.authConfig || {}),
+                    tool_id: this.editingId || null,  // PR #232
                 });
                 this.execResult = r;
             } catch(e) {
