@@ -78,3 +78,38 @@ class TestRagDropdownUnchanged:
     def test_rag_keeps_checkbox_pattern(self, html):
         assert "boundSourceIds.includes(src.id)" in html
         assert 'type="checkbox"' in html
+
+
+class TestUnifiedCountersXOverN:
+    """Padrão unificado X/N (escolhidos/disponíveis) nos 4 botões do toolbar.
+
+    User pediu (2026-05-31): os contadores de Inserir API e Inserir Tabela
+    mostravam só `disponíveis no catálogo` (3 endpoints, 2 tabelas), enquanto
+    Inserir MCP já mostrava `X/N`. Unificamos tudo no formato `X/N` para que
+    a contagem reflita imediatamente o estado do SKILL.md.
+    """
+
+    def test_api_badge_uses_x_over_n_pattern(self, html):
+        """Inserir API: inseridos no SKILL.md / endpoints disponíveis."""
+        assert "apiEndpointsFlat.filter(i => isInsertedInRaw(i.ep_id)).length + '/' + apiEndpointsFlat.length" in html
+
+    def test_table_badge_uses_x_over_n_pattern(self, html):
+        """Inserir Tabela: tabelas referenciadas / tabelas disponíveis."""
+        assert "availableTables.filter(t => isInsertedInRaw(t.urn)).length + '/' + availableTables.length" in html
+
+    def test_mcp_badge_uses_x_over_n_pattern(self, html):
+        """Inserir MCP: tools inseridas / tools disponíveis (padrão preexistente)."""
+        assert "mcpTools.filter(t => isInsertedInRaw(t.id)).length + '/' + mcpTools.length" in html
+
+    def test_rag_badge_uses_x_over_n_pattern(self, html):
+        """Fontes RAG: ids vinculados / fontes disponíveis."""
+        assert "boundSourceIds.length + '/' + availableSources.length" in html
+
+    def test_mcp_badge_visible_whenever_catalog_has_items(self, html):
+        """Badge X/N aparece mesmo com 0 inseridos (ex.: '0/2'), desde que haja catálogo."""
+        # x-show passou a depender de mcpTools.length > 0, não da contagem de inseridos.
+        assert 'x-show="mcpTools.length > 0"' in html
+
+    def test_rag_badge_visible_whenever_catalog_has_items(self, html):
+        """RAG: badge aparece se há fontes disponíveis (mesmo com 0 vinculadas)."""
+        assert 'x-show="availableSources.length > 0"' in html
