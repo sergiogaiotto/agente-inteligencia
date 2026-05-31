@@ -613,12 +613,12 @@
                     </button>
                 </div>
 
-                <!-- Tabs -->
-                <div class="flex border-b border-surface-100 px-6 shrink-0">
-                    <template x-for="t in [{k:'overview',label:'Visão Geral'},{k:'chunks',label:'Chunks'},{k:'tables',label:'Tabelas'},{k:'query',label:'Test Query'}]" :key="t.k">
-                        <button @click="inspectTab = t.k; if (t.k === 'tables') loadTablesForSource(inspectSource?.id)"
+                <!-- Tabs (PR #227: nova aba Documentos antes de Chunks) -->
+                <div class="flex border-b border-surface-100 px-6 shrink-0 overflow-x-auto">
+                    <template x-for="t in [{k:'overview',label:'Visão Geral'},{k:'documents',label:'Documentos'},{k:'chunks',label:'Chunks'},{k:'tables',label:'Tabelas'},{k:'query',label:'Test Query'}]" :key="t.k">
+                        <button @click="inspectTab = t.k; if (t.k === 'tables') loadTablesForSource(inspectSource?.id); if (t.k === 'documents') loadDocumentsForSource(inspectSource?.id)"
                                 :class="inspectTab === t.k ? 'border-brand-500 text-brand-700' : 'border-transparent text-surface-500 hover:text-brand-600'"
-                                class="px-4 py-3 border-b-2 text-[12px] font-semibold transition-colors">
+                                class="px-4 py-3 border-b-2 text-[12px] font-semibold transition-colors whitespace-nowrap">
                             <span x-text="t.label"></span>
                         </button>
                     </template>
@@ -706,6 +706,50 @@
                                     class="rounded-lg border border-surface-200 px-4 py-1.5 text-[11px] font-medium text-surface-600 hover:bg-surface-50">
                                 Carregar mais
                             </button>
+                        </div>
+                    </div>
+
+                    <!-- TAB: Documentos (PR #227 — multi-doc por KB) -->
+                    <div x-show="inspectTab === 'documents'" class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <p class="text-[11px] text-surface-500">
+                                Documentos ingeridos nesta KB (RAG textual). Cada documento agrupa seus chunks via <code class="bg-surface-100 px-1 rounded">metadata.source_doc_id</code>. Apagar um documento preserva os outros.
+                            </p>
+                            <button @click="loadDocumentsForSource(inspectSource?.id)"
+                                    class="rounded-lg border border-surface-200 px-3 py-1.5 text-[11px] text-surface-600 hover:bg-surface-50">
+                                ↻ Recarregar
+                            </button>
+                        </div>
+                        <div x-show="inspectDocsLoading" class="text-center py-8 text-[12px] text-surface-400">Carregando documentos...</div>
+                        <div x-show="!inspectDocsLoading && inspectDocs.length === 0" class="text-center py-8 text-[12px] text-surface-400">
+                            Nenhum documento ingerido ainda. Use o botão "Ingerir" no card da KB.
+                        </div>
+                        <div class="space-y-2">
+                            <template x-for="d in inspectDocs" :key="d.source_doc_id">
+                                <div class="rounded-lg border border-surface-200 bg-white">
+                                    <div class="flex items-center justify-between px-3 py-2.5">
+                                        <div class="min-w-0 flex-1">
+                                            <div class="flex items-center gap-2">
+                                                <!-- Ícone por formato -->
+                                                <span class="text-[16px]" x-text="docIcon(d.source_format)"></span>
+                                                <span class="text-[12px] font-semibold text-brand-900 truncate" x-text="d.source_filename || (d.is_legacy ? 'Documento legado (sem metadata)' : 'documento sem nome')"></span>
+                                                <span x-show="d.is_legacy" class="rounded-full bg-amber-50 text-amber-700 px-1.5 py-0.5 text-[9px] font-semibold">legado</span>
+                                                <span x-show="d.source_format" class="rounded-full bg-surface-100 text-surface-500 px-1.5 py-0.5 text-[9px] font-mono" x-text="d.source_format"></span>
+                                            </div>
+                                            <div class="text-[10px] text-surface-400 mt-0.5 flex items-center gap-3">
+                                                <span><strong class="text-brand-700 font-mono" x-text="(d.chunks_count||0).toLocaleString()"></strong> chunks</span>
+                                                <span x-show="(d.tokens_total||0) > 0"><strong class="text-brand-700 font-mono" x-text="(d.tokens_total||0).toLocaleString()"></strong> tokens</span>
+                                                <span x-show="d.ingested_at" :title="d.ingested_at" x-text="'ingerido ' + ago(d.ingested_at)"></span>
+                                                <span x-show="d.source_uri" class="font-mono truncate max-w-[200px]" :title="d.source_uri" x-text="d.source_uri"></span>
+                                            </div>
+                                        </div>
+                                        <button @click="deleteDocument(d)" :title="'Excluir ' + (d.source_filename || 'este documento')"
+                                                class="shrink-0 p-1.5 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600 transition-colors">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79"/></svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
                         </div>
                     </div>
 
@@ -868,11 +912,14 @@ function evidencePage() {
         // ─── Inspeção de KB (overview/chunks/test query) ───────────
         inspectOpen: false,
         inspectSource: null,         // KB completa (id, name, source_type, etc.)
-        inspectTab: 'overview',       // 'overview' | 'chunks' | 'query'
+        inspectTab: 'overview',       // 'overview' | 'documents' | 'chunks' | 'tables' | 'query'
         inspectChunks: [],            // chunks já carregados
         inspectChunkLimit: 50,        // página a cada loadInspectChunks
         inspectChunksLoading: false,
         inspectChunkFilter: '',       // filtro textual local (sem hit no servidor)
+        // PR #227: documentos agrupados por source_doc_id
+        inspectDocs: [],
+        inspectDocsLoading: false,
         inspectQueryText: '',
         inspectQueryTopN: 5,
         inspectQueryResults: [],
@@ -1422,6 +1469,52 @@ function evidencePage() {
             } finally {
                 this.refreshingStatsId = null;
             }
+        },
+
+        // ── Multi-doc: lista documentos da KB (PR #227) ─────────────
+        async loadDocumentsForSource(sid) {
+            if (!sid) return;
+            this.inspectDocsLoading = true;
+            try {
+                const body = await api.get('/api/v1/knowledge-sources/' + encodeURIComponent(sid) + '/documents');
+                this.inspectDocs = body.documents || [];
+            } catch(e) {
+                this.inspectDocs = [];
+                showToast('Erro ao carregar documentos: ' + (e?.message || ''), 'error');
+            } finally {
+                this.inspectDocsLoading = false;
+            }
+        },
+
+        async deleteDocument(d) {
+            if (!d?.source_doc_id) return;
+            const label = d.source_filename || (d.is_legacy ? 'documento legado' : 'documento');
+            if (!confirm(`Excluir "${label}"? ${d.chunks_count} chunk(s) serão apagados. Os outros documentos da KB permanecem intactos.`)) return;
+            try {
+                const r = await api.del('/api/v1/knowledge-sources/' + encodeURIComponent(this.inspectSource.id) + '/documents/' + encodeURIComponent(d.source_doc_id));
+                showToast(`${r.chunks_deleted} chunk(s) apagado(s)`);
+                await this.loadDocumentsForSource(this.inspectSource.id);
+                await this.refreshStatsFor(this.inspectSource.id);
+            } catch(e) {
+                showToast('Erro: ' + (e?.message || ''), 'error');
+            }
+        },
+
+        // Ícone por formato — mapping leve, default genérico
+        docIcon(fmt) {
+            if (!fmt) return '📄';
+            const f = String(fmt).toLowerCase();
+            if (['pdf'].includes(f)) return '📕';
+            if (['docx', 'doc'].includes(f)) return '📘';
+            if (['pptx', 'ppt'].includes(f)) return '📊';
+            if (['xlsx', 'xls', 'csv'].includes(f)) return '📈';
+            if (['md', 'markdown', 'txt'].includes(f)) return '📝';
+            if (['url'].includes(f)) return '🔗';
+            if (['html', 'htm'].includes(f)) return '🌐';
+            if (['json', 'xml', 'yaml', 'yml'].includes(f)) return '📋';
+            if (['mp3', 'wav', 'm4a', 'ogg'].includes(f)) return '🎵';
+            if (['png', 'jpg', 'jpeg', 'gif'].includes(f)) return '🖼️';
+            return '📄';
         },
     }
 }

@@ -1127,6 +1127,37 @@ async def list_source_chunks(ks_id: str, limit: int = 50, offset: int = 0):
     return {"source_id": ks_id, "count": len(chunks), "chunks": chunks}
 
 
+# ─── Multi-doc (PR #227) ──────────────────────────────────────────
+
+
+@router.get("/knowledge-sources/{ks_id}/documents")
+async def list_source_documents_endpoint(ks_id: str):
+    """Lista documentos ingeridos agrupados por `source_doc_id`.
+
+    Chunks ingeridos antes da PR #227 aparecem como um único documento
+    "legacy" com `is_legacy=True`. UI pode tratar diferenciado.
+    """
+    from app.evidence.ingest import list_documents_for_source
+    if not await knowledge_repo.find_by_id(ks_id):
+        raise HTTPException(404, "knowledge_source não encontrada")
+    docs = await list_documents_for_source(ks_id)
+    return {"source_id": ks_id, "count": len(docs), "documents": docs}
+
+
+@router.delete("/knowledge-sources/{ks_id}/documents/{doc_id}")
+async def delete_source_document_endpoint(ks_id: str, doc_id: str):
+    """Apaga todos os chunks de um documento específico, preservando outros
+    documentos da mesma KB.
+
+    `doc_id == '_legacy_'` apaga chunks sem metadata (anteriores à PR #227).
+    Idempotente: doc inexistente → `chunks_deleted=0`.
+    """
+    from app.evidence.ingest import delete_document
+    if not await knowledge_repo.find_by_id(ks_id):
+        raise HTTPException(404, "knowledge_source não encontrada")
+    return await delete_document(ks_id, doc_id)
+
+
 # ─── Reindex global (recreate vector store + re-embarcar Postgres) ──
 
 @router.get("/evidence/collection-info")

@@ -12,10 +12,11 @@ Falhas tratadas com semantica clara:
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.core.config import get_settings
@@ -23,6 +24,12 @@ from app.core.database import _get_pool, evidence_chunks_repo, knowledge_repo
 from app.core.otel import get_tracer
 from app.evidence.chunker import chunk_text
 from app.evidence.embedder import embed_texts
+
+
+# Sentinel para identificar documentos legados (sem metadata.source_doc_id).
+# Usado no endpoint GET /documents e DELETE /documents/{doc_id} para que o
+# operador consiga lidar com chunks ingeridos antes desta PR (PR #227).
+LEGACY_DOC_ID = "_legacy_"
 
 logger = logging.getLogger(__name__)
 _tracer = get_tracer(__name__)
@@ -54,24 +61,43 @@ async def ingest_text(
     replace: bool = True,
     chunk_size: Optional[int] = None,
     chunk_overlap: Optional[int] = None,
+    *,
+    source_doc_id: Optional[str] = None,
+    source_filename: Optional[str] = None,
+    source_format: Optional[str] = None,
+    source_uri: Optional[str] = None,
 ) -> dict:
     """Ingere `text` na knowledge_source `source_id`.
 
     Args:
         source_id: id da knowledge_source destino. Deve existir.
         text: conteúdo a indexar. Não vazio.
-        replace: True (default) apaga chunks/pontos anteriores antes de inserir.
+        replace: comportamento de remoção antes da inserção:
+            - True + source_doc_id passado pelo caller: apaga só chunks deste doc
+              (re-ingestão idempotente do mesmo documento).
+            - True + source_doc_id None (auto-gerado): apaga TUDO da KB
+              (compat com comportamento legado: 1 ingest = 1 KB).
+            - False: não apaga nada; adiciona novos chunks (PR #227 — múltiplos
+              docs por KB).
         chunk_size: tokens por chunk. None (default) usa RAG_CHUNK_SIZE_TOKENS do .env.
         chunk_overlap: tokens de overlap entre chunks adjacentes. None usa default.
+        source_doc_id: UUID do documento. Se None, é gerado. Quando o caller
+            passa explicitamente, sinaliza "re-ingestão" → replace afeta só
+            este doc, não toda a KB. PR #227.
+        source_filename: nome de arquivo original (para exibição no inspector).
+        source_format: extensão/tipo do source (ex: 'pdf', 'docx', 'url',
+            'text/markdown'). PR #227.
+        source_uri: URI canônico (URL fonte, ou path opcional). PR #227.
 
     Returns:
         {
           "source_id": ...,
+          "source_doc_id": str,    # gerado ou passado (PR #227)
           "chunks_created": N,
           "tokens_total": N,
-          "qdrant_upserted": N,    # 0 se Qdrant offline
+          "qdrant_upserted": N,
           "duration_ms": N,
-          "partial": bool,         # True se Qdrant falhou; só Postgres tem dados
+          "partial": bool,
         }
 
     Raises:
@@ -118,7 +144,29 @@ async def ingest_text(
                 status_code=500,
             )
 
-        # 3. Replace: limpa state anterior (Postgres + vector store)
+        # 3. Replace: limpa state anterior (Postgres + vector store).
+        #    PR #227: comportamento depende de se o caller forneceu source_doc_id.
+        #    - caller_provided_doc_id=True: re-ingest deste doc → apaga só seus chunks.
+        #    - caller_provided_doc_id=False: comportamento legado → apaga TUDO da KB.
+        caller_provided_doc_id = source_doc_id is not None
+        if source_doc_id is None:
+            source_doc_id = str(uuid.uuid4())
+        span.set_attribute("ingest.source_doc_id", source_doc_id)
+        span.set_attribute("ingest.caller_provided_doc_id", caller_provided_doc_id)
+
+        # Monta payload de metadata (vai em cada chunk via JSONB)
+        chunk_metadata = {
+            "source_doc_id": source_doc_id,
+            "ingested_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if source_filename:
+            chunk_metadata["source_filename"] = source_filename
+        if source_format:
+            chunk_metadata["source_format"] = source_format
+        if source_uri:
+            chunk_metadata["source_uri"] = source_uri
+        chunk_metadata_json = json.dumps(chunk_metadata, ensure_ascii=False)
+
         pool = _get_pool()
         vector_store = _get_vector_store()
         # Onda Q (2026-05-30): backend único pgvector — antes lia
@@ -128,10 +176,20 @@ async def ingest_text(
         if replace:
             with _tracer.start_as_current_span("ingest.delete_old"):
                 async with pool.acquire() as con:
-                    await con.execute(
-                        "DELETE FROM evidence_chunks WHERE knowledge_source_id = $1",
-                        source_id,
-                    )
+                    if caller_provided_doc_id:
+                        # Apaga só chunks deste documento — não toca os outros
+                        await con.execute(
+                            "DELETE FROM evidence_chunks "
+                            "WHERE knowledge_source_id = $1 "
+                            "AND metadata->>'source_doc_id' = $2",
+                            source_id, source_doc_id,
+                        )
+                    else:
+                        # Legado: apaga TODOS os chunks da KB
+                        await con.execute(
+                            "DELETE FROM evidence_chunks WHERE knowledge_source_id = $1",
+                            source_id,
+                        )
                 # Vector store: best-effort. Qdrant: deleta pontos. pgvector:
                 # no-op (rows já foram apagadas pelo DELETE acima, vetor foi
                 # junto na mesma transação). Mantemos a chamada por paridade
@@ -147,10 +205,11 @@ async def ingest_text(
                     chunk_ids.append(cid)
                     await con.execute(
                         """
-                        INSERT INTO evidence_chunks (id, knowledge_source_id, ordinal, text, token_count, char_count)
-                        VALUES ($1, $2, $3, $4, $5, $6)
+                        INSERT INTO evidence_chunks (id, knowledge_source_id, ordinal, text, token_count, char_count, metadata)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
                         """,
                         cid, source_id, c.ordinal, c.text, c.token_count, c.char_count,
+                        chunk_metadata_json,
                     )
 
         # 5. Associa vetores ao vector store ativo.
@@ -201,6 +260,7 @@ async def ingest_text(
         duration_ms = int((time.time() - start) * 1000)
         result = {
             "source_id": source_id,
+            "source_doc_id": source_doc_id,
             "chunks_created": len(chunks),
             "tokens_total": tokens_total,
             # qdrant_upserted: retrocompat para UI e clients antigos.
@@ -217,6 +277,117 @@ async def ingest_text(
             extra={"event": "evidence.ingest.completed", **result},
         )
         return result
+
+
+# ─── Multi-doc: list/delete por documento (PR #227) ───────────────
+
+
+async def list_documents_for_source(source_id: str) -> list[dict]:
+    """Lista documentos ingeridos agrupados por `metadata.source_doc_id`.
+
+    Cada documento agrega seus chunks: contagem, tokens totais, filename,
+    formato, URI, timestamp da ingestão. Chunks sem metadata (legados, de
+    antes da PR #227) são agrupados em um documento sentinela com
+    `doc_id = LEGACY_DOC_ID` ("_legacy_") — assim o operador pode pelo menos
+    apagá-los sem precisar usar `clear_source` (que apaga TUDO).
+
+    Returns:
+        Lista de dicts com:
+          {
+            "source_doc_id": str,
+            "source_filename": str | None,
+            "source_format": str | None,
+            "source_uri": str | None,
+            "ingested_at": str | None,    # ISO timestamp, mínimo entre chunks
+            "chunks_count": int,
+            "tokens_total": int,
+            "is_legacy": bool,
+          }
+        Ordenada por `ingested_at` desc (mais recente primeiro).
+    """
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        rows = await con.fetch(
+            """
+            SELECT
+                COALESCE(metadata->>'source_doc_id', $2) AS source_doc_id,
+                MAX(metadata->>'source_filename')        AS source_filename,
+                MAX(metadata->>'source_format')          AS source_format,
+                MAX(metadata->>'source_uri')             AS source_uri,
+                MIN(metadata->>'ingested_at')            AS ingested_at,
+                COUNT(*)                                  AS chunks_count,
+                COALESCE(SUM(token_count), 0)            AS tokens_total
+            FROM evidence_chunks
+            WHERE knowledge_source_id = $1
+            GROUP BY COALESCE(metadata->>'source_doc_id', $2)
+            ORDER BY MIN(metadata->>'ingested_at') DESC NULLS LAST
+            """,
+            source_id, LEGACY_DOC_ID,
+        )
+
+    out: list[dict] = []
+    for r in rows:
+        doc_id = r["source_doc_id"]
+        out.append({
+            "source_doc_id": doc_id,
+            "source_filename": r["source_filename"],
+            "source_format": r["source_format"],
+            "source_uri": r["source_uri"],
+            "ingested_at": r["ingested_at"],
+            "chunks_count": int(r["chunks_count"] or 0),
+            "tokens_total": int(r["tokens_total"] or 0),
+            "is_legacy": doc_id == LEGACY_DOC_ID,
+        })
+    return out
+
+
+async def delete_document(source_id: str, doc_id: str) -> dict:
+    """Apaga todos os chunks de um documento específico da KB. Idempotente.
+
+    Para `doc_id == LEGACY_DOC_ID` ("_legacy_"), apaga os chunks SEM
+    `metadata.source_doc_id` (ingeridos antes da PR #227).
+
+    Returns:
+        {
+          "source_id": ..., "source_doc_id": ...,
+          "chunks_deleted": int,
+        }
+    """
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        if doc_id == LEGACY_DOC_ID:
+            res = await con.execute(
+                "DELETE FROM evidence_chunks "
+                "WHERE knowledge_source_id = $1 "
+                "AND (metadata IS NULL OR metadata->>'source_doc_id' IS NULL)",
+                source_id,
+            )
+        else:
+            res = await con.execute(
+                "DELETE FROM evidence_chunks "
+                "WHERE knowledge_source_id = $1 "
+                "AND metadata->>'source_doc_id' = $2",
+                source_id, doc_id,
+            )
+    try:
+        deleted = int(res.rsplit(" ", 1)[-1])
+    except (ValueError, IndexError):
+        deleted = 0
+
+    logger.info(
+        "document_delete_completed",
+        extra={
+            "event": "evidence.document.delete.completed",
+            "source_id": source_id,
+            "source_doc_id": doc_id,
+            "chunks_deleted": deleted,
+        },
+    )
+    return {
+        "source_id": source_id,
+        "source_doc_id": doc_id,
+        "chunks_deleted": deleted,
+    }
 
 
 async def clear_source(source_id: str) -> dict:
@@ -537,13 +708,17 @@ async def ingest_file(
             )
         span.set_attribute("converter.markdown_chars", len(text))
 
-        # Pipeline padrão: chunk → embed → store
+        # Pipeline padrão: chunk → embed → store. PR #227: propaga metadata
+        # do arquivo para que o documento fique rastreável no inspector
+        # (UI Documentos + DELETE por doc_id).
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
         result = await ingest_text(
             source_id, text, replace=replace,
             chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+            source_filename=filename,
+            source_format=ext,
         )
         result["converter"] = "markitdown"
-        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
         result["source_format"] = ext
         result["source_filename"] = filename
         return result
@@ -592,12 +767,19 @@ async def ingest_url(
             )
         span.set_attribute("converter.markdown_chars", len(text))
 
+        # PR #227: propaga URL como metadata do documento ingerido.
+        # filename derivado do path da URL ou domínio para exibição no inspector.
+        url_clean = url.strip()
+        derived_filename = url_clean.rsplit("/", 1)[-1] or url_clean[:60]
         result = await ingest_text(
             source_id, text, replace=replace,
             chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+            source_filename=derived_filename,
+            source_format="url",
+            source_uri=url_clean,
         )
         result["converter"] = "markitdown"
-        result["source_url"] = url.strip()
+        result["source_url"] = url_clean
         return result
 
 
