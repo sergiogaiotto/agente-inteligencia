@@ -239,6 +239,100 @@ class TestSuggestEndpointErrors:
         _FakeProvider.next_raise = None  # cleanup
 
 
+class TestTestPathValuesPr237:
+    """PR #237: IA também sugere valores reais para placeholders do path.
+    Para Brasilapi /ibge/uf/v1/{code} o valor que funciona é 'SP', não '35'.
+    Sem isso, operador testa, dá 404 e pensa que o sistema está quebrado."""
+
+    def test_test_path_values_propagated_when_llm_returns_them(self, monkeypatch):
+        _FakeProvider.next_content = json.dumps({
+            "name": "Consultar UF",
+            "method": "GET",
+            "path": "/api/ibge/uf/v1/{code}",
+            "category": "consulta",
+            "description": "Busca estado por código",
+            "sample_body": "{}",
+            "test_path_values": {"code": "SP"},
+        })
+        client = _app(monkeypatch)
+        r = client.post("/api/v1/api-connectors/suggest-endpoint", json={
+            "free_text": "info de UF da Brasilapi",
+        })
+        assert r.status_code == 200
+        s = r.json()["suggestion"]
+        assert s["test_path_values"] == {"code": "SP"}
+
+    def test_test_path_values_defaults_to_empty_dict_when_llm_omits(
+        self, monkeypatch,
+    ):
+        """LLM pode esquecer o campo — backend retorna {} sem quebrar."""
+        _FakeProvider.next_content = json.dumps({
+            "name": "X", "method": "GET", "path": "/x",
+            "category": "g", "description": "d", "sample_body": "{}",
+            # sem test_path_values
+        })
+        client = _app(monkeypatch)
+        s = client.post("/api/v1/api-connectors/suggest-endpoint", json={
+            "free_text": "x",
+        }).json()["suggestion"]
+        assert s["test_path_values"] == {}
+
+    def test_test_path_values_non_dict_is_sanitized_to_empty(self, monkeypatch):
+        """Se LLM devolver test_path_values: [...] (lista) ou string, ignora."""
+        _FakeProvider.next_content = json.dumps({
+            "name": "X", "method": "GET", "path": "/x",
+            "category": "g", "description": "d", "sample_body": "{}",
+            "test_path_values": ["SP", "RJ"],   # tipo errado
+        })
+        client = _app(monkeypatch)
+        s = client.post("/api/v1/api-connectors/suggest-endpoint", json={
+            "free_text": "x",
+        }).json()["suggestion"]
+        assert s["test_path_values"] == {}
+
+    def test_test_path_values_coerces_number_to_string(self, monkeypatch):
+        """LLM às vezes devolve {ddd: 11} (int). Vira "11" (string) — input HTML lida com string."""
+        _FakeProvider.next_content = json.dumps({
+            "name": "X", "method": "GET", "path": "/api/ddd/v1/{ddd}",
+            "category": "g", "description": "d", "sample_body": "{}",
+            "test_path_values": {"ddd": 11},
+        })
+        client = _app(monkeypatch)
+        s = client.post("/api/v1/api-connectors/suggest-endpoint", json={
+            "free_text": "x",
+        }).json()["suggestion"]
+        assert s["test_path_values"] == {"ddd": "11"}
+
+    def test_test_path_values_truncates_oversize_values(self, monkeypatch):
+        """LLM pode alucinar valor enorme — limite defensivo."""
+        big = "X" * 5000
+        _FakeProvider.next_content = json.dumps({
+            "name": "X", "method": "GET", "path": "/x/{id}",
+            "category": "g", "description": "d", "sample_body": "{}",
+            "test_path_values": {"id": big},
+        })
+        client = _app(monkeypatch)
+        s = client.post("/api/v1/api-connectors/suggest-endpoint", json={
+            "free_text": "x",
+        }).json()["suggestion"]
+        assert len(s["test_path_values"]["id"]) <= 100
+
+    def test_system_prompt_contains_brasilapi_guidance(self):
+        """O prompt diz à IA que para Brasilapi /ibge/uf/v1/{code} a API
+        aceita SIGLA, não código numérico. Sem isso, o sentido prático
+        do PR #237 se perde."""
+        from app.routes.api_connectors import suggest_endpoint  # noqa
+        from app.routes import api_connectors
+        # Importa o módulo, pega o source do user_prompt
+        import inspect
+        src = inspect.getsource(api_connectors.suggest_endpoint)
+        assert "Brasilapi" in src and "SIGLA" in src.upper(), (
+            "Prompt da IA perdeu a orientação específica do Brasilapi UF. "
+            "Sem ela, o LLM volta a sugerir '35' para {code} e o operador "
+            "vê HTTP 404 — exatamente o que motivou este PR."
+        )
+
+
 class TestSuggestEndpointStructuredLog:
 
     def test_emits_completed_event_with_metadata(self, monkeypatch, caplog):
