@@ -394,11 +394,11 @@ function meshPage() {
         _skillMap: {},
 
         groupColors: [
-            {id:'blue',bg:'#dbeafe'},{id:'violet',bg:'#ede9fe'},{id:'teal',bg:'#ccfbf1'},{id:'amber',bg:'#fef3c7'},
+            {id:'blue',bg:'#dbeafe'},{id:'red',bg:'#fee2e2'},{id:'teal',bg:'#ccfbf1'},{id:'amber',bg:'#fef3c7'},
             {id:'rose',bg:'#ffe4e6'},{id:'emerald',bg:'#d1fae5'},{id:'sky',bg:'#e0f2fe'},{id:'orange',bg:'#ffedd5'},
         ],
         getGroupColor(id) {
-            const m = {blue:{bg:'#dbeafe',border:'#93c5fd',text:'#1e40af'},violet:{bg:'#ede9fe',border:'#c4b5fd',text:'#5b21b6'},teal:{bg:'#ccfbf1',border:'#5eead4',text:'#0f766e'},amber:{bg:'#fef3c7',border:'#fcd34d',text:'#92400e'},rose:{bg:'#ffe4e6',border:'#fda4af',text:'#9f1239'},emerald:{bg:'#d1fae5',border:'#6ee7b7',text:'#065f46'},sky:{bg:'#e0f2fe',border:'#7dd3fc',text:'#0369a1'},orange:{bg:'#ffedd5',border:'#fdba74',text:'#9a3412'}};
+            const m = {blue:{bg:'#dbeafe',border:'#93c5fd',text:'#1e40af'},red:{bg:'#fee2e2',border:'#fca5a5',text:'#991b1b'},teal:{bg:'#ccfbf1',border:'#5eead4',text:'#0f766e'},amber:{bg:'#fef3c7',border:'#fcd34d',text:'#92400e'},rose:{bg:'#ffe4e6',border:'#fda4af',text:'#9f1239'},emerald:{bg:'#d1fae5',border:'#6ee7b7',text:'#065f46'},sky:{bg:'#e0f2fe',border:'#7dd3fc',text:'#0369a1'},orange:{bg:'#ffedd5',border:'#fdba74',text:'#9a3412'}};
             return m[id]||m.blue;
         },
 

@@ -156,9 +156,9 @@
                      multiline→textarea, demais→input). Validação leve no
                      front (mais robusta no backend). -->
                 <!-- UI-A.6: paleta vermelho+branco neste form a pedido do user.
-                     Antes: violet/fuchsia (mantido em outros lugares pra preservar
-                     brand consistency). Mudança escopada SÓ ao form de invocação
-                     direta — não toca slash popover nem outras áreas. -->
+                     Migração violet/fuchsia → red consolidada na plataforma
+                     (PR #209 + cleanups subsequentes incluindo PR #223). Este
+                     bloco está alinhado ao guard-rail test_platform_red_palette. -->
                 <div x-show="activeBindingForm" x-transition.duration.150ms
                      class="absolute bottom-full left-12 right-12 mb-2 rounded-xl border border-red-300 bg-white shadow-lg z-40 overflow-hidden">
                     <div class="px-3 py-2 border-b border-red-100 bg-gradient-to-r from-red-50 to-white flex items-center justify-between">
@@ -1857,7 +1857,9 @@ function workspacePage() {
         },
         _renderHelp(d){
             const a=d.agent||{};const s=d.skill;const mode=d.execution_mode||'standard';
-            const modeColor={fast:'emerald',standard:'brand',rigorous:'amber',declarative:'violet'}[mode]||'brand';
+            // 'declarative' usa rose (vermelho-rosa do design system) — antes era
+            // 'violet', trocado em PR #223 (cleanup residual da migração red).
+            const modeColor={fast:'emerald',standard:'brand',rigorous:'amber',declarative:'rose'}[mode]||'brand';
             const bindings=d.api_bindings||[];
             return `
 <div class="space-y-2 text-[12px]">
