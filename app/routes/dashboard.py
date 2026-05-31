@@ -1570,17 +1570,9 @@ class MCPTestRequest(BaseModel):
     auth_token: Optional[str] = ""
     auth_config: Optional[str] = "{}"
 
-@router.post("/tools/test")
-async def test_mcp_connection(data: MCPTestRequest):
-    """Testa conexão com MCP Server — HTTP ou stdio.
-
-    NOTA: timeout de stdio elevado para 90s para acomodar a 1ª execução de
-    'npx -y <pacote>' que precisa baixar dependências do registry npm.
-
-    CORREÇÃO 2026-04-21: Header Accept adicionado para compatibilidade com
-    MCP Streamable HTTP (spec 2025-03-26). Sem ele, servidores como Context7
-    retornam HTTP 406 Not Acceptable.
-    """
+async def _test_mcp_connection_impl(data: MCPTestRequest) -> dict:
+    """Implementação real do teste MCP. Wrapper público adiciona log
+    estruturado pós-execução (PR #231)."""
     import httpx, time
 
     endpoint = data.endpoint.strip()
@@ -1715,6 +1707,45 @@ async def test_mcp_connection(data: MCPTestRequest):
         _cleanup_mcp_auth(auth)
 
 
+@router.post("/tools/test")
+async def test_mcp_connection(data: MCPTestRequest):
+    """Testa conexão com MCP Server — HTTP ou stdio.
+
+    NOTA: timeout de stdio elevado para 90s para acomodar a 1ª execução de
+    'npx -y <pacote>' que precisa baixar dependências do registry npm.
+
+    PR #231: emite evento estruturado `mcp.test.completed` ou `mcp.test.failed`
+    no app.log para que o operador consiga rastrear falhas pelo Log Viewer 2.0
+    (Observabilidade > Manutenção de Logs).
+    """
+    import time
+    _t0 = time.time()
+    result = await _test_mcp_connection_impl(data)
+    duration_ms = round((time.time() - _t0) * 1000, 2)
+    success = bool(result.get("success"))
+    payload = {
+        "event": "mcp.test.completed" if success else "mcp.test.failed",
+        "mcp_endpoint": (data.endpoint or "").strip(),
+        "transport": "http" if (data.endpoint or "").startswith("http") else "stdio",
+        "auth_type": data.auth_type or "",
+        "success": success,
+        "details": (result.get("details") or "")[:300],
+        "latency_ms": result.get("latency"),
+        "duration_ms": duration_ms,
+        "server_name": result.get("server_name"),
+        "discovered_tools_count": len(result.get("discovered_tools") or []),
+        "recommendations_count": len(result.get("recommendations") or []),
+    }
+    # IMPORTANTE: usar key `event` (não `name`) — `name` colide com
+    # LogRecord.name (bug PR #225). `mcp_endpoint` em vez de `endpoint`
+    # por consistência semântica + futura defesa.
+    if success:
+        logger.info(payload["event"], extra=payload)
+    else:
+        logger.warning(payload["event"], extra=payload)
+    return result
+
+
 class MCPExecuteRequest(BaseModel):
     endpoint: str
     tool_name: str
@@ -1723,11 +1754,9 @@ class MCPExecuteRequest(BaseModel):
     auth_token: Optional[str] = ""
     auth_config: Optional[str] = "{}"
 
-@router.post("/tools/execute")
-async def execute_mcp_tool(data: MCPExecuteRequest):
-    """Executa uma ferramenta MCP via JSON-RPC — HTTP ou stdio.
-    Suporta autenticação API Key, OAuth2 Client Credentials e mTLS.
-    """
+async def _execute_mcp_tool_impl(data: MCPExecuteRequest) -> dict:
+    """Implementação real do execute. Wrapper público adiciona log
+    estruturado pós-execução (PR #231)."""
     import httpx, time
 
     endpoint = data.endpoint.strip()
@@ -1816,6 +1845,45 @@ async def execute_mcp_tool(data: MCPExecuteRequest):
         return {"success": False, "error": str(e)[:300], "latency": int((time.time()-start)*1000)}
     finally:
         _cleanup_mcp_auth(auth)
+
+
+@router.post("/tools/execute")
+async def execute_mcp_tool(data: MCPExecuteRequest):
+    """Executa uma ferramenta MCP via JSON-RPC — HTTP ou stdio.
+    Suporta autenticação API Key, OAuth2 Client Credentials e mTLS.
+
+    PR #231: emite evento estruturado `mcp.execute.completed` ou
+    `mcp.execute.failed` para rastreio via Log Viewer 2.0. Não loga
+    arguments (podem conter dados sensíveis do operador) — só size.
+    """
+    import json as _json, time
+    _t0 = time.time()
+    result = await _execute_mcp_tool_impl(data)
+    duration_ms = round((time.time() - _t0) * 1000, 2)
+    success = bool(result.get("success"))
+    try:
+        args_size = len(_json.dumps(data.arguments or {}))
+    except Exception:
+        args_size = 0
+    raw_data = result.get("data") or ""
+    payload = {
+        "event": "mcp.execute.completed" if success else "mcp.execute.failed",
+        "mcp_endpoint": (data.endpoint or "").strip(),
+        "transport": "http" if (data.endpoint or "").startswith("http") else "stdio",
+        "auth_type": data.auth_type or "",
+        "tool_name": data.tool_name or "",
+        "args_size_bytes": args_size,
+        "success": success,
+        "error": (result.get("error") or "")[:300] if not success else "",
+        "data_size_bytes": len(raw_data) if isinstance(raw_data, str) else 0,
+        "latency_ms": result.get("latency"),
+        "duration_ms": duration_ms,
+    }
+    if success:
+        logger.info(payload["event"], extra=payload)
+    else:
+        logger.warning(payload["event"], extra=payload)
+    return result
 
 
 def _extract_json_from_sse(sse_text: str) -> dict | None:

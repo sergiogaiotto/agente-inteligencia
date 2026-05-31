@@ -332,6 +332,9 @@ async def toggle_favorite(connector_id: str, endpoint_id: str):
 
 @router.post("/{connector_id}/test")
 async def test_connector(connector_id: str):
+    """Health check de um API connector. PR #231: emite evento estruturado
+    `api_connector.test.completed` / `.failed` para rastreio via Log Viewer 2.0.
+    """
     conn_repo, _, _ = _repos()
     c = await conn_repo.find_by_id(connector_id)
     if not c:
@@ -341,22 +344,42 @@ async def test_connector(connector_id: str):
     url = f"{base}{path}"
     headers = _build_auth_headers(c)
     start = time.time()
+    result: dict
     try:
         async with httpx.AsyncClient(headers=headers, **_client_kwargs(c)) as client:
             r = await client.get(url)
         latency = round((time.time() - start) * 1000, 2)
-        return {
+        result = {
             "ok": 200 <= r.status_code < 400,
             "status": r.status_code,
             "latency_ms": latency,
             "url": url,
         }
     except httpx.ConnectError:
-        return {"ok": False, "status": 0, "error": f"Não foi possível conectar a {base}", "url": url}
+        result = {"ok": False, "status": 0, "error": f"Não foi possível conectar a {base}", "url": url}
     except httpx.TimeoutException:
-        return {"ok": False, "status": 408, "error": "Timeout", "url": url}
+        result = {"ok": False, "status": 408, "error": "Timeout", "url": url}
     except Exception as e:
-        return {"ok": False, "status": 500, "error": str(e)[:200], "url": url}
+        result = {"ok": False, "status": 500, "error": str(e)[:200], "url": url}
+
+    duration_ms = round((time.time() - start) * 1000, 2)
+    ok = bool(result.get("ok"))
+    log_payload = {
+        "event": "api_connector.test.completed" if ok else "api_connector.test.failed",
+        "connector_id": connector_id,
+        "connector_name": c.get("name", ""),
+        "url": url,
+        "ok": ok,
+        "status": result.get("status"),
+        "error": (result.get("error") or "")[:300] if not ok else "",
+        "latency_ms": result.get("latency_ms"),
+        "duration_ms": duration_ms,
+    }
+    if ok:
+        logger.info(log_payload["event"], extra=log_payload)
+    else:
+        logger.warning(log_payload["event"], extra=log_payload)
+    return result
 
 
 @router.get("/health/all")
