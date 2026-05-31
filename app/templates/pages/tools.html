@@ -357,17 +357,20 @@
                     </div>
                     <!-- ══ AUTH CONFIG — campos condicionais por tipo ══ -->
 
-                    <!-- API Key -->
+                    <!-- API Key (PR #229: input vazio em edit; placeholder muda se há token armazenado) -->
                     <div x-show="form.auth_requirements === 'api_key'" x-transition class="rounded-lg border border-amber-200 bg-amber-50/30 px-4 py-3">
                         <label class="block text-[11px] font-semibold text-amber-800 mb-1.5">API Key / Bearer Token</label>
                         <div class="flex gap-2">
                             <input :type="showAuthToken ? 'text' : 'password'" x-model="form.auth_token"
-                                   placeholder="sk-... ou token"
-                                   class="flex-1 rounded-lg border border-amber-200 bg-white px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-amber-400 placeholder:text-amber-300">
+                                   :placeholder="hasExistingAuthToken ? '••• token armazenado — deixe vazio para manter, ou cole novo' : 'sk-... ou token'"
+                                   class="flex-1 rounded-lg border border-amber-200 bg-white px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-amber-400 placeholder:text-amber-400">
                             <button @click="showAuthToken = !showAuthToken" type="button"
                                     class="rounded-lg border border-amber-200 px-3 py-2 text-[11px] text-amber-700 hover:bg-amber-100 transition-colors"
                                     x-text="showAuthToken ? 'Ocultar' : 'Mostrar'"></button>
                         </div>
+                        <p x-show="hasExistingAuthToken && !form.auth_token" class="mt-1.5 text-[9px] text-emerald-700">
+                            ✓ Token armazenado em repouso (Fernet). Para mantê-lo, basta clicar em Atualizar sem editar este campo.
+                        </p>
                         <p class="mt-1.5 text-[9px] text-amber-600">Enviado como <code class="bg-amber-100 px-1 rounded">Authorization: Bearer &lt;token&gt;</code> em cada chamada HTTP.</p>
                     </div>
 
@@ -587,6 +590,10 @@ function toolsPage() {
             execFormatted: false, execExpanded: false,
         },
         showAuthToken: false,
+        // PR #229: backend mascara secrets no GET para evitar duplo cifragem.
+        // Estas flags dizem à UI se a tool já tem token/secrets armazenados.
+        hasExistingAuthToken: false,
+        hasExistingAuthConfigSecrets: false,
         authConfig: { client_id: '', client_secret: '', token_url: '', scope: '', client_cert: '', client_key: '', ca_cert: '' },
         form: { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'' },
 
@@ -999,6 +1006,11 @@ function toolsPage() {
             this.saving = false;
             if(tool){
                 this.editingId = tool.id;
+                // PR #229: NÃO carregamos auth_token nem secrets do auth_config —
+                // o backend agora mascara esses campos no GET. UI mostra
+                // "(token armazenado)" via has_auth_token / has_auth_config_secrets
+                // e deixa em branco. Editar o campo SUBSTITUI; deixar vazio
+                // PRESERVA o valor existente no banco.
                 this.form = {
                     name: tool.name||'',
                     mcp_server: tool.mcp_server||'',
@@ -1008,9 +1020,11 @@ function toolsPage() {
                     sensitivity: tool.sensitivity||'internal',
                     requires_trusted_context: !!tool.requires_trusted_context,
                     auth_requirements: tool.auth_requirements||'',
-                    auth_token: tool.auth_token||''
+                    auth_token: ''  // sempre vazio em edit — bandeira abaixo indica se há existente
                 };
-                // Carregar auth_config JSON em objeto reativo
+                this.hasExistingAuthToken = !!tool.has_auth_token;
+                this.hasExistingAuthConfigSecrets = !!tool.has_auth_config_secrets;
+                // Carregar auth_config JSON em objeto reativo (sem secrets — backend mascarou)
                 try { this.authConfig = JSON.parse(tool.auth_config || '{}'); }
                 catch { this.authConfig = {}; }
                 // Garantir que todas as chaves existam
@@ -1019,6 +1033,8 @@ function toolsPage() {
                 this.editingId = null;
                 this.form = { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'' };
                 this.authConfig = { client_id:'', client_secret:'', token_url:'', scope:'', client_cert:'', client_key:'', ca_cert:'' };
+                this.hasExistingAuthToken = false;
+                this.hasExistingAuthConfigSecrets = false;
             }
             this.showAuthToken = false;
             this.wizardOpen=false;this.wizardResults=[];this.wizardError='';this.wizardNoResults=false;
@@ -1058,6 +1074,12 @@ function toolsPage() {
                 auth_token: String(this.form.auth_token || ''),
                 auth_config: JSON.stringify(this.authConfig || {}),
             };
+            // PR #229: se está editando e o auth_token foi deixado vazio,
+            // OMITE do payload — backend interpreta como "preservar".
+            // Sem isso, o backend zeraria o token armazenado.
+            if (this.editingId && this.hasExistingAuthToken && !payload.auth_token) {
+                delete payload.auth_token;
+            }
 
             console.log('[saveTool] editingId:', this.editingId, '| payload:', JSON.parse(JSON.stringify(payload)));
 
