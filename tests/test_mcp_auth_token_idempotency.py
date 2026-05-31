@@ -128,12 +128,14 @@ def _make_app(tools_store: dict, monkeypatch):
 
 class TestGetMasksSecrets:
     def test_list_tools_masks_auth_token(self, monkeypatch):
+        # PR #230: usa um cipher real para fingerprint funcionar
+        real_cipher = secrets_mod.write_secret("plain-token-abc")
         store = {
             "t1": {
                 "id": "t1", "name": "Tavily",
                 "mcp_server": "https://mcp.tavily.com/mcp",
                 "auth_requirements": "api_key",
-                "auth_token": "fernet:gAAAAxxxxxxxxxxxxxxx",
+                "auth_token": real_cipher,
                 "auth_config": "{}",
             },
         }
@@ -143,6 +145,9 @@ class TestGetMasksSecrets:
         tools = r.json()["tools"]
         assert tools[0]["auth_token"] == ""
         assert tools[0]["has_auth_token"] is True
+        # PR #230: fingerprint exposto, 8 chars do SHA-256 do plaintext
+        assert len(tools[0]["auth_token_fingerprint"]) == 8
+        assert tools[0]["auth_token_fingerprint"] == secrets_mod.fingerprint("plain-token-abc")
 
     def test_get_tool_returns_empty_when_no_auth_token(self, monkeypatch):
         store = {
@@ -179,6 +184,24 @@ class TestGetMasksSecrets:
         assert cfg["token_url"] == "https://auth.example.com/token"
         assert cfg["client_secret"] == ""      # mascarado
         assert body["has_auth_config_secrets"] is True
+        # PR #230: fingerprint por secret presente
+        fps = body["auth_config_fingerprints"]
+        assert fps["client_secret"] == secrets_mod.fingerprint("sk-secret-xyz")
+        assert fps["client_key"] == ""   # vazio quando não há
+
+    def test_fingerprint_same_for_same_plaintext_across_saves(self, monkeypatch):
+        """PR #230: cerne do feedback ao operador — o mesmo plaintext sempre
+        produz o mesmo fingerprint, independentemente de como/quantas vezes
+        foi cifrado. Sem isso, o operador não tem como saber que o token
+        está realmente lá depois de salvar."""
+        plain = "real-key-xyz"
+        cipher_a = secrets_mod.write_secret(plain)
+        cipher_b = secrets_mod.write_secret(plain)
+        # ciphertexts são diferentes (Fernet usa IV aleatório)...
+        assert cipher_a != cipher_b
+        # ...mas fingerprint do plaintext é IGUAL (sinal estável para o operador)
+        assert secrets_mod.fingerprint(cipher_a) == secrets_mod.fingerprint(cipher_b)
+        assert secrets_mod.fingerprint(plain) == secrets_mod.fingerprint(cipher_a)
 
 
 # ─── 3. PUT preserva auth_token vazio ────────────────────────

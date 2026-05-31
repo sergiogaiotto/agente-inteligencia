@@ -368,8 +368,16 @@
                                     class="rounded-lg border border-amber-200 px-3 py-2 text-[11px] text-amber-700 hover:bg-amber-100 transition-colors"
                                     x-text="showAuthToken ? 'Ocultar' : 'Mostrar'"></button>
                         </div>
-                        <p x-show="hasExistingAuthToken && !form.auth_token" class="mt-1.5 text-[9px] text-emerald-700">
-                            ✓ Token armazenado em repouso (Fernet). Para mantê-lo, basta clicar em Atualizar sem editar este campo.
+                        <p x-show="hasExistingAuthToken && !form.auth_token" class="mt-1.5 text-[9px] text-emerald-700 flex items-center gap-1.5">
+                            <span>✓ Token armazenado em repouso (Fernet)</span>
+                            <span x-show="authTokenFingerprint" class="font-mono bg-emerald-100 px-1.5 rounded text-emerald-800" :title="'Fingerprint SHA-256 do plaintext (8 chars). Muda se o token mudar.'">
+                                fp:<span x-text="authTokenFingerprint"></span>
+                            </span>
+                            <span class="text-emerald-600">·</span>
+                            <span class="text-emerald-600">deixe em branco para manter</span>
+                        </p>
+                        <p x-show="hasExistingAuthToken && form.auth_token" class="mt-1.5 text-[9px] text-amber-700">
+                            ⚠ Você digitou um novo valor. Ao clicar em Atualizar o token armazenado será SUBSTITUÍDO.
                         </p>
                         <p class="mt-1.5 text-[9px] text-amber-600">Enviado como <code class="bg-amber-100 px-1 rounded">Authorization: Bearer &lt;token&gt;</code> em cada chamada HTTP.</p>
                     </div>
@@ -594,6 +602,11 @@ function toolsPage() {
         // Estas flags dizem à UI se a tool já tem token/secrets armazenados.
         hasExistingAuthToken: false,
         hasExistingAuthConfigSecrets: false,
+        // PR #230: fingerprints (8 chars do hash do plaintext) dão sinal
+        // visual de que o secret está salvo. Mesmo plaintext = mesmo fp;
+        // novo plaintext = fp diferente → operador VÊ a mudança após salvar.
+        authTokenFingerprint: '',
+        authConfigFingerprints: { client_secret: '', client_key: '', ca_cert: '' },
         authConfig: { client_id: '', client_secret: '', token_url: '', scope: '', client_cert: '', client_key: '', ca_cert: '' },
         form: { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'' },
 
@@ -1024,6 +1037,11 @@ function toolsPage() {
                 };
                 this.hasExistingAuthToken = !!tool.has_auth_token;
                 this.hasExistingAuthConfigSecrets = !!tool.has_auth_config_secrets;
+                // PR #230: fingerprints (8 chars do hash) — sinal visual que o
+                // token está armazenado. Mesmo plaintext = mesmo fingerprint;
+                // operador vê quando algo muda.
+                this.authTokenFingerprint = tool.auth_token_fingerprint || '';
+                this.authConfigFingerprints = tool.auth_config_fingerprints || {client_secret:'', client_key:'', ca_cert:''};
                 // Carregar auth_config JSON em objeto reativo (sem secrets — backend mascarou)
                 try { this.authConfig = JSON.parse(tool.auth_config || '{}'); }
                 catch { this.authConfig = {}; }
@@ -1035,6 +1053,8 @@ function toolsPage() {
                 this.authConfig = { client_id:'', client_secret:'', token_url:'', scope:'', client_cert:'', client_key:'', ca_cert:'' };
                 this.hasExistingAuthToken = false;
                 this.hasExistingAuthConfigSecrets = false;
+                this.authTokenFingerprint = '';
+                this.authConfigFingerprints = {client_secret:'', client_key:'', ca_cert:''};
             }
             this.showAuthToken = false;
             this.wizardOpen=false;this.wizardResults=[];this.wizardError='';this.wizardNoResults=false;
