@@ -936,12 +936,16 @@ async def promote_to_table(
     enriched = await find_by_id_with_ks(table_id)
 
     # Log de sucesso (catálogo de eventos)
+    # IMPORTANTE: as chaves do `extra` NÃO podem colidir com atributos
+    # reservados de LogRecord (name, msg, args, levelname, message, module,
+    # funcName, lineno, etc) — Python levanta KeyError em makeRecord.
+    # Por isso `table_name` em vez de `name` (PR #225 corrigiu o bug original).
     _tabular_logger.info(
         "promote_completed",
         extra={
             "event": EVT_PROMOTE_COMPLETED,
             "ks_id": ks_id, "table_id": table_id, "urn": urn,
-            "name": display_name, "sheet_name": sheet_name,
+            "table_name": display_name, "sheet_name": sheet_name,
             "rows": target_sheet.get("rows", 0),
             "columns": target_sheet.get("columns", len(schema)),
             "size_bytes": size_bytes,
