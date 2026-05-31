@@ -1299,18 +1299,26 @@ def _strip_secrets_from_tool(t: dict) -> dict:
     reenviava no PUT sem editar, causando duplo cifragem no banco e quebra
     silenciosa do MCP (401). Solução: nunca emitir o ciphertext na rede.
 
+    PR #230: adiciona `auth_token_fingerprint` (8 chars do SHA-256 do
+    PLAINTEXT) para a UI mostrar evidência visual de que o token está
+    armazenado. Quando o operador troca o token, o fingerprint muda — sinal
+    claro de "sim, foi salvo". Sem isso, o input volta a aparecer vazio
+    após salvar e o operador acha que não persistiu.
+
     Em vez de remover o campo (quebraria clients antigos), substitui por
     string vazia e adiciona flags `has_auth_token` / `has_auth_config_secrets`
-    para a UI mostrar "(token armazenado)" sem expor o conteúdo.
+    e fingerprints para a UI mostrar "(token armazenado · ab12cd34)".
 
     auth_config pode ter client_secret/client_key/ca_cert (OAuth2/mTLS).
     Esses campos são removidos do JSON mas o resto da config (client_id,
     token_url, scope) permanece para a UI rehidratar.
     """
     import json as _json
+    from app.core.secrets import fingerprint as _fp
     out = dict(t)
     token = out.get("auth_token") or ""
     out["has_auth_token"] = bool(token)
+    out["auth_token_fingerprint"] = _fp(token) if token else ""
     out["auth_token"] = ""
     cfg_raw = out.get("auth_config") or "{}"
     try:
@@ -1319,6 +1327,12 @@ def _strip_secrets_from_tool(t: dict) -> dict:
         cfg = {}
     SECRET_KEYS = ("client_secret", "client_key", "ca_cert")
     has_secrets = any(cfg.get(k) for k in SECRET_KEYS)
+    # PR #230: fingerprints por secret para que a UI mostre "saved · ab12cd34"
+    # em cada campo separado quando OAuth2/mTLS tem múltiplos secrets.
+    out["auth_config_fingerprints"] = {
+        k: (_fp(cfg.get(k) or "") if cfg.get(k) else "")
+        for k in SECRET_KEYS
+    }
     for k in SECRET_KEYS:
         if k in cfg:
             cfg[k] = ""
