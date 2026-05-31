@@ -1569,11 +1569,65 @@ class MCPTestRequest(BaseModel):
     auth_type: Optional[str] = ""
     auth_token: Optional[str] = ""
     auth_config: Optional[str] = "{}"
+    # PR #232: opcional. Quando passado e auth_token está vazio, o backend
+    # busca o token armazenado da tool — necessário porque o PR #229
+    # mascarou o auth_token no GET, e a UI do painel direito passou a
+    # enviar string vazia, gerando 401 silencioso contra o MCP real.
+    tool_id: Optional[str] = None
+
+
+async def _resolve_secrets_from_tool_id(data) -> None:
+    """Se `data.tool_id` é passado E os campos de auth vieram vazios na
+    request, busca os valores armazenados em `tools` e in-place atualiza
+    `data.auth_token` / `data.auth_config` (apenas para os secrets vazios).
+
+    Token preenchido NUNCA é sobrescrito — operador pode estar testando um
+    valor novo antes de salvar.
+
+    Token armazenado pode estar cifrado (`fernet:...`); decifragem fica a
+    cargo do `_build_mcp_auth` via `read_secret` (idempotente para
+    plaintext legacy). Aqui só passamos o valor opaco.
+    """
+    if not getattr(data, "tool_id", None):
+        return
+    needs_token = not (data.auth_token or "").strip()
+    cfg_str = data.auth_config or "{}"
+    try:
+        cur_cfg = json.loads(cfg_str)
+    except (ValueError, TypeError):
+        cur_cfg = {}
+    needs_cfg_secret = any(
+        k in cur_cfg and not cur_cfg.get(k)
+        for k in ("client_secret", "client_key", "ca_cert")
+    )
+    if not needs_token and not needs_cfg_secret:
+        return  # nada a resolver — caller forneceu tudo
+    tool = await tools_repo.find_by_id(data.tool_id)
+    if not tool:
+        return  # tool sumiu/foi deletada — segue sem fallback, falha downstream
+    if needs_token:
+        stored = tool.get("auth_token") or ""
+        if stored:
+            data.auth_token = stored
+    if needs_cfg_secret:
+        try:
+            stored_cfg = json.loads(tool.get("auth_config") or "{}")
+        except (ValueError, TypeError):
+            stored_cfg = {}
+        for k in ("client_secret", "client_key", "ca_cert"):
+            if k in cur_cfg and not cur_cfg.get(k) and stored_cfg.get(k):
+                cur_cfg[k] = stored_cfg[k]
+        data.auth_config = json.dumps(cur_cfg)
+
 
 async def _test_mcp_connection_impl(data: MCPTestRequest) -> dict:
     """Implementação real do teste MCP. Wrapper público adiciona log
     estruturado pós-execução (PR #231)."""
     import httpx, time
+
+    # PR #232: se a UI passou tool_id e o auth_token está vazio (porque o
+    # GET de tools mascarou desde PR #229), busca o token armazenado do banco.
+    await _resolve_secrets_from_tool_id(data)
 
     endpoint = data.endpoint.strip()
 
@@ -1728,6 +1782,7 @@ async def test_mcp_connection(data: MCPTestRequest):
         "mcp_endpoint": (data.endpoint or "").strip(),
         "transport": "http" if (data.endpoint or "").startswith("http") else "stdio",
         "auth_type": data.auth_type or "",
+        "tool_id": data.tool_id or "",  # PR #232
         "success": success,
         "details": (result.get("details") or "")[:300],
         "latency_ms": result.get("latency"),
@@ -1753,11 +1808,18 @@ class MCPExecuteRequest(BaseModel):
     auth_type: Optional[str] = ""
     auth_token: Optional[str] = ""
     auth_config: Optional[str] = "{}"
+    # PR #232: mesma semântica do MCPTestRequest — backend resolve secrets
+    # do tool quando UI manda tool_id + auth_token vazio.
+    tool_id: Optional[str] = None
 
 async def _execute_mcp_tool_impl(data: MCPExecuteRequest) -> dict:
     """Implementação real do execute. Wrapper público adiciona log
     estruturado pós-execução (PR #231)."""
     import httpx, time
+
+    # PR #232: resolve secrets armazenados quando tool_id é passado e
+    # auth_token vem vazio (UI mascara desde PR #229).
+    await _resolve_secrets_from_tool_id(data)
 
     endpoint = data.endpoint.strip()
 
@@ -1871,6 +1933,7 @@ async def execute_mcp_tool(data: MCPExecuteRequest):
         "mcp_endpoint": (data.endpoint or "").strip(),
         "transport": "http" if (data.endpoint or "").startswith("http") else "stdio",
         "auth_type": data.auth_type or "",
+        "tool_id": data.tool_id or "",  # PR #232
         "tool_name": data.tool_name or "",
         "args_size_bytes": args_size,
         "success": success,
