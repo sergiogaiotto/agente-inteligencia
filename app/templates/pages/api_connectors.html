@@ -1140,7 +1140,16 @@ function apiConnectorsPage() {
             catch { this.curlStatus = '✗ URL inválida'; showToast('URL do cURL inválida', 'error'); return; }
 
             const baseUrl = u.origin;
-            const path = u.pathname + (u.search || '');
+            // PR #233: preserva placeholders de path template ({cep}, {id}, etc).
+            // `new URL(...).pathname` URL-encoda `{` → `%7B` e `}` → `%7D` (spec WHATWG).
+            // Sem este decode, o substituidor de path em runtime não acha `{cep}`
+            // para trocar pelo valor real, e a chamada vai pra `/api/cep/v1/%7Bcep%7D`
+            // literalmente — 404 garantido.
+            // Decode é cirúrgico — só esses 2 chars; outros encodings (espaços, acentos)
+            // ficam intactos.
+            const path = (u.pathname + (u.search || ''))
+                .replace(/%7B/gi, '{')
+                .replace(/%7D/gi, '}');
 
             // Detectar auth — ordem de prioridade: -u, Authorization, Cookie, X-API-Key/token
             let authType = 'none', authHeader = '', apiKey = '', authLabel = 'nenhuma';
