@@ -1093,8 +1093,24 @@ async def suggest_endpoint(data: EndpointSuggestRequest):
         '  "category": "categoria curta em PT-BR",\n'
         '  "description": "1 frase curta em PT-BR sobre o que faz",\n'
         '  "sample_body": "JSON-string. \\"{}\\" para GET. Para POST/PUT, '
-        'shape esperado."\n'
-        "}"
+        'shape esperado.",\n'
+        '  "test_path_values": { "<nome do placeholder>": "valor real que '
+        'funciona na API" }\n'
+        "}\n\n"
+        "## Regras críticas para test_path_values (PR #237)\n"
+        "- Para cada placeholder {x} que aparece no path, gere uma chave\n"
+        "  test_path_values[x] com um valor REAL que faz a API retornar 200.\n"
+        "- Use o conhecimento do connector para acertar o formato:\n"
+        "  * Brasilapi /ibge/uf/v1/{code}: aceita SIGLA (SP, RJ), NÃO\n"
+        "    aceita código numérico apesar da doc dizer 'sigla ou código'.\n"
+        "  * /api/cep/v1/{cep}: 8 dígitos numéricos sem hífen (01310100).\n"
+        "  * /api/cnpj/v1/{cnpj}: 14 dígitos sem pontos (33000167000101).\n"
+        "  * /api/ddd/v1/{ddd}: 2 dígitos (11, 21, 31).\n"
+        "  * /api/banks/v1/{code}: código numérico de banco (1 para BB).\n"
+        "  * /api/feriados/v1/{ano}: ano com 4 dígitos (2026).\n"
+        "- Se não tiver placeholder no path, retorne test_path_values: {}.\n"
+        "- Para APIs desconhecidas, sugira o formato mais comum (id=1,\n"
+        "  cep=01310100, etc.) — operador ainda pode editar."
     )
 
     from app.core.config import get_settings
@@ -1147,6 +1163,27 @@ async def suggest_endpoint(data: EndpointSuggestRequest):
         except Exception:
             sample_body = "{}"
 
+    # PR #237: sanitiza test_path_values (dict[str, str]) — usado pela UI
+    # pra pré-preencher os inputs de teste do path. Brasilapi {code} vira "SP",
+    # /cep/{cep} vira "01310100" etc. Operador ainda pode editar.
+    raw_tpv = raw.get("test_path_values") or {}
+    if not isinstance(raw_tpv, dict):
+        raw_tpv = {}
+    test_path_values: dict[str, str] = {}
+    for k, v in list(raw_tpv.items())[:20]:  # cap defensivo
+        if not isinstance(k, str) or not k:
+            continue
+        if v is None:
+            continue
+        # Coerção: number → str, dict/list → json string (raro)
+        if isinstance(v, (str, int, float, bool)):
+            test_path_values[k[:50]] = str(v)[:100]
+        else:
+            try:
+                test_path_values[k[:50]] = _json.dumps(v, ensure_ascii=False)[:100]
+            except Exception:
+                continue
+
     suggestion = {
         "name": str(raw.get("name", ""))[:100],
         "method": method,
@@ -1154,6 +1191,7 @@ async def suggest_endpoint(data: EndpointSuggestRequest):
         "category": str(raw.get("category", "geral"))[:50],
         "description": str(raw.get("description", ""))[:300],
         "sample_body": sample_body[:2000],
+        "test_path_values": test_path_values,
     }
 
     logger.info(
@@ -1164,6 +1202,8 @@ async def suggest_endpoint(data: EndpointSuggestRequest):
             "free_text_len": len(free),
             "suggested_method": suggestion["method"],
             "suggested_path_len": len(suggestion["path"]),
+            # PR #237: contagem (não valores — podem ser sensíveis em APIs internas)
+            "test_path_values_count": len(test_path_values),
             "provider": provider_name,
             "model": result.get("model") or model or provider_name,
         },

@@ -1598,6 +1598,13 @@ function apiConnectorsPage() {
                 if (s.category) this.epForm.category = s.category;
                 if (s.description) this.epForm.description = s.description;
                 if (s.sample_body) this.epForm.sample_body = s.sample_body;
+                // PR #237: IA agora também sugere valores reais para os
+                // placeholders do path (ex: Brasilapi UF /{code} → "SP",
+                // não "35"). Operador ainda pode editar antes do Testar.
+                if (s.test_path_values && typeof s.test_path_values === 'object') {
+                    // Objeto novo para acionar reatividade Alpine corretamente
+                    this.epTestPathValues = { ...this.epTestPathValues, ...s.test_path_values };
+                }
                 this.aiSuggestModel = r?.model || '';
                 this.aiSuggestApplied = true;
                 showToast('Sugestão aplicada — revise antes de criar');
