@@ -39,22 +39,40 @@
                                 <span class="rounded-full bg-surface-100 px-2 py-0.5 text-[10px] font-medium text-surface-500" x-text="s.source_type"></span>
                             </div>
                             <p class="text-[12px] text-surface-400 mb-2" x-text="s.description || 'Sem descrição'"></p>
-                            <!-- Stats bar (Onda 6) -->
+                            <!-- Stats bar (Onda 6 + PR #226: tabelas) -->
+                            <!-- kbHasContent considera chunks E tabelas: KB modo tabular
+                                 não tem chunks mas pode ter dados estruturados. -->
                             <div class="flex items-center gap-3 text-[11px]">
                                 <template x-if="statsBy[s.id]">
-                                    <div class="flex items-center gap-3">
-                                        <span :class="statsBy[s.id].chunks_count > 0 ? 'text-emerald-600 font-medium' : 'text-amber-600 font-medium'">
-                                            <span x-show="statsBy[s.id].chunks_count > 0">●</span>
-                                            <span x-show="statsBy[s.id].chunks_count === 0">⚠</span>
-                                            <span x-text="statsBy[s.id].chunks_count + ' chunks'"></span>
+                                    <div class="flex items-center gap-3 flex-wrap">
+                                        <!-- Chunks (RAG textual) — só mostra se modo aceita texto -->
+                                        <span x-show="s.kb_mode !== 'tabular' && statsBy[s.id].chunks_count > 0"
+                                              class="text-emerald-600 font-medium">
+                                            ● <span x-text="statsBy[s.id].chunks_count + ' chunks'"></span>
                                         </span>
-                                        <span class="text-surface-400" x-show="statsBy[s.id].chunks_count > 0"
+                                        <span class="text-surface-400"
+                                              x-show="s.kb_mode !== 'tabular' && statsBy[s.id].chunks_count > 0"
                                               x-text="(statsBy[s.id].tokens_total||0).toLocaleString() + ' tokens'"></span>
-                                        <span class="text-surface-400" x-show="statsBy[s.id].last_chunk_at"
-                                              :title="statsBy[s.id].last_chunk_at"
-                                              x-text="'ingerido ' + ago(statsBy[s.id].last_chunk_at)"></span>
-                                        <span class="text-amber-600" x-show="statsBy[s.id].chunks_count === 0">
-                                            sem conteúdo — clique em "Ingerir"
+
+                                        <!-- Tabelas (DuckDB) — sempre que houver, qualquer modo -->
+                                        <span x-show="(statsBy[s.id].tables_count||0) > 0"
+                                              class="text-amber-700 font-medium"
+                                              :title="'Tabelas estruturadas DuckDB · ' + (statsBy[s.id].tables_rows_total||0).toLocaleString() + ' linhas total'">
+                                            📊 <span x-text="statsBy[s.id].tables_count + ' tabela(s)'"></span>
+                                            <span class="text-surface-400 font-normal" x-show="(statsBy[s.id].tables_rows_total||0) > 0"
+                                                  x-text="'· ' + (statsBy[s.id].tables_rows_total||0).toLocaleString() + ' linhas'"></span>
+                                        </span>
+
+                                        <!-- Timestamp do mais recente entre chunk/tabela -->
+                                        <span class="text-surface-400"
+                                              x-show="statsBy[s.id].last_chunk_at || statsBy[s.id].last_table_at"
+                                              :title="statsBy[s.id].last_table_at || statsBy[s.id].last_chunk_at"
+                                              x-text="'ingerido ' + ago(statsBy[s.id].last_table_at || statsBy[s.id].last_chunk_at)"></span>
+
+                                        <!-- Empty state: só se NÃO tem chunks E NÃO tem tabelas -->
+                                        <span class="text-amber-600"
+                                              x-show="(statsBy[s.id].chunks_count||0) === 0 && (statsBy[s.id].tables_count||0) === 0">
+                                            ⚠ sem conteúdo — clique em "Ingerir"
                                         </span>
                                     </div>
                                 </template>
@@ -74,10 +92,22 @@
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
                             Ingerir
                         </button>
+                        <!-- Refresh stats (sempre disponível em hover, mostra info sem ação destrutiva) -->
+                        <button @click.stop="refreshStatsFor(s.id)" title="Atualizar estatísticas desta KB"
+                                class="p-1.5 rounded-md hover:bg-brand-50 text-surface-400 hover:text-brand-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <svg class="w-4 h-4" :class="refreshingStatsId === s.id ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+                        </button>
+                        <!-- Limpar chunks (RAG textual) -->
                         <button x-show="statsBy[s.id]?.chunks_count > 0"
-                                @click.stop="clearChunks(s)" title="Limpar conteúdo (mantém a fonte registrada)"
+                                @click.stop="clearChunks(s)" title="Limpar conteúdo textual (chunks RAG)"
                                 class="p-1.5 rounded-md hover:bg-amber-50 text-surface-400 hover:text-amber-700 opacity-0 group-hover:opacity-100 transition-opacity">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 00-3.7-3.7 48.678 48.678 0 00-7.324 0 4.006 4.006 0 00-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3l-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 003.7 3.7 48.656 48.656 0 007.324 0 4.006 4.006 0 003.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3l-3 3"/></svg>
+                        </button>
+                        <!-- Limpar tabelas (DuckDB) — PR #226 -->
+                        <button x-show="(statsBy[s.id]?.tables_count||0) > 0"
+                                @click.stop="clearTables(s)" title="Limpar tabelas estruturadas (mantém a fonte registrada)"
+                                class="p-1.5 rounded-md hover:bg-amber-50 text-surface-400 hover:text-amber-700 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 7.5h18M3 12h18M3 16.5h18M7.5 3v18M16.5 3v18"/></svg>
                         </button>
                         <button @click.stop="openEditor(s)" title="Editar metadados"
                                 class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -716,6 +746,11 @@
                                             <span class="rounded-full text-[10px] px-2 py-0.5 font-mono"
                                                   :class="(t.quality_score||0) >= 0.7 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'"
                                                   x-text="'score ' + (t.quality_score||0).toFixed(2)"></span>
+                                            <!-- Botão delete por linha — PR #226 -->
+                                            <button @click.stop="deleteTable(t)" :title="'Excluir tabela ' + t.name"
+                                                    class="p-1 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600 transition-colors">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79"/></svg>
+                                            </button>
                                             <svg class="w-3.5 h-3.5 text-surface-400 transition-transform" :class="t._expanded ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                                         </div>
                                     </div>
@@ -1336,6 +1371,56 @@ function evidencePage() {
                 await this.loadAllStats();
             } catch(e) {
                 showToast('Erro: ' + (e?.message || ''), 'error');
+            }
+        },
+
+        // ── Tabelas: limpar todas (paralelo do clearChunks) — PR #226 ──
+        async clearTables(s) {
+            const n = this.statsBy[s.id]?.tables_count || 0;
+            if (!n) return;
+            if (!confirm(`Apagar TODAS as ${n} tabela(s) estruturada(s) de "${s.name}"? Os arquivos .duckdb são apagados em disco. A fonte permanece registrada.`)) return;
+            try {
+                const r = await api.del('/api/v1/knowledge-sources/' + s.id + '/tables');
+                showToast(`${r.deleted} tabela(s) apagada(s)`);
+                await this.loadAllStats();
+                // Se a KB inspecionada é a mesma, atualiza a aba Tabelas também
+                if (this.inspectSource?.id === s.id) {
+                    await this.loadTablesForSource(s.id);
+                }
+            } catch(e) {
+                showToast('Erro: ' + (e?.message || ''), 'error');
+            }
+        },
+
+        // ── Delete de uma tabela individual no painel direito — PR #226 ──
+        async deleteTable(t) {
+            if (!confirm(`Excluir tabela "${t.name}"? O arquivo .duckdb é apagado em disco e a metadata é removida do banco. Operação irreversível.`)) return;
+            try {
+                await api.del('/api/v1/data-tables/' + t.id);
+                showToast('Tabela excluída');
+                // Atualiza listagem do inspector + stats da KB
+                await this.loadTablesForSource(this.inspectSource?.id);
+                if (t.knowledge_source_id) {
+                    // Re-busca stats só desta KB (mais rápido que loadAllStats)
+                    await this.refreshStatsFor(t.knowledge_source_id);
+                }
+            } catch(e) {
+                showToast('Erro: ' + (e?.message || ''), 'error');
+            }
+        },
+
+        // ── Refresh stats de uma KB (sem recarregar a lista inteira) — PR #226 ──
+        refreshingStatsId: null,
+        async refreshStatsFor(sid) {
+            this.refreshingStatsId = sid;
+            try {
+                const r = await api.get('/api/v1/knowledge-sources/' + sid + '/stats');
+                // Substitui só esta entrada de statsBy para reatividade granular
+                this.statsBy = { ...this.statsBy, [sid]: r };
+            } catch(e) {
+                showToast('Erro ao atualizar stats: ' + (e?.message || ''), 'error');
+            } finally {
+                this.refreshingStatsId = null;
             }
         },
     }

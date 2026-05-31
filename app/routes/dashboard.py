@@ -1055,13 +1055,57 @@ async def ingest_url_into_source(ks_id: str, data: IngestUrlRequest):
 
 @router.get("/knowledge-sources/{ks_id}/stats")
 async def source_stats_endpoint(ks_id: str):
-    """Estatísticas operacionais da fonte: chunks_count, tokens_total,
-    last_chunk_at, last_updated, index_version. Pra UI mostrar status sem
-    listar todos os chunks."""
+    """Estatísticas operacionais da fonte para a UI.
+
+    Campos legados (compat com clients anteriores):
+        chunks_count, tokens_total, last_chunk_at, last_updated, index_version
+
+    Campos adicionados em 2026-05-31 (PR #226 — card de KB tabular não
+    mostrava info de tabelas):
+        tables_count: int          — quantas data_tables apontam para esta KB
+        tables_rows_total: int     — soma de row_count das tabelas
+        tables_size_bytes: int     — soma de size_bytes dos arquivos .duckdb
+        last_table_at: str | None  — ISO timestamp da promoção mais recente
+
+    Para KB em `kb_mode='tabular'`, `chunks_count` é sempre 0 (correto —
+    elas não usam RAG textual). A UI precisa olhar `tables_*` para saber
+    se a KB tem conteúdo. KB `hybrid` tem ambos.
+    """
     from app.evidence.ingest import source_stats
     if not await knowledge_repo.find_by_id(ks_id):
         raise HTTPException(404, "knowledge_source não encontrada")
-    return await source_stats(ks_id)
+    stats = await source_stats(ks_id) or {}
+
+    # Aglutina contagem/tamanho/timestamp das tabelas. Query direta no pool —
+    # mais eficiente que list_for_user (que monta dicts completos por linha).
+    from app.core.database import _get_pool
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        row = await con.fetchrow(
+            """
+            SELECT
+                COUNT(*)                       AS tables_count,
+                COALESCE(SUM(row_count), 0)    AS tables_rows_total,
+                COALESCE(SUM(size_bytes), 0)   AS tables_size_bytes,
+                MAX(created_at)                AS last_table_at
+            FROM data_tables
+            WHERE knowledge_source_id = $1
+              AND status != 'deleted'
+            """,
+            ks_id,
+        )
+    if row:
+        stats["tables_count"] = int(row["tables_count"] or 0)
+        stats["tables_rows_total"] = int(row["tables_rows_total"] or 0)
+        stats["tables_size_bytes"] = int(row["tables_size_bytes"] or 0)
+        last_at = row["last_table_at"]
+        stats["last_table_at"] = last_at.isoformat() if last_at else None
+    else:
+        stats.setdefault("tables_count", 0)
+        stats.setdefault("tables_rows_total", 0)
+        stats.setdefault("tables_size_bytes", 0)
+        stats.setdefault("last_table_at", None)
+    return stats
 
 
 @router.delete("/knowledge-sources/{ks_id}/chunks")

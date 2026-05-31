@@ -957,7 +957,142 @@ async def promote_to_table(
     return enriched or row
 
 
-# ─── 3. EXECUTE QUERY ────────────────────────────────────────────
+# ─── 3. DELETE ───────────────────────────────────────────────────
+
+
+async def delete_table(table_id: str, deleted_by: Optional[str] = None) -> dict:
+    """Apaga uma tabela: arquivo .duckdb + linha em data_tables.
+
+    Idempotente: se a tabela já não existe, retorna `{deleted: False,
+    reason: 'not_found'}` em vez de levantar — facilita "limpar todas"
+    em batch sem precisar tratar race conditions.
+
+    Args:
+        table_id: ID da data_table a apagar.
+        deleted_by: user id para audit (opcional).
+
+    Returns:
+        Dict com `deleted: bool`, `table_id`, `name` (se existia),
+        `size_freed_bytes` (do .duckdb removido).
+    """
+    _t0_delete = time.perf_counter()
+    row = await data_tables_repo.find_by_id(table_id)
+    if not row:
+        _tabular_logger.info(
+            "delete_skipped_not_found",
+            extra={
+                "event": "tabular.delete.skipped",
+                "table_id": table_id,
+                "reason": "not_found",
+            },
+        )
+        return {"deleted": False, "table_id": table_id, "reason": "not_found"}
+
+    table_name = row.get("name", "")
+    ks_id = row.get("knowledge_source_id", "")
+    duckdb_path_rel = row.get("duckdb_path", "")
+    size_freed = 0
+
+    # 1. Apaga o arquivo .duckdb persistente (best-effort — se falhar, a metadata
+    # ainda some, evitando órfãos de metadata. O arquivo órfão pode ser limpo
+    # depois manualmente; é mais leve do que metadata órfã na UI).
+    if duckdb_path_rel:
+        duckdb_path = Path(duckdb_path_rel)
+        if duckdb_path.exists():
+            try:
+                size_freed = duckdb_path.stat().st_size
+                duckdb_path.unlink()
+            except OSError as e:
+                _tabular_logger.warning(
+                    "delete_file_failed",
+                    extra={
+                        "event": "tabular.delete.file_failed",
+                        "table_id": table_id,
+                        "path": duckdb_path_rel,
+                        "error": str(e),
+                    },
+                )
+
+    # 2. Apaga a metadata em Postgres
+    await data_tables_repo.delete(table_id)
+
+    _tabular_logger.info(
+        "delete_completed",
+        extra={
+            "event": "tabular.delete.completed",
+            "table_id": table_id,
+            "table_name": table_name,
+            "ks_id": ks_id,
+            "size_freed_bytes": size_freed,
+            "deleted_by": deleted_by or "",
+            "duration_ms": round((time.perf_counter() - _t0_delete) * 1000, 2),
+        },
+    )
+
+    return {
+        "deleted": True,
+        "table_id": table_id,
+        "name": table_name,
+        "ks_id": ks_id,
+        "size_freed_bytes": size_freed,
+    }
+
+
+async def delete_all_tables_for_ks(
+    ks_id: str, user: dict, deleted_by: Optional[str] = None
+) -> dict:
+    """Apaga TODAS as tabelas visíveis ao user na KB. Usado pelo botão
+    "Limpar tabelas" do card da KB tabular (paralelo ao /chunks DELETE).
+
+    Visibility-aware: usa `list_for_user` para listar antes de apagar.
+    Root vê e apaga tudo; user comum só apaga o que enxergaria via
+    `GET /data-tables?ks_id=...`. Tabelas confidential/restricted
+    permanecem se o caller não puder vê-las.
+
+    Idempotente: KB sem tabelas (ou sem nenhuma visível ao user) retorna
+    `{deleted: 0, freed_bytes: 0}`.
+    """
+    # Import lazy para evitar ciclo com app.data_tables.queries (que importa
+    # tabular indiretamente via routes/data_tables).
+    from app.data_tables.queries import list_for_user
+
+    _t0 = time.perf_counter()
+    rows = await list_for_user(user, ks_id=ks_id)
+    deleted = 0
+    freed = 0
+    details: list[dict] = []
+    for row in rows or []:
+        result = await delete_table(row["id"], deleted_by=deleted_by)
+        if result.get("deleted"):
+            deleted += 1
+            freed += result.get("size_freed_bytes", 0) or 0
+            details.append({
+                "table_id": result["table_id"],
+                "name": result.get("name", ""),
+                "size_freed_bytes": result.get("size_freed_bytes", 0),
+            })
+
+    _tabular_logger.info(
+        "delete_all_completed",
+        extra={
+            "event": "tabular.delete_all.completed",
+            "ks_id": ks_id,
+            "deleted_count": deleted,
+            "freed_bytes": freed,
+            "deleted_by": deleted_by or "",
+            "duration_ms": round((time.perf_counter() - _t0) * 1000, 2),
+        },
+    )
+
+    return {
+        "deleted": deleted,
+        "freed_bytes": freed,
+        "ks_id": ks_id,
+        "details": details,
+    }
+
+
+# ─── 4. EXECUTE QUERY ────────────────────────────────────────────
 
 
 def _quote_ident(name: str) -> str:
