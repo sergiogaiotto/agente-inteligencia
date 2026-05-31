@@ -725,12 +725,23 @@ async def extract_cookie(data: ExtractCookieRequest):
 # ═══════════════════════════════════════════════════════
 
 _OPENAPI_CANDIDATE_PATHS = (
+    # FastAPI / Starlette default
     "/openapi.json",
     "/api/openapi.json",
     "/v1/openapi.json",
+    "/v2/openapi.json",
+    "/api/v1/openapi.json",
+    "/api/v2/openapi.json",
+    # Spring Boot 2/3
     "/v3/api-docs",
+    "/v2/api-docs",
+    "/api/v3/api-docs",
+    # ASP.NET / Swashbuckle
     "/swagger.json",
+    "/swagger/v1/swagger.json",
+    # Express + swagger-ui-express / generic
     "/docs/openapi.json",
+    "/api-docs/swagger.json",
 )
 
 
@@ -867,10 +878,17 @@ async def introspect(data: IntrospectRequest):
                         tried.append({"url": hinted, "status": 0, "error": str(e)[:120], "via": "html-hint"})
 
     if not spec:
-        # Hint mais útil quando a auth via connector ainda não bastou
+        # PR #234: mensagem agora começa pela razão MAIS COMUM (API não publica
+        # OpenAPI) e destaca o atalho que funciona (cURL wizard). Muitas APIs
+        # públicas (Brasilapi, ViaCEP, OpenWeather no plano free, etc.) documentam
+        # em HTML estático sem expor .json — não há "URL exata do spec" para o
+        # operador colar, então sugerir isso primeiro só confunde.
         hint_not_found = (
-            "Não encontrei openapi.json nas rotas comuns. Se você tem a URL exata do spec, "
-            "cole-a inteira. Se a API não expõe OpenAPI, preencha manualmente."
+            "Esta API provavelmente não expõe OpenAPI publicamente (tentei "
+            f"{len(candidate_urls)} caminhos comuns — todos sem sucesso). "
+            "Atalhos: 1) cole um comando cURL no campo abaixo — eu extraio "
+            "base_url, auth e endpoint automaticamente; 2) se mesmo assim souber "
+            "a URL exata do openapi.json, cole-a aqui; 3) preencha manualmente."
         )
         if auth_hint and auth_source != "none":
             # já tentou com auth do connector mas ainda deu 401/403 — pista contextual
