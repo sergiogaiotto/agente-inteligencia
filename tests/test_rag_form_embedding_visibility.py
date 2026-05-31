@@ -132,11 +132,16 @@ class TestRagFooterUI:
         assert "rag_meta.embedding_dim" in block
 
     def test_embedding_badge_has_tooltip_explaining_significance(self, html):
-        """Tooltip explica pro user que dim deve bater com Qdrant collection
-        e que mudança de provider exige reindex."""
+        """Tooltip explica pro user que dim deve bater com a collection pgvector
+        e que mudança de provider exige reindex.
+
+        Onda Q (2026-05-30) removeu Qdrant e adotou pgvector como backend
+        único. O tooltip foi atualizado em PR #222 — este teste agora valida
+        a redação nova (caça resíduos "Qdrant" que confundem operadores).
+        """
         idx = html.find("Sem LLM intermediário")
         block = html[idx:idx + 2000]
-        assert "Qdrant" in block
+        assert "pgvector" in block
         assert "reindex" in block
 
     def test_embedding_badge_shows_d_suffix(self, html):
