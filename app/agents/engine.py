@@ -1142,7 +1142,12 @@ async def execute_interaction(
 
     ctx = InteractionContext(agent_id=agent_id, journey=journey, channel=channel)
     fsm = InteractionStateMachine(ctx)
-    await fsm.run_intake(user_input, agent_id, journey, channel)
+    # Propaga session_id para FSM reusar interaction existente (2026-06-01).
+    # Antes ficava só na assinatura de execute_interaction e era descartado
+    # — cada call criava uma sessão nova mesmo com session_id fornecido,
+    # fragmentando conversas no workspace (user reportou sidebar com várias
+    # entries quando esperava uma só).
+    await fsm.run_intake(user_input, agent_id, journey, channel, session_id=session_id)
 
     # ── Prompt-injection guard (LLM01) ─────────────────────────
     # Aplicado ANTES do policy_check para bloquear payloads adversariais
@@ -2152,6 +2157,7 @@ async def execute_pipeline(
     channel: str = "api",
     attachments: list = None,
     progress_callback=None,
+    session_id: str | None = None,
 ) -> dict:
     """Executa pipeline completo pelo AI Mesh.
 
@@ -2291,6 +2297,10 @@ async def execute_pipeline(
                 channel=channel,
                 attachments=attachments if i == 0 else None,
                 pipeline_context=last_result.get("output","") if i > 0 and last_result else None,
+                # Só o primeiro agente reutiliza a session_id do request.
+                # Subsequentes criam sub-interactions próprias (child_interaction_ids)
+                # que se ligam à master via execute_pipeline:2298+ depois.
+                session_id=session_id if i == 0 else None,
             )
             iid = result.get("interaction_id")
             # Primeiro agente executado (não pass-through) vira o master

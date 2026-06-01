@@ -87,6 +87,11 @@ class InteractionContext:
     evidence_score: float = 0.0
     transition_log: list = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    # turn_number da request que iniciou esta execução. Em sessões novas
+    # começa em 1; quando run_intake reusa session_id existente, fica em
+    # max(turns_anteriores)+1. run_log_and_close usa next_user_turn+1
+    # para gravar o output turn no DB sem sobrescrever turns antigos.
+    next_user_turn: int = 1
 
 
 class InteractionStateMachine:
@@ -134,9 +139,52 @@ class InteractionStateMachine:
 
             logger.info(f"Interaction {self.ctx.interaction_id}: {from_state.value} → {target.value}")
 
-    async def run_intake(self, user_input: str, agent_id: str, journey: str = "", channel: str = "api"):
-        """Estado Intake: recebe solicitação, normaliza, constrói contexto."""
-        self.ctx.interaction_id = str(uuid.uuid4())
+    async def run_intake(
+        self,
+        user_input: str,
+        agent_id: str,
+        journey: str = "",
+        channel: str = "api",
+        session_id: str | None = None,
+    ):
+        """Estado Intake: recebe solicitação, normaliza, constrói contexto.
+
+        Reuso de sessão (2026-06-01): quando `session_id` é informado e já
+        existe no DB, a interaction é REUTILIZADA — turn_number da request
+        fica como max(turns existentes) + 1, sem `interactions_repo.create`.
+        Sem isso, mensagens sucessivas com o mesmo `session_id` criavam
+        interactions distintas no DB, e a sidebar do workspace
+        fragmentava a conversa em entradas separadas. O `/chat` declarativo
+        e `/invoke-binding-direct` já implementam essa lógica diretamente
+        no handler; aqui replicamos no FSM para o branch standard.
+        """
+        requested = (session_id or "").strip() or None
+        existing = None
+        if requested:
+            try:
+                existing = await interactions_repo.find_by_id(requested)
+            except Exception as e:  # find_by_id pode falhar (DB down etc)
+                logger.warning(
+                    "state_machine.run_intake.find_by_id_failed",
+                    extra={
+                        "event": "state_machine.session_lookup",
+                        "session_id": requested,
+                        "error_type": type(e).__name__,
+                        "error_msg": str(e)[:200],
+                    },
+                )
+                existing = None
+
+        if existing:
+            self.ctx.interaction_id = requested
+            old_turns = await turns_repo.find_all(interaction_id=requested, limit=500)
+            self.ctx.next_user_turn = max(
+                (int(t.get("turn_number") or 0) for t in old_turns), default=0
+            ) + 1
+        else:
+            self.ctx.interaction_id = requested or str(uuid.uuid4())
+            self.ctx.next_user_turn = 1
+
         self.ctx.agent_id = agent_id
         self.ctx.journey = journey
         self.ctx.channel = channel
@@ -150,17 +198,23 @@ class InteractionStateMachine:
             }
             logger.info(f"PII detectada no input: total={pii.total} types={self.ctx.metadata['pii_in_input']}")
 
-        await interactions_repo.create({
-            "id": self.ctx.interaction_id,
-            "title": _maybe_redact(user_input)[:80].strip(),
-            "agent_id": agent_id,
-            "channel": channel,
-            "journey_id": journey,
-            "state": State.INTAKE.value,
-        })
+        if existing:
+            # Reativa a sessão — não recria. ended_at é atualizado em LogAndClose.
+            await interactions_repo.update(self.ctx.interaction_id, {
+                "state": State.INTAKE.value,
+            })
+        else:
+            await interactions_repo.create({
+                "id": self.ctx.interaction_id,
+                "title": _maybe_redact(user_input)[:80].strip(),
+                "agent_id": agent_id,
+                "channel": channel,
+                "journey_id": journey,
+                "state": State.INTAKE.value,
+            })
         await turns_repo.create({
             "id": str(uuid.uuid4()),
-            "turn_number": 1,
+            "turn_number": self.ctx.next_user_turn,
             "user_text_redacted": _maybe_redact(user_input),
             "interaction_id": self.ctx.interaction_id,
         })
@@ -239,9 +293,13 @@ class InteractionStateMachine:
             })
             # Registra turno de saída — output também é redactado.
             # Saída do LLM pode regurgitar PII vinda das evidências.
+            # Em sessão nova: next_user_turn=1 → output_turn=2 (comportamento
+            # legado preservado). Em sessão reutilizada: next_user_turn=N → output
+            # turn=N+1, evitando sobrescrever turns anteriores.
+            output_turn = (self.ctx.next_user_turn or 1) + 1
             await turns_repo.create({
                 "id": str(uuid.uuid4()),
-                "turn_number": 2,
+                "turn_number": output_turn,
                 "output_text_redacted": _maybe_redact(self.ctx.final_output),
                 "interaction_id": self.ctx.interaction_id,
             })

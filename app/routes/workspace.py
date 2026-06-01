@@ -365,6 +365,10 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
                 channel=data.channel,
                 attachments=attachments,
                 progress_callback=_cb,
+                # Reusa interaction existente quando frontend manda session_id
+                # — só o primeiro agente do pipeline reaproveita (subagentes
+                # geram child_interaction_ids próprios em execute_pipeline).
+                session_id=data.session_id,
             )
         except Exception as e:
             await queue.put({"type": "stream_error", "error": str(e)[:300]})
@@ -426,6 +430,7 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                 user_input=data.message,
                 channel=data.channel,
                 attachments=attachments,
+                session_id=data.session_id,
             )
         else:
             # Auto-rotear para engine declarativo se a skill do agente declara
