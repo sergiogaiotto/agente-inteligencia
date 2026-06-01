@@ -209,14 +209,48 @@ async def upload_file(file: UploadFile = File(...)):
     async with aiofiles.open(str(file_path), "wb") as f:
         await f.write(content_bytes)
 
-    # Tentar ler como texto para passar ao agente
+    # Tentar ler como texto para passar ao agente.
+    # Ordem: UTF-8 direto → markitdown (PDF/PPTX/DOCX/XLSX/imagens/audio) →
+    # placeholder descritivo. Antes (até 2026-06-01) o handler caía direto no
+    # placeholder pra qualquer binário, sem invocar markitdown — o LLM recebia
+    # "[Arquivo binário: relatorio.pdf]" como input e respondia parafraseando
+    # ("não foi possível ler arquivo binário"). markitdown já vivia em
+    # requirements.txt + app/evidence/converters.py mas só era usado pelo
+    # pipeline RAG.
     text_content = None
     try:
         text_content = content_bytes.decode("utf-8")
-        if len(text_content) > 50000:
-            text_content = text_content[:50000] + "\n\n[...truncado em 50.000 caracteres]"
     except (UnicodeDecodeError, ValueError):
-        text_content = f"[Arquivo binário: {file.filename}, {len(content_bytes)} bytes, tipo: {file.content_type}]"
+        try:
+            # Import lazy: markitdown puxa PIL/soundfile/etc. Falha de import
+            # vira ConverterError 503 mas aqui tratamos como warning sem
+            # quebrar o upload — agente recebe placeholder e responde.
+            from app.evidence.converters import convert_bytes
+            text_content = convert_bytes(
+                content_bytes, file.filename, file.content_type
+            )
+        except Exception as conv_e:  # pragma: no cover - conversor falhou
+            import logging as _logging
+            _logging.getLogger("app.routes.workspace").warning(
+                "workspace.upload.text_extract_failed",
+                extra={
+                    "event": "workspace.upload",
+                    # 'filename' é atributo built-in do LogRecord — usar nome
+                    # diferente pra não disparar KeyError no logging.
+                    "attachment_name": file.filename,
+                    "content_type": file.content_type,
+                    "size": len(content_bytes),
+                    "error_type": type(conv_e).__name__,
+                    "error_msg": str(conv_e)[:200],
+                },
+            )
+            text_content = (
+                f"[Arquivo binário não convertido: {file.filename}, "
+                f"{len(content_bytes)} bytes, tipo: {file.content_type}]"
+            )
+
+    if text_content and len(text_content) > 50000:
+        text_content = text_content[:50000] + "\n\n[...truncado em 50.000 caracteres]"
 
     return {
         "file_id": file_id,
