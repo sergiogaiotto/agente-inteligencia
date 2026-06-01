@@ -1,5 +1,6 @@
 """Rotas de agentes — AOBD, Router, Subagent."""
 import base64
+import logging
 import mimetypes
 import os
 import re
@@ -7,6 +8,8 @@ import time
 import uuid, json
 from datetime import datetime, timezone
 from urllib.parse import quote
+
+logger = logging.getLogger(__name__)
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import (
     AgentCreate, AgentUpdate, AgentInvokeRequest, AgentInvokeResponse,
@@ -55,13 +58,33 @@ def _decode_attachments(items: list) -> tuple[list, list]:
             rejected.append({"name": filename, "type": ctype, "kind": "oversize",
                              "reason": f"Excedeu 10MB ({len(raw)} bytes)"})
             continue
-        # Texto se decodifica como UTF-8; binário fica com content vazio (engine
-        # lê metadata pra prompt e o disco/contexto via fluxo multimodal).
+        # Ordem: UTF-8 direto → markitdown (PDF/PPTX/DOCX/XLSX/imagens/audio) →
+        # content vazio. Antes (até 2026-06-01) o except UnicodeDecodeError caía
+        # silenciosamente em content="" e o engine descartava o attachment —
+        # sem qualquer rastro pra troubleshooting de "agente não viu o PDF".
         text_content = ""
         try:
             text_content = raw.decode("utf-8")[:_ATTACHMENT_TEXT_TRUNCATE]
         except UnicodeDecodeError:
-            pass
+            try:
+                from app.evidence.converters import convert_bytes
+                text_content = convert_bytes(raw, filename, ctype)[
+                    :_ATTACHMENT_TEXT_TRUNCATE
+                ]
+            except Exception as conv_e:  # pragma: no cover - conversor falhou
+                logger.warning(
+                    "agents.invoke.text_extract_failed",
+                    extra={
+                        "event": "agents.invoke_attachments",
+                        # 'filename' é built-in do LogRecord — renomeado.
+                        "attachment_name": filename,
+                        "content_type": ctype,
+                        "size": len(raw),
+                        "error_type": type(conv_e).__name__,
+                        "error_msg": str(conv_e)[:200],
+                    },
+                )
+                # mantém content="" — engine descarta (comportamento legado)
         accepted.append({
             "name": filename,
             "type": ctype,
