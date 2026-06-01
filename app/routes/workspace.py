@@ -743,6 +743,11 @@ class InvokeBindingDirectRequest(_BaseModel):
     deve ser invocado, e os params do user (já preenchidos via form).
 
     Onda A.1: só `binding_kind="mcp"`. A.2+ adiciona "api"|"rag"|"tabular".
+
+    Persistência (2026-06-01): `session_id` e `message` opcionais. Quando
+    `message` vem, a invocação é gravada como 1 turn na sessão (cria se
+    não existir) — sem isso, mensagens viviam só no DOM do Alpine e
+    sumiam ao recarregar a sessão pela sidebar.
     """
     agent_id: str
     skill_id: str
@@ -751,6 +756,82 @@ class InvokeBindingDirectRequest(_BaseModel):
     operation: str = ""
     params: dict = _Field(default_factory=dict)
     timeout: int = 60
+    session_id: str = ""
+    message: str = ""
+
+
+async def _persist_invoke_turn(
+    *,
+    session_id: str,
+    message: str,
+    output_text: str,
+    agent_id: str,
+    title_fallback: str,
+) -> str | None:
+    """Grava 1 turn (user + assistant) na sessão e devolve o interaction_id.
+
+    Comportamento (alinhado com /chat declarativo, workspace.py:526-562):
+    - `session_id` vazio → cria nova sessão (UUID novo, title = primeiros 80
+      chars de `message` ou `title_fallback`).
+    - Sessão já existe → calcula next_turn baseado no maior turn_number atual.
+    - Falha silenciosamente (loga e devolve None) — não derrubar a invocação
+      do tool por erro de persistência.
+
+    `message` é o texto humano que o frontend já mostra na bolha do user
+    (ex.: "🛠️ Tavily MCP Server (search) · query=agentes de IA autonomos").
+    `output_text` é o conteúdo do assistant na mesma forma que o frontend
+    renderiza (string crua OU fenced JSON) — assim o round-trip pelo
+    /sessions/{id} GET reproduz exatamente o que estava no DOM.
+    """
+    if not message:
+        # Sem texto de usuário não dá pra reconstruir a bolha "EU" no
+        # round-trip. Não persiste — comportamento legado (efêmero).
+        return None
+    try:
+        sid = (session_id or "").strip() or str(uuid.uuid4())
+        existing = await interactions_repo.find_by_id(sid) if session_id else None
+        if not existing:
+            await interactions_repo.create({
+                "id": sid,
+                "title": (message or title_fallback)[:80].strip(),
+                "agent_id": agent_id,
+                "channel": "workspace",
+                "journey_id": "",
+                "state": "LogAndClose",
+                "ended_at": datetime.now(),
+            })
+            next_turn = 1
+        else:
+            old_turns = await turns_repo.find_all(interaction_id=sid, limit=500)
+            next_turn = max((int(t.get("turn_number") or 0) for t in old_turns), default=0) + 1
+            await interactions_repo.update(sid, {
+                "state": "LogAndClose",
+                "ended_at": datetime.now(),
+            })
+        await turns_repo.create({
+            "id": str(uuid.uuid4()),
+            "turn_number": next_turn,
+            "user_text_redacted": message,
+            "interaction_id": sid,
+        })
+        await turns_repo.create({
+            "id": str(uuid.uuid4()),
+            "turn_number": next_turn + 1,
+            "output_text_redacted": output_text,
+            "interaction_id": sid,
+        })
+        return sid
+    except Exception as e:
+        logger.warning(
+            "workspace.invoke_direct.persist_failed",
+            extra={
+                "event": "workspace.invoke_direct",
+                "agent_id": agent_id,
+                "error_type": type(e).__name__,
+                "error": str(e)[:200],
+            },
+        )
+        return None
 
 
 @router.post("/invoke-binding-direct")
@@ -927,6 +1008,22 @@ async def invoke_binding_direct(
         },
     )
 
+    # 8. Persistência (2026-06-01): grava o turn na sessão para que ao
+    # recarregar (sidebar de Sessões) a invocação reapareça com os mesmos
+    # cards bonitos. Antes disso, a interação vivia só no DOM Alpine e
+    # sumia em F5 / troca de sessão. Falha não derruba a invocação.
+    if isinstance(result_obj, str):
+        output_text = result_obj
+    else:
+        output_text = "```json\n" + _json.dumps(result_obj, ensure_ascii=False, indent=2) + "\n```"
+    interaction_id = await _persist_invoke_turn(
+        session_id=data.session_id,
+        message=data.message,
+        output_text=output_text,
+        agent_id=data.agent_id,
+        title_fallback=f"Invocação · {tool_name}",
+    )
+
     return {
         "ok": not is_error,
         "result": result_obj,
@@ -935,6 +1032,7 @@ async def invoke_binding_direct(
         "payload_sent": arguments,
         "latency_ms": latency_ms,
         "tool_name": tool_name,
+        "interaction_id": interaction_id,
     }
 
 

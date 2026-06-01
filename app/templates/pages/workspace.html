@@ -1873,9 +1873,10 @@ function workspacePage() {
                 .filter(([k,v])=>v!==''&&v!==null&&v!==undefined)
                 .map(([k,v])=>`${k}=${typeof v==='string'?v.slice(0,40):JSON.stringify(v)}`)
                 .join(', ');
+            const _userMsgContent=`🛠️ **${b.binding_label}** (${operation||'sem op'}) · ${paramSummary||'sem params'}`;
             this.messages.push({
                 role:'user',
-                content:`🛠️ **${b.binding_label}** (${operation||'sem op'}) · ${paramSummary||'sem params'}`,
+                content:_userMsgContent,
                 _isBindingInvoke:true,
                 created_at:new Date().toISOString(),
             });
@@ -1889,6 +1890,11 @@ function workspacePage() {
                     operation,
                     params: this.bindingFormParams,
                     timeout: 60,
+                    // Persistência (2026-06-01): backend grava 1 turn na sessão
+                    // (cria se session_id vazio). Sem isso, a invocação sumia
+                    // do histórico ao recarregar pela sidebar.
+                    session_id: this.currentSessionId || '',
+                    message: _userMsgContent,
                 });
                 // Renderiza resposta como assistant message. Se result for
                 // objeto JSON, stringify; se string, mantém.
@@ -1909,6 +1915,17 @@ function workspacePage() {
                 // do invoke-binding-direct também devem abrir em rich view quando
                 // for estruturado (Tavily search etc), em vez de paredão de JSON cru.
                 if(this.isStructuredContent(content)) this.richViewMsgs[_bindIdx]=true;
+                // Persistência (2026-06-01): backend devolve interaction_id quando
+                // gravou o turn. Captura para que próximas invocações (e o chat
+                // normal) reaproveitem a mesma sessão; recarrega lista da sidebar
+                // se for sessão nova.
+                if(result.interaction_id){
+                    const isNew = result.interaction_id !== this.currentSessionId;
+                    this.currentSessionId = result.interaction_id;
+                    if(isNew){
+                        try{ this.sessions=(await api.get('/api/v1/workspace/sessions?limit=20')).sessions||[]; }catch{}
+                    }
+                }
                 this.$nextTick(()=>this.scrollToBottom());
                 showToast(result.ok?'Invocação OK':'Tool retornou erro',result.ok?'success':'error');
                 // Onda A.4: registra invocação no histórico (mesmo se result.ok=false
@@ -2022,6 +2039,17 @@ function workspacePage() {
                 this.selectedAgentId=isPipelineSession?(pipelineEntryId||sessionAgentId||''):(sessionAgentId||pipelineEntryId||'');
                 this.activeTraceIdx=-1;this.richViewMsgs={};
                 for(let i=this.messages.length-1;i>=0;i--){if(this.messages[i]._trace){this.activeTraceIdx=i;break}}
+                // Round-trip de invocações de tool (2026-06-01): respostas
+                // estruturadas (fenced JSON, etc) auto-abrem em rich view
+                // ao recarregar, igual ao caminho de chat/binding-direct.
+                // Sem isso o user recarregaria a sessão e veria paredão JSON
+                // mesmo tendo visto cards bonitos na primeira vez.
+                for(let i=0;i<this.messages.length;i++){
+                    const m=this.messages[i];
+                    if(m.role==='assistant' && !m._systemNote && this.isStructuredContent(m.content)){
+                        this.richViewMsgs[i]=true;
+                    }
+                }
                 this._restoreLog(d.trace);
                 this.$nextTick(()=>this.scrollToBottom());
             }catch{showToast('Erro ao carregar sessão','error')}
