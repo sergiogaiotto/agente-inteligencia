@@ -232,12 +232,43 @@ def _extract_json_schema_from_contract(contract: str) -> dict | None:
     candidate = m.group(1).strip() if m else contract.strip()
     try:
         schema = json.loads(candidate)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError) as e:
+        # Antes silencioso (return None). Sem isso, ## Output Contract com
+        # JSON quebrado fazia o runtime mandar prompt cru pro LLM sem
+        # response_format — operador via resposta sem estrutura e não
+        # entendia o porquê. Agora vai pro errors.log com preview do
+        # que tentamos parsear.
+        logger.warning(
+            "engine.output_contract_json_invalid",
+            extra={
+                "event": "engine.json_invalid",
+                "section": "Output Contract",
+                "candidate_preview": candidate[:200],
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+        )
         return None
     # JSON Schema válido tem que ser objeto com pelo menos type ou properties.
     if not isinstance(schema, dict):
+        logger.warning(
+            "engine.output_contract_not_object",
+            extra={
+                "event": "engine.schema_invalid",
+                "section": "Output Contract",
+                "actual_type": type(schema).__name__,
+            },
+        )
         return None
     if not (schema.get("type") or schema.get("properties") or schema.get("$ref")):
+        logger.warning(
+            "engine.output_contract_empty_schema",
+            extra={
+                "event": "engine.schema_invalid",
+                "section": "Output Contract",
+                "keys": list(schema.keys())[:10],
+            },
+        )
         return None
     return schema
 

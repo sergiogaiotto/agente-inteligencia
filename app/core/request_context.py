@@ -75,7 +75,21 @@ async def _capture_body_preview(request: Request) -> str:
 
     try:
         raw = await request.body()
-    except Exception:
+    except Exception as e:
+        # Body indisponível (stream consumido, conexão caiu antes de
+        # completar, etc). Antes silencioso; agora vai pro errors.log
+        # como warning para troubleshooting de "request_received sem
+        # body_preview".
+        _logger.warning(
+            "request_context.body_read_failed",
+            extra={
+                "event": "request_context.body_failed",
+                "method": request.method,
+                "path": request.url.path,
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+        )
         return ""
 
     if not raw:
@@ -92,7 +106,21 @@ async def _capture_body_preview(request: Request) -> str:
             if isinstance(parsed, dict):
                 parsed = _redact_dict(parsed)
             text = json.dumps(parsed, ensure_ascii=False)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            # JSON malformado em request marcado como application/json —
+            # raro mas vale visibilidade (client mandou Content-Type errado
+            # ou JSON quebrado). Devolve texto cru como fallback.
+            _logger.warning(
+                "request_context.body_json_decode_failed",
+                extra={
+                    "event": "request_context.body_failed",
+                    "method": request.method,
+                    "path": request.url.path,
+                    "ctype": ctype,
+                    "error_type": type(e).__name__,
+                    "error_msg": str(e)[:200],
+                },
+            )
             text = raw.decode("utf-8", errors="replace")
     else:
         # x-www-form-urlencoded — não tem PII estruturada que dê pra parsear
