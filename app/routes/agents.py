@@ -1066,3 +1066,202 @@ async def get_invocation_detail(agent_id: str, interaction_id: str):
         "trace_id": trace_id,
         "tempo_link": tempo_link,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Diagnóstico do Agente (2026-06-01) — paridade com tela de Skill mas
+# aproveitando dados que SÓ o Agente tem: modelo configurado, histórico
+# de execução, conexões no mesh, capacidades (accepts_images etc).
+# ═══════════════════════════════════════════════════════════════════
+
+
+@router.get("/{agent_id}/diagnostics")
+async def agent_diagnostics(agent_id: str):
+    """Diagnóstico rico do agente — 3 grupos de informação.
+
+    1. **cost**: custo/chamada e /mês usando o MODELO do agente (não
+       gpt-4o-mini hardcoded). Estimativa de tokens via tiktoken (com
+       fallback char/4). Base de 1000 chamadas/mês para comparar com
+       a tela do Skill.
+    2. **performance**: latência p50/p95 e taxa de sucesso (% de
+       interactions que terminaram em Recommend) nos últimos 30 dias.
+    3. **capabilities**: badges visuais (visão, documentos, tools_count,
+       mesh_in/out) + alerta de incompat multimodal (accepts_images=true
+       + modelo text-only força fallback em runtime).
+    4. **health**: score 0-100 combinando success_rate + (1-drift) +
+       presença de skill. Drift estimado como % de respostas que NÃO
+       terminaram em Recommend.
+
+    Endpoint stateless, calculado on-demand. Cache HTTP de 60s sugerido
+    pelo header (frontend pode recachear ao trocar modelo do agente).
+    """
+    from app.core.database import (
+        mesh_repo,
+        skills_repo as _skills_repo,
+        interactions_repo as _interactions_repo,
+    )
+    from app.core.llm_pricing import compute_cost, get_pricing
+    from app.core.token_estimator import estimate_tokens
+
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
+
+    model = agent.get("model") or "gpt-4o-mini"
+    provider = (agent.get("llm_provider") or "").lower()
+
+    # ── Custo (estimativa) ──────────────────────────────────────────
+    # Conta como tokens de input: system_prompt + SKILL.md inteiro.
+    # Não inclui input do user, output do LLM, evidências RAG, tool
+    # results — mesma base que a tela do Skill usa pra comparabilidade.
+    system_prompt = (agent.get("system_prompt") or "").strip()
+    skill_raw = ""
+    skill_id = agent.get("skill_id")
+    if skill_id:
+        sk = await _skills_repo.find_by_id(skill_id)
+        if sk:
+            skill_raw = (sk.get("raw_content") or "").strip()
+
+    total_input_chars = len(system_prompt) + len(skill_raw)
+    total_input_tokens = estimate_tokens(system_prompt + "\n" + skill_raw, model=model)
+    # Assume output médio de 500 tokens (paridade com base do Skill)
+    assumed_output_tokens = 500
+    # compute_cost trabalha em USD/1k tokens internamente; expomos na UI
+    # também os preços por 1M para comparabilidade com tela do Skill e
+    # documentação OpenAI.
+    cost_call = compute_cost(provider, model, total_input_tokens, assumed_output_tokens)
+    cost_month = cost_call * 1000  # base de 1000 chamadas/mês
+    pricing_entry = get_pricing(provider, model) or {"input": 0.00015, "output": 0.0006}
+    input_price_per_1m = pricing_entry["input"] * 1000
+    output_price_per_1m = pricing_entry["output"] * 1000
+
+    # ── Performance (histórico real) ────────────────────────────────
+    perf_p50_ms = None
+    perf_p95_ms = None
+    success_rate = None
+    interactions_30d = 0
+    try:
+        # find_all retorna DESC por created_at. Pega últimas 200.
+        all_int = await _interactions_repo.find_all(agent_id=agent_id, limit=200)
+        cutoff = datetime.now(timezone.utc).timestamp() - (30 * 86400)
+        recent = []
+        for itx in all_int:
+            ca = itx.get("created_at")
+            if hasattr(ca, "timestamp") and ca.timestamp() >= cutoff:
+                recent.append(itx)
+        interactions_30d = len(recent)
+        if recent:
+            durations = [
+                int(itx.get("duration_ms") or 0)
+                for itx in recent
+                if itx.get("duration_ms")
+            ]
+            if durations:
+                durations.sort()
+                perf_p50_ms = durations[len(durations) // 2]
+                idx95 = max(0, int(len(durations) * 0.95) - 1)
+                perf_p95_ms = durations[idx95]
+            recommend_count = sum(
+                1 for itx in recent if (itx.get("state") or "").lower().startswith("recommend")
+            )
+            success_rate = round(recommend_count / len(recent), 3)
+    except Exception as e:
+        logger.warning(
+            "agents.diagnostics.perf_query_failed",
+            extra={
+                "event": "agents.diagnostics",
+                "agent_id": agent_id,
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+        )
+
+    # ── Capabilities + incompat warning ─────────────────────────────
+    from app.llm_routing import is_multimodal as _is_multimodal
+
+    accepts_images = bool(agent.get("accepts_images"))
+    accepts_documents = bool(agent.get("accepts_documents"))
+    multimodal_warning = accepts_images and not _is_multimodal(provider, model)
+
+    # Tools count: parse skill raw content para tool_bindings + api_bindings
+    tools_mcp_count = 0
+    tools_api_count = 0
+    if skill_raw:
+        try:
+            from app.skill_parser.parser import parse_skill_md
+            parsed = parse_skill_md(skill_raw)
+            tools_api_count = len(parsed.api_bindings_parsed or [])
+            # MCP tool bindings: linhas começando com '- `<uuid>` (nome)' na
+            # seção ## Tool Bindings (mesma heurística do engine)
+            tool_section = (parsed.tool_bindings or "")
+            tools_mcp_count = tool_section.count("- `") if tool_section else 0
+        except Exception:
+            pass
+
+    # Mesh in/out
+    mesh_in = 0
+    mesh_out = 0
+    try:
+        in_conns = await mesh_repo.find_all(target_agent_id=agent_id, limit=50)
+        out_conns = await mesh_repo.find_all(source_agent_id=agent_id, limit=50)
+        mesh_in = len(in_conns or [])
+        mesh_out = len(out_conns or [])
+    except Exception:
+        pass
+
+    # ── Health score ────────────────────────────────────────────────
+    # Composto: 60% success_rate + 20% (skill presente) + 20% (sem
+    # multimodal_warning). Se sem histórico, devolve apenas o "potencial"
+    # baseado em config (skill + capabilities).
+    score_components = []
+    if success_rate is not None:
+        score_components.append(("success_rate", success_rate, 60))
+    score_components.append(("has_skill", 1.0 if skill_id else 0.0, 20))
+    score_components.append(("no_multimodal_warning", 0.0 if multimodal_warning else 1.0, 20))
+    total_weight = sum(w for _, _, w in score_components)
+    weighted = sum(v * w for _, v, w in score_components)
+    health_score = int(round((weighted / total_weight) * 100)) if total_weight else 50
+
+    return {
+        "agent": {
+            "id": agent_id,
+            "name": agent.get("name"),
+            "model": model,
+            "provider": provider,
+        },
+        "cost": {
+            "model": model,
+            "input_chars": total_input_chars,
+            "input_tokens_est": total_input_tokens,
+            "output_tokens_assumed": assumed_output_tokens,
+            "input_price_per_1m_usd": round(input_price_per_1m, 4),
+            "output_price_per_1m_usd": round(output_price_per_1m, 4),
+            "cost_per_call_usd": round(cost_call, 6),
+            "cost_per_month_usd": round(cost_month, 4),
+            "calls_per_month_base": 1000,
+        },
+        "performance": {
+            "interactions_last_30d": interactions_30d,
+            "p50_latency_ms": perf_p50_ms,
+            "p95_latency_ms": perf_p95_ms,
+            "success_rate": success_rate,  # None se sem histórico
+            "drift_pct": round(1 - success_rate, 3) if success_rate is not None else None,
+        },
+        "capabilities": {
+            "accepts_images": accepts_images,
+            "accepts_documents": accepts_documents,
+            "is_multimodal_model": _is_multimodal(provider, model),
+            "multimodal_warning": multimodal_warning,
+            "tools_mcp_count": tools_mcp_count,
+            "tools_api_count": tools_api_count,
+            "mesh_upstream_count": mesh_in,
+            "mesh_downstream_count": mesh_out,
+        },
+        "health": {
+            "score": health_score,
+            "components": [
+                {"name": n, "value": v, "weight": w}
+                for n, v, w in score_components
+            ],
+        },
+    }

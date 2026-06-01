@@ -69,6 +69,27 @@ PRICING: dict[str, dict[str, float]] = {
     # Aliases sem prefixo openai/ (caso UI guarde sem o prefixo)
     "gpt-oss-20b/gpt-oss-20b":   {"input": 0.0, "output": 0.0},
     "gpt-oss-120b/gpt-oss-120b": {"input": 0.0, "output": 0.0},
+
+    # ── Adicionados para Diagnóstico do Agente (2026-06-01) ──
+    # GPT-4.1 family
+    "azure/gpt-4.1":         {"input": 0.005, "output": 0.015},
+    "azure/gpt-4.1-mini":    {"input": 0.0004, "output": 0.0016},
+    "openai/gpt-4.1":        {"input": 0.005, "output": 0.015},
+    "openai/gpt-4.1-mini":   {"input": 0.0004, "output": 0.0016},
+    "openai_public/gpt-4.1": {"input": 0.005, "output": 0.015},
+    # o1 family (reasoning)
+    "openai/o1-preview":     {"input": 0.015, "output": 0.06},
+    "openai/o1-mini":        {"input": 0.003, "output": 0.012},
+    # Claude legado mais comum
+    "anthropic/claude-3-5-sonnet":  {"input": 0.003, "output": 0.015},
+    "anthropic/claude-3-5-haiku":   {"input": 0.001, "output": 0.005},
+    # Gemini
+    "google/gemini-2.5-pro":    {"input": 0.00125, "output": 0.005},
+    "google/gemini-2.5-flash":  {"input": 0.000075, "output": 0.0003},
+    # openai_public aliases (provider visto em logs)
+    "openai_public/gpt-4o":          {"input": 0.0025, "output": 0.01},
+    "openai_public/gpt-4o-mini":     {"input": 0.00015, "output": 0.0006},
+    "openai_public/gpt-oss-120b":    {"input": 0.0, "output": 0.0},
 }
 
 
