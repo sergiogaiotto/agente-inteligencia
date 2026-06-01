@@ -121,18 +121,24 @@ def _validate_or_generate(header_val: str | None, prefix: str = "req") -> str:
 def _resolve_user_id(request: Request) -> str:
     """Tenta extrair user_id do request sem fazer DB lookup pesado.
 
-    Best-effort: usa cookie 'session' se houver (apenas o id, sem decode);
-    OU header X-User-Id (em dev). Não chama require_user pra evitar
-    overhead em endpoints públicos.
+    Best-effort: lê o cookie `user_id` (definido em /api/v1/users/login —
+    é o UUID do usuário em texto puro, HttpOnly+SameSite); OU header
+    `X-User-Id` (em dev / integrações server-to-server). Não chama
+    require_user pra evitar overhead em endpoints públicos.
+
+    Histórico: antes lia `session` truncado (`sess:abcd1234`), mas o
+    projeto nunca emitiu um cookie com esse nome — o cookie real sempre
+    foi `user_id`. Logs de requests autenticados ficavam sem user_id
+    silenciosamente. Corrigido em 2026-05-31.
     """
     # Header explícito tem precedência (útil em integrações server-to-server)
     hdr_uid = request.headers.get("x-user-id")
     if hdr_uid:
         return hdr_uid[:64]
-    # Cookie session: se existir, usa como dica (mesmo sem validar)
-    sid = request.cookies.get("session")
-    if sid:
-        return f"sess:{sid[:8]}"
+    # Cookie `user_id` setado em /api/v1/users/login (UUID em texto puro).
+    uid_cookie = request.cookies.get("user_id")
+    if uid_cookie:
+        return uid_cookie[:64]
     return ""
 
 

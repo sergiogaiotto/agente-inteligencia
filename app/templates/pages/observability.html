@@ -167,10 +167,24 @@
          ════════════════════════════════════════════════════════════ -->
     <div class="mt-6 rounded-xl border border-surface-200 bg-white">
         <div class="flex items-center justify-between border-b border-surface-100 px-4 py-3">
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
                 <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
                 <h2 class="text-[13px] font-semibold text-brand-900">Manutenção de Logs</h2>
                 <span x-show="logs.totals" class="text-[10px] text-surface-400" x-text="'(' + (logs.totals?.all_size_human || '0 B') + ' em disco · ' + (logs.totals?.archives_count || 0) + ' archives)'"></span>
+                <!-- Sessão atual: lembra ao operador quem está logado antes de ações destrutivas
+                     (Forçar rotação / Limpar archives exigem role=root). Fallback discreto quando anônimo. -->
+                <span x-show="currentUser" class="ml-2 inline-flex items-center gap-1 rounded-full bg-surface-50 border border-surface-200 px-2 py-0.5 text-[10px] text-surface-600"
+                      :title="'user_id: ' + (currentUser?.id || '')">
+                    <svg class="w-3 h-3 text-surface-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg>
+                    Sessão:
+                    <strong class="text-brand-900" x-text="currentUser?.display_name || currentUser?.username || currentUser?.email || '—'"></strong>
+                    <span x-show="currentUser?.role" class="rounded-full px-1.5 text-[9px] font-bold"
+                          :class="(currentUser?.role||'').toLowerCase()==='root' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'"
+                          x-text="currentUser?.role"></span>
+                </span>
+                <span x-show="!currentUser" class="ml-2 inline-flex items-center gap-1 rounded-full bg-surface-50 border border-dashed border-surface-200 px-2 py-0.5 text-[10px] text-surface-400">
+                    Sessão: anônima
+                </span>
             </div>
             <div class="flex items-center gap-2">
                 <button @click="loadLogsStats()" :disabled="logsLoading" class="rounded-lg border border-surface-200 px-3 py-1 text-[11px] text-surface-600 hover:bg-surface-50 disabled:opacity-50">
@@ -338,6 +352,13 @@
                         </template>
                     </select>
                     <!-- Event -->
+                    <select x-show="logUserIds.length > 0" x-model="logView.userFilter" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[11px] max-w-[180px]" title="Filtrar por user_id (UUID do autor da request)">
+                        <option value="">Todos usuários</option>
+                        <template x-for="uid in logUserIds" :key="uid">
+                            <option :value="uid" x-text="userLabel(uid)"></option>
+                        </template>
+                    </select>
+
                     <select x-show="logEvents.length > 0" x-model="logView.eventFilter" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[11px] max-w-[180px]">
                         <option value="">Todos eventos</option>
                         <template x-for="ev in logEvents" :key="ev">
@@ -581,6 +602,9 @@ function observabilityPage() {
         logs: {}, logsLoading: false,
         tailOpen: false, tailFile: '', tailLines: 100,
         tailContent: '', tailMeta: null, tailLoading: false,
+        // Sessão e mapa UUID→nome (usados em Manutenção de Logs + filtro de user no Log Viewer)
+        currentUser: null,
+        userIdToName: {},
         // ── Log Viewer 2.0 (PR pós-tools-console) ──
         logView: {
             parsed: [],            // [{_idx, raw, json}]
@@ -590,6 +614,7 @@ function observabilityPage() {
             levelFilter: '',
             loggerFilter: '',
             eventFilter: '',
+            userFilter: '',
             search: '',
             httpErrorsOnly: false,
             groupByTrace: false,
@@ -612,7 +637,29 @@ function observabilityPage() {
             try { const d = await api.get('/api/v1/agents'); this.agents = d.agents || []; } catch {}
             await this.loadPage();
             try { const s = await api.get('/api/v1/settings'); this.langfuseUrl = s.settings?.langfuse_host || 'https://cloud.langfuse.com'; } catch {}
+            // Sessão atual + mapa UUID→nome (usados no header "Sessão" e no filtro user do Log Viewer).
+            // Falhas são silenciosas — fallback exibe o UUID puro.
+            try {
+                const me = await fetch('/api/v1/users/me').then(r => r.json()).catch(() => ({user: null}));
+                this.currentUser = me?.user || null;
+            } catch {}
+            try {
+                const all = await fetch('/api/v1/users').then(r => r.json()).catch(() => ({users: []}));
+                const map = {};
+                for (const u of (all?.users || [])) {
+                    if (u?.id) map[u.id] = u.display_name || u.username || u.email || u.id;
+                }
+                this.userIdToName = map;
+            } catch {}
             this.loadLogsStats();
+        },
+
+        // Rótulo human-readable para um user_id (UUID). Fallback: 8 chars do UUID.
+        userLabel(uid) {
+            if (!uid) return '—';
+            const name = this.userIdToName?.[uid];
+            if (name) return name + ' (' + uid.substring(0, 8) + ')';
+            return uid.substring(0, 8) + '…';
         },
 
         // ─── Manutenção de Logs ────────────────────────────────────
@@ -680,6 +727,13 @@ function observabilityPage() {
             }
             return Array.from(set).sort();
         },
+        get logUserIds() {
+            const set = new Set();
+            for (const l of this.logView.parsed) {
+                if (l.json?.user_id) set.add(l.json.user_id);
+            }
+            return Array.from(set).sort();
+        },
 
         _timeWindowMs() {
             const map = { '5m': 5*60_000, '15m': 15*60_000, '30m': 30*60_000, '1h': 60*60_000, '6h': 6*60*60_000, '24h': 24*60*60_000 };
@@ -710,6 +764,8 @@ function observabilityPage() {
                 if (v.loggerFilter && j?.logger !== v.loggerFilter) continue;
                 // Event
                 if (v.eventFilter && j?.event !== v.eventFilter) continue;
+                // User
+                if (v.userFilter && j?.user_id !== v.userFilter) continue;
                 // Trace
                 if (v.selectedTraceId && j?.trace_id !== v.selectedTraceId) continue;
                 // HTTP errors
@@ -806,7 +862,7 @@ function observabilityPage() {
         get hasActiveFilters() {
             const v = this.logView;
             return !!(v.timeWindow !== 'all' || v.levelFilter || v.loggerFilter ||
-                     v.eventFilter || v.search || v.httpErrorsOnly || v.selectedTraceId);
+                     v.eventFilter || v.userFilter || v.search || v.httpErrorsOnly || v.selectedTraceId);
         },
 
         clearLogFilters() {
@@ -814,6 +870,7 @@ function observabilityPage() {
             this.logView.levelFilter = '';
             this.logView.loggerFilter = '';
             this.logView.eventFilter = '';
+            this.logView.userFilter = '';
             this.logView.search = '';
             this.logView.httpErrorsOnly = false;
             this.logView.selectedTraceId = null;

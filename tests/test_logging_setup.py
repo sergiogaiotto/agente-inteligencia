@@ -336,6 +336,66 @@ class TestRequestReceivedLogging:
         assert not received, "/api/health deveria continuar silencioso"
 
 
+# ─── _resolve_user_id — cookie 'user_id' (não 'session') ──────────
+# Histórico (2026-05-31): o middleware lia `cookies.get("session")`, mas o
+# projeto nunca emitiu um cookie com esse nome — o cookie real sempre foi
+# `user_id` (UUID em texto puro, set em /api/v1/users/login). Logs de
+# requests autenticados ficavam SEM user_id silenciosamente.
+
+
+class TestResolveUserIdCookie:
+    def _make_app(self):
+        app = FastAPI()
+        install_request_context_middleware(app)
+
+        @app.get("/whoami")
+        def whoami():
+            return {"user_id": user_id_var.get()}
+
+        return app
+
+    def test_user_id_cookie_populates_context_var(self):
+        """Cookie `user_id` (UUID) é lido e propagado para os logs."""
+        client = TestClient(self._make_app())
+        client.cookies.set("user_id", "41e3a8b8-0000-1111-2222-aaaabbbbcccc")
+        r = client.get("/whoami")
+        assert r.status_code == 200
+        assert r.json()["user_id"] == "41e3a8b8-0000-1111-2222-aaaabbbbcccc"
+
+    def test_x_user_id_header_takes_precedence(self):
+        """Header X-User-Id (server-to-server) vence o cookie."""
+        client = TestClient(self._make_app())
+        client.cookies.set("user_id", "from-cookie-uuid")
+        r = client.get("/whoami", headers={"X-User-Id": "from-header"})
+        assert r.json()["user_id"] == "from-header"
+
+    def test_no_cookie_no_header_returns_empty(self):
+        """Anônimo: user_id_var fica vazio (não bloqueia request)."""
+        client = TestClient(self._make_app())
+        r = client.get("/whoami")
+        assert r.json()["user_id"] == ""
+
+    def test_legacy_session_cookie_no_longer_consumed(self):
+        """Defensivo contra regressão: o cookie antigo `session` (que o
+        projeto nunca emitiu) NÃO deve mais ser consumido. Era a fonte do
+        bug — gerava strings 'sess:abcd...' inúteis no log.
+        """
+        client = TestClient(self._make_app())
+        client.cookies.set("session", "abcd1234deadbeef")
+        r = client.get("/whoami")
+        # Nada de `sess:` no resultado — só vazio porque não há cookie `user_id`.
+        assert r.json()["user_id"] == ""
+        assert "sess:" not in r.json()["user_id"]
+
+    def test_long_cookie_value_truncated_to_64_chars(self):
+        """Defesa contra envenenamento via cookie inflado."""
+        client = TestClient(self._make_app())
+        long_uid = "x" * 200
+        client.cookies.set("user_id", long_uid)
+        r = client.get("/whoami")
+        assert len(r.json()["user_id"]) == 64
+
+
 # ─── Retenção uniforme 7d (decisão operacional 2026-05-27) ────────
 # Trava o contrato pra ambos os arquivos. Se mudar um sem o outro, UI mostra
 # valor diferente do real (TimedRotatingFileHandler.backupCount).
