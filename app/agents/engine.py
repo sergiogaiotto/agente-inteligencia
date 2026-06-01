@@ -2522,23 +2522,80 @@ def _get_conditional_jinja_env():
     return _conditional_jinja_env
 
 
+def _build_conditional_context(
+    output: str | None = None,
+    final_state: str | None = None,
+) -> dict:
+    """Monta o dict de variáveis disponíveis para expressões condicionais.
+
+    Centralizado para garantir que runtime (`_should_skip_conditional`),
+    endpoint de teste (`POST /mesh/connections/test-conditional`) e a UI
+    de "vars panel" mostrem EXATAMENTE o mesmo conjunto.
+
+    Vars (2026-06-01 — wizard expansion):
+    - `output` (str): texto da resposta do agente upstream
+    - `output_lower` (str): output em lowercase
+    - `output_length` (int): len(output) — útil pra detectar respostas
+      vazias ou curtas demais
+    - `has_output` (bool): output não-vazio
+    - `final_state` (str): "Recommend"/"Refuse"/"Escalate"/"LogAndClose"
+    - `is_recommend` / `is_refuse` / `is_escalate` (bool): atalhos comuns
+    - `contains_image` (bool): output menciona imagem (jpg/png/gif/webp/
+      "imagem")
+    - `contains_url` (bool): output menciona URL (http:// ou https://)
+    - `contains_pdf` (bool): output menciona pdf
+    - `lines_count` (int): número de linhas (\\n + 1)
+    """
+    out = output or ""
+    out_lower = out.lower()
+    fs = final_state or ""
+    fs_lower = fs.lower()
+    return {
+        "output": out,
+        "output_lower": out_lower,
+        "output_length": len(out),
+        "has_output": bool(out.strip()),
+        "final_state": fs,
+        "is_recommend": fs_lower == "recommend",
+        "is_refuse": fs_lower == "refuse",
+        "is_escalate": fs_lower == "escalate",
+        "contains_image": any(
+            kw in out_lower
+            for kw in ("imagem", ".jpg", ".jpeg", ".png", ".gif", ".webp")
+        ),
+        "contains_url": "http://" in out_lower or "https://" in out_lower,
+        "contains_pdf": ".pdf" in out_lower or " pdf " in out_lower,
+        "lines_count": out.count("\n") + 1 if out else 0,
+    }
+
+
+# Metadata declarativa das vars — consumida pela UI do wizard (vars panel
+# com descrição + exemplo). Mantém ao lado de _build_conditional_context
+# para não dar drift.
+CONDITIONAL_VARS_META: list[dict] = [
+    {"name": "output", "type": "str", "desc": "Texto completo da resposta do agente upstream"},
+    {"name": "output_lower", "type": "str", "desc": "output em lowercase (case-insensitive matching)"},
+    {"name": "output_length", "type": "int", "desc": "Quantidade de caracteres em output"},
+    {"name": "has_output", "type": "bool", "desc": "True se output não é vazio"},
+    {"name": "final_state", "type": "str", "desc": "Estado final do FSM: Recommend / Refuse / Escalate / LogAndClose"},
+    {"name": "is_recommend", "type": "bool", "desc": "Atalho para final_state == 'Recommend'"},
+    {"name": "is_refuse", "type": "bool", "desc": "Atalho para final_state == 'Refuse'"},
+    {"name": "is_escalate", "type": "bool", "desc": "Atalho para final_state == 'Escalate'"},
+    {"name": "contains_image", "type": "bool", "desc": "True se output menciona imagem (.jpg/.png/.webp/'imagem')"},
+    {"name": "contains_url", "type": "bool", "desc": "True se output contém http:// ou https://"},
+    {"name": "contains_pdf", "type": "bool", "desc": "True se output menciona pdf"},
+    {"name": "lines_count", "type": "int", "desc": "Quantas linhas tem output"},
+]
+
+
 def _eval_conditional(expr: str, ctx: dict) -> bool:
     """Avalia uma expressão Jinja booleana contra `ctx`.
 
-    Variáveis disponíveis no contexto:
-    - `output` (str): texto da resposta do agente upstream
-    - `output_lower` (str): output em lowercase (case-insensitive matching)
-    - `final_state` (str): estado final do FSM do agente upstream
-      (ex.: "Recommend", "Refuse", "Escalate", "LogAndClose")
-
-    Exemplos válidos:
-    - `'imagem' in output_lower`
-    - `final_state == 'Recommend'`
-    - `output_lower.startswith('## ')`
-    - `len(output) > 100`
+    Variáveis disponíveis vêm de `_build_conditional_context()` — ver
+    docstring lá.
 
     Em erro de sintaxe ou execução, levanta — caller decide fail-open vs
-    fail-closed. Helper isolado pra ser testável e reusável.
+    fail-closed.
     """
     env = _get_conditional_jinja_env()
     return bool(env.compile_expression(expr)(**ctx))
@@ -2589,11 +2646,12 @@ async def _should_skip_conditional(
         return False
 
     try:
-        result = _eval_conditional(expr, {
-            "output": last_output or "",
-            "output_lower": (last_output or "").lower(),
-            "final_state": last_final_state or "",
-        })
+        result = _eval_conditional(
+            expr,
+            _build_conditional_context(
+                output=last_output, final_state=last_final_state
+            ),
+        )
     except Exception as e:
         logger.warning(
             "mesh.conditional.eval_failed",

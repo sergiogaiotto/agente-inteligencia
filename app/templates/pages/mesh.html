@@ -92,7 +92,9 @@
                     </div>
                     <!-- Edge row -->
                     <div x-show="item.edge && item.type === 'edge' && !collapsedChains[item.rootId]" x-transition.duration.150ms
+                         :id="item.edge?.id ? ('conn-' + item.edge.id) : null"
                          class="group flex items-center gap-3 px-5 py-2.5 hover:bg-surface-50/50 transition-colors"
+                         :class="editingConnId === item.edge?.id && connEditorOpen ? 'mesh-conn-editing ring-2 ring-amber-400 bg-amber-50/70' : ''"
                          :style="'padding-left:' + (20 + (item.depth||0) * 28) + 'px'">
                         <span class="text-[12px] font-mono font-bold shrink-0 min-w-[50px]"
                               :class="(item.depth||0)<=1?'text-brand-600':(item.depth||0)===2?'text-red-500':'text-teal-500'"
@@ -316,16 +318,34 @@
         </div>
     </aside>
 
-    <!-- ══ CONNECTION EDITOR MODAL ══ -->
+    <!-- ══ CONNECTION EDITOR MODAL (Wizard 2026-06-01) ══
+         Modal redesenhado em 2 modos:
+         - "basic": sequential/parallel — form direto (paridade UX legada)
+         - "conditional": tabs Contexto/Padrão/Refinar/Simular com vars panel
+           e simulador em tempo real chamando /test-conditional.
+         Header com breadcrumb da origem→destino quando isEdit. -->
     <template x-if="connEditorOpen">
         <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
             <div class="fixed inset-0 bg-black/40" @click="connEditorOpen = false"></div>
-            <div class="relative z-10 w-full max-w-xl rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden">
-                <div class="flex items-center justify-between border-b border-surface-100 px-6 py-4">
-                    <h3 class="text-[15px] font-bold text-brand-900" x-text="editingConnId ? 'Editar Conexão' : 'Nova Conexão'"></h3>
-                    <button @click="connEditorOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+            <div class="relative z-10 w-full max-w-3xl rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in overflow-hidden max-h-[90vh] flex flex-col">
+                <!-- Header com breadcrumb -->
+                <div class="border-b border-surface-100 px-6 py-4 flex items-center justify-between gap-4">
+                    <div class="min-w-0">
+                        <h3 class="text-[15px] font-bold text-brand-900" x-text="editingConnId ? 'Editar Conexão' : 'Nova Conexão'"></h3>
+                        <div x-show="editingEdgeContext" class="mt-1 flex items-center gap-2 text-[11px] text-surface-500 truncate">
+                            <span x-text="editingEdgeContext?.sourceName || '?'"></span>
+                            <span class="rounded bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono uppercase" x-text="editingEdgeContext?.sourceKind || ''"></span>
+                            <svg class="w-3 h-3 text-surface-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+                            <span x-text="editingEdgeContext?.targetName || '?'"></span>
+                            <span class="rounded bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono uppercase" x-text="editingEdgeContext?.targetKind || ''"></span>
+                        </div>
+                    </div>
+                    <button @click="connEditorOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 shrink-0"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
                 </div>
-                <div class="px-6 py-5 space-y-5">
+
+                <!-- Body (scrollable) -->
+                <div class="px-6 py-5 space-y-5 overflow-y-auto flex-1">
+                    <!-- Origem/Destino -->
                     <div class="flex items-center gap-4">
                         <div class="flex-1">
                             <label class="block text-[11px] font-semibold text-surface-500 mb-1.5">Agente Origem</label>
@@ -345,6 +365,8 @@
                             </select>
                         </div>
                     </div>
+
+                    <!-- Tipo de Conexão -->
                     <div>
                         <label class="block text-[11px] font-semibold text-surface-500 mb-2">Tipo de Conexão</label>
                         <div class="grid grid-cols-3 gap-3">
@@ -362,28 +384,131 @@
                             </button>
                         </div>
                     </div>
-                    <!-- Conditional rule (só aparece quando type=conditional) -->
-                    <div x-show="connForm.connection_type === 'conditional'" x-transition class="rounded-xl border-2 border-amber-200 bg-amber-50/50 p-4 space-y-2">
-                        <label class="block text-[11px] font-semibold text-amber-900">
-                            Regra (expressão Jinja booleana)
-                        </label>
-                        <textarea x-model="connForm.condition_expr"
-                                  rows="2"
-                                  placeholder="'imagem' in output_lower"
-                                  class="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-amber-500 placeholder:text-amber-400/70"></textarea>
-                        <div class="text-[10px] text-amber-800/80 leading-relaxed">
-                            Avaliada contra o <strong>output do agente anterior</strong>. Quando <strong>verdadeiro</strong>, o agente destino executa; quando <strong>falso</strong>, é pulado (passthrough). Variáveis disponíveis:
-                            <code class="bg-amber-100 px-1 rounded">output</code>,
-                            <code class="bg-amber-100 px-1 rounded">output_lower</code>,
-                            <code class="bg-amber-100 px-1 rounded">final_state</code>.
-                            <br>Ex.: <code class="bg-amber-100 px-1 rounded">'pdf' in output_lower</code> ·
-                            <code class="bg-amber-100 px-1 rounded">final_state == 'Recommend'</code> ·
-                            <code class="bg-amber-100 px-1 rounded">len(output) &gt; 200</code>.
-                            <br>Sem regra = sempre passa (equivalente a sequencial). Erro de avaliação = passa (fail-open, ver errors.log).
+
+                    <!-- ─── Wizard (só quando type=conditional) ─── -->
+                    <div x-show="connForm.connection_type === 'conditional'" x-transition class="rounded-xl border-2 border-amber-200 bg-amber-50/30">
+                        <!-- Tabs -->
+                        <div class="flex border-b border-amber-200 bg-amber-100/40">
+                            <template x-for="t in ['context','pattern','refine','simulate']" :key="t">
+                                <button @click="condTab = t" type="button"
+                                        class="flex-1 px-3 py-2.5 text-[11px] font-semibold transition-colors"
+                                        :class="condTab === t ? 'bg-amber-50 text-amber-900 border-b-2 border-amber-500' : 'text-amber-600 hover:bg-amber-50/60'">
+                                    <span x-show="t==='context'">1. Contexto</span>
+                                    <span x-show="t==='pattern'">2. Padrão</span>
+                                    <span x-show="t==='refine'">3. Refinar</span>
+                                    <span x-show="t==='simulate'">4. Simular</span>
+                                </button>
+                            </template>
+                        </div>
+                        <div class="p-4 space-y-3">
+                            <!-- Tab 1: Contexto -->
+                            <div x-show="condTab === 'context'" class="space-y-3 text-[12px] text-amber-900">
+                                <div class="text-[11px] leading-relaxed">
+                                    Conexões condicionais funcionam como <strong>gate de continuação</strong>:
+                                    a regra é avaliada contra o output do agente <strong>origem</strong> antes de executar o
+                                    <strong>destino</strong>. Quando verdadeira → executa. Quando falsa → pula
+                                    (passthrough — output do origem segue adiante).
+                                </div>
+                                <div class="rounded-lg bg-white border border-amber-200 p-3 text-[11px] space-y-1.5">
+                                    <div class="flex gap-2"><span class="text-amber-600 font-semibold w-16 shrink-0">Origem:</span><span x-text="(editingEdgeContext?.sourceName||'—') + ' (' + (editingEdgeContext?.sourceKind||'?') + ')'"></span></div>
+                                    <div class="flex gap-2"><span class="text-amber-600 font-semibold w-16 shrink-0">Destino:</span><span x-text="(editingEdgeContext?.targetName||'—') + ' (' + (editingEdgeContext?.targetKind||'?') + ')'"></span></div>
+                                </div>
+                                <div class="text-[10px] italic text-amber-700">
+                                    <strong>Kind do agente</strong> ajuda a escolher a regra: <code class="bg-amber-100 px-1">aobd</code> (orquestrador) costuma ter output estruturado; <code class="bg-amber-100 px-1">router</code> uma decisão; <code class="bg-amber-100 px-1">subagent</code> uma resposta livre.
+                                </div>
+                                <button @click="condTab = 'pattern'" type="button" class="text-[11px] font-semibold text-amber-700 hover:text-amber-900 inline-flex items-center gap-1">
+                                    Próximo: escolher padrão →
+                                </button>
+                            </div>
+
+                            <!-- Tab 2: Padrão (4 cards de template) -->
+                            <div x-show="condTab === 'pattern'" class="space-y-3">
+                                <div class="text-[11px] text-amber-900">Escolha um <strong>padrão de regra</strong>. Os cards pré-preenchem o textarea no passo seguinte; você pode refinar depois.</div>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button @click="applyPattern('keyword')" type="button" class="rounded-lg border border-amber-300 bg-white hover:bg-amber-50 p-3 text-left transition-all">
+                                        <div class="text-[12px] font-semibold text-amber-900">Contém palavra-chave</div>
+                                        <div class="text-[10px] text-amber-700 mt-0.5">Ex.: <code class="bg-amber-100 px-1">'imagem' in output_lower</code></div>
+                                    </button>
+                                    <button @click="applyPattern('state')" type="button" class="rounded-lg border border-amber-300 bg-white hover:bg-amber-50 p-3 text-left transition-all">
+                                        <div class="text-[12px] font-semibold text-amber-900">Estado final do FSM</div>
+                                        <div class="text-[10px] text-amber-700 mt-0.5">Ex.: <code class="bg-amber-100 px-1">final_state == 'Recommend'</code></div>
+                                    </button>
+                                    <button @click="applyPattern('length')" type="button" class="rounded-lg border border-amber-300 bg-white hover:bg-amber-50 p-3 text-left transition-all">
+                                        <div class="text-[12px] font-semibold text-amber-900">Tamanho do output</div>
+                                        <div class="text-[10px] text-amber-700 mt-0.5">Ex.: <code class="bg-amber-100 px-1">output_length &gt; 200</code></div>
+                                    </button>
+                                    <button @click="applyPattern('custom')" type="button" class="rounded-lg border border-amber-300 bg-white hover:bg-amber-50 p-3 text-left transition-all">
+                                        <div class="text-[12px] font-semibold text-amber-900">Expressão livre (Jinja)</div>
+                                        <div class="text-[10px] text-amber-700 mt-0.5">Comece do zero e use o vars panel</div>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Tab 3: Refinar (textarea + vars panel) -->
+                            <div x-show="condTab === 'refine'" class="space-y-3">
+                                <div>
+                                    <label class="block text-[11px] font-semibold text-amber-900 mb-1.5">Regra (expressão Jinja booleana)</label>
+                                    <textarea x-model="connForm.condition_expr"
+                                              rows="3"
+                                              placeholder="'imagem' in output_lower"
+                                              class="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-amber-500 placeholder:text-amber-400/70"></textarea>
+                                </div>
+                                <div>
+                                    <div class="text-[10px] font-bold text-amber-700 uppercase tracking-wider mb-1.5">Variáveis disponíveis (clique para inserir)</div>
+                                    <div class="grid grid-cols-2 gap-1 max-h-56 overflow-y-auto pr-1">
+                                        <template x-for="v in conditionalVars" :key="v.name">
+                                            <button @click="insertVar(v.name)" type="button" class="text-left rounded-md border border-amber-200 bg-white hover:bg-amber-50 px-2 py-1.5 transition-colors">
+                                                <div class="text-[11px] font-mono font-semibold text-amber-900" x-text="v.name"></div>
+                                                <div class="text-[9px] text-amber-600" x-text="v.type + ' · ' + v.desc"></div>
+                                            </button>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Tab 4: Simular -->
+                            <div x-show="condTab === 'simulate'" class="space-y-3">
+                                <div class="text-[11px] text-amber-900">Cole um <strong>output de exemplo</strong> abaixo. A regra é avaliada em tempo real contra esse contexto — você sabe se vai passar ou pular antes de salvar.</div>
+                                <div>
+                                    <label class="block text-[10px] font-bold text-amber-700 uppercase tracking-wider mb-1">output (texto do agente origem)</label>
+                                    <textarea x-model="sim.output" @input.debounce.400ms="runSimulation()"
+                                              rows="3"
+                                              placeholder="Cole aqui um output de exemplo..."
+                                              class="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none focus:border-amber-500"></textarea>
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-bold text-amber-700 uppercase tracking-wider mb-1">final_state</label>
+                                    <select x-model="sim.final_state" @change="runSimulation()" class="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-[12px] text-brand-900">
+                                        <option value="">(não definido)</option>
+                                        <option value="Recommend">Recommend</option>
+                                        <option value="Refuse">Refuse</option>
+                                        <option value="Escalate">Escalate</option>
+                                        <option value="LogAndClose">LogAndClose</option>
+                                    </select>
+                                </div>
+                                <div class="rounded-lg border-2 p-3"
+                                     :class="sim.error ? 'border-rose-300 bg-rose-50' : (sim.result === true ? 'border-emerald-300 bg-emerald-50' : (sim.result === false ? 'border-amber-300 bg-amber-50' : 'border-surface-200 bg-surface-50'))">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-[11px] font-bold uppercase tracking-wider"
+                                              :class="sim.error ? 'text-rose-700' : (sim.result === true ? 'text-emerald-700' : (sim.result === false ? 'text-amber-700' : 'text-surface-500'))">
+                                            Resultado
+                                        </span>
+                                        <span x-show="sim.loading" class="text-[10px] text-amber-600">avaliando…</span>
+                                    </div>
+                                    <div class="mt-1">
+                                        <span x-show="!sim.loading && sim.error" class="text-[12px] font-mono text-rose-800" x-text="sim.error"></span>
+                                        <span x-show="!sim.loading && !sim.error && sim.result === true" class="text-[14px] font-bold text-emerald-700">✓ verdadeiro — destino EXECUTA</span>
+                                        <span x-show="!sim.loading && !sim.error && sim.result === false" class="text-[14px] font-bold text-amber-700">✗ falso — destino é PULADO</span>
+                                        <span x-show="!sim.loading && !sim.error && sim.result === null" class="text-[11px] italic text-surface-500">preencha um output exemplo para simular</span>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
-                <div class="border-t border-surface-100 px-6 py-4 flex items-center justify-end gap-3">
+
+                <!-- Footer fixo -->
+                <div class="border-t border-surface-100 px-6 py-4 flex items-center justify-end gap-3 bg-white">
                     <button @click="connEditorOpen = false" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] font-medium text-surface-500 hover:bg-surface-50">Cancelar</button>
                     <button @click="saveConnection()" :disabled="savingConn" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
                         <span x-text="savingConn ? 'Salvando...' : (editingConnId ? 'Atualizar' : 'Criar Conexão')"></span>
@@ -404,6 +529,14 @@ function meshPage() {
         groups: [], newGroupName: '', newGroupColor: 'blue', ungroupedCollapsed: false,
         connEditorOpen: false, editingConnId: null, savingConn: false,
         connForm: { source_agent_id: '', target_agent_id: '', connection_type: 'sequential', condition_expr: '' },
+        // Wizard 2026-06-01 — só ativa quando connection_type='conditional'.
+        // editingEdgeContext: snapshot dos nomes/kinds para breadcrumb no header e
+        // resumo na tab "Contexto". Populado em openConnEditor a partir das
+        // node references do topology.
+        editingEdgeContext: null,
+        condTab: 'context',                 // 'context'|'pattern'|'refine'|'simulate'
+        conditionalVars: [],                // populado de GET /conditional-vars
+        sim: { output: '', final_state: '', result: null, error: '', loading: false },
         chainNames: {}, collapsedChains: {},
         renamingChainId: null, renameChainValue: '',
         // ── Detail panel state ──
@@ -547,11 +680,13 @@ function meshPage() {
         nodeKindColor(id) { const k=this.topology.nodes.find(x=>x.id===id)?.kind; return k==='aobd'?'bg-red-500':k==='router'?'bg-brand-500':'bg-teal-500'; },
 
         openConnEditor(edge) {
+            // Reset wizard state — não vazar entre aberturas
+            this.condTab = 'context';
+            this.sim = { output: '', final_state: '', result: null, error: '', loading: false };
+            this.editingEdgeContext = null;
+
             if (edge) {
                 this.editingConnId = edge.id;
-                // edge.config vem do backend como string JSON (ou objeto).
-                // Quando type=conditional, extrai `expr` para popular o textarea
-                // no form. Outros tipos ignoram condition_expr.
                 let cfg = {};
                 if (edge.config) {
                     if (typeof edge.config === 'string') {
@@ -566,18 +701,99 @@ function meshPage() {
                     connection_type: edge.type,
                     condition_expr: cfg.expr || '',
                 };
+                // Breadcrumb context — busca nomes/kinds das nodes do topology
+                const sn = this.topology.nodes.find(n => n.id === edge.source);
+                const tn = this.topology.nodes.find(n => n.id === edge.target);
+                this.editingEdgeContext = {
+                    sourceName: sn?.name || edge.source,
+                    sourceKind: sn?.kind || '?',
+                    targetName: tn?.name || edge.target,
+                    targetKind: tn?.kind || '?',
+                };
+                // Scroll para o item editado no listing (pulsando para destacar).
+                // Defer para o próximo tick — DOM precisa estar com o modal renderizado.
+                this.$nextTick(() => {
+                    const el = document.getElementById('conn-' + edge.id);
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
             } else {
                 this.editingConnId = null;
                 this.connForm = { source_agent_id: '', target_agent_id: '', connection_type: 'sequential', condition_expr: '' };
             }
             this.connEditorOpen = true;
+            // Garante que vars panel está populado antes do user chegar na tab "Refinar"
+            if (!this.conditionalVars.length) this.loadConditionalVars();
         },
         addConnectionToChain(rootId) {
             const chainEdges = this.hierarchicalEdges.filter(i => i.type === 'edge' && i.rootId === rootId);
             let sourceId = rootId;
             if (chainEdges.length) { const deepest = chainEdges.reduce((a, b) => (b.depth||0) > (a.depth||0) ? b : a); sourceId = deepest.edge.target; }
             this.connForm = { source_agent_id: sourceId, target_agent_id: '', connection_type: 'sequential', condition_expr: '' };
-            this.editingConnId = null; this.connEditorOpen = true;
+            this.editingConnId = null;
+            this.editingEdgeContext = null;
+            this.condTab = 'context';
+            this.sim = { output: '', final_state: '', result: null, error: '', loading: false };
+            this.connEditorOpen = true;
+            if (!this.conditionalVars.length) this.loadConditionalVars();
+        },
+        // ─── Wizard conditional ────────────────────────────────
+        async loadConditionalVars() {
+            try {
+                const d = await api.get('/api/v1/mesh/conditional-vars');
+                this.conditionalVars = d.vars || [];
+            } catch { this.conditionalVars = []; }
+        },
+        applyPattern(name) {
+            // Templates iniciais — operador refina na tab seguinte
+            const templates = {
+                keyword: "'imagem' in output_lower",
+                state: "final_state == 'Recommend'",
+                length: "output_length > 200",
+                custom: "",
+            };
+            if (name in templates) {
+                this.connForm.condition_expr = templates[name];
+                this.connForm.connection_type = 'conditional'; // garante
+                this.condTab = 'refine';
+            }
+        },
+        insertVar(varname) {
+            // Insere o nome da var no fim do textarea (com espaço antes se preciso)
+            const cur = (this.connForm.condition_expr || '').trimEnd();
+            this.connForm.condition_expr = cur ? (cur + ' ' + varname) : varname;
+        },
+        async runSimulation() {
+            const expr = (this.connForm.condition_expr || '').trim();
+            if (!expr) {
+                this.sim.result = null;
+                this.sim.error = 'Sem expressão para avaliar (volte ao passo Refinar).';
+                return;
+            }
+            if (!this.sim.output && !this.sim.final_state) {
+                this.sim.result = null;
+                this.sim.error = '';
+                return;
+            }
+            this.sim.loading = true;
+            this.sim.error = '';
+            try {
+                const r = await api.post('/api/v1/mesh/connections/test-conditional', {
+                    expr,
+                    output: this.sim.output,
+                    final_state: this.sim.final_state,
+                });
+                if (r.error) {
+                    this.sim.result = null;
+                    this.sim.error = r.error;
+                } else {
+                    this.sim.result = !!r.result;
+                    this.sim.error = '';
+                }
+            } catch (e) {
+                this.sim.result = null;
+                this.sim.error = 'Falha na chamada: ' + (e?.message || 'desconhecida');
+            }
+            this.sim.loading = false;
         },
         async saveConnection() {
             if (!this.connForm.source_agent_id || !this.connForm.target_agent_id) { showToast('Selecione origem e destino', 'error'); return; }
