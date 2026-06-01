@@ -347,14 +347,19 @@ class Verifier:
                 if schema:
                     # name precisa casar com ^[a-zA-Z0-9_-]+$ — sanitiza title cru
                     # do SKILL.md. Mesma helper do engine.py:_build_response_format.
-                    from app.core.text_utils import sanitize_schema_name
+                    # Strict mode exige required completo + additionalProperties=false
+                    # em todos os objetos — coercionamos antes de enviar.
+                    from app.core.text_utils import (
+                        coerce_to_openai_strict_schema,
+                        sanitize_schema_name,
+                    )
                     kwargs["response_format"] = {
                         "type": "json_schema",
                         "json_schema": {
                             "name": sanitize_schema_name(
                                 schema.get("title"), fallback="CorrectedOutput"
                             ),
-                            "schema": schema,
+                            "schema": coerce_to_openai_strict_schema(schema),
                             "strict": True,
                         },
                     }

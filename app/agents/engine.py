@@ -333,13 +333,21 @@ class DeepAgentHarness:
         # cru do SKILL.md (operador escreve "Saída da Categorizar Imagem" com
         # espaço e acento) e quebrava o request com 400. Centralizamos a
         # sanitização em sanitize_schema_name pra evitar a divergência.
-        from app.core.text_utils import sanitize_schema_name
+        from app.core.text_utils import (
+            coerce_to_openai_strict_schema,
+            sanitize_schema_name,
+        )
         name = sanitize_schema_name(schema.get("title"), fallback="SkillOutput")
+        # Strict mode da OpenAI exige `required` listando TODAS as keys de
+        # `properties` e `additionalProperties: false` em cada objeto. Skills
+        # raramente declaram isso manualmente — coercionamos o schema antes
+        # de enviar para evitar 400 "Invalid schema for response_format".
+        strict_schema = coerce_to_openai_strict_schema(schema)
         return {
             "type": "json_schema",
             "json_schema": {
                 "name": name,
-                "schema": schema,
+                "schema": strict_schema,
                 "strict": True,
             },
         }

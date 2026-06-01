@@ -90,11 +90,16 @@ class TestSchemaNameIsValid:
 
 class TestEngineUsesSanitizedName:
     def test_engine_imports_helper(self):
-        """Confirma que engine.py importa sanitize_schema_name (smoke do source)."""
+        """Confirma que engine.py importa sanitize_schema_name (smoke do source).
+
+        Aceita import único OU multilinha (after PR de strict-mode coercion
+        passou a importar coerce_to_openai_strict_schema junto).
+        """
         from pathlib import Path
         path = Path(__file__).resolve().parent.parent / "app" / "agents" / "engine.py"
         src = path.read_text(encoding="utf-8")
-        assert "from app.core.text_utils import sanitize_schema_name" in src
+        assert "from app.core.text_utils import" in src
+        assert "sanitize_schema_name" in src
         assert "sanitize_schema_name(schema.get(\"title\")" in src
 
 
@@ -103,7 +108,8 @@ class TestVerifierUsesSanitizedName:
         from pathlib import Path
         path = Path(__file__).resolve().parent.parent / "app" / "verifier" / "runtime.py"
         src = path.read_text(encoding="utf-8")
-        assert "from app.core.text_utils import sanitize_schema_name" in src
+        assert "from app.core.text_utils import" in src
+        assert "sanitize_schema_name" in src
         assert "sanitize_schema_name(" in src
 
 
