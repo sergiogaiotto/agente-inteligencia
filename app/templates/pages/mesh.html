@@ -362,6 +362,26 @@
                             </button>
                         </div>
                     </div>
+                    <!-- Conditional rule (só aparece quando type=conditional) -->
+                    <div x-show="connForm.connection_type === 'conditional'" x-transition class="rounded-xl border-2 border-amber-200 bg-amber-50/50 p-4 space-y-2">
+                        <label class="block text-[11px] font-semibold text-amber-900">
+                            Regra (expressão Jinja booleana)
+                        </label>
+                        <textarea x-model="connForm.condition_expr"
+                                  rows="2"
+                                  placeholder="'imagem' in output_lower"
+                                  class="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-[12px] font-mono text-brand-900 outline-none focus:border-amber-500 placeholder:text-amber-400/70"></textarea>
+                        <div class="text-[10px] text-amber-800/80 leading-relaxed">
+                            Avaliada contra o <strong>output do agente anterior</strong>. Quando <strong>verdadeiro</strong>, o agente destino executa; quando <strong>falso</strong>, é pulado (passthrough). Variáveis disponíveis:
+                            <code class="bg-amber-100 px-1 rounded">output</code>,
+                            <code class="bg-amber-100 px-1 rounded">output_lower</code>,
+                            <code class="bg-amber-100 px-1 rounded">final_state</code>.
+                            <br>Ex.: <code class="bg-amber-100 px-1 rounded">'pdf' in output_lower</code> ·
+                            <code class="bg-amber-100 px-1 rounded">final_state == 'Recommend'</code> ·
+                            <code class="bg-amber-100 px-1 rounded">len(output) &gt; 200</code>.
+                            <br>Sem regra = sempre passa (equivalente a sequencial). Erro de avaliação = passa (fail-open, ver errors.log).
+                        </div>
+                    </div>
                 </div>
                 <div class="border-t border-surface-100 px-6 py-4 flex items-center justify-end gap-3">
                     <button @click="connEditorOpen = false" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] font-medium text-surface-500 hover:bg-surface-50">Cancelar</button>
@@ -383,7 +403,7 @@ function meshPage() {
         showGroupForm: false, connsCollapsed: false,
         groups: [], newGroupName: '', newGroupColor: 'blue', ungroupedCollapsed: false,
         connEditorOpen: false, editingConnId: null, savingConn: false,
-        connForm: { source_agent_id: '', target_agent_id: '', connection_type: 'sequential' },
+        connForm: { source_agent_id: '', target_agent_id: '', connection_type: 'sequential', condition_expr: '' },
         chainNames: {}, collapsedChains: {},
         renamingChainId: null, renameChainValue: '',
         // ── Detail panel state ──
@@ -527,24 +547,59 @@ function meshPage() {
         nodeKindColor(id) { const k=this.topology.nodes.find(x=>x.id===id)?.kind; return k==='aobd'?'bg-red-500':k==='router'?'bg-brand-500':'bg-teal-500'; },
 
         openConnEditor(edge) {
-            if (edge) { this.editingConnId = edge.id; this.connForm = { source_agent_id: edge.source, target_agent_id: edge.target, connection_type: edge.type }; }
-            else { this.editingConnId = null; this.connForm = { source_agent_id: '', target_agent_id: '', connection_type: 'sequential' }; }
+            if (edge) {
+                this.editingConnId = edge.id;
+                // edge.config vem do backend como string JSON (ou objeto).
+                // Quando type=conditional, extrai `expr` para popular o textarea
+                // no form. Outros tipos ignoram condition_expr.
+                let cfg = {};
+                if (edge.config) {
+                    if (typeof edge.config === 'string') {
+                        try { cfg = JSON.parse(edge.config); } catch { cfg = {}; }
+                    } else if (typeof edge.config === 'object') {
+                        cfg = edge.config;
+                    }
+                }
+                this.connForm = {
+                    source_agent_id: edge.source,
+                    target_agent_id: edge.target,
+                    connection_type: edge.type,
+                    condition_expr: cfg.expr || '',
+                };
+            } else {
+                this.editingConnId = null;
+                this.connForm = { source_agent_id: '', target_agent_id: '', connection_type: 'sequential', condition_expr: '' };
+            }
             this.connEditorOpen = true;
         },
         addConnectionToChain(rootId) {
             const chainEdges = this.hierarchicalEdges.filter(i => i.type === 'edge' && i.rootId === rootId);
             let sourceId = rootId;
             if (chainEdges.length) { const deepest = chainEdges.reduce((a, b) => (b.depth||0) > (a.depth||0) ? b : a); sourceId = deepest.edge.target; }
-            this.connForm = { source_agent_id: sourceId, target_agent_id: '', connection_type: 'sequential' };
+            this.connForm = { source_agent_id: sourceId, target_agent_id: '', connection_type: 'sequential', condition_expr: '' };
             this.editingConnId = null; this.connEditorOpen = true;
         },
         async saveConnection() {
             if (!this.connForm.source_agent_id || !this.connForm.target_agent_id) { showToast('Selecione origem e destino', 'error'); return; }
             if (this.connForm.source_agent_id === this.connForm.target_agent_id) { showToast('Origem e destino devem ser diferentes', 'error'); return; }
             this.savingConn = true;
+            // Monta o payload: condition_expr só vai como config={expr:...}
+            // quando type=conditional. Para outros tipos, config="{}" (limpa
+            // eventual config legado se o operador trocou o tipo).
+            const payload = {
+                source_agent_id: this.connForm.source_agent_id,
+                target_agent_id: this.connForm.target_agent_id,
+                connection_type: this.connForm.connection_type,
+            };
+            if (this.connForm.connection_type === 'conditional') {
+                const expr = (this.connForm.condition_expr || '').trim();
+                payload.config = JSON.stringify(expr ? { expr } : {});
+            } else {
+                payload.config = '{}';
+            }
             try {
-                if (this.editingConnId) { await api.put('/api/v1/mesh/connections/' + this.editingConnId, this.connForm); showToast('Conexão atualizada'); }
-                else { await api.post('/api/v1/mesh/connections', this.connForm); showToast('Conexão criada'); }
+                if (this.editingConnId) { await api.put('/api/v1/mesh/connections/' + this.editingConnId, payload); showToast('Conexão atualizada'); }
+                else { await api.post('/api/v1/mesh/connections', payload); showToast('Conexão criada'); }
                 this.connEditorOpen = false; await this.load();
             } catch(e) { showToast(e.message, 'error'); }
             this.savingConn = false;
