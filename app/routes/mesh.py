@@ -54,6 +54,55 @@ async def delete_connection(conn_id: str):
     if not await mesh_repo.delete(conn_id): raise HTTPException(404)
     return {"message": "Conexão removida"}
 
+
+# ═══════════════════════════════════════════════════════════════════
+# Conditional Routing Wizard (2026-06-01) — endpoint para o frontend
+# avaliar uma expressão Jinja contra um contexto simulado, sem precisar
+# salvar a conexão nem disparar um pipeline.
+# ═══════════════════════════════════════════════════════════════════
+
+
+@router.get("/conditional-vars")
+async def conditional_vars():
+    """Lista as variáveis disponíveis em expressões conditional, com
+    descrição + tipo. Usado pelo wizard de Edição de Conexão (vars panel).
+    """
+    from app.agents.engine import CONDITIONAL_VARS_META
+    return {"vars": CONDITIONAL_VARS_META}
+
+
+@router.post("/connections/test-conditional")
+async def test_conditional(payload: dict):
+    """Avalia uma expressão Jinja boolean contra um output/final_state
+    de exemplo. Usado pelo simulador do wizard antes do operador salvar.
+
+    Payload: {"expr": str, "output": str (opcional), "final_state": str (opcional)}
+    Returns: {"result": bool, "context": dict} OU {"error": str}
+
+    Política: fail-CLOSED — erro vira mensagem para o operador corrigir
+    a expressão antes de salvar. Em runtime (`_should_skip_conditional`)
+    o erro é fail-OPEN porque é melhor executar do que perder dado; aqui
+    o operador QUER ver o erro para corrigir.
+    """
+    expr = (payload.get("expr") or "").strip()
+    if not expr:
+        return {"error": "Expressão vazia — sem regra para avaliar."}
+
+    from app.agents.engine import _build_conditional_context, _eval_conditional
+
+    ctx = _build_conditional_context(
+        output=payload.get("output", ""),
+        final_state=payload.get("final_state", ""),
+    )
+    try:
+        result = _eval_conditional(expr, ctx)
+    except Exception as e:
+        return {
+            "error": f"{type(e).__name__}: {str(e)[:300]}",
+            "context": ctx,
+        }
+    return {"result": bool(result), "context": ctx}
+
 # ── CAR §6 ──
 car_router = APIRouter(prefix="/api/v1/car", tags=["car"])
 
