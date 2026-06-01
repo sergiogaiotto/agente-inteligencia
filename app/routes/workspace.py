@@ -127,13 +127,70 @@ async def get_session(session_id: str):
     if not s: raise HTTPException(404, "Sessão não encontrada")
     msgs = await turns_repo.find_all(interaction_id=session_id, limit=200)
 
-    # Restaurar trace_data persistido
+    # Restaurar trace_data persistido. Estabilizar campos críticos para
+    # evitar "undefinedms / 0 transições" no frontend quando sessões
+    # antigas/parciais tinham JSON minimalista.
     trace_data = None
-    if s.get("trace_data"):
+    raw_trace = s.get("trace_data")
+    if raw_trace:
         try:
-            trace_data = json.loads(s["trace_data"])
-        except (json.JSONDecodeError, TypeError):
-            pass
+            parsed = json.loads(raw_trace)
+            if isinstance(parsed, dict):
+                trace_data = parsed
+        except (json.JSONDecodeError, TypeError) as e:
+            # Logger é declarado mais abaixo no módulo (linha ~689) — usar
+            # getLogger inline pra evitar acoplamento com a ordem de
+            # carregamento (mesmo pattern de logger inline já usado em
+            # _enforce_skill_input_schema).
+            import logging as _logging
+            _logging.getLogger("app.routes.workspace").warning(
+                "workspace.session.trace_data_parse_failed",
+                extra={
+                    "event": "workspace.session.trace_data",
+                    "session_id": session_id,
+                    "raw_preview": str(raw_trace)[:200],
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
+
+    # Determinar se a sessão tem rastreabilidade real (vs. ausente/legada).
+    # Frontend usa isso pra mostrar mensagem clara em vez de UI "vazia".
+    has_real_trace = bool(
+        trace_data and (
+            trace_data.get("transitions")
+            or trace_data.get("pipeline_steps")
+            or (isinstance(trace_data.get("trace"), dict) and trace_data["trace"].get("execution_log"))
+        )
+    )
+
+    # Estabilizar campos críticos pra não dar "undefinedms" no frontend.
+    # Trace_data ausente (None) ⇢ frontend mostra empty state. Trace_data
+    # presente mas com gaps ⇢ preencher defaults seguros aqui.
+    # IMPORTANTE: usar `is None` check, não setdefault — sessões antigas
+    # podem ter `"duration_ms": null` explícito, e setdefault não troca
+    # `null` por default (só atua quando a chave está ausente).
+    if trace_data is not None:
+        _defaults = {
+            "interaction_id": session_id,
+            "agent_id": s.get("agent_id"),
+            "final_state": s.get("state") or "Unknown",
+            "duration_ms": 0,
+            "transitions": [],
+            "evidence_score": 0,
+            "pipeline_steps": [],
+        }
+        for k, v in _defaults.items():
+            if trace_data.get(k) is None:
+                trace_data[k] = v
+        # mode: 'pipeline' se há steps; 'agent' caso contrário. Default
+        # explícito pra o frontend escolher o toggle correto.
+        if not trace_data.get("mode"):
+            trace_data["mode"] = "pipeline" if trace_data.get("pipeline_steps") else "agent"
+        # `_has_real_trace` é um marcador interno consumido pelo frontend
+        # pra distinguir "sessão antiga sem detalhes persistidos" de
+        # "sessão nova com rastreabilidade rica".
+        trace_data["_has_real_trace"] = has_real_trace
 
     # Pipeline steps para enriquecer mensagens com metadata de agente
     pipeline_steps = trace_data.get("pipeline_steps", []) if trace_data else []
@@ -609,11 +666,38 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                     attachments=attachments,
                 )
 
-        # Persistir trace_data
+        # Persistir trace_data. Estabilizar defaults pra evitar campos
+        # missing que viram "undefinedms" no frontend de sessão antiga.
         iid = result.get("interaction_id")
         if iid:
             trace_persist = {k: result.get(k) for k in ["interaction_id","agent_id","final_state","evidence_score","transitions","duration_ms","trace","pipeline_steps","mode"]}
-            await interactions_repo.update(iid, {"trace_data": json.dumps(trace_persist, ensure_ascii=False, default=str)})
+            # Defaults pra campos que o frontend espera sempre presentes
+            trace_persist.setdefault("interaction_id", iid)
+            trace_persist.setdefault("agent_id", data.agent_id)
+            if trace_persist.get("duration_ms") is None:
+                trace_persist["duration_ms"] = 0
+            if trace_persist.get("transitions") is None:
+                trace_persist["transitions"] = []
+            if trace_persist.get("evidence_score") is None:
+                trace_persist["evidence_score"] = 0
+            if not trace_persist.get("mode"):
+                trace_persist["mode"] = "pipeline" if trace_persist.get("pipeline_steps") else "agent"
+            try:
+                await interactions_repo.update(iid, {"trace_data": json.dumps(trace_persist, ensure_ascii=False, default=str)})
+            except Exception as e:
+                # Persist falhou — não bloqueia a resposta ao user (já temos
+                # `result`), mas vai pro errors.log pra troubleshooting.
+                import logging as _logging
+                _logging.getLogger("app.routes.workspace").error(
+                    "workspace.chat.trace_persist_failed",
+                    extra={
+                        "event": "workspace.chat.trace_persist",
+                        "interaction_id": iid,
+                        "mode": trace_persist.get("mode"),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
 
         # Sinaliza attachments rejeitados para que o frontend possa mostrar
         if rejected_attachments:

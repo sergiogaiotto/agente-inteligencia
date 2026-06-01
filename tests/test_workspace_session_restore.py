@@ -1,0 +1,272 @@
+"""Restore de sessão antiga no Workspace (2026-06-01).
+
+User reportou via screenshot: ao clicar em sessão antiga na sidebar, o
+painel "Rastreabilidade" mostra "undefinedms / 0 transições / 0 evidências"
+e Execution Log fica vazio mesmo a sessão tendo conteúdo. Causas:
+
+1. Backend (`GET /workspace/sessions/{id}`) retornava `trace_data` cru,
+   às vezes com campos faltando (sessões antigas pré-hardening). Frontend
+   acessava `lastTrace.duration_ms?.toFixed(0)+'ms'` que, com campo
+   undefined, virava literal string `"undefinedms"`.
+2. Sem distinção entre "sessão sem trace algum" vs "trace minimalista
+   sem detalhe (FSM/execution_log)". UI tratava ambos igual e mostrava
+   placeholders quebrados.
+3. Erros silenciosos: JSON.parse de trace_data inválido era engolido
+   sem log, dificultando troubleshooting.
+
+Fix (este PR):
+- Backend estabiliza campos críticos (final_state, duration_ms, mode,
+  transitions, evidence_score) com defaults seguros antes de devolver
+- Backend marca `_has_real_trace` baseado em transitions/pipeline_steps/
+  execution_log para o frontend escolher template
+- Backend loga `workspace.session.trace_data_parse_failed` e
+  `workspace.chat.trace_persist_failed` com exc_info=True no errors.log
+- Frontend tem 3 templates distintos: empty state (sem sessão),
+  "sessão antiga sem rastreabilidade", "trace parcial", "trace completo"
+- Frontend usa fallback `(duration_ms||0)` no toFixed para evitar
+  "undefinedms"
+- Frontend toggle Agente/Pipeline deriva primeiro de session.agent_id
+  (sempre persistido) e só depois consulta trace.mode
+"""
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+
+# ─── Fixtures ────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def workspace_client():
+    from app.routes.workspace import router
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def _patch_session(monkeypatch, *, session_row, turns=None):
+    """Mocka o repo para retornar uma sessão específica + turns vazios."""
+    async def fake_find_by_id(sid):
+        return session_row if (session_row and session_row.get("id") == sid) else None
+
+    async def fake_turns_find_all(limit=200, **filters):
+        return turns or []
+
+    monkeypatch.setattr("app.core.database.interactions_repo.find_by_id", fake_find_by_id)
+    monkeypatch.setattr("app.core.database.turns_repo.find_all", fake_turns_find_all)
+
+
+# ─── GET /sessions/{id} — comportamento de hardening ─────────────────
+
+
+class TestGetSessionTraceHardening:
+    SESSION_ID = "sess-001"
+    AGENT_ID = "agent-xyz"
+
+    def _base_session(self, *, trace_data: str | None, state: str = "LogAndClose"):
+        return {
+            "id": self.SESSION_ID,
+            "agent_id": self.AGENT_ID,
+            "title": "test session",
+            "state": state,
+            "trace_data": trace_data,
+        }
+
+    def test_trace_data_null_returns_trace_null(self, monkeypatch, workspace_client):
+        """Sessão muito antiga sem trace_data persistido — trace=null no
+        response. Frontend vai mostrar template "sem rastreabilidade
+        detalhada" em vez de UI quebrada."""
+        _patch_session(monkeypatch, session_row=self._base_session(trace_data=None))
+        r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        assert r.status_code == 200
+        assert r.json()["trace"] is None
+
+    def test_trace_data_empty_json_returns_stabilized_trace(self, monkeypatch, workspace_client):
+        """trace_data='{}' — após hardening, vem com defaults preenchidos
+        e _has_real_trace=False (UI mostra "parcial")."""
+        _patch_session(monkeypatch, session_row=self._base_session(trace_data="{}"))
+        r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        body = r.json()
+        trace = body["trace"]
+        assert trace is not None
+        # Defaults estabilizados pelo backend
+        assert trace["duration_ms"] == 0
+        assert trace["transitions"] == []
+        assert trace["evidence_score"] == 0
+        assert trace["pipeline_steps"] == []
+        assert trace["mode"] == "agent"  # default seguro
+        assert trace["interaction_id"] == self.SESSION_ID
+        assert trace["agent_id"] == self.AGENT_ID
+        # Marcador "trace raso" para o frontend
+        assert trace["_has_real_trace"] is False
+
+    def test_invalid_json_logs_warning_with_exc_info(self, monkeypatch, workspace_client, caplog):
+        """trace_data='{not json' — log warning com exc_info=True
+        (errors.log) + trace=null no response. Comportamento gracioso."""
+        _patch_session(
+            monkeypatch,
+            session_row=self._base_session(trace_data="{ not valid json"),
+        )
+        with caplog.at_level(logging.WARNING, logger="app.routes.workspace"):
+            r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        assert r.json()["trace"] is None
+        # Achou o log estruturado com exc_info
+        rec = next(
+            (r for r in caplog.records
+             if getattr(r, "event", None) == "workspace.session.trace_data"),
+            None,
+        )
+        assert rec is not None, "esperava log workspace.session.trace_data"
+        assert rec.exc_info is not None  # exc_info=True preservado
+        assert getattr(rec, "session_id", None) == self.SESSION_ID
+
+    def test_trace_with_transitions_marks_has_real_trace_true(self, monkeypatch, workspace_client):
+        """Sessão com FSM transitions registradas → _has_real_trace=True
+        (frontend renderiza o painel completo)."""
+        trace = {
+            "interaction_id": self.SESSION_ID,
+            "agent_id": self.AGENT_ID,
+            "final_state": "LogAndClose",
+            "duration_ms": 4321,
+            "evidence_score": 0.85,
+            "transitions": [
+                {"to": "PolicyCheck"},
+                {"to": "DraftAnswer"},
+                {"to": "LogAndClose"},
+            ],
+            "trace": {"execution_log": [], "evidence_count": 0},
+        }
+        _patch_session(monkeypatch, session_row=self._base_session(trace_data=json.dumps(trace)))
+        body = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}").json()
+        assert body["trace"]["_has_real_trace"] is True
+
+    def test_trace_with_pipeline_steps_marks_has_real_trace_true(self, monkeypatch, workspace_client):
+        """Pipeline session com steps registrados → _has_real_trace=True
+        e mode='pipeline' (mesmo que não veio explícito no payload)."""
+        trace = {
+            "interaction_id": self.SESSION_ID,
+            "pipeline_steps": [
+                {"agent_id": "a1", "agent_name": "AOBD", "status": "completed"},
+                {"agent_id": "a2", "agent_name": "AR", "status": "completed"},
+            ],
+        }
+        _patch_session(monkeypatch, session_row=self._base_session(trace_data=json.dumps(trace)))
+        trace_out = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}").json()["trace"]
+        assert trace_out["_has_real_trace"] is True
+        assert trace_out["mode"] == "pipeline"  # derivado pela presença de steps
+
+    def test_trace_with_execution_log_only_marks_has_real_trace_true(self, monkeypatch, workspace_client):
+        """Trace com `trace.execution_log` mesmo sem transitions/pipeline_steps
+        → considerado real (operador vê os passos no Execution Log)."""
+        trace = {
+            "interaction_id": self.SESSION_ID,
+            "trace": {
+                "execution_log": [
+                    {"title": "Agent Bootstrapped", "cat": "init"},
+                ],
+            },
+        }
+        _patch_session(monkeypatch, session_row=self._base_session(trace_data=json.dumps(trace)))
+        assert workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}").json()["trace"]["_has_real_trace"] is True
+
+    def test_trace_minimal_dict_marks_has_real_trace_false(self, monkeypatch, workspace_client):
+        """Trace com só agent_id+final_state, sem transitions nem steps nem
+        execution_log → _has_real_trace=False (UI mostra "parcial")."""
+        trace = {
+            "interaction_id": self.SESSION_ID,
+            "agent_id": self.AGENT_ID,
+            "final_state": "LogAndClose",
+            "duration_ms": 1234,
+        }
+        _patch_session(monkeypatch, session_row=self._base_session(trace_data=json.dumps(trace)))
+        out = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}").json()["trace"]
+        assert out["_has_real_trace"] is False
+        # Duração original foi preservada (não sobrescrita pelo default)
+        assert out["duration_ms"] == 1234
+
+    def test_trace_with_none_duration_gets_default_zero(self, monkeypatch, workspace_client):
+        """Bug clássico do screenshot: `duration_ms=null` → frontend
+        renderizava "undefinedms". Backend agora normaliza pra 0."""
+        trace = {
+            "final_state": "LogAndClose",
+            "duration_ms": None,  # explicit None
+            "transitions": None,
+            "evidence_score": None,
+        }
+        _patch_session(monkeypatch, session_row=self._base_session(trace_data=json.dumps(trace)))
+        out = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}").json()["trace"]
+        assert out["duration_ms"] == 0
+        assert out["transitions"] == []
+        assert out["evidence_score"] == 0
+
+    def test_non_dict_trace_data_treated_as_missing(self, monkeypatch, workspace_client):
+        """trace_data='"string"' ou '[1,2,3]' (JSON válido mas não dict) →
+        backend descarta e devolve trace=null (não confunde o frontend)."""
+        _patch_session(monkeypatch, session_row=self._base_session(trace_data='[1,2,3]'))
+        assert workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}").json()["trace"] is None
+
+
+# ─── UI smoke (workspace.html) ───────────────────────────────────────
+
+
+def _workspace_html() -> str:
+    p = Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "workspace.html"
+    return p.read_text(encoding="utf-8")
+
+
+class TestWorkspaceUiHardening:
+    """Smoke do source HTML — garante que os fixes ficaram cabeados no
+    template e que regressões não removeriam o tratamento dos campos null."""
+
+    def test_duration_ms_has_fallback_to_zero(self):
+        """Antes: `lastTrace.duration_ms?.toFixed(0)+'ms'` virava 'undefinedms'
+        quando o campo faltava. Fix: usa `||0` antes do toFixed."""
+        src = _workspace_html()
+        assert "(lastTrace.duration_ms||0).toFixed(0)" in src
+        # Garante que a versão buggy não voltou (regressão guard)
+        assert "lastTrace.duration_ms?.toFixed(0)+'ms'" not in src
+
+    def test_three_distinct_states_for_trace_panel(self):
+        """Painel agora distingue: sem sessão / sessão antiga sem trace /
+        trace parcial / trace completo — em vez de tudo cair no mesmo
+        empty state confuso."""
+        src = _workspace_html()
+        # 1. Empty (sem sessão aberta)
+        assert "!lastTrace && !currentSessionId" in src
+        # 2. Sessão aberta MAS sem trace persistido
+        assert "!lastTrace && currentSessionId" in src
+        assert "Sessão sem rastreabilidade detalhada" in src
+        # 3. Trace presente MAS sem detalhe real
+        assert "lastTrace && !lastTrace._has_real_trace" in src
+        assert "Rastreabilidade parcial" in src
+        # 4. Trace completo (caminho original)
+        assert "lastTrace && lastTrace._has_real_trace" in src
+
+    def test_final_state_has_fallback_label(self):
+        """Quando final_state é null/undefined, mostrar 'Concluído' em vez
+        de literal undefined no header."""
+        src = _workspace_html()
+        # O fallback `||'Concluído'` foi acoplado ao mostrar final_state
+        assert "(lastTrace.final_state||'Concluído')" in src
+
+    def test_load_session_prefers_session_agent_id(self):
+        """selectedAgentId prioriza session.agent_id (sempre persistido)
+        sobre pipeline_steps[0].agent_id — evita ficar undefined em
+        sessões antigas sem pipeline_steps."""
+        src = _workspace_html()
+        # A nova lógica usa session.agent_id como primeira fonte
+        assert "const sessionAgentId = d.session?.agent_id || ''" in src
+        # E mantém os fallbacks
+        assert "sessionAgentId || pipelineSteps[0]?.agent_id || d.trace?.agent_id" in src
+
+    def test_load_session_catch_has_console_error(self):
+        """Reforço (2026-06-01): catch silencioso ganhou console.error
+        com contexto (sessionId + error) pra troubleshooting no DevTools."""
+        src = _workspace_html()
+        assert "console.error('[workspace] loadSession falhou'" in src
