@@ -154,43 +154,43 @@ async def get_session(session_id: str):
                 exc_info=True,
             )
 
-    # Determinar se a sessão tem rastreabilidade real (vs. ausente/legada).
-    # Frontend usa isso pra mostrar mensagem clara em vez de UI "vazia".
-    has_real_trace = bool(
-        trace_data and (
+    # 2026-06-01 (revisão): trace_data SEMPRE não-null quando há sessão.
+    # User pediu: painéis Rastreabilidade + Execution Log SEMPRE visíveis,
+    # mesmo para sessões antigas. Frontend confia que `trace` sempre
+    # existe — placeholders ("—", 0, []) em vez de UI escondida.
+    if trace_data is None:
+        trace_data = {}  # placeholder vazio, defaults preenchidos abaixo
+    _defaults = {
+        "interaction_id": session_id,
+        "agent_id": s.get("agent_id"),
+        "final_state": s.get("state") or "Unknown",
+        "duration_ms": 0,
+        "transitions": [],
+        "evidence_score": 0,
+        "pipeline_steps": [],
+        "trace": {},
+    }
+    for k, v in _defaults.items():
+        if trace_data.get(k) is None:
+            trace_data[k] = v
+    # `trace` sub-objeto também precisa estrutura mínima — frontend lê
+    # trace.execution_log e trace.evidence_count.
+    if isinstance(trace_data.get("trace"), dict):
+        trace_data["trace"].setdefault("execution_log", [])
+        trace_data["trace"].setdefault("evidence_count", 0)
+    # mode: 'pipeline' se há steps; 'agent' caso contrário.
+    if not trace_data.get("mode"):
+        trace_data["mode"] = "pipeline" if trace_data.get("pipeline_steps") else "agent"
+    # Marcador opcional de "trace é placeholder vs real" — não usado pra
+    # esconder UI, mantido pra observability/debug.
+    trace_data.setdefault(
+        "_has_real_trace",
+        bool(
             trace_data.get("transitions")
             or trace_data.get("pipeline_steps")
             or (isinstance(trace_data.get("trace"), dict) and trace_data["trace"].get("execution_log"))
-        )
+        ),
     )
-
-    # Estabilizar campos críticos pra não dar "undefinedms" no frontend.
-    # Trace_data ausente (None) ⇢ frontend mostra empty state. Trace_data
-    # presente mas com gaps ⇢ preencher defaults seguros aqui.
-    # IMPORTANTE: usar `is None` check, não setdefault — sessões antigas
-    # podem ter `"duration_ms": null` explícito, e setdefault não troca
-    # `null` por default (só atua quando a chave está ausente).
-    if trace_data is not None:
-        _defaults = {
-            "interaction_id": session_id,
-            "agent_id": s.get("agent_id"),
-            "final_state": s.get("state") or "Unknown",
-            "duration_ms": 0,
-            "transitions": [],
-            "evidence_score": 0,
-            "pipeline_steps": [],
-        }
-        for k, v in _defaults.items():
-            if trace_data.get(k) is None:
-                trace_data[k] = v
-        # mode: 'pipeline' se há steps; 'agent' caso contrário. Default
-        # explícito pra o frontend escolher o toggle correto.
-        if not trace_data.get("mode"):
-            trace_data["mode"] = "pipeline" if trace_data.get("pipeline_steps") else "agent"
-        # `_has_real_trace` é um marcador interno consumido pelo frontend
-        # pra distinguir "sessão antiga sem detalhes persistidos" de
-        # "sessão nova com rastreabilidade rica".
-        trace_data["_has_real_trace"] = has_real_trace
 
     # Pipeline steps para enriquecer mensagens com metadata de agente
     pipeline_steps = trace_data.get("pipeline_steps", []) if trace_data else []
