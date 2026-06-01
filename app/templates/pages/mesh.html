@@ -332,12 +332,12 @@
                 <div class="border-b border-surface-100 px-6 py-4 flex items-center justify-between gap-4">
                     <div class="min-w-0">
                         <h3 class="text-[15px] font-bold text-brand-900" x-text="editingConnId ? 'Editar Conexão' : 'Nova Conexão'"></h3>
-                        <div x-show="editingEdgeContext" class="mt-1 flex items-center gap-2 text-[11px] text-surface-500 truncate">
-                            <span x-text="editingEdgeContext?.sourceName || '?'"></span>
-                            <span class="rounded bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono uppercase" x-text="editingEdgeContext?.sourceKind || ''"></span>
+                        <div x-show="currentEdgeContext" class="mt-1 flex items-center gap-2 text-[11px] text-surface-500 truncate">
+                            <span x-text="currentEdgeContext?.sourceName || '?'"></span>
+                            <span class="rounded bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono uppercase" x-text="currentEdgeContext?.sourceKind || ''"></span>
                             <svg class="w-3 h-3 text-surface-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
-                            <span x-text="editingEdgeContext?.targetName || '?'"></span>
-                            <span class="rounded bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono uppercase" x-text="editingEdgeContext?.targetKind || ''"></span>
+                            <span x-text="currentEdgeContext?.targetName || '?'"></span>
+                            <span class="rounded bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono uppercase" x-text="currentEdgeContext?.targetKind || ''"></span>
                         </div>
                     </div>
                     <button @click="connEditorOpen = false" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 shrink-0"><svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
@@ -410,8 +410,8 @@
                                     (passthrough — output do origem segue adiante).
                                 </div>
                                 <div class="rounded-lg bg-white border border-amber-200 p-3 text-[11px] space-y-1.5">
-                                    <div class="flex gap-2"><span class="text-amber-600 font-semibold w-16 shrink-0">Origem:</span><span x-text="(editingEdgeContext?.sourceName||'—') + ' (' + (editingEdgeContext?.sourceKind||'?') + ')'"></span></div>
-                                    <div class="flex gap-2"><span class="text-amber-600 font-semibold w-16 shrink-0">Destino:</span><span x-text="(editingEdgeContext?.targetName||'—') + ' (' + (editingEdgeContext?.targetKind||'?') + ')'"></span></div>
+                                    <div class="flex gap-2"><span class="text-amber-600 font-semibold w-16 shrink-0">Origem:</span><span x-text="(currentEdgeContext?.sourceName||'—') + ' (' + (currentEdgeContext?.sourceKind||'?') + ')'"></span></div>
+                                    <div class="flex gap-2"><span class="text-amber-600 font-semibold w-16 shrink-0">Destino:</span><span x-text="(currentEdgeContext?.targetName||'—') + ' (' + (currentEdgeContext?.targetKind||'?') + ')'"></span></div>
                                 </div>
                                 <div class="text-[10px] italic text-amber-700">
                                     <strong>Kind do agente</strong> ajuda a escolher a regra: <code class="bg-amber-100 px-1">aobd</code> (orquestrador) costuma ter output estruturado; <code class="bg-amber-100 px-1">router</code> uma decisão; <code class="bg-amber-100 px-1">subagent</code> uma resposta livre.
@@ -701,10 +701,10 @@ function meshPage() {
         connEditorOpen: false, editingConnId: null, savingConn: false,
         connForm: { source_agent_id: '', target_agent_id: '', connection_type: 'sequential', condition_expr: '' },
         // Wizard 2026-06-01 — só ativa quando connection_type='conditional'.
-        // editingEdgeContext: snapshot dos nomes/kinds para breadcrumb no header e
-        // resumo na tab "Contexto". Populado em openConnEditor a partir das
-        // node references do topology.
-        editingEdgeContext: null,
+        // Breadcrumb + resumo na tab "Contexto" usam o getter `currentEdgeContext`
+        // (definido perto de activeNodes), reativo a connForm.source_agent_id /
+        // target_agent_id — funciona tanto em Editar Conexão (vem pré-preenchido)
+        // quanto em Nova Conexão (atualiza enquanto user escolhe os comboboxes).
         condTab: 'context',                 // 'context'|'pattern'|'refine'|'simulate'
         conditionalVars: [],                // populado de GET /conditional-vars
         sim: { output: '', final_state: '', result: null, error: '', loading: false },
@@ -742,6 +742,27 @@ function meshPage() {
         },
 
         get activeNodes() { return this.topology.nodes.filter(n => n.status === 'active'); },
+        // currentEdgeContext (2026-06-01): getter reativo que segue
+        // connForm.source_agent_id e target_agent_id em tempo real.
+        // Substituiu o field estático `editingEdgeContext` (que só era
+        // populado em edit). Agora funciona também em Nova Conexão — o
+        // breadcrumb do header e a tab "Contexto" do wizard condicional
+        // acompanham o usuário enquanto ele escolhe nos comboboxes.
+        // Retorna null quando NENHUM dos IDs está setado (esconde o
+        // breadcrumb via x-show).
+        get currentEdgeContext() {
+            const sid = this.connForm.source_agent_id;
+            const tid = this.connForm.target_agent_id;
+            if (!sid && !tid) return null;
+            const sn = sid ? this.topology.nodes.find(n => n.id === sid) : null;
+            const tn = tid ? this.topology.nodes.find(n => n.id === tid) : null;
+            return {
+                sourceName: sn?.name || (sid ? sid.substring(0,8) : '—'),
+                sourceKind: sn?.kind || (sid ? '?' : ''),
+                targetName: tn?.name || (tid ? tid.substring(0,8) : '—'),
+                targetKind: tn?.kind || (tid ? '?' : ''),
+            };
+        },
         get unassignedNodes() { const a=new Set(); for(const g of this.groups) for(const id of g.agent_ids) a.add(id); return this.topology.nodes.filter(n => !a.has(n.id)); },
         get detailPassthroughCount() { return this.detailChain.filter(a => a._passthrough).length; },
         get detailActiveCount() { return this.detailChain.filter(a => !a._passthrough).length; },
@@ -869,7 +890,6 @@ function meshPage() {
             // Reset wizard state — não vazar entre aberturas
             this.condTab = 'context';
             this.sim = { output: '', final_state: '', result: null, error: '', loading: false };
-            this.editingEdgeContext = null;
             // Reset scope wizard também — não vazar entre aberturas
             this.scopeTab = 'mode';
             this.scopeForm = { mode: 'inherit', template: '', max_chars: null };
@@ -885,7 +905,14 @@ function meshPage() {
                 let cfg = {};
                 if (edge.config) {
                     if (typeof edge.config === 'string') {
-                        try { cfg = JSON.parse(edge.config); } catch { cfg = {}; }
+                        try {
+                            cfg = JSON.parse(edge.config);
+                        } catch (e) {
+                            // Config inválido em edge.config — log pra troubleshooting
+                            // no DevTools. Não bloqueia o operador: cai pra cfg={}.
+                            console.error('[mesh] edge.config JSON inválido', { edgeId: edge.id, raw: edge.config, error: e });
+                            cfg = {};
+                        }
                     } else if (typeof edge.config === 'object') {
                         cfg = edge.config;
                     }
@@ -908,15 +935,6 @@ function meshPage() {
                     // Auto-expand quando há config não-default — operador vê o estado atual
                     if (this.scopeForm.mode !== 'inherit') this.scopeOpen = true;
                 }
-                // Breadcrumb context — busca nomes/kinds das nodes do topology
-                const sn = this.topology.nodes.find(n => n.id === edge.source);
-                const tn = this.topology.nodes.find(n => n.id === edge.target);
-                this.editingEdgeContext = {
-                    sourceName: sn?.name || edge.source,
-                    sourceKind: sn?.kind || '?',
-                    targetName: tn?.name || edge.target,
-                    targetKind: tn?.kind || '?',
-                };
                 // Scroll para o item editado no listing (pulsando para destacar).
                 // Defer para o próximo tick — DOM precisa estar com o modal renderizado.
                 this.$nextTick(() => {
@@ -928,6 +946,18 @@ function meshPage() {
                 this.connForm = { source_agent_id: '', target_agent_id: '', connection_type: 'sequential', condition_expr: '' };
             }
             this.connEditorOpen = true;
+            // Workaround conhecido do Alpine: <template x-if> com <select x-model>
+            // contendo <template x-for> perde a reatividade do x-model na primeira
+            // render. O valor inicial do connForm é setado ANTES do template ser
+            // montado, então os <option>s ainda não existem quando o x-model lê
+            // o value. Re-aplicar os IDs no próximo tick (depois das options
+            // serem renderizadas) faz os selects pegarem o valor correto.
+            if (edge) {
+                this.$nextTick(() => {
+                    this.connForm.source_agent_id = edge.source;
+                    this.connForm.target_agent_id = edge.target;
+                });
+            }
             // Garante que vars panel está populado antes do user chegar na tab "Refinar"
             if (!this.conditionalVars.length) this.loadConditionalVars();
             if (!this.scopeVars.length) this.loadScopeVars();
@@ -938,7 +968,6 @@ function meshPage() {
             if (chainEdges.length) { const deepest = chainEdges.reduce((a, b) => (b.depth||0) > (a.depth||0) ? b : a); sourceId = deepest.edge.target; }
             this.connForm = { source_agent_id: sourceId, target_agent_id: '', connection_type: 'sequential', condition_expr: '' };
             this.editingConnId = null;
-            this.editingEdgeContext = null;
             this.condTab = 'context';
             this.sim = { output: '', final_state: '', result: null, error: '', loading: false };
             // Reset scope para defaults — nova conexão começa em inherit
@@ -951,6 +980,12 @@ function meshPage() {
             };
             this.scopeOpen = false;
             this.connEditorOpen = true;
+            // Workaround Alpine x-if + x-model + x-for — vide openConnEditor.
+            // Re-aplicar source_agent_id no próximo tick faz o <select> exibir
+            // o agente origem pré-selecionado (em vez de "Selecione...").
+            this.$nextTick(() => {
+                this.connForm.source_agent_id = sourceId;
+            });
             if (!this.conditionalVars.length) this.loadConditionalVars();
             if (!this.scopeVars.length) this.loadScopeVars();
         },
@@ -959,7 +994,12 @@ function meshPage() {
             try {
                 const d = await api.get('/api/v1/mesh/conditional-vars');
                 this.conditionalVars = d.vars || [];
-            } catch { this.conditionalVars = []; }
+            } catch (e) {
+                // Backend offline ou endpoint quebrado — log pra troubleshooting
+                // no DevTools. UI continua funcional (vars panel fica vazio).
+                console.error('[mesh] loadConditionalVars falhou', e);
+                this.conditionalVars = [];
+            }
         },
         applyPattern(name) {
             // Templates iniciais — operador refina na tab seguinte
@@ -1050,7 +1090,14 @@ function meshPage() {
                 const d = await api.get('/api/v1/mesh/context-scope-vars');
                 this.scopeVars = d.vars || [];
                 this.scopeModes = d.modes || [];
-            } catch { this.scopeVars = []; this.scopeModes = []; }
+            } catch (e) {
+                // Backend offline ou endpoint quebrado — log pra troubleshooting
+                // no DevTools. UI continua funcional (modo selector fica vazio
+                // até reload, vars panel idem).
+                console.error('[mesh] loadScopeVars falhou', e);
+                this.scopeVars = [];
+                this.scopeModes = [];
+            }
         },
         applyScopePattern(name) {
             // Templates iniciais para o modo `scoped` — operador refina depois
@@ -1138,7 +1185,16 @@ function meshPage() {
         },
         async deleteConnection(id) {
             if (!confirm('Remover esta conexão?')) return;
-            try { await api.del('/api/v1/mesh/connections/'+id); await this.load(); showToast('Conexão removida'); } catch { showToast('Erro','error'); }
+            try {
+                await api.del('/api/v1/mesh/connections/' + id);
+                await this.load();
+                showToast('Conexão removida');
+            } catch (e) {
+                // Backend rejeitou DELETE — pode ser 404 (já removida) ou
+                // 500 (erro). Log no DevTools + toast genérico ao operador.
+                console.error('[mesh] deleteConnection falhou', { connId: id, error: e });
+                showToast('Erro', 'error');
+            }
         },
 
         addGroup() { if(!this.newGroupName.trim()){showToast('Nome obrigatório','error');return;} this.groups.push({id:Date.now().toString(),name:this.newGroupName.trim(),color:this.newGroupColor,agent_ids:[],collapsed:false}); this.newGroupName=''; this.showGroupForm=false; this.persistGroups(); showToast('Grupo criado'); },
@@ -1146,13 +1202,50 @@ function meshPage() {
         removeGroup(gid) { if(!confirm('Remover grupo?'))return; this.groups=this.groups.filter(g=>g.id!==gid); this.persistGroups(); showToast('Grupo removido'); },
         assignToGroup(gid,aid) { if(!aid)return; for(const g of this.groups) g.agent_ids=g.agent_ids.filter(id=>id!==aid); const g=this.groups.find(x=>x.id===gid); if(g){g.agent_ids.push(aid);this.persistGroups();} },
         unassignFromGroup(gid,aid) { const g=this.groups.find(x=>x.id===gid); if(g){g.agent_ids=g.agent_ids.filter(id=>id!==aid);this.persistGroups();} },
-        async persistGroups() { try{await api.put('/api/v1/settings',{mesh_groups:JSON.stringify(this.groups.map(g=>({id:g.id,name:g.name,color:g.color,agent_ids:g.agent_ids})))})}catch{} },
-        async loadGroups() { try{const d=await api.get('/api/v1/settings');const r=d.settings?.mesh_groups;if(r)this.groups=JSON.parse(r).map(g=>({...g,collapsed:false}));const cn=d.settings?.mesh_chain_names;if(cn)this.chainNames=JSON.parse(cn)}catch{} },
-        async persistChainNames() { try{await api.put('/api/v1/settings',{mesh_chain_names:JSON.stringify(this.chainNames)})}catch{} },
+        async persistGroups() {
+            try {
+                await api.put('/api/v1/settings', { mesh_groups: JSON.stringify(this.groups.map(g => ({id: g.id, name: g.name, color: g.color, agent_ids: g.agent_ids}))) });
+            } catch (e) {
+                // Persist falhou — UI ainda mostra a mudança em memória, mas
+                // não vai sobreviver ao reload. Log pra troubleshooting; user
+                // verá o estado revertido se recarregar.
+                console.error('[mesh] persistGroups falhou', e);
+            }
+        },
+        async loadGroups() {
+            try {
+                const d = await api.get('/api/v1/settings');
+                const r = d.settings?.mesh_groups;
+                if (r) this.groups = JSON.parse(r).map(g => ({...g, collapsed: false}));
+                const cn = d.settings?.mesh_chain_names;
+                if (cn) this.chainNames = JSON.parse(cn);
+            } catch (e) {
+                // /api/v1/settings offline ou JSON malformado em mesh_groups/
+                // mesh_chain_names. Grupos/nomes ficam como estavam. Log pra
+                // troubleshooting no DevTools.
+                console.error('[mesh] loadGroups falhou', e);
+            }
+        },
+        async persistChainNames() {
+            try {
+                await api.put('/api/v1/settings', { mesh_chain_names: JSON.stringify(this.chainNames) });
+            } catch (e) {
+                console.error('[mesh] persistChainNames falhou', e);
+            }
+        },
         startRenameChain(rootId, currentName) { this.renamingChainId=rootId; this.renameChainValue=currentName||''; },
         confirmRenameChain(rootId) { this.chainNames[rootId]=this.renameChainValue.trim(); this.renamingChainId=null; this.persistChainNames(); if(this.renameChainValue.trim()) showToast('Pipeline renomeado'); },
 
-        async load() { try{this.topology=await api.get('/api/v1/mesh/topology')}catch{} await this.loadGroups(); },
+        async load() {
+            try {
+                this.topology = await api.get('/api/v1/mesh/topology');
+            } catch (e) {
+                // Topology offline → UI mostra mesh vazio. Log pra DevTools;
+                // sem topology, nada renderiza (estado conhecido pelo user).
+                console.error('[mesh] load topology falhou', e);
+            }
+            await this.loadGroups();
+        },
     }
 }
 </script>

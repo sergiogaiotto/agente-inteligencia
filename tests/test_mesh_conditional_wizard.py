@@ -171,7 +171,10 @@ class TestMeshUiWizard:
     def test_state_has_wizard_fields(self):
         from pathlib import Path
         src = (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "mesh.html").read_text(encoding="utf-8")
-        assert "editingEdgeContext:" in src
+        # 2026-06-01: editingEdgeContext (field estático) virou getter
+        # currentEdgeContext (reativo a connForm). Funciona em Editar e
+        # em Nova Conexão.
+        assert "get currentEdgeContext()" in src
         assert "condTab:" in src
         assert "conditionalVars:" in src
         assert "sim:" in src
@@ -220,10 +223,11 @@ class TestMeshUiWizard:
     def test_breadcrumb_in_header(self):
         from pathlib import Path
         src = (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "mesh.html").read_text(encoding="utf-8")
-        # Header mostra origem→destino com kind
-        assert "editingEdgeContext?.sourceName" in src
-        assert "editingEdgeContext?.targetName" in src
-        assert "editingEdgeContext?.sourceKind" in src
+        # Header mostra origem→destino com kind, via getter reativo
+        # currentEdgeContext (substituiu editingEdgeContext em 2026-06-01).
+        assert "currentEdgeContext?.sourceName" in src
+        assert "currentEdgeContext?.targetName" in src
+        assert "currentEdgeContext?.sourceKind" in src
 
     def test_edge_listing_has_id_for_scroll(self):
         from pathlib import Path
@@ -251,3 +255,77 @@ class TestMeshUiWizard:
         src = (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "mesh.html").read_text(encoding="utf-8")
         assert "async loadConditionalVars()" in src
         assert "/api/v1/mesh/conditional-vars" in src
+
+
+class TestEditorPrefillAndDynamicBreadcrumb:
+    """2026-06-01: 2 melhorias UX reportadas pelo usuário:
+
+    1. Editar Conexão deve trazer comboboxes "Agente Origem" e "Agente
+       Destino" pré-selecionados (estavam vindo com "Selecione...").
+    2. Nova Conexão deve atualizar o breadcrumb da tab "1. Contexto"
+       dinamicamente conforme o user escolhe nos comboboxes.
+
+    O bug do (1) era do Alpine: <template x-if> + <select x-model> +
+    <template x-for> perde reatividade na primeira render. Fix: $nextTick
+    re-aplica os IDs depois do template renderizar as <option>s.
+
+    O (2) foi resolvido trocando o field estático `editingEdgeContext`
+    por um getter computado `currentEdgeContext` reativo a `connForm`.
+    """
+
+    def _src(self):
+        from pathlib import Path
+        return (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "mesh.html").read_text(encoding="utf-8")
+
+    def test_current_edge_context_is_a_reactive_getter(self):
+        """O getter substituiu o field — funciona em edit E em new."""
+        src = self._src()
+        assert "get currentEdgeContext()" in src
+        # Lê de connForm em tempo real (não snapshot setado em openConnEditor)
+        assert "this.connForm.source_agent_id" in src
+        assert "this.connForm.target_agent_id" in src
+
+    def test_current_edge_context_handles_partial_selection(self):
+        """Em Nova Conexão, user pode ter source mas não target ainda —
+        getter deve retornar objeto truthy (mostrando o que tem) e não null."""
+        src = self._src()
+        # Falha rápida só quando AMBOS vazios. Senão monta o objeto com
+        # placeholder no que falta.
+        assert "if (!sid && !tid) return null" in src
+
+    def test_open_conn_editor_re_applies_ids_in_next_tick(self):
+        """Fix do bug: $nextTick força o <select> a pegar o valor depois
+        que o <template x-for> rendeza as <option>s."""
+        src = self._src()
+        # Bloco de re-aplicação em edit
+        assert "this.connForm.source_agent_id = edge.source" in src
+        assert "this.connForm.target_agent_id = edge.target" in src
+        # E o $nextTick está no openConnEditor (não só no scrollIntoView)
+        # — checa que o re-apply é deferido
+        assert src.count("$nextTick") >= 2  # scrollIntoView + re-apply IDs
+
+    def test_add_connection_to_chain_also_uses_next_tick_for_source(self):
+        """Adicionar conexão a partir de uma chain pré-seta o source —
+        também precisa de $nextTick pro select pegar o valor."""
+        src = self._src()
+        # O sourceId é calculado e depois re-aplicado em nextTick
+        assert "this.connForm.source_agent_id = sourceId" in src
+
+    def test_no_more_stale_editing_edge_context_sets(self):
+        """Regressão guard: não deve ter mais sets de `editingEdgeContext`
+        no JS (foi substituído pelo getter)."""
+        src = self._src()
+        # Comentário documentação mantém a palavra mas não é set
+        # Procura padrões de assignment
+        assert "this.editingEdgeContext = " not in src
+
+    def test_silent_catches_have_console_error(self):
+        """Reforço (2026-06-01): todo catch silencioso no JS ganhou
+        console.error pra troubleshooting no DevTools."""
+        src = self._src()
+        # Pelo menos os principais loaders/persisters têm log
+        assert "console.error('[mesh] loadConditionalVars falhou'" in src
+        assert "console.error('[mesh] loadScopeVars falhou'" in src
+        assert "console.error('[mesh] loadGroups falhou'" in src
+        assert "console.error('[mesh] load topology falhou'" in src
+        assert "console.error('[mesh] deleteConnection falhou'" in src
