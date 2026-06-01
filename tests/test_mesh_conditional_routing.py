@@ -217,7 +217,12 @@ class TestUiAndBackendWiring:
         src = (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "mesh.html").read_text(encoding="utf-8")
         # Payload usa expr só quando type=conditional
         assert "if (this.connForm.connection_type === 'conditional')" in src
-        assert "JSON.stringify(expr ? { expr } : {})" in src
+        # 2026-06-01: refactor do saveConnection para suportar dois eixos
+        # ortogonais no mesmo `config` (expr + context_scope). A expr
+        # continua sendo serializada exclusivamente quando type=conditional,
+        # mas agora via `cfg.expr = expr` em vez do ternário inline antigo.
+        assert "cfg.expr = expr" in src
+        assert "JSON.stringify(cfg)" in src
 
     def test_topology_endpoint_returns_config(self):
         from pathlib import Path
