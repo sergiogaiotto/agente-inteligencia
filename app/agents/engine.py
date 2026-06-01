@@ -2271,6 +2271,50 @@ async def execute_pipeline(
             # O próximo agente receberá o input original
             continue
 
+        # Conditional routing (2026-06-01): se a conexão upstream→current
+        # é do tipo `conditional` e a expr configurada avaliou false contra
+        # o output do agente anterior, skipa este agente — passthrough.
+        # Decisão de design: "gate de continuação" e não "branch", pra não
+        # exigir refator do BFS chain. Operador implementa branch real
+        # criando 2 conditionals do mesmo nó com exprs opostas.
+        if i > 0 and last_result:
+            skip_by_conditional = await _should_skip_conditional(
+                source_id=chain[i - 1],
+                target_id=agent_id,
+                last_output=last_result.get("output", ""),
+                last_final_state=last_result.get("final_state", ""),
+            )
+            if skip_by_conditional:
+                steps.append({
+                    "agent_id": agent_id,
+                    "agent_name": agent.get("name", ""),
+                    "agent_kind": agent.get("kind", ""),
+                    "agent_model": agent.get("model", ""),
+                    "status": "skipped_conditional",
+                    "output": last_result.get("output", ""),
+                    "final_state": "SkippedConditional",
+                    "duration_ms": 0,
+                    "evidence_score": 0,
+                    "transitions": [],
+                    "trace": {
+                        "diagnostics": [
+                            {
+                                "level": "info",
+                                "text": f"Conexão condicional avaliou false — {agent.get('name','')} pulado (passthrough)",
+                            }
+                        ],
+                    },
+                })
+                await _emit({
+                    "type": "agent_skipped",
+                    "step_index": i,
+                    "agent_id": agent_id,
+                    "agent_name": agent.get("name", ""),
+                    "reason": "conditional_false",
+                })
+                # last_result NÃO muda — próximo agente recebe output do anterior
+                continue
+
         if i > 0 and last_result:
             current_input = (
                 f"## Contexto do agente anterior ({steps[-1].get('agent_name','')}):\n"
@@ -2460,8 +2504,122 @@ async def execute_pipeline(
     return final_result
 
 
+_conditional_jinja_env = None
+
+
+def _get_conditional_jinja_env():
+    """Sandboxed Jinja2 environment para avaliar expressões de roteamento
+    condicional do AI Mesh. Lazy init pra não acoplar import no startup.
+    """
+    global _conditional_jinja_env
+    if _conditional_jinja_env is None:
+        from jinja2.sandbox import SandboxedEnvironment
+        from jinja2 import ChainableUndefined
+        _conditional_jinja_env = SandboxedEnvironment(
+            undefined=ChainableUndefined,
+            autoescape=False,
+        )
+    return _conditional_jinja_env
+
+
+def _eval_conditional(expr: str, ctx: dict) -> bool:
+    """Avalia uma expressão Jinja booleana contra `ctx`.
+
+    Variáveis disponíveis no contexto:
+    - `output` (str): texto da resposta do agente upstream
+    - `output_lower` (str): output em lowercase (case-insensitive matching)
+    - `final_state` (str): estado final do FSM do agente upstream
+      (ex.: "Recommend", "Refuse", "Escalate", "LogAndClose")
+
+    Exemplos válidos:
+    - `'imagem' in output_lower`
+    - `final_state == 'Recommend'`
+    - `output_lower.startswith('## ')`
+    - `len(output) > 100`
+
+    Em erro de sintaxe ou execução, levanta — caller decide fail-open vs
+    fail-closed. Helper isolado pra ser testável e reusável.
+    """
+    env = _get_conditional_jinja_env()
+    return bool(env.compile_expression(expr)(**ctx))
+
+
+async def _should_skip_conditional(
+    *,
+    source_id: str,
+    target_id: str,
+    last_output: str,
+    last_final_state: str,
+) -> bool:
+    """True se a conexão source→target é `connection_type=conditional` e
+    a expressão configurada em `config.expr` avaliou para `False`.
+
+    Política de erro: **fail-open** — qualquer falha (config malformado,
+    expr inválida, exception no Jinja) loga warning e devolve `False`
+    (NÃO skipa). É melhor executar o agente que perder dados por bug
+    de regra. Operador vê o warning em errors.log e corrige.
+    """
+    from app.core.database import mesh_repo
+
+    conns = await mesh_repo.find_all(source_agent_id=source_id, limit=20)
+    conn = next((c for c in conns if c.get("target_agent_id") == target_id), None)
+    if not conn or conn.get("connection_type") != "conditional":
+        return False
+
+    cfg = conn.get("config") or "{}"
+    try:
+        cfg_dict = json.loads(cfg) if isinstance(cfg, str) else cfg
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            "mesh.conditional.bad_config",
+            extra={
+                "event": "mesh.conditional",
+                "source_id": source_id,
+                "target_id": target_id,
+                "config_preview": str(cfg)[:200],
+                "error_type": type(e).__name__,
+            },
+        )
+        return False
+
+    expr = ((cfg_dict or {}).get("expr") or "").strip()
+    if not expr:
+        # Condicional sem expr = sempre passa (operador escolheu o tipo
+        # mas não definiu a regra — equivalente a sequencial).
+        return False
+
+    try:
+        result = _eval_conditional(expr, {
+            "output": last_output or "",
+            "output_lower": (last_output or "").lower(),
+            "final_state": last_final_state or "",
+        })
+    except Exception as e:
+        logger.warning(
+            "mesh.conditional.eval_failed",
+            extra={
+                "event": "mesh.conditional",
+                "source_id": source_id,
+                "target_id": target_id,
+                "expr": expr[:200],
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+        )
+        return False  # fail-open
+
+    return not result
+
+
 async def _resolve_ordered_chain(entry_agent_id: str) -> list:
-    """Resolve cadeia ordenada downstream a partir do agente de entrada (BFS)."""
+    """Resolve cadeia ordenada downstream a partir do agente de entrada (BFS).
+
+    Importante: ESTA função NÃO consulta `connection_type` — ela devolve
+    a topologia completa (todos os possíveis filhos). A decisão de pular
+    nós condicionais é tomada em runtime por `execute_pipeline` via
+    `_should_skip_conditional`, depois que o output do agente anterior
+    está disponível.
+    """
     from app.core.database import mesh_repo
     chain = [entry_agent_id]
     visited = {entry_agent_id}

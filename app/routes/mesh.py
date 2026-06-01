@@ -17,7 +17,15 @@ async def get_topology():
     for c in conns:
         src, tgt = c["source_agent_id"], c["target_agent_id"]
         if src in active_ids and tgt in active_ids:
-            edges.append({"id":c["id"],"source":src,"target":tgt,"type":c["connection_type"]})
+            # `config` exposto para o frontend conseguir popular o form de
+            # edição (especialmente expr de conexões conditional).
+            edges.append({
+                "id": c["id"],
+                "source": src,
+                "target": tgt,
+                "type": c["connection_type"],
+                "config": c.get("config") or "{}",
+            })
         elif src not in {a["id"] for a in agents} or tgt not in {a["id"] for a in agents}:
             # Auto-cleanup: conexão órfã → agente deletado (não apenas inativo)
             try:
