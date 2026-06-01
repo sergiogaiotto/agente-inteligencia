@@ -48,6 +48,14 @@ _jinja_env_strict = SandboxedEnvironment(undefined=StrictUndefined, autoescape=F
 _jinja_env_lenient = SandboxedEnvironment(undefined=ChainableUndefined, autoescape=False)
 _PURE_JINJA_EXPR_RE = re.compile(r"^\s*{{\s*(.+?)\s*}}\s*$", re.DOTALL)
 
+# RFC 6570 / OpenAPI path templates usam {name} (brace único). O engine
+# de templating é Jinja2 que só interpreta {{ }}. Sem pre-substituição,
+# `/api/cep/v1/{cep}` chega literal ao httpx, é URL-encodado como
+# `%7Bcep%7D`, e a API externa rejeita (Bug fix 2026-06-01: BrasilAPI
+# respondia "CEP possui menos do que 8 caracteres" para um CEP válido
+# de 8 chars — recebia literal `{cep}` (5 chars) na URL).
+_PATH_PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
 # ═══════════════════════════════════════════════════════
 # Templating — Jinja2 sandboxed
 # ═══════════════════════════════════════════════════════
@@ -65,6 +73,36 @@ def _render(template: Any, scope: dict, lenient: bool = False) -> Any:
         expr = pure_expr.group(1)
         return env.compile_expression(expr)(**scope)
     return env.from_string(template).render(**scope)
+
+
+def _resolve_path_placeholders(path: str, scope: dict) -> str:
+    """Substitui placeholders `{name}` em path por valor de `scope['inputs'][name]`.
+
+    Convenção: o parser persiste path em estilo brace-único (RFC 6570 /
+    OpenAPI path templates — igual ao path do connector real). Esta função
+    traduz para o valor concreto ANTES do Jinja `_render`, sem afetar
+    expressões Jinja `{{ ... }}` já presentes (Jinja segue funcionando para
+    casos avançados).
+
+    Placeholders não resolvidos (nome não existe em `scope.inputs` nem em
+    `scope`) ficam literais — facilita debug em vez de virar string vazia
+    silenciosa. Aplicado apenas em path (não em headers/query/body para
+    não interferir com `{}` legítimos em JSON; usuários que precisam de
+    interpolação nesses campos usam Jinja `{{ ... }}` explícito).
+    """
+    if not isinstance(path, str) or "{" not in path:
+        return path
+    inputs = scope.get("inputs") or {}
+
+    def _sub(m: "re.Match[str]") -> str:
+        name = m.group(1)
+        if isinstance(inputs, dict) and name in inputs:
+            return str(inputs[name])
+        if name in scope:
+            return str(scope[name])
+        return m.group(0)
+
+    return _PATH_PLACEHOLDER_RE.sub(_sub, path)
 
 
 def _render_deep(value: Any, scope: dict, lenient: bool = False) -> Any:
@@ -577,7 +615,12 @@ async def _plan_binding(binding: dict, scope: dict, lenient: bool = False) -> tu
     method = (binding.get("method") or "GET").upper()
 
     try:
-        path = _render(binding.get("path", "/"), scope, lenient=lenient)
+        # Resolve {name} placeholders (brace-único) ANTES do Jinja, porque
+        # o parser persiste path em estilo OpenAPI/RFC 6570 e o _render só
+        # interpreta {{ }}. Sem isso, /api/cep/v1/{cep} chega ao httpx
+        # literal e a API externa rejeita o request.
+        raw_path = _resolve_path_placeholders(binding.get("path", "/"), scope)
+        path = _render(raw_path, scope, lenient=lenient)
         headers = _render_deep(binding.get("headers") or {}, scope, lenient=lenient)
         query = _render_deep(binding.get("query") or {}, scope, lenient=lenient)
         body = _render_deep(binding.get("body"), scope, lenient=lenient) if binding.get("body") is not None else None
