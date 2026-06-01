@@ -8,12 +8,16 @@ Determina modo de execução (fast/standard/rigorous) para otimizar
 pipeline — elimina chamadas LLM desnecessárias.
 """
 
+import logging
 import re
 import hashlib
 import json
 import yaml
 from dataclasses import dataclass, field, asdict
 from typing import Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 REQUIRED_SECTIONS = ["Purpose", "Activation Criteria", "Inputs", "Workflow", "Tool Bindings", "Output Contract", "Failure Modes"]
@@ -262,7 +266,22 @@ def _parse_api_bindings(section_text: str) -> list[dict]:
 
     try:
         data = yaml.safe_load(body)
-    except yaml.YAMLError:
+    except yaml.YAMLError as e:
+        # Antes silencioso (return []). Bug #244 mostrou que YAML
+        # quebrado em ## API Bindings derrubava o binding sem deixar
+        # rastro — operador via erro "exige ## API Bindings ..." mas
+        # não sabia que o YAML estava mal formatado. Agora vai pro
+        # errors.log com preview pra debug imediato.
+        logger.warning(
+            "parser.api_bindings_yaml_invalid",
+            extra={
+                "event": "skill_parser.yaml_invalid",
+                "section": "API Bindings",
+                "body_preview": body[:200],
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+        )
         return []
 
     # Tolerância: aceita mapping com chave 'endpoints' ou 'bindings'
@@ -311,7 +330,17 @@ def _parse_data_tables(section_text: str) -> list[dict]:
 
     try:
         data = yaml.safe_load(body)
-    except yaml.YAMLError:
+    except yaml.YAMLError as e:
+        logger.warning(
+            "parser.data_tables_yaml_invalid",
+            extra={
+                "event": "skill_parser.yaml_invalid",
+                "section": "Data Tables",
+                "body_preview": body[:200],
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+        )
         return []
 
     # Aceita dict {tables: [...]} OU list direta
@@ -360,7 +389,17 @@ def _parse_output_shape(section_text: str) -> dict:
 
     try:
         data = yaml.safe_load(body)
-    except yaml.YAMLError:
+    except yaml.YAMLError as e:
+        logger.warning(
+            "parser.output_shape_yaml_invalid",
+            extra={
+                "event": "skill_parser.yaml_invalid",
+                "section": "Output Shape",
+                "body_preview": body[:200],
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+        )
         return {}
 
     if not isinstance(data, dict):
@@ -416,7 +455,17 @@ def _parse_evidence_policy(section_text: str) -> dict:
 
     try:
         data = yaml.safe_load(body)
-    except yaml.YAMLError:
+    except yaml.YAMLError as e:
+        logger.warning(
+            "parser.evidence_policy_yaml_invalid",
+            extra={
+                "event": "skill_parser.yaml_invalid",
+                "section": "Evidence Policy",
+                "body_preview": body[:200],
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+        )
         return {"raw": section_text}
 
     if not isinstance(data, dict):

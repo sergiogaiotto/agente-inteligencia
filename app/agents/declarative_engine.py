@@ -627,6 +627,21 @@ async def _plan_binding(binding: dict, scope: dict, lenient: bool = False) -> tu
         idemp_tpl = binding.get("idempotency_key") or ""
         idempotency_key = _render(idemp_tpl, scope, lenient=lenient) if idemp_tpl else ""
     except Exception as e:
+        # Antes só retornava (None, "erro ao renderizar template: ..."). O
+        # erro ia parar em `errors` do execute_declarative mas não em
+        # errors.log — troubleshooting de Jinja quebrado em produção ficava
+        # cego. Agora vai estruturado com binding_id + connector + path.
+        logger.warning(
+            "declarative_engine.plan_binding_template_failed",
+            extra={
+                "event": "declarative.template_failed",
+                "binding_id": binding_id,
+                "connector": connector_ref,
+                "path_template": binding.get("path", "/"),
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+        )
         return None, f"[{binding_id}] erro ao renderizar template: {e}"
 
     if method in _IDEMPOTENT_REQUIRED_METHODS and not idempotency_key and not lenient:
