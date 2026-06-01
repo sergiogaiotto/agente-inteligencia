@@ -2315,12 +2315,44 @@ async def execute_pipeline(
                 # last_result NÃO muda — próximo agente recebe output do anterior
                 continue
 
+        # Context scope (2026-06-01): aplica política inherit/scoped/isolated
+        # ao output do agente anterior ANTES de montar o prompt do próximo.
+        # - inherit: comportamento padrão (output cru vira prefix)
+        # - scoped: output passa por transform Jinja sandboxed (truncate,
+        #   first-line, regex, etc) — economiza tokens + governance
+        # - isolated: próximo agente recebe SÓ user_input, sem prefix
+        # Fail-OPEN no runtime — ver `_resolve_context_scope`.
+        scope_resolution = None
         if i > 0 and last_result:
-            current_input = (
-                f"## Contexto do agente anterior ({steps[-1].get('agent_name','')}):\n"
-                f"{last_result.get('output','')}\n\n"
-                f"## Solicitação original:\n{user_input}"
+            scope_resolution = await _resolve_context_scope(
+                source_id=chain[i - 1],
+                target_id=agent_id,
+                last_output=last_result.get("output", ""),
+                last_final_state=last_result.get("final_state", ""),
             )
+            if scope_resolution["skip_prefix"]:
+                # mode=isolated → próximo agente recebe SÓ a solicitação
+                # original, sem nenhuma menção ao output anterior.
+                current_input = user_input
+            else:
+                scoped_output = scope_resolution["output"]
+                current_input = (
+                    f"## Contexto do agente anterior ({steps[-1].get('agent_name','')}):\n"
+                    f"{scoped_output}\n\n"
+                    f"## Solicitação original:\n{user_input}"
+                )
+            if scope_resolution["mode"] != "inherit":
+                # Só emite evento quando scope efetivamente filtrou algo.
+                # `inherit` é o default — não polui o stream de eventos.
+                await _emit({
+                    "type": "context_scope_applied",
+                    "step_index": i,
+                    "source_id": chain[i - 1],
+                    "target_id": agent_id,
+                    "mode": scope_resolution["mode"],
+                    "chars_before": scope_resolution["chars_before"],
+                    "chars_after": scope_resolution["chars_after"],
+                })
 
         # Emite agent_start ANTES de chamar execute_interaction (LLM tarda 1-30s,
         # esse evento é o que destrava o UX "ao vivo" durante a chamada).
@@ -2334,13 +2366,24 @@ async def execute_pipeline(
             "processing_message": (agent.get("processing_message") or "").strip(),
         })
 
+        # pipeline_context segue o scope: isolated → None (zera ctx vindo
+        # do anterior); inherit/scoped → versão filtrada que entrou no prompt.
+        if scope_resolution and scope_resolution["skip_prefix"]:
+            pipeline_ctx = None
+        elif scope_resolution:
+            pipeline_ctx = scope_resolution["output"]
+        elif i > 0 and last_result:
+            pipeline_ctx = last_result.get("output", "")
+        else:
+            pipeline_ctx = None
+
         try:
             result = await execute_interaction(
                 agent_id=agent_id,
                 user_input=current_input,
                 channel=channel,
                 attachments=attachments if i == 0 else None,
-                pipeline_context=last_result.get("output","") if i > 0 and last_result else None,
+                pipeline_context=pipeline_ctx,
                 # Só o primeiro agente reutiliza a session_id do request.
                 # Subsequentes criam sub-interactions próprias (child_interaction_ids)
                 # que se ligam à master via execute_pipeline:2298+ depois.
@@ -2667,6 +2710,210 @@ async def _should_skip_conditional(
         return False  # fail-open
 
     return not result
+
+
+# ─── Context Scope (2026-06-01) ───
+# Inherit/Scoped/Isolated propagation control entre nós da mesh chain.
+# Funciona em complemento ao conditional routing: conditional decide SE
+# o agente downstream executa; scope decide QUE PARTE do output anterior
+# vira contexto pra ele. Persistido em `mesh_connections.config.context_scope`.
+#
+# Shape esperado de `config.context_scope` (parseado do JSON em config):
+#   {
+#     "mode": "inherit" | "scoped" | "isolated",
+#     "template": "<jinja expression>",   # só p/ mode=scoped (precedência)
+#     "max_chars": 500                     # só p/ mode=scoped (atalho)
+#   }
+#
+# Política de erro: fail-OPEN — qualquer falha (config malformado, template
+# inválido) loga warning + cai pra inherit. Mesma filosofia do conditional.
+
+CONTEXT_SCOPE_MODES: tuple[str, ...] = ("inherit", "scoped", "isolated")
+
+# Vars disponíveis no template Jinja do modo scoped — reusa as do conditional
+# pra não fragmentar mental model do operador. Ver `_build_conditional_context`.
+CONTEXT_SCOPE_VARS_META: list[dict] = CONDITIONAL_VARS_META
+
+
+def _apply_context_scope_template(template: str, ctx: dict) -> str:
+    """Avalia uma expressão Jinja contra `ctx` e retorna o resultado como str.
+
+    Aceita expressão (ex.: `output[:200]`, `output | upper`,
+    `output.split('\\n')[0]`) — usa `compile_expression` pra simetria total
+    com `_eval_conditional` e reuso do mesmo ambiente sandboxed.
+
+    Em erro de sintaxe ou execução, levanta — caller decide fail-open.
+    """
+    env = _get_conditional_jinja_env()
+    result = env.compile_expression(template)(**ctx)
+    if result is None:
+        return ""
+    return result if isinstance(result, str) else str(result)
+
+
+async def _resolve_context_scope(
+    *,
+    source_id: str,
+    target_id: str,
+    last_output: str,
+    last_final_state: str,
+) -> dict:
+    """Resolve a política de scope da conexão `source→target` e aplica-a
+    ao `last_output`. Retorna dict com:
+
+    - `mode`: 'inherit' | 'scoped' | 'isolated'
+    - `output`: string a propagar adiante (vazia se isolated)
+    - `skip_prefix`: bool — quando True, caller NÃO deve montar o prefix
+      "## Contexto do agente anterior" (apenas user_input vai pro próximo)
+    - `chars_before` / `chars_after`: int — telemetria
+
+    Política fail-OPEN: erro em config/template → loga warning + retorna
+    inherit (output original). É melhor over-share contexto que perder dado
+    por bug de regra.
+    """
+    from app.core.database import mesh_repo
+
+    prev_len = len(last_output or "")
+    inherit_result = {
+        "mode": "inherit",
+        "output": last_output or "",
+        "skip_prefix": False,
+        "chars_before": prev_len,
+        "chars_after": prev_len,
+    }
+
+    try:
+        conns = await mesh_repo.find_all(source_agent_id=source_id, limit=20)
+    except Exception as e:
+        logger.error(
+            "mesh.context_scope.repo_lookup_failed",
+            extra={
+                "event": "mesh.context_scope",
+                "source_id": source_id,
+                "target_id": target_id,
+                "error_type": type(e).__name__,
+            },
+            exc_info=True,
+        )
+        return inherit_result
+
+    conn = next((c for c in conns if c.get("target_agent_id") == target_id), None)
+    if not conn:
+        return inherit_result
+
+    cfg = conn.get("config") or "{}"
+    try:
+        cfg_dict = json.loads(cfg) if isinstance(cfg, str) else cfg
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            "mesh.context_scope.bad_config",
+            extra={
+                "event": "mesh.context_scope",
+                "source_id": source_id,
+                "target_id": target_id,
+                "config_preview": str(cfg)[:200],
+                "error_type": type(e).__name__,
+            },
+        )
+        return inherit_result
+
+    scope_cfg = (cfg_dict or {}).get("context_scope")
+    if not isinstance(scope_cfg, dict):
+        return inherit_result
+
+    mode = (scope_cfg.get("mode") or "inherit").strip().lower()
+    if mode not in CONTEXT_SCOPE_MODES:
+        logger.warning(
+            "mesh.context_scope.invalid_mode",
+            extra={
+                "event": "mesh.context_scope",
+                "source_id": source_id,
+                "target_id": target_id,
+                "mode": str(mode)[:50],
+            },
+        )
+        return inherit_result
+
+    if mode == "inherit":
+        return inherit_result
+
+    if mode == "isolated":
+        logger.info(
+            "mesh.context_scope.applied",
+            extra={
+                "event": "mesh.context_scope",
+                "source_id": source_id,
+                "target_id": target_id,
+                "mode": "isolated",
+                "chars_before": prev_len,
+                "chars_after": 0,
+                "reduction_pct": 100.0 if prev_len > 0 else 0.0,
+            },
+        )
+        return {
+            "mode": "isolated",
+            "output": "",
+            "skip_prefix": True,
+            "chars_before": prev_len,
+            "chars_after": 0,
+        }
+
+    # mode == "scoped"
+    template = (scope_cfg.get("template") or "").strip()
+    max_chars = scope_cfg.get("max_chars")
+    if not template and isinstance(max_chars, int) and max_chars > 0:
+        template = f"output[:{max_chars}]"
+    if not template:
+        # scoped sem template nem max_chars = inherit (operador escolheu
+        # mas não definiu a regra — fail-open).
+        return inherit_result
+
+    try:
+        scoped_output = _apply_context_scope_template(
+            template,
+            _build_conditional_context(
+                output=last_output, final_state=last_final_state
+            ),
+        )
+    except Exception as e:
+        logger.warning(
+            "mesh.context_scope.eval_failed",
+            extra={
+                "event": "mesh.context_scope",
+                "source_id": source_id,
+                "target_id": target_id,
+                "template": template[:200],
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+            exc_info=True,
+        )
+        return inherit_result  # fail-open
+
+    chars_after = len(scoped_output)
+    logger.info(
+        "mesh.context_scope.applied",
+        extra={
+            "event": "mesh.context_scope",
+            "source_id": source_id,
+            "target_id": target_id,
+            "mode": "scoped",
+            "template_preview": template[:80],
+            "chars_before": prev_len,
+            "chars_after": chars_after,
+            "reduction_pct": (
+                round((1 - chars_after / prev_len) * 100, 1)
+                if prev_len > 0 else 0.0
+            ),
+        },
+    )
+    return {
+        "mode": "scoped",
+        "output": scoped_output,
+        "skip_prefix": False,
+        "chars_before": prev_len,
+        "chars_after": chars_after,
+    }
 
 
 async def _resolve_ordered_chain(entry_agent_id: str) -> list:
