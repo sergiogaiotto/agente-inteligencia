@@ -103,6 +103,161 @@ async def test_conditional(payload: dict):
         }
     return {"result": bool(result), "context": ctx}
 
+
+# ═══════════════════════════════════════════════════════════════════
+# Context Scope Wizard (2026-06-01) — endpoints para o frontend
+# escolher a política de propagação de contexto (inherit/scoped/isolated)
+# entre nós da mesh chain. Complementar ao Conditional Routing — ver
+# `_resolve_context_scope` em app/agents/engine.py.
+# ═══════════════════════════════════════════════════════════════════
+
+
+@router.get("/context-scope-vars")
+async def context_scope_vars():
+    """Lista as variáveis disponíveis em templates Jinja do modo `scoped`
+    + os modos suportados. Usado pelo wizard de Edição de Conexão (vars
+    panel + seletor de modo).
+
+    As vars são as MESMAS do conditional routing — operador aprende uma
+    vez, usa nos dois lugares. Ver `_build_conditional_context`.
+    """
+    from app.agents.engine import (
+        CONTEXT_SCOPE_VARS_META, CONTEXT_SCOPE_MODES,
+    )
+    return {
+        "vars": CONTEXT_SCOPE_VARS_META,
+        "modes": [
+            {
+                "id": "inherit",
+                "label": "Herdar (padrão)",
+                "desc": "Output completo do agente anterior vira contexto do próximo — comportamento histórico, retrocompatível.",
+            },
+            {
+                "id": "scoped",
+                "label": "Filtrar (scoped)",
+                "desc": "Output passa por transformação Jinja antes de virar contexto. Economiza tokens e permite extrair só a parte relevante.",
+            },
+            {
+                "id": "isolated",
+                "label": "Isolar",
+                "desc": "Próximo agente NÃO recebe contexto do anterior — apenas a solicitação original. Útil para subagentes atômicos.",
+            },
+        ],
+        "_modes_canonical": list(CONTEXT_SCOPE_MODES),
+    }
+
+
+@router.post("/connections/test-context-scope")
+async def test_context_scope(payload: dict):
+    """Aplica a política de scope contra um output de exemplo e devolve
+    o resultado. Usado pelo simulador do wizard antes do operador salvar.
+
+    Payload:
+      {
+        "mode": "inherit" | "scoped" | "isolated",
+        "template": str (opcional, só p/ mode=scoped),
+        "max_chars": int (opcional, só p/ mode=scoped — atalho),
+        "output": str (simulação do output do agente anterior),
+        "final_state": str (opcional)
+      }
+
+    Returns (sucesso):
+      {
+        "mode": str,
+        "output": str (resultado da aplicação do scope),
+        "skip_prefix": bool,
+        "chars_before": int,
+        "chars_after": int,
+        "reduction_pct": float,
+        "effective_template": str (template realmente avaliado — útil
+            quando max_chars expandiu pra output[:N]),
+        "context": dict (vars disponíveis no Jinja, pra debugging)
+      }
+
+    Returns (erro):
+      {"error": "<descrição>", "context": dict}
+
+    Política: **fail-CLOSED** — erro vira mensagem para o operador
+    corrigir o template antes de salvar. Em runtime
+    (`_resolve_context_scope`) o erro é fail-OPEN; aqui o operador QUER
+    ver o erro para corrigir.
+    """
+    from app.agents.engine import (
+        CONTEXT_SCOPE_MODES, _apply_context_scope_template,
+        _build_conditional_context,
+    )
+
+    mode = (payload.get("mode") or "inherit").strip().lower()
+    if mode not in CONTEXT_SCOPE_MODES:
+        return {
+            "error": f"Modo inválido: {mode!r}. Use um de: {', '.join(CONTEXT_SCOPE_MODES)}.",
+        }
+
+    last_output = payload.get("output", "") or ""
+    final_state = payload.get("final_state", "") or ""
+    chars_before = len(last_output)
+    ctx = _build_conditional_context(output=last_output, final_state=final_state)
+
+    if mode == "inherit":
+        return {
+            "mode": "inherit",
+            "output": last_output,
+            "skip_prefix": False,
+            "chars_before": chars_before,
+            "chars_after": chars_before,
+            "reduction_pct": 0.0,
+            "effective_template": "",
+            "context": ctx,
+        }
+
+    if mode == "isolated":
+        return {
+            "mode": "isolated",
+            "output": "",
+            "skip_prefix": True,
+            "chars_before": chars_before,
+            "chars_after": 0,
+            "reduction_pct": 100.0 if chars_before > 0 else 0.0,
+            "effective_template": "",
+            "context": ctx,
+        }
+
+    # mode == "scoped"
+    template = (payload.get("template") or "").strip()
+    max_chars = payload.get("max_chars")
+    if not template and isinstance(max_chars, int) and max_chars > 0:
+        template = f"output[:{max_chars}]"
+    if not template:
+        return {
+            "error": "Modo 'scoped' requer 'template' (expressão Jinja) ou 'max_chars' (atalho).",
+            "context": ctx,
+        }
+
+    try:
+        scoped_output = _apply_context_scope_template(template, ctx)
+    except Exception as e:
+        return {
+            "error": f"{type(e).__name__}: {str(e)[:300]}",
+            "effective_template": template,
+            "context": ctx,
+        }
+
+    chars_after = len(scoped_output)
+    return {
+        "mode": "scoped",
+        "output": scoped_output,
+        "skip_prefix": False,
+        "chars_before": chars_before,
+        "chars_after": chars_after,
+        "reduction_pct": (
+            round((1 - chars_after / chars_before) * 100, 1)
+            if chars_before > 0 else 0.0
+        ),
+        "effective_template": template,
+        "context": ctx,
+    }
+
+
 # ── CAR §6 ──
 car_router = APIRouter(prefix="/api/v1/car", tags=["car"])
 
