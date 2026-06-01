@@ -208,6 +208,36 @@ def parse_skill_md(content: str) -> ParsedSkill:
     return result
 
 
+def _extract_fenced_yaml_body(section_text: str) -> str:
+    """Extrai o corpo de um bloco ```yaml ... ``` dentro de section_text.
+
+    Devolve o conteúdo entre o fence de abertura e o PRIMEIRO fence de
+    fechamento — independente de haver texto, horizontal rule (`---`)
+    ou outra seção depois. Quando não há fence, devolve `section_text`
+    inteiro (modo inline).
+
+    Histórico (bug fixado em 2026-06-01): o parser usava
+    `re.sub(r"\\n```\\s*$", "", body)`, que só removia o fence quando
+    ele estava no FINAL ABSOLUTO da string. Como `_extract_sections`
+    inclui tudo até o próximo `## `, sempre havia conteúdo após o
+    fence de fechamento (no mínimo o HR `\\n\\n---\\n\\n` que o wizard
+    injeta entre seções obrigatórias). Resultado: o ``` literal sobrava
+    no body, `yaml.safe_load` levantava `ScannerError` ao encontrar a
+    crase, o `except yaml.YAMLError: return []` engolia em silêncio e
+    a validação reportava "execution_mode=declarative exige ## API
+    Bindings ... com pelo menos 1 entrada válida" mesmo com o binding
+    visualmente presente no SKILL.md.
+    """
+    fence_open = re.search(r"```(?:yaml|yml)?\s*\n", section_text)
+    if not fence_open:
+        return section_text
+    rest = section_text[fence_open.end():]
+    fence_close = rest.find("\n```")
+    if fence_close == -1:
+        return rest
+    return rest[:fence_close]
+
+
 def _parse_api_bindings(section_text: str) -> list[dict]:
     """Parse a seção ## API Bindings como lista YAML.
 
@@ -228,12 +258,7 @@ def _parse_api_bindings(section_text: str) -> list[dict]:
     if not section_text:
         return []
 
-    fence_open = re.search(r"```(?:yaml|yml)?\s*\n", section_text)
-    if fence_open:
-        body = section_text[fence_open.end():]
-        body = re.sub(r"\n```\s*$", "", body)
-    else:
-        body = section_text
+    body = _extract_fenced_yaml_body(section_text)
 
     try:
         data = yaml.safe_load(body)
@@ -282,12 +307,7 @@ def _parse_data_tables(section_text: str) -> list[dict]:
     if not section_text:
         return []
 
-    fence_open = re.search(r"```(?:yaml|yml)?\s*\n", section_text)
-    if fence_open:
-        body = section_text[fence_open.end():]
-        body = re.sub(r"\n```\s*$", "", body)
-    else:
-        body = section_text
+    body = _extract_fenced_yaml_body(section_text)
 
     try:
         data = yaml.safe_load(body)
