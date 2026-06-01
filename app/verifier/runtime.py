@@ -345,10 +345,15 @@ class Verifier:
                 from app.agents.engine import _extract_json_schema_from_contract
                 schema = _extract_json_schema_from_contract(output_contract)
                 if schema:
+                    # name precisa casar com ^[a-zA-Z0-9_-]+$ — sanitiza title cru
+                    # do SKILL.md. Mesma helper do engine.py:_build_response_format.
+                    from app.core.text_utils import sanitize_schema_name
                     kwargs["response_format"] = {
                         "type": "json_schema",
                         "json_schema": {
-                            "name": (schema.get("title") or "CorrectedOutput")[:64],
+                            "name": sanitize_schema_name(
+                                schema.get("title"), fallback="CorrectedOutput"
+                            ),
                             "schema": schema,
                             "strict": True,
                         },
