@@ -218,6 +218,21 @@ async def resolve_llm_for_task(
     provider, model = _split_pm(resolved)
 
     if has_image and not is_multimodal(provider, model):
+        # Preferência (2026-06-01): se o Modelo Primário da plataforma já é
+        # multimodal, usa ele no lugar do fallback hardcoded. Sem isso o
+        # operador via "Modelo Primário=gpt-4.1" na UI e mesmo assim a request
+        # ia pro `multimodal_fallback` (default azure/gpt-4o) — UX confusa.
+        # Só dispara quando primary É multimodal; caso contrário cai no fallback
+        # como antes.
+        primary = global_primary_routing()
+        if primary:
+            p_provider, p_model = _split_pm(primary)
+            if is_multimodal(p_provider, p_model):
+                logger.info(
+                    f"resolve_llm_for_task: input multimodal → primary {primary} "
+                    f"(original {resolved} é text-only; primary é multimodal)"
+                )
+                return p_provider, p_model
         fallback = routing.get("multimodal_fallback") or DEFAULT_ROUTING["multimodal_fallback"]
         f_provider, f_model = _split_pm(fallback)
         logger.info(

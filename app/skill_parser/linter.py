@@ -191,6 +191,25 @@ def lint_skill(parsed: Any) -> list[dict]:
             f"ciclo detectado em depends_on: {sorted(cycle_ids)}",
         ))
 
+    # Output Contract.title precisa casar com ^[a-zA-Z0-9_-]+$ — vira name
+    # do response_format.json_schema na chamada à OpenAI (engine.py:_build
+    # _response_format). Pegar isso em runtime já está sanitizado (helper
+    # sanitize_schema_name), mas o lint avisa em tempo de edição para o
+    # operador entender o que sai como identifier. Reportado por user
+    # 2026-06-01 com title="Saida da Categorizar Imagem".
+    output_contract = getattr(parsed, "output_contract", "") or ""
+    raw_title = _extract_json_schema_title(output_contract)
+    if raw_title:
+        from app.core.text_utils import schema_name_is_valid, sanitize_schema_name
+        if not schema_name_is_valid(raw_title):
+            sanitized = sanitize_schema_name(raw_title)
+            issues.append(LintIssue(
+                "warning", "*", "output_contract_title_invalid_chars",
+                f"## Output Contract.title='{raw_title}' tem chars fora de "
+                f"^[a-zA-Z0-9_-]+$ — runtime sanitiza para '{sanitized}', mas "
+                "considere editar o title no SKILL.md para combinar.",
+            ))
+
     return [i.as_dict() for i in issues]
 
 
@@ -214,6 +233,28 @@ def _iter_strings(obj: Any):
     elif isinstance(obj, list):
         for v in obj:
             yield from _iter_strings(v)
+
+
+def _extract_json_schema_title(output_contract_text: str) -> str:
+    """Extrai `title` do bloco JSON Schema dentro de ## Output Contract.
+
+    Retorna `""` quando não há fence ```json, quando o JSON é inválido, ou
+    quando o schema não declara `title`. Best-effort — falha silenciosa para
+    não derrubar todo o linter por um Output Contract mal formatado (outros
+    checks já cobrem isso).
+    """
+    if not output_contract_text:
+        return ""
+    import json as _json
+    match = re.search(r"```(?:json)?\s*\n(.*?)\n```", output_contract_text, re.DOTALL)
+    if not match:
+        return ""
+    try:
+        data = _json.loads(match.group(1))
+    except (ValueError, TypeError):
+        return ""
+    title = data.get("title") if isinstance(data, dict) else None
+    return str(title) if isinstance(title, str) else ""
 
 
 def _detect_cycle(bindings: list[dict]) -> set[str]:

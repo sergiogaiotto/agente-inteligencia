@@ -329,8 +329,12 @@ class DeepAgentHarness:
         schema = _extract_json_schema_from_contract(contract)
         if not schema:
             return None
-        # OpenAI espera nome no schema. Usa title do schema ou fallback genérico.
-        name = (schema.get("title") or "SkillOutput")[:64]
+        # OpenAI exige name casando com ^[a-zA-Z0-9_-]+$. O `title` do schema vem
+        # cru do SKILL.md (operador escreve "Saída da Categorizar Imagem" com
+        # espaço e acento) e quebrava o request com 400. Centralizamos a
+        # sanitização em sanitize_schema_name pra evitar a divergência.
+        from app.core.text_utils import sanitize_schema_name
+        name = sanitize_schema_name(schema.get("title"), fallback="SkillOutput")
         return {
             "type": "json_schema",
             "json_schema": {
