@@ -876,6 +876,8 @@ function workspacePage() {
         isStructuredContent(content) {
             if (!content) return false;
             const t = content.trim();
+            // Fenced JSON (vindo do invoke-binding-direct, etc) também conta como estruturado.
+            if (/^```(?:json)?\s*\n[\s\S]*\n```\s*$/.test(t)) return true;
             // User-facing rule: if it looks like key:value OR contains braces, show format toggle.
             if (/[{}]/.test(t)) return true;
             if (/["'\w-]+\s*:\s*[^\s]/.test(t)) return true;
@@ -884,14 +886,25 @@ function workspacePage() {
             return false;
         },
 
+        // Remove ```json … ``` (ou ``` … ```) e devolve o conteúdo interno se for JSON.
+        // Devolve o texto original quando não é fence. Centraliza o fix do bug em que
+        // respostas do invoke-binding-direct (que vêm encapsuladas em fence pra render
+        // como markdown code block) não entravam no path de cards bonitos.
+        _unwrapJsonFence(text) {
+            if (!text) return text;
+            const m = text.match(/^\s*```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$/);
+            return m ? m[1].trim() : text;
+        },
+
         renderRichContent(content) {
             if (!content) return '';
             let text = content.trim();
+            const unwrapped = this._unwrapJsonFence(text);
 
-            // Try JSON parse
-            if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+            // Try JSON parse (em cima do conteúdo desembrulhado da fence)
+            if ((unwrapped.startsWith('{') && unwrapped.endsWith('}')) || (unwrapped.startsWith('[') && unwrapped.endsWith(']'))) {
                 try {
-                    const parsed = JSON.parse(text);
+                    const parsed = JSON.parse(unwrapped);
                     return this._renderParsedJson(parsed);
                 } catch {}
             }
@@ -912,7 +925,8 @@ function workspacePage() {
                     const texts = obj.map(b => b.text || '').join('\n\n');
                     return this._renderRichMarkdown(texts.replace(/\\n/g, '\n'));
                 }
-                return `<pre class="rounded-lg bg-surface-50 border border-surface-200 p-3 text-[11px] font-mono overflow-x-auto whitespace-pre-wrap text-brand-800">${this._esc(JSON.stringify(obj, null, 2))}</pre>`;
+                // Array genérico → tree colapsável (não paredão de JSON cru)
+                return this._renderJsonTree(obj);
             }
 
             // ── Object with "results" array ──
@@ -951,11 +965,78 @@ function workspacePage() {
                 return this._renderObjectCard(obj);
             }
 
-            // ── Fallback: pretty JSON ──
-            return `<pre class="rounded-lg bg-surface-50 border border-surface-200 p-3 text-[11px] font-mono overflow-x-auto whitespace-pre-wrap text-brand-800">${this._esc(JSON.stringify(obj, null, 2))}</pre>`;
+            // ── Fallback: JSON tree colapsável (não paredão de pretty-print) ──
+            return this._renderJsonTree(obj);
+        },
+
+        // Tree colapsável recursiva para JSON arbitrário. <details> nativo
+        // (sem Alpine x-data) pra funcionar dentro de innerHTML injetado por
+        // x-html. Arrays > 3 itens trazem só os 3 primeiros visíveis + bloco
+        // "mostrar mais N" como em _renderResultCards.
+        _renderJsonTree(value, depth = 0) {
+            const MAX_DEPTH = 6;            // Defesa contra cycles e structs absurdos
+            const ARRAY_PREVIEW = 3;
+            if (depth > MAX_DEPTH) {
+                return `<span class="text-[10px] italic text-surface-400">…profundidade ${MAX_DEPTH}+</span>`;
+            }
+            if (value === null) return `<span class="font-mono text-[11px] text-surface-400">null</span>`;
+            if (value === undefined) return `<span class="font-mono text-[11px] text-surface-400">—</span>`;
+            const t = typeof value;
+            if (t === 'string') {
+                // Strings longas em <pre> wrap (preserva quebras) — curtas inline.
+                const safe = this._esc(value);
+                if (value.length > 120 || /\n/.test(value)) {
+                    return `<pre class="rounded bg-surface-50 border border-surface-100 px-2 py-1 text-[10px] font-mono whitespace-pre-wrap text-brand-800 max-h-40 overflow-y-auto">${safe}</pre>`;
+                }
+                // URLs viram link clicável (igual ao _renderLinkValue)
+                if (/^https?:\/\/\S+$/.test(value.trim())) {
+                    return `<a href="${safe}" target="_blank" rel="noopener" class="font-mono text-[11px] text-brand-600 hover:text-red-700 hover:underline break-all">${safe}</a>`;
+                }
+                return `<span class="font-mono text-[11px] text-emerald-700">"${safe}"</span>`;
+            }
+            if (t === 'number') return `<span class="font-mono text-[11px] text-brand-700">${this._esc(String(value))}</span>`;
+            if (t === 'boolean') return `<span class="font-mono text-[11px] text-amber-700">${value}</span>`;
+
+            if (Array.isArray(value)) {
+                if (value.length === 0) return `<span class="font-mono text-[10px] text-surface-400">[ ]</span>`;
+                const visible = value.slice(0, ARRAY_PREVIEW);
+                const hidden = value.slice(ARRAY_PREVIEW);
+                let items = '';
+                for (let i = 0; i < visible.length; i++) {
+                    items += `<div class="flex gap-2"><span class="font-mono text-[10px] text-surface-300 shrink-0 pt-0.5">${i}</span><div class="flex-1 min-w-0">${this._renderJsonTree(visible[i], depth + 1)}</div></div>`;
+                }
+                let html = `<details open class="border-l-2 border-surface-100 pl-2 my-0.5"><summary class="cursor-pointer text-[10px] font-mono text-surface-500 select-none hover:text-brand-700">array <span class="text-surface-400">[${value.length}]</span></summary><div class="mt-1 space-y-1">${items}`;
+                if (hidden.length > 0) {
+                    let extras = '';
+                    for (let i = 0; i < hidden.length; i++) {
+                        const realIdx = ARRAY_PREVIEW + i;
+                        extras += `<div class="flex gap-2"><span class="font-mono text-[10px] text-surface-300 shrink-0 pt-0.5">${realIdx}</span><div class="flex-1 min-w-0">${this._renderJsonTree(hidden[i], depth + 1)}</div></div>`;
+                    }
+                    html += `<details class="mt-1"><summary class="cursor-pointer text-[10px] font-semibold text-red-700 hover:text-red-800 select-none">mostrar mais ${hidden.length}</summary><div class="mt-1 space-y-1">${extras}</div></details>`;
+                }
+                html += '</div></details>';
+                return html;
+            }
+
+            // Object
+            const keys = Object.keys(value);
+            if (keys.length === 0) return `<span class="font-mono text-[10px] text-surface-400">{ }</span>`;
+            let rows = '';
+            for (const k of keys) {
+                rows += `<div class="flex gap-2"><span class="font-mono text-[10px] font-semibold text-brand-600 shrink-0 pt-0.5">${this._esc(k)}:</span><div class="flex-1 min-w-0">${this._renderJsonTree(value[k], depth + 1)}</div></div>`;
+            }
+            return `<details open class="border-l-2 border-surface-100 pl-2 my-0.5"><summary class="cursor-pointer text-[10px] font-mono text-surface-500 select-none hover:text-brand-700">object <span class="text-surface-400">{${keys.length}}</span></summary><div class="mt-1 space-y-1">${rows}</div></details>`;
         },
 
         _renderResultCards(results) {
+            // Arrays > 3 itens vêm colapsados por padrão (decisão UX 2026-05-31):
+            // mostra 3 cards visíveis + <details> nativo com "mostrar mais N". Evita
+            // scroll infinito quando o agente devolve 10+ resultados (Tavily search,
+            // catálogos de skills, etc).
+            const VISIBLE = 3;
+            const visible = results.slice(0, VISIBLE);
+            const hidden = results.slice(VISIBLE);
+
             let html = `
                 <div class="flex items-center justify-between mb-2.5">
                     <div class="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-red-700">
@@ -966,46 +1047,60 @@ function workspacePage() {
                 </div>
                 <div class="space-y-2.5">
             `;
-            for (const r of results) {
-                const title = r.title || r.name || '—';
-                const link = r.link || r.url || r.href || '';
-                const snippet = r.snippet || r.description || r.summary || r.abstract || r.text || '';
-                const domain = this._hostFromUrl(link);
-
-                html += `<div class="rounded-xl border border-surface-200 bg-white/90 p-3.5 shadow-[0_1px_0_rgba(15,23,42,0.03)] hover:shadow-md hover:border-red-200 transition-all">`;
-
-                // Title (linked if URL available)
-                if (link) {
-                    html += `
-                        <a href="${this._esc(link)}" target="_blank" rel="noopener" class="text-[13px] font-semibold text-brand-700 hover:text-red-700 hover:underline leading-snug">
-                            ${this._esc(title)}
-                        </a>
-                        <div class="mt-1 flex items-center gap-2">
-                            ${domain ? `<span class="inline-flex max-w-[220px] items-center rounded-full bg-surface-100 px-2 py-0.5 text-[9px] font-mono text-surface-500 truncate">${this._esc(domain)}</span>` : ''}
-                            <span class="text-[9px] text-surface-300 truncate font-mono">${this._esc(link)}</span>
+            for (const r of visible) html += this._renderResultCard(r);
+            html += `</div>`;
+            if (hidden.length > 0) {
+                html += `
+                    <details class="mt-2.5 group">
+                        <summary class="cursor-pointer text-[11px] font-semibold text-red-700 hover:text-red-800 inline-flex items-center gap-1 select-none">
+                            <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+                            <span>Mostrar mais ${hidden.length} resultado(s)</span>
+                        </summary>
+                        <div class="mt-2.5 space-y-2.5">
+                `;
+                for (const r of hidden) html += this._renderResultCard(r);
+                html += `
                         </div>
-                    `;
-                } else {
-                    html += `<div class="text-[13px] font-semibold text-brand-900 leading-snug">${this._esc(title)}</div>`;
-                }
+                    </details>
+                `;
+            }
+            return html;
+        },
 
-                // Snippet
-                if (snippet) {
-                    html += `<p class="text-[12px] text-surface-600 mt-2 leading-relaxed">${this._esc(snippet)}</p>`;
-                }
-
-                // Extra fields
-                const skip = new Set(['title','name','link','url','href','snippet','description','summary','abstract','text']);
-                for (const [k, v] of Object.entries(r)) {
-                    if (!skip.has(k) && v !== null && v !== undefined && v !== '') {
-                        const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-                        if (val.length < 300) {
-                            html += `<div class="text-[10px] mt-1.5"><span class="font-semibold text-surface-400">${this._esc(k)}:</span> <span class="text-surface-500">${this._esc(val)}</span></div>`;
-                        }
+        // Render de um único card de resultado — extraído pra reuso entre visíveis
+        // e o bloco <details> "mostrar mais".
+        _renderResultCard(r) {
+            const title = r.title || r.name || '—';
+            const link = r.link || r.url || r.href || '';
+            const snippet = r.snippet || r.description || r.summary || r.abstract || r.text || r.content || '';
+            const domain = this._hostFromUrl(link);
+            let html = `<div class="rounded-xl border border-surface-200 bg-white/90 p-3.5 shadow-[0_1px_0_rgba(15,23,42,0.03)] hover:shadow-md hover:border-red-200 transition-all">`;
+            if (link) {
+                html += `
+                    <a href="${this._esc(link)}" target="_blank" rel="noopener" class="text-[13px] font-semibold text-brand-700 hover:text-red-700 hover:underline leading-snug">
+                        ${this._esc(title)}
+                    </a>
+                    <div class="mt-1 flex items-center gap-2">
+                        ${domain ? `<span class="inline-flex max-w-[220px] items-center rounded-full bg-surface-100 px-2 py-0.5 text-[9px] font-mono text-surface-500 truncate">${this._esc(domain)}</span>` : ''}
+                        <span class="text-[9px] text-surface-300 truncate font-mono">${this._esc(link)}</span>
+                    </div>
+                `;
+            } else {
+                html += `<div class="text-[13px] font-semibold text-brand-900 leading-snug">${this._esc(title)}</div>`;
+            }
+            if (snippet) {
+                const trimmed = String(snippet).slice(0, 480);
+                html += `<p class="text-[12px] text-surface-600 mt-2 leading-relaxed">${this._esc(trimmed)}${String(snippet).length > 480 ? '…' : ''}</p>`;
+            }
+            // Extra fields (score, raw_content, etc) ignorando os já consumidos acima
+            const skip = new Set(['title','name','link','url','href','snippet','description','summary','abstract','text','content']);
+            for (const [k, v] of Object.entries(r)) {
+                if (!skip.has(k) && v !== null && v !== undefined && v !== '') {
+                    const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+                    if (val.length < 300) {
+                        html += `<div class="text-[10px] mt-1.5"><span class="font-semibold text-surface-400">${this._esc(k)}:</span> <span class="text-surface-500">${this._esc(val)}</span></div>`;
                     }
                 }
-
-                html += `</div>`;
             }
             html += `</div>`;
             return html;
@@ -1071,8 +1166,8 @@ function workspacePage() {
 
             // ── Objetos aninhados ──
             if (typeof v === 'object') {
-                // Json formatado em <pre> — fallback seguro pra nested objects
-                return `<pre class="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2 text-[10px] font-mono overflow-x-auto text-brand-800">${this._esc(JSON.stringify(v, null, 2))}</pre>`;
+                // Tree colapsável em vez de paredão JSON
+                return this._renderJsonTree(v);
             }
 
             // ── Números / booleans ──
@@ -1170,8 +1265,8 @@ function workspacePage() {
                 return `<div class="flex flex-wrap">${chips}</div>`;
             }
 
-            // Array misto → fallback JSON pretty
-            return `<pre class="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2 text-[10px] font-mono overflow-x-auto text-brand-800">${this._esc(JSON.stringify(arr, null, 2))}</pre>`;
+            // Array misto → tree colapsável (mantém legibilidade sem paredão)
+            return this._renderJsonTree(arr);
         },
 
         _hostFromUrl(url){
@@ -1800,6 +1895,7 @@ function workspacePage() {
                 let content;
                 if(typeof result.result==='string') content=result.result;
                 else content='```json\n'+JSON.stringify(result.result,null,2)+'\n```';
+                const _bindIdx=this.messages.length;
                 this.messages.push({
                     role:'assistant',
                     content,
@@ -1809,6 +1905,10 @@ function workspacePage() {
                     _duration:result.latency_ms,
                     created_at:new Date().toISOString(),
                 });
+                // Paridade com o caminho de chat (linha ~1998): toolresults vindo
+                // do invoke-binding-direct também devem abrir em rich view quando
+                // for estruturado (Tavily search etc), em vez de paredão de JSON cru.
+                if(this.isStructuredContent(content)) this.richViewMsgs[_bindIdx]=true;
                 this.$nextTick(()=>this.scrollToBottom());
                 showToast(result.ok?'Invocação OK':'Tool retornou erro',result.ok?'success':'error');
                 // Onda A.4: registra invocação no histórico (mesmo se result.ok=false
