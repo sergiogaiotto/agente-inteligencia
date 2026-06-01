@@ -233,20 +233,43 @@ class TestWorkspaceUiHardening:
         assert "lastTrace.duration_ms?.toFixed(0)+'ms'" not in src
 
     def test_three_distinct_states_for_trace_panel(self):
-        """Painel agora distingue: sem sessão / sessão antiga sem trace /
-        trace parcial / trace completo — em vez de tudo cair no mesmo
-        empty state confuso."""
+        """Painel distingue 3 estados (revisão urgente 2026-06-01 — eram 4,
+        o "parcial" foi removido por esconder trace VÁLIDO):
+        1. Sem sessão aberta → empty state inicial
+        2. Sessão aberta MAS sem trace_data persistido → "sessão antiga"
+        3. lastTrace existe (parcial ou completo) → painel completo com
+           fallbacks dentro de cada bloco."""
         src = _workspace_html()
         # 1. Empty (sem sessão aberta)
         assert "!lastTrace && !currentSessionId" in src
         # 2. Sessão aberta MAS sem trace persistido
         assert "!lastTrace && currentSessionId" in src
         assert "Sessão sem rastreabilidade detalhada" in src
-        # 3. Trace presente MAS sem detalhe real
-        assert "lastTrace && !lastTrace._has_real_trace" in src
-        assert "Rastreabilidade parcial" in src
-        # 4. Trace completo (caminho original)
-        assert "lastTrace && lastTrace._has_real_trace" in src
+        # 3. lastTrace presente — SEMPRE renderiza painel completo,
+        # sem gate `_has_real_trace` que escondia trace válido
+        assert '<template x-if="lastTrace">' in src
+
+    def test_no_more_partial_trace_banner(self):
+        """Regressão guard: banner "Rastreabilidade parcial" foi removida
+        em 2026-06-01 (revisão urgente). User reportou sessão AOBD/pipeline
+        com 16+ entradas no Execution Log mostrando "parcial" no painel
+        direito porque o gate `_has_real_trace=false` escondia trace válido.
+        Painel agora sempre tenta renderizar quando há lastTrace —
+        fallbacks individuais cuidam de campos missing."""
+        src = _workspace_html()
+        assert "Rastreabilidade parcial" not in src
+        # `_has_real_trace` ainda pode aparecer no payload do backend
+        # (info diagnóstica), mas NÃO deve ser usado em x-if que esconda
+        # o painel principal — só comentário documentação é OK.
+        # Filtra comentários (que começam com `Antes,` ou similares).
+        for line in src.split("\n"):
+            stripped = line.strip()
+            if "_has_real_trace" not in stripped:
+                continue
+            # Aceita comentário HTML / JS, mas não x-if condicional
+            assert "x-if=" not in stripped, (
+                f"_has_real_trace não pode condicionar x-if (esconde painel): {stripped}"
+            )
 
     def test_final_state_has_fallback_label(self):
         """Quando final_state é null/undefined, mostrar 'Concluído' em vez
