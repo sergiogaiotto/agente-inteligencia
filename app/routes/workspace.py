@@ -1173,6 +1173,26 @@ async def _invoke_api_binding_direct(
         },
     )
 
+    # 8. Persistência (2026-06-01, Bug 2): paridade com o caminho MCP — sem
+    # isso, invocações de API/Tabular binding via slash não eram gravadas
+    # como interaction/turn, e a sessão aparecia vazia ao recarregar pela
+    # sidebar. A PR #243 instrumentou só o ramo MCP; aqui completamos a
+    # paridade. Fenceia com base no `result_obj` (que ainda preserva o tipo
+    # original) e não no `output_text` (já serializado como JSON puro).
+    # Sem o fence, `isStructuredContent` no round-trip não detecta JSON
+    # e mostra paredão em vez dos cards.
+    if isinstance(result_obj, str):
+        persist_text = result_obj
+    else:
+        persist_text = "```json\n" + _json.dumps(result_obj, ensure_ascii=False, indent=2) + "\n```"
+    interaction_id = await _persist_invoke_turn(
+        session_id=data.session_id,
+        message=data.message,
+        output_text=persist_text,
+        agent_id=data.agent_id,
+        title_fallback=f"Invocação · {skill.get('name') or data.binding_kind}",
+    )
+
     return {
         "ok": is_ok,
         "result": result_obj,
@@ -1187,6 +1207,7 @@ async def _invoke_api_binding_direct(
             "errors": errors_out,
             "final_state": decl.get("final_state", "completed"),
         },
+        "interaction_id": interaction_id,
     }
 
 
@@ -1333,6 +1354,20 @@ async def _invoke_rag_binding_direct(
         },
     )
 
+    # 7. Persistência (2026-06-01, Bug 2): paridade com MCP/API — sem isso,
+    # invocações RAG via slash não eram gravadas e sumiam no reload da
+    # sessão. result_obj é um dict (chunks + total + query + source), então
+    # vai como fenced JSON pro round-trip fiel.
+    import json as _json
+    persist_text = "```json\n" + _json.dumps(result_obj, ensure_ascii=False, indent=2) + "\n```"
+    interaction_id = await _persist_invoke_turn(
+        session_id=data.session_id,
+        message=data.message,
+        output_text=persist_text,
+        agent_id=data.agent_id,
+        title_fallback=f"Busca RAG · {source.get('name') or data.binding_id}",
+    )
+
     return {
         "ok": True,
         "result": result_obj,
@@ -1345,4 +1380,5 @@ async def _invoke_rag_binding_direct(
         },
         "latency_ms": latency_ms,
         "tool_name": source.get("name") or "",
+        "interaction_id": interaction_id,
     }
