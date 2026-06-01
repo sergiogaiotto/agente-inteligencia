@@ -78,14 +78,25 @@ class TestGetSessionTraceHardening:
             "trace_data": trace_data,
         }
 
-    def test_trace_data_null_returns_trace_null(self, monkeypatch, workspace_client):
-        """Sessão muito antiga sem trace_data persistido — trace=null no
-        response. Frontend vai mostrar template "sem rastreabilidade
-        detalhada" em vez de UI quebrada."""
+    def test_trace_data_null_returns_synthetic_trace_with_defaults(self, monkeypatch, workspace_client):
+        """Sessão antiga sem trace_data persistido — backend retorna trace
+        SINTÉTICO com defaults preenchidos (3ª revisão 2026-06-01).
+        User quer painéis Rastreabilidade + Execution Log SEMPRE visíveis,
+        então frontend confia que trace existe sempre que sessão existe."""
         _patch_session(monkeypatch, session_row=self._base_session(trace_data=None))
         r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
         assert r.status_code == 200
-        assert r.json()["trace"] is None
+        trace = r.json()["trace"]
+        # Não é mais None — vem como objeto com defaults preenchidos
+        assert trace is not None
+        assert trace["duration_ms"] == 0
+        assert trace["transitions"] == []
+        assert trace["pipeline_steps"] == []
+        assert trace["mode"] == "agent"
+        assert trace["interaction_id"] == self.SESSION_ID
+        assert trace["agent_id"] == self.AGENT_ID
+        # Marcador opcional indica que trace é "placeholder" (não real)
+        assert trace["_has_real_trace"] is False
 
     def test_trace_data_empty_json_returns_stabilized_trace(self, monkeypatch, workspace_client):
         """trace_data='{}' — após hardening, vem com defaults preenchidos
@@ -108,14 +119,20 @@ class TestGetSessionTraceHardening:
 
     def test_invalid_json_logs_warning_with_exc_info(self, monkeypatch, workspace_client, caplog):
         """trace_data='{not json' — log warning com exc_info=True
-        (errors.log) + trace=null no response. Comportamento gracioso."""
+        (errors.log). Backend NÃO retorna trace=null (3ª revisão 2026-06-01:
+        trace sempre não-null pra UI sempre renderizar painéis); retorna
+        trace sintético com defaults vazios."""
         _patch_session(
             monkeypatch,
             session_row=self._base_session(trace_data="{ not valid json"),
         )
         with caplog.at_level(logging.WARNING, logger="app.routes.workspace"):
             r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
-        assert r.json()["trace"] is None
+        # Trace agora vem sintético, não null
+        trace = r.json()["trace"]
+        assert trace is not None
+        assert trace["transitions"] == []
+        assert trace["_has_real_trace"] is False
         # Achou o log estruturado com exc_info
         rec = next(
             (r for r in caplog.records
@@ -205,11 +222,15 @@ class TestGetSessionTraceHardening:
         assert out["transitions"] == []
         assert out["evidence_score"] == 0
 
-    def test_non_dict_trace_data_treated_as_missing(self, monkeypatch, workspace_client):
-        """trace_data='"string"' ou '[1,2,3]' (JSON válido mas não dict) →
-        backend descarta e devolve trace=null (não confunde o frontend)."""
+    def test_non_dict_trace_data_replaced_by_synthetic(self, monkeypatch, workspace_client):
+        """trace_data='[1,2,3]' (JSON válido mas não dict) → backend
+        descarta e devolve trace sintético (em vez de null) pra UI sempre
+        renderizar painéis (3ª revisão 2026-06-01)."""
         _patch_session(monkeypatch, session_row=self._base_session(trace_data='[1,2,3]'))
-        assert workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}").json()["trace"] is None
+        trace = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}").json()["trace"]
+        assert trace is not None
+        assert trace["_has_real_trace"] is False
+        assert trace["interaction_id"] == self.SESSION_ID
 
 
 # ─── UI smoke (workspace.html) ───────────────────────────────────────
@@ -232,36 +253,37 @@ class TestWorkspaceUiHardening:
         # Garante que a versão buggy não voltou (regressão guard)
         assert "lastTrace.duration_ms?.toFixed(0)+'ms'" not in src
 
-    def test_three_distinct_states_for_trace_panel(self):
-        """Painel distingue 3 estados (revisão urgente 2026-06-01 — eram 4,
-        o "parcial" foi removido por esconder trace VÁLIDO):
+    def test_two_states_for_trace_panel(self):
+        """Painel agora tem APENAS 2 estados (3ª revisão 2026-06-01):
         1. Sem sessão aberta → empty state inicial
-        2. Sessão aberta MAS sem trace_data persistido → "sessão antiga"
-        3. lastTrace existe (parcial ou completo) → painel completo com
-           fallbacks dentro de cada bloco."""
+        2. lastTrace presente (backend SEMPRE retorna trace para sessão
+           aberta, sintético ou real) → painel completo
+
+        User pediu explicitamente: painéis SEMPRE visíveis com TODAS as
+        informações pensadas. Removeu-se o estado "Sessão sem
+        rastreabilidade detalhada" porque o backend agora garante trace
+        sintético com defaults pra qualquer sessão aberta."""
         src = _workspace_html()
         # 1. Empty (sem sessão aberta)
         assert "!lastTrace && !currentSessionId" in src
-        # 2. Sessão aberta MAS sem trace persistido
-        assert "!lastTrace && currentSessionId" in src
-        assert "Sessão sem rastreabilidade detalhada" in src
-        # 3. lastTrace presente — SEMPRE renderiza painel completo,
-        # sem gate `_has_real_trace` que escondia trace válido
+        # 2. lastTrace presente — SEMPRE renderiza painel completo
         assert '<template x-if="lastTrace">' in src
 
-    def test_no_more_partial_trace_banner(self):
-        """Regressão guard: banner "Rastreabilidade parcial" foi removida
-        em 2026-06-01 (revisão urgente). User reportou sessão AOBD/pipeline
-        com 16+ entradas no Execution Log mostrando "parcial" no painel
-        direito porque o gate `_has_real_trace=false` escondia trace válido.
-        Painel agora sempre tenta renderizar quando há lastTrace —
-        fallbacks individuais cuidam de campos missing."""
+    def test_no_more_hidden_panel_for_old_sessions(self):
+        """Regressão guard: as duas mensagens de "sessão sem trace" que
+        escondiam painéis foram removidas em 2026-06-01."""
         src = _workspace_html()
+        assert "Sessão sem rastreabilidade detalhada" not in src
         assert "Rastreabilidade parcial" not in src
-        # `_has_real_trace` ainda pode aparecer no payload do backend
-        # (info diagnóstica), mas NÃO deve ser usado em x-if que esconda
-        # o painel principal — só comentário documentação é OK.
-        # Filtra comentários (que começam com `Antes,` ou similares).
+        # `!lastTrace && currentSessionId` não deve existir como condicional
+        # (era usado pra esconder o painel direito)
+        assert "!lastTrace && currentSessionId" not in src
+
+    def test_no_more_partial_trace_banner(self):
+        """Regressão guard: `_has_real_trace` continua sendo emitido no
+        payload do backend (info diagnóstica), mas NÃO pode ser usado em
+        x-if que esconda painel principal."""
+        src = _workspace_html()
         for line in src.split("\n"):
             stripped = line.strip()
             if "_has_real_trace" not in stripped:
@@ -270,6 +292,23 @@ class TestWorkspaceUiHardening:
             assert "x-if=" not in stripped, (
                 f"_has_real_trace não pode condicionar x-if (esconde painel): {stripped}"
             )
+
+    def test_execution_log_always_visible_with_session(self):
+        """User pediu (2026-06-01, 3ª iteração): painel Execution Log
+        SEMPRE visível quando há sessão aberta, mesmo que vazio. Antes:
+        `x-show="liveLog.length > 0"` escondia painel quando trace antigo
+        não tinha execution_log. Agora: `x-show="currentSessionId || liveLog.length > 0"`."""
+        src = _workspace_html()
+        assert 'x-show="currentSessionId || liveLog.length > 0"' in src
+        # Regressão guard: condição antiga foi removida
+        assert 'x-show="liveLog.length > 0" x-transition' not in src
+
+    def test_execution_log_empty_state_message(self):
+        """Quando há sessão mas log vazio, mostrar mensagem suave
+        explicando ("Sem entradas registradas...") em vez de painel oco."""
+        src = _workspace_html()
+        assert "Sem entradas registradas para esta execução" in src
+        assert 'x-show="liveLog.length === 0"' in src
 
     def test_final_state_has_fallback_label(self):
         """Quando final_state é null/undefined, mostrar 'Concluído' em vez
