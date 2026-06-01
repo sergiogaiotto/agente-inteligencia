@@ -5,7 +5,7 @@ import os
 import re
 import time
 import uuid, json
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import (
@@ -996,7 +996,12 @@ async def get_invocation_detail(agent_id: str, interaction_id: str):
     api_logs = await api_call_logs_repo.find_all(interaction_id=interaction_id, limit=500)
     if not api_logs:
         started = itx.get("started_at")
-        ended = itx.get("ended_at") or datetime.utcnow()
+        # datetime.now(timezone.utc) — não datetime.utcnow() (tz-naive). A
+        # coluna api_call_logs.created_at vem timestamptz do Postgres (tz-aware);
+        # comparar com naive levanta TypeError. Bug fix 2026-06-01 reportado
+        # pelo user (logs mostravam 500 em GET /agents/{id}/stats por bug
+        # equivalente, já corrigido em get_agent_stats no commit 906809a).
+        ended = itx.get("ended_at") or datetime.now(timezone.utc)
         api_logs_raw = await api_call_logs_repo.find_all(agent_id=agent_id, limit=500)
         api_logs = [
             log for log in api_logs_raw
