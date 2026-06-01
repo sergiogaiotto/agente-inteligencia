@@ -41,10 +41,14 @@ def lint_skill(parsed: Any) -> list[dict]:
     bindings = list(getattr(parsed, "api_bindings_parsed", []) or [])
 
     # ── Checks globais ──────────────────────────────────────
+    # Mensagem alinhada com a do parser (parser.py:202-204) para que o
+    # operador não veja dois erros diferentes para a mesma causa em
+    # caminhos de validação distintos.
     if exec_mode == "declarative" and not bindings:
         issues.append(LintIssue(
             "error", "*", "declarative_without_bindings",
-            "execution_mode=declarative exige pelo menos 1 binding em ## API Bindings",
+            "execution_mode=declarative exige ## API Bindings OU ## Data Tables "
+            "com pelo menos 1 entrada válida",
         ))
 
     # Duplicatas de binding_id
@@ -70,11 +74,12 @@ def lint_skill(parsed: Any) -> list[dict]:
     for b in bindings:
         bid = b.get("id") or "?"
 
-        # connector obrigatório
-        if not b.get("connector"):
+        # connector obrigatório (aceita `connector` ou `connector_id` como
+        # alias — wizard emite ambos, SKILL.md à mão tende a usar `connector`).
+        if not (b.get("connector") or b.get("connector_id")):
             issues.append(LintIssue(
                 "error", bid, "missing_connector",
-                "campo 'connector' obrigatório",
+                "campo 'connector' (ou 'connector_id') obrigatório",
             ))
 
         # method + path

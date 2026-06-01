@@ -215,6 +215,12 @@ def _parse_api_bindings(section_text: str) -> list[dict]:
       1. Bloco fencado ```yaml ... ``` (fechamento opcional — o
          pré-processador da SKILL remove trailing ``` global).
       2. Conteúdo inline (sem fence) começando com '- id:'.
+      3. Mapping no topo com chave 'endpoints:' OU 'bindings:' contendo
+         a lista (formato emitido pelo wizard "IA, me ajude" — 2026-05-31).
+         Antes desta tolerância, SKILL.md gerado pelo wizard caía no
+         `return []` e disparava "execution_mode=declarative exige ##
+         API Bindings com pelo menos 1 entrada válida" mesmo tendo o
+         binding lá dentro.
 
     Retorna lista de dicts; em erro retorna lista vazia silenciosamente
     (validação estrutural fica na camada do engine).
@@ -233,6 +239,15 @@ def _parse_api_bindings(section_text: str) -> list[dict]:
         data = yaml.safe_load(body)
     except yaml.YAMLError:
         return []
+
+    # Tolerância: aceita mapping com chave 'endpoints' ou 'bindings'
+    # (formato emitido pelo wizard via prompt — variação comum de LLM).
+    if isinstance(data, dict):
+        for wrapper in ("endpoints", "bindings"):
+            inner = data.get(wrapper)
+            if isinstance(inner, list):
+                data = inner
+                break
 
     if isinstance(data, list):
         return [_normalize_yaml11_bool_keys(b) for b in data if isinstance(b, dict) and b.get("id")]

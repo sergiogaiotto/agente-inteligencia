@@ -382,6 +382,11 @@ async def _resolve_bindings_for_prompt(data: WizardSkillRequest) -> dict:
                             "ep_id": r["ep_id"],
                             "ep_name": r["ep_name"],
                             "method": r["method"],
+                            # path: caminho relativo (sem base_url). Exposto para o
+                            # template do prompt incluir o campo `path:` no YAML
+                            # — o linter exige path (linter.py:82-87) e o engine
+                            # resolve host via connector em runtime.
+                            "path": "/" + (r.get("path") or "").lstrip("/"),
                             "url": f"{(r.get('base_url') or '').rstrip('/')}/{(r.get('path') or '').lstrip('/')}",
                         })
         except Exception as e:
@@ -727,15 +732,30 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         )
 
     if bindings["api_endpoints"]:
+        # Formato YAML (atualizado 2026-05-31):
+        #   - lista PURA no topo do bloco (sem chave wrapper 'endpoints:').
+        #     O parser canônico em skill_parser/parser.py:_parse_api_bindings
+        #     agora aceita ambos os formatos por defesa, mas lista pura é o
+        #     canônico — alinha com SKILL.md feitas à mão.
+        #   - campo `path:` em vez de comentário `# URL: ...`. O linter exige
+        #     path; o comentário não era extraído por nada. Engine resolve
+        #     host via connector em runtime.
+        #   - tanto `connector` quanto `connector_id` ficam presentes —
+        #     `connector` para o linter, `connector_id` mantido por compat
+        #     com qualquer leitor que já dependa do nome longo.
         api_yaml = "\n".join(
-            f"  - id: {ep['ep_id']}\n    connector_id: {ep['conn_id']}\n"
-            f"    name: {ep['ep_name']}\n    method: {ep['method']}\n    # URL: {ep['url']}"
+            f"  - id: {ep['ep_id']}\n"
+            f"    connector: {ep['conn_id']}\n"
+            f"    connector_id: {ep['conn_id']}\n"
+            f"    name: {ep['ep_name']}\n"
+            f"    method: {ep['method']}\n"
+            f"    path: {ep.get('path') or ep['url']}"
             for ep in bindings["api_endpoints"]
         )
         # APIs também exigem frontmatter execution_mode: declarative
         obligatory_sections.append(
             "INCLUA no frontmatter YAML: `execution_mode: declarative`\n\n"
-            "## API Bindings\n```yaml\nendpoints:\n" + api_yaml + "\n```"
+            "## API Bindings\n```yaml\n" + api_yaml + "\n```"
         )
 
     # Execution Profile sempre presente
