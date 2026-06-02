@@ -1136,9 +1136,51 @@ async def execute_interaction(
     attachment_meta = []
     if attachments:
         for att in attachments:
-            attachment_meta.append({"name": att.get("name",""), "type": att.get("type",""), "size": att.get("size",0)})
-            if att.get("content"):
-                attachment_context += f"\n\n## Arquivo Anexo: {att.get('name','arquivo')}\n```\n{att['content'][:5000]}\n```"
+            # 2026-06-01: enriquece metadata de cada anexo com `purpose`,
+            # `routed_to`, `extracted_chars` e `category` para o card
+            # "Anexos" do painel Rastreabilidade. UI lê esses campos para
+            # mostrar objetivo humanizado (Análise visual / Texto extraído
+            # / etc.) sem precisar inferir do tipo MIME no client.
+            _type = att.get("type", "") or ""
+            _content = att.get("content", "") or ""
+            _extracted_chars = len(_content)
+            if _type.startswith("image/"):
+                _category = "image"
+                # Imagens são roteadas para o modelo multimodal (vision)
+                # via detect_image_in_attachments → multimodal_fallback.
+                # Conteúdo textual fica vazio porque a imagem vai raw na API.
+                _routed_to = "vision"
+                _purpose = "Análise visual (vision)"
+            elif _extracted_chars > 0:
+                # Texto disponível — ou foi UTF-8 puro no upload, ou
+                # markitdown converteu PDF/DOCX/PPTX/XLSX pra markdown.
+                # Heurística: text/* → inline; demais com content → markdown.
+                if _type.startswith("text/"):
+                    _category = "document"
+                    _routed_to = "inline_text"
+                    _purpose = "Texto inline"
+                else:
+                    _category = "document"
+                    _routed_to = "markdown_extracted"
+                    _purpose = "Texto extraído (markitdown)"
+            else:
+                # Sem texto e não é imagem — markitdown falhou ou tipo
+                # não suportado. Anexo ainda referenciado no histórico
+                # mas conteúdo não chegou ao LLM.
+                _category = "document"
+                _routed_to = "unprocessed"
+                _purpose = "Não processado"
+            attachment_meta.append({
+                "name": att.get("name", ""),
+                "type": _type,
+                "size": att.get("size", 0),
+                "category": _category,
+                "purpose": _purpose,
+                "routed_to": _routed_to,
+                "extracted_chars": _extracted_chars,
+            })
+            if _content:
+                attachment_context += f"\n\n## Arquivo Anexo: {att.get('name','arquivo')}\n```\n{_content[:5000]}\n```"
 
     ctx = InteractionContext(agent_id=agent_id, journey=journey, channel=channel)
     fsm = InteractionStateMachine(ctx)
@@ -1892,6 +1934,10 @@ async def _build_result(
             "journey": ctx.journey or "—",
             "channel": ctx.channel,
             "mesh_chain": mesh_chain or [],
+            # `attachments` aqui é o parâmetro de _build_result — o caller
+            # (execute_interaction) já passa `attachment_meta` enriquecido
+            # com purpose/routed_to/category/extracted_chars (vide
+            # linhas 1251 e 1307). UI do card "Anexos" lê esses campos.
             "attachments": attachments or [],
             "agent_name": agent.get("name", ""),
             "agent_kind": agent.get("kind", ""),
