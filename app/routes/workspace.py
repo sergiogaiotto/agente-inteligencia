@@ -883,6 +883,78 @@ class InvokeBindingDirectRequest(_BaseModel):
     message: str = ""
 
 
+def _build_invoke_trace(
+    *,
+    agent: dict,
+    skill: dict | None,
+    final_state: str,
+    duration_ms: int,
+    execution_log: list[dict],
+    diagnostics: list[dict] | None = None,
+    mcp_tools: list[dict] | None = None,
+    api_tools: list[dict] | None = None,
+    api_tools_count: int = 0,
+    evidence_count: int = 0,
+    evidence_sources: list | None = None,
+    interaction_id: str | None = None,
+) -> dict:
+    """Monta o trace canônico de uma invocação direta (slash invoke, sem LLM).
+
+    Bug (2026-06-02): o caminho /invoke-binding-direct NÃO produzia trace
+    algum. Resultado: o painel "Execution Log" mostrava "0 entrada(s)" e a
+    "Rastreabilidade" ficava totalmente vazia (lastTrace=null + sessão
+    aberta → nenhum dos x-if do template renderiza). User pediu que os dois
+    painéis SEMPRE apareçam.
+
+    A forma aqui espelha exatamente o trace persistido pelo /chat declarativo
+    (workspace.py:584-617) para que o frontend (Rastreabilidade + Execution
+    Log + Métricas + drilldowns MCP/API) renderize idêntico — tanto na
+    invocação ao vivo (response body) quanto no reload da sessão (trace_data).
+
+    Campos consumidos pelo frontend (workspace.html):
+    - lastTrace.final_state / .mode / .duration_ms / .transitions /
+      .pipeline_steps / .evidence_score / .interaction_id
+    - lastTrace.trace.{total_steps, evidence_count, evidence_sources,
+      diagnostics, mcp_tools[{name,status,server,latency_ms}],
+      api_tools[{binding_id,status_code,latency_ms,...}], api_tools_count,
+      execution_log[{cat,icon,title,detail,level}]}
+    """
+    return {
+        "interaction_id": interaction_id,
+        "agent_id": agent.get("id"),
+        "final_state": final_state,
+        "evidence_score": 0.0,
+        "transitions": [],
+        "pipeline_steps": [],
+        "duration_ms": duration_ms,
+        "status": "completed",
+        "mode": "agent",
+        "trace": {
+            "total_steps": len(execution_log),
+            "evidence_count": evidence_count,
+            "evidence_sources": evidence_sources or [],
+            "diagnostics": diagnostics or [],
+            "agent_name": agent.get("name", ""),
+            "agent_kind": agent.get("kind", ""),
+            "agent_model": "(invocação direta)",
+            "agent_provider": "direct",
+            "agent_version": agent.get("version", "1.0.0"),
+            "agent_domain": agent.get("domain", ""),
+            "skill_detail": {
+                "name": (skill.get("name") if skill else "") or "",
+                "version": (skill.get("version") if skill else "") or "",
+                "execution_mode": "direct",
+            },
+            "mcp_tools": mcp_tools or [],
+            "api_tools": api_tools or [],
+            "api_tools_count": api_tools_count,
+            "api_bindings_executed": api_tools or [],
+            "tokens": {"input": 0, "output": 0, "total": 0, "calls": 0, "input_billed_sum": 0, "total_billed": 0},
+            "execution_log": execution_log,
+        },
+    }
+
+
 async def _persist_invoke_turn(
     *,
     session_id: str,
@@ -890,6 +962,7 @@ async def _persist_invoke_turn(
     output_text: str,
     agent_id: str,
     title_fallback: str,
+    trace_data: dict | None = None,
 ) -> str | None:
     """Grava 1 turn (user + assistant) na sessão e devolve o interaction_id.
 
@@ -905,6 +978,12 @@ async def _persist_invoke_turn(
     `output_text` é o conteúdo do assistant na mesma forma que o frontend
     renderiza (string crua OU fenced JSON) — assim o round-trip pelo
     /sessions/{id} GET reproduz exatamente o que estava no DOM.
+
+    `trace_data` (2026-06-02): quando fornecido, é gravado na coluna
+    `trace_data` da interaction (mesmo shape do /chat) para que ao recarregar
+    a sessão pela sidebar o Execution Log + Rastreabilidade reapareçam. Antes
+    desta extensão o slash invoke gravava só os turns e o trace voltava como
+    placeholder vazio ({}), com "0 entrada(s)".
     """
     if not message:
         # Sem texto de usuário não dá pra reconstruir a bolha "EU" no
@@ -943,6 +1022,15 @@ async def _persist_invoke_turn(
             "output_text_redacted": output_text,
             "interaction_id": sid,
         })
+        # Persistir trace_data quando fornecido (2026-06-02). Round-trip do
+        # /sessions/{id} GET reconstrói Rastreabilidade + Execution Log a
+        # partir daqui. Carimba o interaction_id real no trace.
+        if trace_data is not None:
+            td = dict(trace_data)
+            td["interaction_id"] = sid
+            await interactions_repo.update(
+                sid, {"trace_data": json.dumps(td, ensure_ascii=False, default=str)}
+            )
         return sid
     except Exception as e:
         logger.warning(
@@ -1139,13 +1227,53 @@ async def invoke_binding_direct(
         output_text = result_obj
     else:
         output_text = "```json\n" + _json.dumps(result_obj, ensure_ascii=False, indent=2) + "\n```"
+
+    # 8b. Trace canônico (2026-06-02): sem isso, Execution Log + Rastreabilidade
+    # ficavam vazios para invocações diretas. Espelha o /chat declarativo.
+    op_label = arguments.get("operation") or ""
+    exec_log = [
+        {
+            "cat": "tools", "icon": "🛠️",
+            "title": tool_name + (f" ({op_label})" if op_label else ""),
+            "detail": "params: " + (", ".join(sorted((data.params or {}).keys())) or "—"),
+            "level": "info",
+        },
+        {
+            "cat": "result", "icon": "✓" if not is_error else "✗",
+            "title": "Resultado da ferramenta",
+            "detail": f"{latency_ms}ms · {'ok' if not is_error else 'erro'}",
+            "level": "success" if not is_error else "danger",
+        },
+    ]
+    mcp_tools_trace = [{
+        "name": tool_name,
+        "status": "error" if is_error else "completed",
+        "server": tool.get("server_label") or tool.get("server") or tool.get("server_name") or "",
+        "latency_ms": latency_ms,
+    }]
+    diag = [{
+        "level": "danger" if is_error else "success",
+        "text": (
+            f"Invocação direta de '{tool_name}'"
+            + (f" (operação {op_label})" if op_label else "")
+            + (" retornou erro." if is_error else " concluída.")
+        ),
+    }]
+    trace_obj = _build_invoke_trace(
+        agent=agent, skill=sk,
+        final_state="Failed" if is_error else "LogAndClose",
+        duration_ms=latency_ms, execution_log=exec_log,
+        diagnostics=diag, mcp_tools=mcp_tools_trace,
+    )
     interaction_id = await _persist_invoke_turn(
         session_id=data.session_id,
         message=data.message,
         output_text=output_text,
         agent_id=data.agent_id,
         title_fallback=f"Invocação · {tool_name}",
+        trace_data=trace_obj,
     )
+    trace_obj["interaction_id"] = interaction_id
 
     return {
         "ok": not is_error,
@@ -1156,6 +1284,7 @@ async def invoke_binding_direct(
         "latency_ms": latency_ms,
         "tool_name": tool_name,
         "interaction_id": interaction_id,
+        "trace": trace_obj,
     }
 
 
@@ -1308,13 +1437,65 @@ async def _invoke_api_binding_direct(
         persist_text = result_obj
     else:
         persist_text = "```json\n" + _json.dumps(result_obj, ensure_ascii=False, indent=2) + "\n```"
+
+    # 8b. Trace canônico (2026-06-02): paridade com MCP/RAG. Constrói o
+    # execution_log a partir dos bindings executados (mesma lógica do /chat
+    # declarativo, workspace.py:572-582) para que Rastreabilidade + Execution
+    # Log + drilldown "API tools" apareçam ao vivo e no reload da sessão.
+    exec_log: list[dict] = []
+    api_tools_trace: list[dict] = []
+    for b in executed:
+        st = b.get("status", 0)
+        lvl = "success" if 200 <= st < 300 else "danger"
+        exec_log.append({
+            "cat": "api", "icon": "🌐",
+            "title": f"{b.get('method','?')} {b.get('path','?')}",
+            "detail": f"status={st} · {b.get('connector','')}",
+            "level": lvl,
+        })
+        api_tools_trace.append({
+            "binding_id": b.get("binding_id") or b.get("path") or "",
+            "status_code": st,
+            "latency_ms": b.get("latency_ms") or b.get("duration_ms") or 0,
+            "attempts": b.get("attempts", 1),
+            "error": b.get("error") or "",
+            "is_compensation": bool(b.get("is_compensation")),
+            "skipped_by_breaker": bool(b.get("skipped_by_breaker")),
+        })
+    if not exec_log:
+        # SKILL declarativa que não chamou nenhum binding HTTP (ex.: tabular
+        # puro / template-only). Registra ao menos 1 entrada pra UI não ficar
+        # vazia — o user pediu que o painel SEMPRE mostre algo.
+        exec_log.append({
+            "cat": "skill", "icon": "⚙️",
+            "title": f"SKILL declarativa · {skill.get('name') or data.binding_kind}",
+            "detail": f"{latency_ms}ms · {len(executed)} binding(s) executado(s)",
+            "level": "success" if is_ok else "warning",
+        })
+    diag_level = "success" if is_ok else ("warning" if any_success else "danger")
+    diag = [{
+        "level": diag_level,
+        "text": (
+            f"Modo declarativo (invoke direto): {len(executed)} binding(s) executado(s)"
+            + (f" · {len(errors_out)} erro(s)" if errors_out else "")
+        ),
+    }]
+    trace_obj = _build_invoke_trace(
+        agent=agent, skill=skill,
+        final_state="LogAndClose" if is_ok else "Failed",
+        duration_ms=latency_ms, execution_log=exec_log,
+        diagnostics=diag, api_tools=api_tools_trace,
+        api_tools_count=len(executed),
+    )
     interaction_id = await _persist_invoke_turn(
         session_id=data.session_id,
         message=data.message,
         output_text=persist_text,
         agent_id=data.agent_id,
         title_fallback=f"Invocação · {skill.get('name') or data.binding_kind}",
+        trace_data=trace_obj,
     )
+    trace_obj["interaction_id"] = interaction_id
 
     return {
         "ok": is_ok,
@@ -1331,6 +1512,7 @@ async def _invoke_api_binding_direct(
             "final_state": decl.get("final_state", "completed"),
         },
         "interaction_id": interaction_id,
+        "trace": trace_obj,
     }
 
 
@@ -1483,13 +1665,46 @@ async def _invoke_rag_binding_direct(
     # vai como fenced JSON pro round-trip fiel.
     import json as _json
     persist_text = "```json\n" + _json.dumps(result_obj, ensure_ascii=False, indent=2) + "\n```"
+
+    # 7b. Trace canônico (2026-06-02): paridade com MCP/API. Chunks viram
+    # evidências (evidence_count + evidence_sources) e o painel de Evidências
+    # da Rastreabilidade passa a renderizar. execution_log com a busca + total.
+    src_name = source.get("name") or data.binding_id
+    exec_log = [
+        {
+            "cat": "evidence", "icon": "🔍",
+            "title": f"Busca RAG · {src_name}",
+            "detail": f"query='{query[:60]}' · top_n={top_n}",
+            "level": "info",
+        },
+        {
+            "cat": "result", "icon": "✓" if chunks else "⚠",
+            "title": f"{len(chunks)} chunk(s) recuperado(s)",
+            "detail": f"{latency_ms}ms",
+            "level": "success" if chunks else "warning",
+        },
+    ]
+    evidence_sources = sorted({c["source_name"] for c in chunks if c.get("source_name")})
+    diag = [{
+        "level": "success" if chunks else "warning",
+        "text": f"Busca RAG retornou {len(chunks)} chunk(s) de '{src_name}'.",
+    }]
+    trace_obj = _build_invoke_trace(
+        agent=agent, skill=skill,
+        final_state="LogAndClose",
+        duration_ms=latency_ms, execution_log=exec_log,
+        diagnostics=diag, evidence_count=len(chunks),
+        evidence_sources=evidence_sources,
+    )
     interaction_id = await _persist_invoke_turn(
         session_id=data.session_id,
         message=data.message,
         output_text=persist_text,
         agent_id=data.agent_id,
-        title_fallback=f"Busca RAG · {source.get('name') or data.binding_id}",
+        title_fallback=f"Busca RAG · {src_name}",
+        trace_data=trace_obj,
     )
+    trace_obj["interaction_id"] = interaction_id
 
     return {
         "ok": True,
@@ -1504,4 +1719,5 @@ async def _invoke_rag_binding_direct(
         "latency_ms": latency_ms,
         "tool_name": source.get("name") or "",
         "interaction_id": interaction_id,
+        "trace": trace_obj,
     }
