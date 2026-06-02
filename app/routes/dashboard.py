@@ -1469,27 +1469,110 @@ async def delete_tool(tool_id: str):
 class MCPWizardQuery(BaseModel):
     query: str
 
+
+def _resolve_mcp_wizard_llm(settings, store_settings: dict) -> Optional[dict]:
+    """Resolve qual LLM o wizard MCP vai usar, na ordem de precedência:
+
+    1. **Modelo Primário** global (settings.primary_provider + primary_model).
+       Caminho preferido — "em Configurações → Plataforma temos o modelo
+       primário e deve ser usado". Roteado via get_provider, então suporta
+       azure, openai_public, maritaca, ollama e gpt-oss-* — cada um lê as
+       próprias credenciais.
+    2. **Legacy** — chaves cruas openai_key/maritaca_key salvas no
+       settings_store por instalações que preencheram só o card OpenAI/Maritaca.
+       Mantido por retrocompat.
+    3. **None** — nada configurado; o caller devolve erro orientando o operador.
+
+    Função pura (recebe o objeto settings + o dict do store) → testável sem
+    DB nem rede.
+    """
+    pp = (getattr(settings, "primary_provider", "") or "").strip()
+    pm = (getattr(settings, "primary_model", "") or "").strip()
+    if pp and pm:
+        return {"mode": "primary", "provider": pp, "model": pm}
+
+    okey = (store_settings.get("openai_key") or "").strip()
+    if okey:
+        return {
+            "mode": "legacy", "source": "openai", "api_key": okey,
+            "model": (store_settings.get("openai_model") or "gpt-4o").strip(),
+            "base_url": "https://api.openai.com/v1",
+        }
+    mkey = (store_settings.get("maritaca_key") or "").strip()
+    if mkey:
+        base = (store_settings.get("maritaca_url") or "https://chat.maritaca.ai/api").strip().rstrip("/")
+        return {
+            "mode": "legacy", "source": "maritaca", "api_key": mkey,
+            "model": (store_settings.get("maritaca_model") or "sabia-3").strip(),
+            "base_url": f"{base}/v1",
+        }
+    return None
+
+
+async def _mcp_wizard_complete(llm_desc: dict, prompt: str) -> str:
+    """Executa a completion do wizard conforme o descriptor resolvido e
+    devolve o texto cru da resposta do modelo.
+
+    - mode=primary → get_provider(provider, model=...).generate(...) — usa o
+      Modelo Primário da plataforma.
+    - mode=legacy  → POST httpx direto num endpoint OpenAI-compatible.
+    """
+    import httpx
+
+    if llm_desc["mode"] == "primary":
+        from app.core.llm_providers import get_provider
+        provider = get_provider(llm_desc["provider"], model=llm_desc["model"], temperature=0.3)
+        result = await provider.generate([{"role": "user", "content": prompt}])
+        return ((result or {}).get("content") or "").strip()
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            f"{llm_desc['base_url']}/chat/completions",
+            headers={"Authorization": f"Bearer {llm_desc['api_key']}", "Content-Type": "application/json"},
+            json={"model": llm_desc["model"], "messages": [{"role": "user", "content": prompt}], "temperature": 0.3},
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+
 @router.post("/tools/wizard")
 async def mcp_wizard(data: MCPWizardQuery):
-    """Wizard: busca MCP Server por URL (mcpservers.org) ou por descrição via LLM."""
+    """Wizard: busca MCP Server por URL (mcpservers.org) ou por descrição via LLM.
+
+    Usa o **Modelo Primário** da plataforma (Configurações → Plataforma) quando
+    configurado; só cai pras chaves legadas (OpenAI/Maritaca no settings_store)
+    se nenhum Modelo Primário estiver definido. Ver _resolve_mcp_wizard_llm.
+    """
     import re, httpx
+    from app.core.config import get_settings as _get_settings
 
     query = data.query.strip()
     is_url = query.startswith("http://") or query.startswith("https://")
 
     try:
-        settings = await settings_store.get_all()
-        api_key = settings.get("openai_key", "")
-        model = settings.get("openai_model", "gpt-4o")
-        base_url = "https://api.openai.com/v1"
+        store_settings = await settings_store.get_all()
+        llm_desc = _resolve_mcp_wizard_llm(_get_settings(), store_settings)
+        if not llm_desc:
+            logger.warning(
+                "mcp_wizard: nenhum LLM configurado",
+                extra={"event": "mcp_wizard.no_llm"},
+            )
+            return {
+                "results": [],
+                "error": "Configure o Modelo Primário em Configurações → Plataforma "
+                         "(ou, alternativamente, uma API key OpenAI/Maritaca).",
+            }
 
-        if not api_key:
-            api_key = settings.get("maritaca_key", "")
-            model = settings.get("maritaca_model", "sabia-3")
-            base_url = settings.get("maritaca_url", "https://chat.maritaca.ai/api") + "/v1"
-
-        if not api_key:
-            return {"results": [], "error": "Configure uma API key em Configurações (OpenAI ou Maritaca)."}
+        logger.info(
+            "mcp_wizard: LLM resolvido",
+            extra={
+                "event": "mcp_wizard.llm_resolved",
+                "mode": llm_desc["mode"],
+                "llm_provider": llm_desc.get("provider") or llm_desc.get("source"),
+                "llm_model": llm_desc["model"],
+                "is_url": is_url,
+            },
+        )
 
         page_content = ""
         if is_url:
@@ -1516,26 +1599,37 @@ Responda SOMENTE com JSON array, sem markdown:
 [{{"name":"nome","description":"descrição","endpoint":"npx -y @scope/server","operations":["op1"],"install_cmd":"npx -y ...","source_url":"https://github.com/...","auth":"none","sensitivity":"internal"}}]
 Se não conhecer, retorne: []"""
 
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.3},
-            )
-            resp.raise_for_status()
-            data_resp = resp.json()
-            raw = data_resp["choices"][0]["message"]["content"]
+        raw = await _mcp_wizard_complete(llm_desc, prompt)
 
         clean = re.sub(r'```json\s*', '', raw)
         clean = re.sub(r'```\s*', '', clean).strip()
         match = re.search(r'\[.*\]', clean, re.DOTALL)
         results = json.loads(match.group(0)) if match else []
+        logger.info(
+            "mcp_wizard: concluído",
+            extra={"event": "mcp_wizard.ok", "mode": llm_desc["mode"], "n_results": len(results)},
+        )
         return {"results": results}
     except httpx.HTTPError as e:
+        logger.warning(
+            f"mcp_wizard: erro de rede ({type(e).__name__})",
+            extra={"event": "mcp_wizard.http_error", "error_type": type(e).__name__, "is_url": is_url},
+            exc_info=True,
+        )
         return {"results": [], "error": f"Erro de rede: {str(e)[:150]}"}
     except (KeyError, IndexError) as e:
+        logger.warning(
+            f"mcp_wizard: resposta inesperada da API ({type(e).__name__})",
+            extra={"event": "mcp_wizard.bad_response", "error_type": type(e).__name__},
+            exc_info=True,
+        )
         return {"results": [], "error": f"Resposta inesperada da API: {str(e)[:150]}"}
     except Exception as e:
+        logger.warning(
+            f"mcp_wizard: erro inesperado ({type(e).__name__})",
+            extra={"event": "mcp_wizard.error", "error_type": type(e).__name__},
+            exc_info=True,
+        )
         return {"results": [], "error": str(e)[:200]}
 
 # ═══ History ═══
