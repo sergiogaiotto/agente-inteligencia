@@ -1973,8 +1973,21 @@ function workspacePage() {
                     _agentKind:'tool',
                     _bindingInvokeResult:result,
                     _duration:result.latency_ms,
+                    // 2026-06-02: backend agora devolve trace canônico. Anexa
+                    // ao msg pra clicar no avatar reabrir a Rastreabilidade.
+                    _trace:result.trace||null,
                     created_at:new Date().toISOString(),
                 });
+                // 2026-06-02 (fix): popula Rastreabilidade + Execution Log na
+                // invocação direta. Antes, lastTrace/liveLog ficavam intactos
+                // → painel Rastreabilidade vazio (lastTrace=null + sessão
+                // aberta) e Execution Log "0 entrada(s)". Agora espelha send().
+                if(result.trace){
+                    this.lastTrace=result.trace;
+                    this.activeTraceIdx=_bindIdx;
+                    this._logStart=Date.now();
+                    this._restoreLog(result.trace);
+                }
                 // Paridade com o caminho de chat (linha ~1998): toolresults vindo
                 // do invoke-binding-direct também devem abrir em rich view quando
                 // for estruturado (Tavily search etc), em vez de paredão de JSON cru.
