@@ -843,6 +843,7 @@ async def execute_declarative(
     context: dict | None = None,
     session_id: str | None = None,
     dry_run: bool = False,
+    register_interaction: bool = True,
 ) -> dict:
     """Executa um agente no modo declarativo com DAG.
 
@@ -851,6 +852,8 @@ async def execute_declarative(
     - Additions deep-merged no context.
     - on_failure: fail | continue | compensate: <binding_id>.
     - dry_run: resolve plan sem tocar na rede.
+    - register_interaction: quando False, o engine NÃO cria a interaction —
+      o caller é dono do ciclo de vida da sessão (ver abaixo).
     """
     start = time.time()
     inputs = inputs or {}
@@ -860,19 +863,29 @@ async def execute_declarative(
     # Registra a invocação como uma interaction pra que (a) apareça em
     # /agents/{id}/invocations e (b) api_call_logs.interaction_id tenha FK
     # válida. Best-effort: erro aqui não bloqueia a execução.
-    try:
-        existing_itx = await interactions_repo.find_by_id(trace_id)
-        if not existing_itx:
-            await interactions_repo.create({
-                "id": trace_id,
-                "title": ((agent.get("name") or "agent") + " (declarativo)")[:80],
-                "agent_id": agent.get("id", ""),
-                "channel": "api",
-                "journey_id": "",
-                "state": "Intake",
-            })
-    except Exception as e:
-        logger.warning("Declarativo: falha ao persistir interaction %s: %s", trace_id, e)
+    #
+    # register_interaction=False (slash invoke / /invoke-binding-direct): o
+    # ROUTE é dono da sessão — ele cria a interaction com título derivado da
+    # mensagem do usuário (via _persist_invoke_turn). Sem este guard o engine
+    # criava uma 2ª interaction órfã "<agent> (declarativo)" (session_id="" →
+    # UUID novo), que aparecia na sidebar como sessão VAZIA (bug 2026-06-02).
+    # api_call_logs / binding_executions usam trace_id como TEXT sem FK, então
+    # passar o MESMO sid da sessão real já liga os logs corretamente — não
+    # exige que a row da interaction exista neste instante.
+    if register_interaction:
+        try:
+            existing_itx = await interactions_repo.find_by_id(trace_id)
+            if not existing_itx:
+                await interactions_repo.create({
+                    "id": trace_id,
+                    "title": ((agent.get("name") or "agent") + " (declarativo)")[:80],
+                    "agent_id": agent.get("id", ""),
+                    "channel": "api",
+                    "journey_id": "",
+                    "state": "Intake",
+                })
+        except Exception as e:
+            logger.warning("Declarativo: falha ao persistir interaction %s: %s", trace_id, e)
 
     scope = {
         "inputs": inputs,

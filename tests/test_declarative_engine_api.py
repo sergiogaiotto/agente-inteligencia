@@ -575,3 +575,75 @@ class TestDAGAndCompensation:
         rollback_bex = [b for b in bexes if b["binding_id"] == "rollback"]
         assert len(rollback_bex) == 1
         assert rollback_bex[0]["is_compensation"] is True
+
+
+# ═════════════════════════════════════════════════════════════════
+# register_interaction — caller é dono da sessão (slash invoke)
+# ═════════════════════════════════════════════════════════════════
+# Bug 2026-06-02: invocar uma SKILL API via slash (/invoke-binding-direct)
+# criava DUAS sessões — a do route (título = mensagem do user) e uma órfã
+# "<agent> (declarativo)" criada aqui pelo engine, que aparecia VAZIA na
+# sidebar. O route agora passa register_interaction=False + o mesmo sid;
+# o engine não cria interaction, mas ainda linka os logs de auditoria.
+class TestRegisterInteraction:
+    def test_default_true_cria_interaction(self, fake_repos, fake_http):
+        """Comportamento legado preservado: sem o flag, o engine cria a
+        interaction "(declarativo)" (usado pelo /chat e /agents/{id}/invoke)."""
+        fake_http.response_queue.append(FakeResponse(200, {"ok": True}))
+        skill = _make_skill([{
+            "id": "b1", "connector": "TestAPI", "method": "GET", "path": "/x",
+            "output_mapping": [{"from": "$.ok", "to": "context.ok"}],
+        }])
+        _seed_connector(fake_repos)
+        out = _run(de.execute_declarative(
+            _make_agent(), skill, session_id="sess-default",
+        ))
+        assert out["final_state"] == "completed"
+        # Interaction criada pelo engine, com o título "(declarativo)".
+        assert "sess-default" in fake_repos["interactions"]
+        assert "(declarativo)" in fake_repos["interactions"]["sess-default"]["title"]
+
+    def test_false_nao_cria_interaction_mas_linka_logs(self, fake_repos, fake_http):
+        """register_interaction=False: engine NÃO cria interaction (route é
+        dono), mas api_call_logs/binding_executions ainda linkam pelo sid."""
+        fake_http.response_queue.append(FakeResponse(200, {"ok": True}))
+        skill = _make_skill([{
+            "id": "b1", "connector": "TestAPI", "method": "GET", "path": "/x",
+            "output_mapping": [{"from": "$.ok", "to": "context.ok"}],
+        }])
+        _seed_connector(fake_repos)
+        out = _run(de.execute_declarative(
+            _make_agent(), skill, session_id="sess-owned",
+            register_interaction=False,
+        ))
+        assert out["final_state"] == "completed"
+        # NENHUMA interaction criada pelo engine (sem sessão órfã na sidebar).
+        assert fake_repos["interactions"] == {}
+        # Mas os logs de auditoria ainda foram gravados, ligados ao sid real.
+        logs = list(fake_repos["api_call_logs"].values())
+        assert len(logs) == 1
+        assert logs[0]["interaction_id"] == "sess-owned"
+        bexes = list(fake_repos["binding_executions"].values())
+        assert len(bexes) == 1
+        assert bexes[0]["interaction_id"] == "sess-owned"
+
+    def test_false_nao_recria_quando_sessao_ja_existe(self, fake_repos, fake_http):
+        """Sessão pré-criada pelo route não é tocada/duplicada pelo engine."""
+        fake_http.response_queue.append(FakeResponse(200, {"ok": True}))
+        skill = _make_skill([{
+            "id": "b1", "connector": "TestAPI", "method": "GET", "path": "/x",
+            "output_mapping": [{"from": "$.ok", "to": "context.ok"}],
+        }])
+        _seed_connector(fake_repos)
+        # Route já criou a sessão com o título "bonito".
+        fake_repos["interactions"]["sess-1"] = {
+            "id": "sess-1", "title": "🛠️ Consultar CEP · cep=13211740",
+            "agent_id": "agent-1",
+        }
+        _run(de.execute_declarative(
+            _make_agent(), skill, session_id="sess-1",
+            register_interaction=False,
+        ))
+        # Continua sendo 1 só sessão, com o título original do route.
+        assert list(fake_repos["interactions"].keys()) == ["sess-1"]
+        assert fake_repos["interactions"]["sess-1"]["title"] == "🛠️ Consultar CEP · cep=13211740"

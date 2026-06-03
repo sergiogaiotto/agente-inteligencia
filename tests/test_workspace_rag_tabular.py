@@ -509,8 +509,12 @@ class TestInvokeTabularBindingDirect:
     def _patch_execute_declarative(self, monkeypatch):
         called = {"args": None}
 
-        async def fake_execute(*, agent, skill_parsed, inputs, context, session_id, dry_run):
-            called["args"] = {"inputs": dict(inputs or {}), "dry_run": dry_run}
+        # register_interaction (2026-06-02): route é dono da sessão; tolera o
+        # kwarg como a função real (execute_declarative) faz.
+        async def fake_execute(*, agent, skill_parsed, inputs, context, session_id,
+                               dry_run, register_interaction=True):
+            called["args"] = {"inputs": dict(inputs or {}), "dry_run": dry_run,
+                              "session_id": session_id, "register_interaction": register_interaction}
             return {
                 "context": {"resposta": "12 vendas em Sul"},
                 "bindings_executed": [

@@ -1352,6 +1352,15 @@ async def _invoke_api_binding_direct(
         inputs = _coerce_inputs_by_schema(inputs, inputs_schema_dict)
 
     # 5. Executa declarativo
+    #
+    # A sessão é dona do ROUTE, não do engine. Derivamos o `sid` ANTES de
+    # execute_declarative e passamos register_interaction=False para que o
+    # engine NÃO crie uma 2ª interaction "<agent> (declarativo)" órfã — que
+    # aparecia na sidebar como sessão VAZIA "Busca endereço" (bug 2026-06-02).
+    # O MESMO `sid` é repassado ao _persist_invoke_turn, então a interaction
+    # real (título = mensagem do user) e os logs de auditoria (api_call_logs /
+    # binding_executions, que usam o sid como TEXT sem FK) ficam ligados.
+    sid = (data.session_id or "").strip() or str(uuid.uuid4())
     t0 = time.monotonic()
     try:
         from app.agents.declarative_engine import execute_declarative
@@ -1360,8 +1369,9 @@ async def _invoke_api_binding_direct(
             skill_parsed=parsed,
             inputs=inputs,
             context=None,
-            session_id="",  # slash invoke é stateless
+            session_id=sid,
             dry_run=False,
+            register_interaction=False,  # route é dono da sessão
         )
         latency_ms = int((time.monotonic() - t0) * 1000)
     except Exception as e:
@@ -1404,7 +1414,22 @@ async def _invoke_api_binding_direct(
     executed = decl.get("bindings_executed") or []
     errors_out = decl.get("errors") or []
     any_success = any(200 <= b.get("status", 0) < 300 for b in executed)
-    is_ok = bool(any_success and not errors_out)
+    # Alinha com a semântica de final_state do engine declarativo:
+    #   completed → tudo 2xx, sem erro             → sucesso (verde ✓)
+    #   partial   → ≥1 binding 2xx, mas houve erro → sucesso PARCIAL (verde + aviso)
+    #   dry_run   → plano resolvido sem rede        → sucesso
+    #   failed    → nenhum 2xx (ou erro fatal)      → falha (vermelho 🔺)
+    # Antes computávamos `is_ok = any_success and not errors_out`, o que pintava
+    # de "Failed" vermelho uma resposta HTTP 200 com mero aviso de mapping
+    # (final_state="partial") apesar dos dados válidos renderizados na bolha
+    # (bug 2026-06-02). Agora só `failed` pinta vermelho.
+    decl_state = (decl.get("final_state") or "").lower()
+    if decl_state:
+        is_ok = decl_state in ("completed", "partial", "dry_run")
+    else:
+        # Fallback p/ resultados legados/mocks sem final_state explícito.
+        is_ok = bool(any_success and not errors_out)
+    is_partial = is_ok and bool(errors_out)
 
     # 7. Log estruturado (auditoria)
     logger.info(
@@ -1447,18 +1472,33 @@ async def _invoke_api_binding_direct(
     for b in executed:
         st = b.get("status", 0)
         lvl = "success" if 200 <= st < 300 else "danger"
+        # O dict de resultado do engine NÃO tem method/path/connector — só
+        # binding_id, status, latency_ms, attempts (ver _execute_planned_binding
+        # / _execute_data_tables_phase). Usar method/path produzia "?? ??" no
+        # log (bug 2026-06-02). binding_id já identifica (ex.: "ep-cep",
+        # "table:vendas"); o prefixo "table:" distingue tabular de HTTP.
+        bid = str(b.get("binding_id") or "binding")
+        is_table = bid.startswith("table:") or b.get("kind") == "table"
+        lat = b.get("latency_ms") or b.get("duration_ms") or 0
+        attempts = b.get("attempts", 1)
+        err = b.get("error")
         exec_log.append({
-            "cat": "api", "icon": "🌐",
-            "title": f"{b.get('method','?')} {b.get('path','?')}",
-            "detail": f"status={st} · {b.get('connector','')}",
+            "cat": "tabular" if is_table else "api",
+            "icon": "📊" if is_table else "🌐",
+            "title": bid,
+            "detail": (
+                f"status={st} · {lat}ms"
+                + (f" · {attempts} tentativa(s)" if attempts and attempts != 1 else "")
+                + (f" · {str(err)[:80]}" if err else "")
+            ),
             "level": lvl,
         })
         api_tools_trace.append({
-            "binding_id": b.get("binding_id") or b.get("path") or "",
+            "binding_id": bid,
             "status_code": st,
-            "latency_ms": b.get("latency_ms") or b.get("duration_ms") or 0,
-            "attempts": b.get("attempts", 1),
-            "error": b.get("error") or "",
+            "latency_ms": lat,
+            "attempts": attempts,
+            "error": err or "",
             "is_compensation": bool(b.get("is_compensation")),
             "skipped_by_breaker": bool(b.get("skipped_by_breaker")),
         })
@@ -1472,23 +1512,28 @@ async def _invoke_api_binding_direct(
             "detail": f"{latency_ms}ms · {len(executed)} binding(s) executado(s)",
             "level": "success" if is_ok else "warning",
         })
-    diag_level = "success" if is_ok else ("warning" if any_success else "danger")
+    # Diagnóstico: sucesso pleno (verde), parcial (verde/amber com aviso) ou
+    # falha (vermelho). `partial` é sucesso COM ressalva, não erro.
+    diag_level = "success" if (is_ok and not is_partial) else ("warning" if is_ok else "danger")
     diag = [{
         "level": diag_level,
         "text": (
             f"Modo declarativo (invoke direto): {len(executed)} binding(s) executado(s)"
-            + (f" · {len(errors_out)} erro(s)" if errors_out else "")
+            + (f" · {len(errors_out)} aviso(s)/erro(s)" if errors_out else "")
+            + (" · resultado parcial" if is_partial else "")
         ),
     }]
     trace_obj = _build_invoke_trace(
         agent=agent, skill=skill,
+        # Só `failed` pinta vermelho na Rastreabilidade; completed/partial/dry_run
+        # → LogAndClose (verde ✓). O aviso do parcial fica no diagnóstico acima.
         final_state="LogAndClose" if is_ok else "Failed",
         duration_ms=latency_ms, execution_log=exec_log,
         diagnostics=diag, api_tools=api_tools_trace,
         api_tools_count=len(executed),
     )
     interaction_id = await _persist_invoke_turn(
-        session_id=data.session_id,
+        session_id=sid,  # mesmo sid passado ao engine — uma única sessão
         message=data.message,
         output_text=persist_text,
         agent_id=data.agent_id,
