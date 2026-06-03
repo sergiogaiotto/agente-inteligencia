@@ -241,6 +241,16 @@
                             </template>
                         </span>
                         <div class="flex items-center gap-1.5">
+                            <!-- Tradução opt-in (2026-06-03): só pra MCP. Liga um passe de
+                                 LLM no backend que traduz o resultado cru da tool pro idioma
+                                 de resposta configurado em Configurações. Default desligado. -->
+                            <label x-show="activeBindingForm?.binding?.binding_kind === 'mcp'"
+                                   class="flex items-center gap-1 text-[10px] text-surface-600 mr-1 cursor-pointer select-none"
+                                   title="Roda um passe de LLM APÓS a ferramenta para traduzir o resultado para o idioma de resposta configurado em Configurações. Adiciona ~1-2s e 1 chamada de LLM. Desligado = resultado cru da ferramenta (idioma da fonte).">
+                                <input type="checkbox" x-model="bindingTranslateResult"
+                                       class="rounded border-surface-300 text-red-600 focus:ring-red-400 w-3 h-3">
+                                <span>Traduzir resultado</span>
+                            </label>
                             <button @click="cancelBindingForm()" type="button"
                                     class="rounded-md border border-surface-200 bg-white px-2.5 py-1 text-[11px] text-surface-600 hover:bg-surface-50">Cancelar</button>
                             <button @click="invokeBindingDirect()" type="button" :disabled="bindingInvoking"
@@ -917,6 +927,11 @@ function workspacePage() {
         // de binding.
         bindingFormParams: {},
         bindingInvoking: false,
+        // Opt-in (2026-06-03): liga o passe de tradução pós-execução no backend
+        // (translate_result). Só vale pra binding MCP — invoke direto é sem-LLM,
+        // então o resultado cru (ex: busca Tavily) volta no idioma da fonte.
+        // Reset a cada abertura de form; default desligado preserva latência.
+        bindingTranslateResult: false,
         // Onda A.4: histórico/sugestões de slash invokes por agent.
         // Persistido em localStorage por agent_id. Cap=20 entries.
         // Cada entry: {kind, id, label, skill_id, ts, recent7d}.
@@ -1798,12 +1813,14 @@ function workspacePage() {
                 else params[f.name]='';
             }
             this.bindingFormParams=params;
+            this.bindingTranslateResult=false;  // opt-in reset a cada abertura
             this.activeBindingForm={binding, skill_id: skillId};
         },
         cancelBindingForm(){
             this.activeBindingForm=null;
             this.bindingFormParams={};
             this.bindingInvoking=false;
+            this.bindingTranslateResult=false;
         },
 
         // ════════════════════════════════════════════
@@ -1954,6 +1971,10 @@ function workspacePage() {
                     operation,
                     params: this.bindingFormParams,
                     timeout: 60,
+                    // Opt-in (2026-06-03): quando ligado, backend roda um passe de
+                    // LLM pós-tool (só MCP) traduzindo o resultado pro idioma de
+                    // resposta configurado. Default false = resultado cru/sem-LLM.
+                    translate_result: this.bindingTranslateResult,
                     // Persistência (2026-06-01): backend grava 1 turn na sessão
                     // (cria se session_id vazio). Sem isso, a invocação sumia
                     // do histórico ao recarregar pela sidebar.
