@@ -394,12 +394,18 @@ class TestInvokeApiBindingDirect:
             }
         called = {"args": None}
 
-        async def fake_execute(*, agent, skill_parsed, inputs, context, session_id, dry_run):
+        # register_interaction (2026-06-02): o route /invoke-binding-direct
+        # passa register_interaction=False (é dono da sessão). O mock precisa
+        # tolerar o kwarg como a função real faz.
+        async def fake_execute(*, agent, skill_parsed, inputs, context, session_id,
+                               dry_run, register_interaction=True):
             called["args"] = {
                 "agent_id": agent.get("id"),
                 "skill_id": getattr(skill_parsed, "frontmatter", None) and skill_parsed.frontmatter.id,
                 "inputs": dict(inputs or {}),
                 "dry_run": dry_run,
+                "session_id": session_id,
+                "register_interaction": register_interaction,
             }
             return return_value
 
@@ -458,6 +464,9 @@ class TestInvokeApiBindingDirect:
         assert called["args"]["inputs"]["notify_channel"] == "#financeiro"
         # Resposta veio do context.resposta do declarativo
         assert "1234.56" in str(body["result"])
+        # 2026-06-02: route é dono da sessão → instrui o engine a NÃO criar
+        # uma 2ª interaction "(declarativo)" órfã (que aparecia vazia na sidebar).
+        assert called["args"]["register_interaction"] is False
 
     def test_includes_declarative_metadata_in_response(self, app_client, monkeypatch):
         """UI quer mostrar quantos bindings rodaram + erros — extras vão

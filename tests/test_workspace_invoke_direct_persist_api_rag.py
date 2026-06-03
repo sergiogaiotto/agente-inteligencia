@@ -149,6 +149,21 @@ def _patch_declarative_engine(monkeypatch, decl_result):
     monkeypatch.setattr("app.agents.declarative_engine.execute_declarative", fake_exec)
 
 
+def _patch_declarative_engine_capturing(monkeypatch, decl_result):
+    """Como _patch_declarative_engine, mas captura os kwargs recebidos pelo
+    engine. Usado para provar que o route é dono da sessão (session_id +
+    register_interaction=False) e não deixa o engine criar uma 2ª sessão."""
+    captured: dict = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        return decl_result
+
+    monkeypatch.setattr("app.agents.declarative_engine.execute_declarative", fake_exec)
+    return captured
+
+
 def _api_payload(**overrides):
     # Convenção do handler (workspace.py:1068-1075): para binding_kind="api"
     # ou "tabular", binding_id deve ser igual a skill_id.
@@ -247,6 +262,131 @@ class TestApiBindingPersistence:
         assert nums == [6, 7]
         # Resposta-string fica sem fence (paridade com MCP)
         assert calls["turns_create"][1]["output_text_redacted"] == "string simples"
+
+
+class TestApiBindingSingleSession:
+    """Bug 2026-06-02: invocar uma SKILL API via slash criava DUAS sessões —
+    a do route (título = mensagem) + uma órfã "<agent> (declarativo)" criada
+    pelo engine (session_id="" → UUID novo), que aparecia VAZIA na sidebar.
+    Além disso o Execution Log mostrava "?? ??" e respostas HTTP-200 com aviso
+    de mapping (final_state="partial") viravam "Failed" vermelho.
+
+    O route agora: (a) é dono do sid e passa register_interaction=False ao
+    engine; (b) deriva o log do binding_id real; (c) alinha ok/cor ao
+    final_state do engine (só `failed` pinta vermelho).
+    """
+
+    def test_route_owns_session_and_disables_engine_create(self, monkeypatch):
+        """Route passa register_interaction=False + o MESMO sid ao engine."""
+        _patch_api_db(monkeypatch)
+        calls = _patch_repos(monkeypatch, existing_session=None)
+        captured = _patch_declarative_engine_capturing(monkeypatch, {
+            "context": {"resposta": {"cep": "13211740"}},
+            "bindings_executed": [
+                {"binding_id": "ep-cep", "status": 200, "latency_ms": 42, "attempts": 1},
+            ],
+            "errors": [],
+            "final_state": "completed",
+        })
+
+        client = _make_client()
+        r = client.post(
+            "/api/v1/workspace/invoke-binding-direct",
+            json=_api_payload(message="🛠️ Consultar CEP · cep=13211740"),
+        )
+        assert r.status_code == 200, r.text
+        sid = r.json()["interaction_id"]
+        assert sid
+        # Engine instruído a NÃO criar sessão...
+        assert captured.get("register_interaction") is False
+        # ...e recebeu o MESMO sid que o route persistiu (1 sessão, logs ligados).
+        assert captured.get("session_id") == sid
+        # Exatamente 1 interaction criada (sem a sessão "(declarativo)" órfã).
+        assert len(calls["interactions_create"]) == 1
+        assert calls["interactions_create"][0]["id"] == sid
+
+    def test_exec_log_uses_binding_id_not_question_marks(self, monkeypatch):
+        """Execution Log usa binding_id real (ex.: 'ep-cep'), nunca '?? ??'."""
+        _patch_api_db(monkeypatch)
+        _patch_repos(monkeypatch, existing_session=None)
+        _patch_declarative_engine(monkeypatch, {
+            "context": {"resposta": {"cep": "13211740"}},
+            "bindings_executed": [
+                {"binding_id": "ep-cep", "status": 200, "latency_ms": 42, "attempts": 1},
+            ],
+            "errors": [],
+            "final_state": "completed",
+        })
+
+        client = _make_client()
+        r = client.post(
+            "/api/v1/workspace/invoke-binding-direct",
+            json=_api_payload(message="🛠️ Consultar CEP · cep=13211740"),
+        )
+        assert r.status_code == 200, r.text
+        tr = r.json()["trace"]["trace"]
+        titles = [e["title"] for e in tr["execution_log"]]
+        assert "ep-cep" in titles
+        assert not any("?" in t for t in titles), titles
+        # api_tools reflete binding_id + latência reais
+        assert tr["api_tools"][0]["binding_id"] == "ep-cep"
+        assert tr["api_tools"][0]["latency_ms"] == 42
+
+    def test_partial_renders_green_with_warning(self, monkeypatch):
+        """HTTP-200 + aviso de mapping (final_state='partial') = sucesso
+        PARCIAL: ok=True, header verde (LogAndClose), diag de aviso."""
+        _patch_api_db(monkeypatch)
+        _patch_repos(monkeypatch, existing_session=None)
+        _patch_declarative_engine(monkeypatch, {
+            "context": {"resposta": {"cep": "13211740", "city": "Campinas"}},
+            "bindings_executed": [
+                {"binding_id": "ep-cep", "status": 200, "latency_ms": 50, "attempts": 1},
+            ],
+            "errors": ["[ep-cep] output_mapping 'extra': caminho não encontrado"],
+            "final_state": "partial",
+        })
+
+        client = _make_client()
+        r = client.post(
+            "/api/v1/workspace/invoke-binding-direct",
+            json=_api_payload(message="🛠️ Consultar CEP · cep=13211740"),
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True  # parcial NÃO é falha
+        assert body["trace"]["final_state"] == "LogAndClose"  # header verde ✓
+        diags = body["trace"]["trace"]["diagnostics"]
+        assert any(d["level"] == "warning" for d in diags), diags
+        assert any("parcial" in d["text"].lower() for d in diags), diags
+
+    def test_failed_renders_red(self, monkeypatch):
+        """final_state='failed' (nenhum 2xx) = falha: ok=False, header vermelho."""
+        _patch_api_db(monkeypatch)
+        _patch_repos(monkeypatch, existing_session=None)
+        _patch_declarative_engine(monkeypatch, {
+            "context": {},
+            "bindings_executed": [
+                {"binding_id": "ep-cep", "status": 500, "latency_ms": 30,
+                 "attempts": 3, "error": "[ep-cep] HTTP 500 — resposta não-2xx"},
+            ],
+            "errors": ["[ep-cep] HTTP 500 — resposta não-2xx"],
+            "final_state": "failed",
+        })
+
+        client = _make_client()
+        r = client.post(
+            "/api/v1/workspace/invoke-binding-direct",
+            json=_api_payload(message="🛠️ Consultar CEP · cep=00000000"),
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is False
+        assert body["trace"]["final_state"] == "Failed"  # header vermelho 🔺
+        diags = body["trace"]["trace"]["diagnostics"]
+        assert any(d["level"] == "danger" for d in diags), diags
+        # log do binding com nível danger (status 500)
+        el = body["trace"]["trace"]["execution_log"]
+        assert any(e["level"] == "danger" for e in el), el
 
 
 # ─── RAG binding (binding_kind="rag") ───────────────────────────────
