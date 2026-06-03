@@ -3,7 +3,10 @@
 {% block content %}
 <div x-data="agentForm('{{ agent_id | default('') }}')" x-init="load(); $watch('step', s => { if (s === 3) runPreflight(); })">
 
-    <div class="max-w-2xl">
+    <div class="max-w-5xl">
+      <div class="lg:flex lg:items-start lg:gap-6">
+       <!-- ─── Coluna principal: o wizard (inalterado por dentro) ─── -->
+       <div class="flex-1 min-w-0 lg:max-w-2xl">
         <div class="mb-6">
             <a href="/agents" class="inline-flex items-center gap-1 text-[12px] text-brand-500 font-medium hover:text-brand-700 mb-2">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
@@ -30,6 +33,31 @@
 
         <!-- Step 1: Básico -->
         <div x-show="step === 0" class="space-y-5">
+            <!-- ════════ CARDS DE CAMADA ════════════════════════════════════
+                 Substitui o <select> de Tipo. Data-driven (layerCards) p/ ser
+                 testável; clicar seta form.kind e re-contextualiza o Mentor.
+                 Cada card traz metáfora + quando usar + exemplo dos SEUS dados. -->
+            <div>
+                <label class="block text-[12px] font-semibold text-brand-900 mb-2">Que tipo de agente você quer criar?</label>
+                <div class="grid sm:grid-cols-3 gap-3">
+                    <template x-for="card in layerCards" :key="card.kind">
+                        <button type="button" @click="form.kind = card.kind"
+                                class="text-left rounded-xl border-2 p-3 transition-all hover:shadow-sm"
+                                :class="form.kind === card.kind ? 'border-brand-500 bg-brand-50/60 ring-2 ring-brand-100' : 'border-surface-200 bg-white hover:border-brand-200'">
+                            <div class="flex items-center gap-2 mb-1.5">
+                                <span class="text-[20px]" x-text="card.icon"></span>
+                                <span class="text-[13px] font-bold text-brand-900" x-text="card.title"></span>
+                                <span class="ml-auto text-[9px] font-mono font-medium px-1.5 py-0.5 rounded"
+                                      :class="form.kind === card.kind ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-400'"
+                                      x-text="card.tech"></span>
+                            </div>
+                            <p class="text-[11px] font-medium text-brand-700 leading-snug" x-text="card.metaphor"></p>
+                            <p class="mt-1 text-[10px] text-surface-500 leading-snug"><span class="font-semibold">Quando usar:</span> <span x-text="card.when"></span></p>
+                            <p class="mt-1.5 text-[10px] text-brand-500 leading-snug border-t border-surface-100 pt-1.5" x-text="card.example"></p>
+                        </button>
+                    </template>
+                </div>
+            </div>
             <div>
                 <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Nome do Agente *</label>
                 <input x-model="form.name" type="text" placeholder="Ex: Agente de Análise de Dados"
@@ -74,15 +102,7 @@
                 </select>
                 <p class="mt-1 text-[10px] text-surface-400">Default global em <a href="/settings" class="text-brand-500 hover:underline">/settings</a>. Use override quando o agente atende público específico (ex: cliente internacional).</p>
             </div>
-            <div class="grid grid-cols-3 gap-4">
-                <div>
-                    <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Tipo (Camada)</label>
-                    <select x-model="form.kind" class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 outline-none transition">
-                        <option value="subagent">Subagente (SA)</option>
-                        <option value="router">Roteador (AR)</option>
-                        <option value="aobd">Orquestrador (AOBD)</option>
-                    </select>
-                </div>
+            <div class="grid grid-cols-2 gap-4">
                 <div>
                     <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Domínio</label>
                     <div class="flex flex-wrap gap-1.5 rounded-lg border border-surface-200 bg-white px-3 py-2 min-h-[42px]">
@@ -693,7 +713,94 @@
                 <span x-text="saving ? 'Salvando...' : (isEdit ? 'Atualizar' : 'Criar Agente')"></span>
             </button>
         </div>
-    </div>
+       </div><!-- /coluna principal (wizard) -->
+
+       <!-- ════════ MENTOR RAIL — guia interativo por camada ════════
+            Sempre visível (sticky em lg+), recolhível via mentorOpen. Lê o
+            estado real do form e oferece atalhos ACIONÁVEIS que costuram
+            refine (PR1), scaffold (PR2), Composer (PR3) e Sincronizar Mesh
+            (PR4) numa jornada guiada. 100% frontend. -->
+       <aside class="mt-6 lg:mt-0 lg:w-80 shrink-0 lg:sticky lg:top-6">
+           <div class="rounded-2xl border border-brand-100 bg-gradient-to-b from-brand-50/60 to-white shadow-sm overflow-hidden">
+               <button type="button" @click="mentorOpen = !mentorOpen"
+                       class="w-full flex items-center justify-between gap-2 px-4 py-3 text-left hover:bg-brand-50/50 transition-colors">
+                   <span class="flex items-center gap-2">
+                       <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-500 text-white text-[13px]">🧭</span>
+                       <span class="text-[13px] font-bold text-brand-900">Mentor</span>
+                   </span>
+                   <svg class="w-4 h-4 text-surface-400 transition-transform" :class="mentorOpen ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+               </button>
+
+               <div x-show="mentorOpen" x-transition class="px-4 pb-4 space-y-4">
+                   <!-- Você está criando um … (dinâmico por camada) -->
+                   <div>
+                       <p class="text-[11px] text-surface-400">Você está criando um</p>
+                       <p class="text-[15px] font-bold text-brand-900 flex items-center gap-1.5">
+                           <span x-text="currentLayer.icon"></span>
+                           <span x-text="currentLayer.title"></span>
+                           <span class="text-[10px] font-mono font-medium text-brand-400" x-text="'(' + currentLayer.tech + ')'"></span>
+                       </p>
+                       <p class="mt-1 text-[11px] leading-relaxed text-surface-500" x-text="mentorIntroForKind()"></p>
+                   </div>
+
+                   <!-- Prontidão: meter vivo computado de mentorChecklist -->
+                   <div>
+                       <div class="flex items-center justify-between mb-1">
+                           <span class="text-[11px] font-semibold text-brand-700">Prontidão</span>
+                           <span class="text-[11px] font-mono font-bold"
+                                 :class="mentorReady.pct >= 80 ? 'text-emerald-600' : mentorReady.pct >= 40 ? 'text-amber-600' : 'text-rose-500'"
+                                 x-text="mentorReady.pct + '%'"></span>
+                       </div>
+                       <div class="h-2 w-full rounded-full bg-surface-100 overflow-hidden">
+                           <div class="h-full rounded-full transition-all duration-500"
+                                :class="mentorReady.pct >= 80 ? 'bg-emerald-500' : mentorReady.pct >= 40 ? 'bg-amber-500' : 'bg-rose-400'"
+                                :style="'width:' + mentorReady.pct + '%'"></div>
+                       </div>
+                       <p class="mt-1 text-[10px] text-surface-400">
+                           <span x-text="mentorReady.done"></span>/<span x-text="mentorReady.total"></span> prontos
+                           <span x-show="mentorReady.pct === 100" class="text-emerald-600 font-medium">— seu super agente está pronto! 🎉</span>
+                       </p>
+                   </div>
+
+                   <!-- Checklist acionável: cada item undone vira atalho -->
+                   <div class="space-y-1.5">
+                       <template x-for="(item, i) in mentorChecklist" :key="item.key">
+                           <div class="flex items-start gap-2 rounded-lg px-2 py-1.5 transition-colors"
+                                :class="item.done ? 'bg-emerald-50/40' : 'bg-white border border-surface-100'">
+                               <span class="mt-0.5 text-[12px] shrink-0" :class="item.done ? 'text-emerald-500' : 'text-amber-500'"
+                                     x-text="item.done ? '✓' : '⚠'"></span>
+                               <div class="min-w-0 flex-1">
+                                   <p class="text-[11px] font-medium leading-tight"
+                                      :class="item.done ? 'text-surface-400 line-through' : 'text-brand-900'"
+                                      x-text="item.label"></p>
+                                   <button x-show="!item.done && item.act" type="button" @click="mentorAct(item.act)"
+                                           class="mt-1 inline-flex items-center gap-1 rounded-md bg-brand-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-brand-600 transition-colors">
+                                       <span x-text="item.actLabel"></span>
+                                       <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+                                   </button>
+                               </div>
+                           </div>
+                       </template>
+                   </div>
+
+                   <!-- Tradutor de jargão (nativo, sem JS) -->
+                   <details class="group rounded-lg border border-surface-100 bg-white">
+                       <summary class="cursor-pointer list-none px-3 py-2 text-[11px] font-semibold text-brand-700 flex items-center justify-between">
+                           <span>📖 Tradutor de jargão</span>
+                           <span class="text-surface-300 group-open:rotate-180 transition-transform">⌄</span>
+                       </summary>
+                       <dl class="px-3 pb-3 space-y-2 text-[10px] leading-relaxed">
+                           <div><dt class="font-semibold text-brand-700">RAG / Exigir Evidência</dt><dd class="text-surface-500">O agente só responde com base em documentos que encontrar — e recusa se não achar nada. É o "modo pesquisa".</dd></div>
+                           <div><dt class="font-semibold text-brand-700">Pass-through</dt><dd class="text-surface-500">Agente "vazio": sem instruções próprias, ele só repassa seu pedido pro modelo cru. Escreva um prompt de verdade pra sair desse modo.</dd></div>
+                           <div><dt class="font-semibold text-brand-700">task_type</dt><dd class="text-surface-500">Que tipo de raciocínio o modelo usa: chamar ferramentas, raciocinar passo a passo, classificar…</dd></div>
+                           <div><dt class="font-semibold text-brand-700">AI Mesh</dt><dd class="text-surface-500">A rede que liga seus agentes — define quem chama quem. Um Maestro conecta-se aos especialistas que rege.</dd></div>
+                       </dl>
+                   </details>
+               </div>
+           </div>
+       </aside>
+      </div><!-- /lg:flex -->
+    </div><!-- /max-w-5xl -->
 
     <!-- ═══ MODAL: Compor missão (PR3) — AOBD/AR ═══════════════════════════
          Monta o System Prompt por campos estruturados. Determinístico, sem
@@ -842,6 +949,8 @@ function agentForm(editId) {
         // viram conexões logo após o save() (quando o orquestrador ganha id).
         meshSyncing: false,
         pendingMeshTargets: [],   // [{id, name}] criados no save() quando o agente é novo
+        // Mentor de Agentes — painel lateral recolhível (default aberto).
+        mentorOpen: true,
         form: {
             name: '', description: '', kind: 'subagent', domain: '', skill_id: '',
             task_type: 'tool_calling',  // Onda 7: paradigma novo, default tool_calling
@@ -889,6 +998,125 @@ function agentForm(editId) {
             }
 
             return false;
+        },
+
+        // ══════════════════════════════════════════════════════════════
+        // MENTOR DE AGENTES — guia interativo por camada (100% frontend).
+        // Cards de camada + painel lateral + checklist "Prontidão" viva e
+        // ACIONÁVEL. Costura refine (PR1) / scaffold (PR2) / Composer (PR3)
+        // / Sincronizar Mesh (PR4) numa jornada única — para iniciantes
+        // criarem um super agente sem decorar jargão.
+        // ══════════════════════════════════════════════════════════════
+        // Metadados por camada — fonte ÚNICA para os cards E o painel.
+        get layerMeta() {
+            return {
+                subagent: {
+                    icon: '🎯', title: 'Especialista', tech: 'SA',
+                    metaphor: 'Faz uma coisa muito bem.',
+                    when: 'a tarefa é única e bem definida (responder dúvida, resumir um doc, buscar um dado).',
+                    intro: 'Um Especialista executa uma única tarefa com excelência. Dê a ele conhecimento (uma Skill ou RAG) e instruções claras de como agir e responder.',
+                },
+                router: {
+                    icon: '🧭', title: 'Triagem', tech: 'AR',
+                    metaphor: 'Lê o pedido e manda pro especialista certo.',
+                    when: 'você precisa CLASSIFICAR a entrada e escolher entre vários destinos.',
+                    intro: 'Uma Triagem não resolve — ela entende a intenção e encaminha. Defina categorias claras e para onde cada uma vai.',
+                },
+                aobd: {
+                    icon: '🎼', title: 'Maestro', tech: 'AOBD',
+                    metaphor: 'Rege vários especialistas num fluxo.',
+                    when: 'um pedido exige coordenar várias etapas/agentes do início ao fim.',
+                    intro: 'Um Maestro orquestra: decide quem faz o quê e em que ordem, mas NUNCA executa a tarefa final — ele delega. Conecte-o aos especialistas no AI Mesh.',
+                },
+            };
+        },
+        get currentLayer() { return this.layerMeta[this.form.kind] || this.layerMeta.subagent; },
+        get layerCards() {
+            const m = this.layerMeta;
+            return ['subagent', 'router', 'aobd'].map(k => ({
+                kind: k, icon: m[k].icon, title: m[k].title, tech: m[k].tech,
+                metaphor: m[k].metaphor, when: m[k].when, example: this.cardExample(k),
+            }));
+        },
+        // Exemplo aterrado nos DADOS do próprio usuário (availableAgents).
+        cardExample(kind) {
+            const names = (this.availableAgents || []).map(a => a.name).filter(Boolean);
+            const n = names.length;
+            if (kind === 'subagent') {
+                const sample = names.slice(0, 3).join(', ');
+                return n ? `Ex.: seus agentes ${sample}${n > 3 ? '…' : ''} são especialistas.`
+                         : 'Ex.: um agente que responde dúvidas de um único assunto.';
+            }
+            if (kind === 'router') {
+                return n ? `Ex.: triar o pedido entre seus ${n} agente(s) e mandar pro certo.`
+                         : 'Ex.: decidir se a mensagem é cobrança, suporte ou vendas.';
+            }
+            return n ? `Ex.: orquestrar ${n} agente(s) para resolver um caso ponta a ponta.`
+                     : 'Ex.: coordenar busca → análise → resposta num fluxo só.';
+        },
+        mentorIntroForKind() { return this.currentLayer.intro; },
+
+        // ── Sinais de prontidão (reaproveitam o estado real do form) ──
+        _promptText() { return (this.form.system_prompt || ''); },
+        // Conta rotas de delegação no prompt (→, "delegar a", "encaminhar para").
+        _routeCount() {
+            const t = this._promptText();
+            const arrows = (t.match(/→/g) || []).length;
+            const verbs = (t.match(/\b(delegar a|encaminhar para)\b/gi) || []).length;
+            return Math.max(arrows, verbs);
+        },
+        // ≥1 conexão de mesh? Edit: lê diagnostics; novo: alvos staged/sincronizáveis.
+        get meshConnected() {
+            if (this.isEdit) return (this.diagnostics?.capabilities?.mesh_downstream_count || 0) > 0;
+            return (this.pendingMeshTargets?.length || 0) > 0 || (this.missionAgentTargets?.length || 0) > 0;
+        },
+
+        // Checklist viva por camada. Item: {key,label,done,act,actLabel}.
+        get mentorChecklist() {
+            const p = this._promptText();
+            const named = !!(this.form.name || '').trim();
+            const hasMission = /##\s*Missão/i.test(p) || (!this.isPassthrough && p.length > 80);
+            if (this.form.kind === 'aobd') {
+                return [
+                    { key: 'name', label: 'Nomeie o orquestrador', done: named, act: 'basic', actLabel: 'Ir para Básico' },
+                    { key: 'mission', label: 'Defina a missão', done: hasMission, act: 'composer', actLabel: 'Compor missão' },
+                    { key: 'routes', label: 'Crie ≥2 rotas de delegação', done: this._routeCount() >= 2, act: 'composer', actLabel: 'Compor missão' },
+                    { key: 'fallback', label: 'Política de fallback', done: /fallback|nenhuma rota|esclarecimento/i.test(p), act: 'composer', actLabel: 'Compor missão' },
+                    { key: 'golden', label: 'Regra de ouro (só delega, nunca executa)', done: /NUNCA executa|regra de ouro/i.test(p), act: 'composer', actLabel: 'Compor missão' },
+                    { key: 'mesh', label: 'Conecte ≥1 agente no AI Mesh', done: this.meshConnected, act: 'mesh', actLabel: 'Sincronizar Mesh' },
+                ];
+            }
+            if (this.form.kind === 'router') {
+                return [
+                    { key: 'name', label: 'Nomeie a triagem', done: named, act: 'basic', actLabel: 'Ir para Básico' },
+                    { key: 'mission', label: 'Defina a missão de triagem', done: hasMission, act: 'composer', actLabel: 'Compor triagem' },
+                    { key: 'cats', label: 'Liste ≥2 categorias e destinos', done: this._routeCount() >= 2, act: 'composer', actLabel: 'Compor triagem' },
+                    { key: 'ambiguous', label: 'Trate entradas ambíguas', done: /ambígu|fora de escopo|outros/i.test(p), act: 'composer', actLabel: 'Compor triagem' },
+                ];
+            }
+            return [
+                { key: 'name', label: 'Nomeie o especialista', done: named, act: 'basic', actLabel: 'Ir para Básico' },
+                { key: 'prompt', label: 'Escreva instruções reais (não genéricas)', done: !this.isPassthrough, act: 'scaffold', actLabel: 'Gerar estrutura' },
+                { key: 'knowledge', label: 'Dê conhecimento (Skill ou RAG)', done: !!this.form.skill_id || !!this.form.require_evidence, act: 'skill', actLabel: 'Vincular Skill' },
+                { key: 'output', label: 'Defina o formato de saída', done: /##\s*Formato|formato de sa|guardrail|restriç/i.test(p), act: 'prompt', actLabel: 'Editar prompt' },
+            ];
+        },
+        get mentorReady() {
+            const items = this.mentorChecklist;
+            const total = items.length;
+            const done = items.filter(i => i.done).length;
+            return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+        },
+        // Dispatcher dos atalhos → leva ao lugar certo / abre a ferramenta da jornada.
+        mentorAct(act) {
+            if (act === 'composer' || act === 'mesh') {
+                if (!this.composerEnabledForKind()) { this.step = 2; return; }
+                this.openComposer();
+                return;
+            }
+            if (act === 'scaffold') { this.step = 2; this.applyScaffold(); return; }
+            if (act === 'prompt') { this.step = 2; return; }
+            if (act === 'skill' || act === 'basic') { this.step = 0; return; }
         },
 
         isDomainSelected(name) {
