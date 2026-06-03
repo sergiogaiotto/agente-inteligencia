@@ -174,6 +174,12 @@ class WizardRefineRequest(BaseModel):
     current_content: str
     instruction: str
     field: str = "all"
+    # Refino por camada: o tipo do agente muda o ESPÍRITO do refino. AOBD
+    # (Orquestrador) e AR (Roteador) precisam de missão cristalina + regras de
+    # delegação/roteamento — não de "formato de saída e guardrails" (pegada de
+    # um Subagente executor). Ver _refine_persona(). Default subagent =
+    # comportamento histórico (retrocompat com clients que não enviam kind).
+    kind: str = "subagent"
     # Wave Wizard Routing: task_type=instruct por default da rota /refine
     # (refinar texto existente é instruction-following, modelo menor basta).
     task_type: Optional[str] = ""
@@ -1060,22 +1066,96 @@ async def wizard_skill(data: WizardSkillRequest):
         raise HTTPException(500, f"Erro no wizard: {str(e)}")
 
 
+# ── Refino por camada (kind) ─────────────────────────────────────────
+# A diretriz muda o ESPÍRITO do system prompt refinado. Orquestradores
+# (AOBD) e Roteadores (AR) precisam de missão cristalina + regras de
+# delegação/roteamento; um Subagente (SA) executor quer formato de saída e
+# guardrails. SA/desconhecido mantém o comportamento histórico (retrocompat).
+_REFINE_PERSONA_SA = (
+    "Você é um especialista em refinamento de configurações de IA. "
+    "Melhore o conteúdo conforme a instrução do usuário. Responda APENAS "
+    "com o conteúdo melhorado, sem explicações adicionais."
+)
+_REFINE_PERSONA_AOBD = (
+    "Você é um especialista em projetar agentes ORQUESTRADORES (camada AOBD). "
+    "Reescreva o conteúdo como uma diretiva de orquestração SIMPLES, porém "
+    "EXTREMAMENTE CLARA quanto à missão. Estruture em: (1) Missão — 1 frase "
+    "imperativa; (2) Critérios de roteamento — quando delegar e para qual "
+    "agente/skill; (3) Política de fallback — o que fazer quando nenhuma rota "
+    "se aplica; (4) Regra de ouro — o orquestrador NUNCA executa a tarefa "
+    "final, apenas decide quem executa e delega. Seja enxuto, direto e "
+    "inequívoco. Responda APENAS com o conteúdo melhorado, sem explicações "
+    "adicionais."
+)
+_REFINE_PERSONA_AR = (
+    "Você é um especialista em projetar agentes ROTEADORES (camada AR). "
+    "Reescreva o conteúdo como uma diretiva de classificação e roteamento. "
+    "Estruture em: (1) Missão de triagem — 1 frase; (2) Categorias/intenções "
+    "reconhecidas e como diferenciá-las; (3) Destino de cada categoria (para "
+    "qual agente/skill encaminhar); (4) Comportamento padrão para entradas "
+    "ambíguas ou fora de escopo. Seja objetivo e determinístico. Responda "
+    "APENAS com o conteúdo melhorado, sem explicações adicionais."
+)
+
+
+def _refine_persona(kind: str) -> str:
+    """System message do /refine conforme a camada (kind) do agente.
+
+    AOBD (Orquestrador) → diretiva de orquestração curta e clara em missão.
+    AR / router (Roteador) → diretiva de classificação/roteamento determinística.
+    SA / subagent / desconhecido / vazio → comportamento histórico (retrocompat).
+
+    Função pura (sem I/O) — fácil de testar isoladamente.
+    """
+    k = (kind or "").strip().lower()
+    if k == "aobd":
+        return _REFINE_PERSONA_AOBD
+    if k == "router":
+        return _REFINE_PERSONA_AR
+    return _REFINE_PERSONA_SA
+
+
 @router.post("/refine")
 async def wizard_refine(data: WizardRefineRequest):
     """Wizard IA: refina/melhora um campo ou conteúdo existente.
 
     Wave Wizard Routing: usa task_type=instruct (default) — refinamento é
     instruction-following, modelo menor (gpt-oss-20b por padrão) basta.
+
+    Refino por camada (kind): a persona/diretriz muda conforme o tipo do
+    agente — AOBD recebe diretiva de orquestração, AR de roteamento, SA o
+    comportamento histórico. Ver _refine_persona().
     """
+    persona_kind = (data.kind or "").strip().lower() or "subagent"
     try:
         provider, model, _ = await _resolve_wizard_llm(data, "refine")
         llm = get_provider(provider, model=(model or None))
         response = await llm.generate([
-            {"role": "system", "content": "Você é um especialista em refinamento de configurações de IA. Melhore o conteúdo conforme a instrução do usuário. Responda APENAS com o conteúdo melhorado, sem explicações adicionais."},
+            {"role": "system", "content": _refine_persona(data.kind)},
             {"role": "user", "content": f"Campo: {data.field}\n\nConteúdo atual:\n{data.current_content}\n\nInstrução de melhoria:\n{data.instruction}"},
         ])
+        logger.info(
+            "wizard.refine.completed",
+            extra={
+                "event": "wizard.refine.completed",
+                "kind": persona_kind,
+                "field": data.field,
+                "provider": provider,
+                "model": model,
+            },
+        )
         return {"status": "ok", "refined": response["content"]}
     except Exception as e:
+        # Tracing estruturado: kind/field ajudam a diagnosticar refino que
+        # falhou por camada (ex.: provider sem credencial p/ task_type).
+        logger.exception(
+            "wizard.refine.failed",
+            extra={
+                "event": "wizard.refine.failed",
+                "kind": persona_kind,
+                "field": data.field,
+            },
+        )
         raise HTTPException(500, f"Erro no wizard: {str(e)}")
 
 
