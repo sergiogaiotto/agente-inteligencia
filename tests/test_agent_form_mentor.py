@@ -274,3 +274,109 @@ class TestNoBannedPalette:
     def test_no_violet_fuchsia_purple(self, html):
         import re
         assert not re.search(r"\b(violet|fuchsia|purple)-\d", html)
+
+
+# ────────────────────────────────────────────────────────────────
+# Pergunte ao mentor — chat LLM contextual (slice sobre o MVP)
+# ────────────────────────────────────────────────────────────────
+class TestMentorChatState:
+    @pytest.mark.parametrize("marker", [
+        "mentorChatOpen: false,",
+        "mentorChatInput: '',",
+        "mentorChatAsking: false,",
+        "mentorChatHistory: [],",
+    ])
+    def test_data_prop_defined(self, html, marker):
+        assert marker in html, f"estado {marker!r} ausente no x-data()"
+
+
+class TestMentorChatMethods:
+    @pytest.mark.parametrize("method", [
+        "get mentorQuickAsks() {",
+        "async askMentor(preset) {",
+        "_scrollMentorChat() {",
+    ])
+    def test_method_defined(self, html, method):
+        assert method in html, f"método {method!r} ausente no x-data()"
+
+    def test_quick_asks_branch_per_kind(self, html):
+        assert "if (this.form.kind === 'aobd') {" in html
+        assert "if (this.form.kind === 'router') {" in html
+
+    def test_ask_posts_to_mentor_endpoint(self, html):
+        assert "api.post('/api/v1/wizard/mentor', {" in html
+
+    def test_ask_payload_carries_context(self, html):
+        for key in (
+            "question: q,",
+            "kind: this.form.kind,",
+            "agent_name: this.form.name || '',",
+            "system_prompt: this.form.system_prompt || '',",
+        ):
+            assert key in html, f"payload sem {key!r}"
+
+    def test_ask_sends_living_checklist_as_readiness(self, html):
+        """O chat reaproveita o checklist vivo — não inventa fonte de prontidão."""
+        assert "checklist: this.mentorChecklist.map(c => ({ label: c.label, done: !!c.done }))" in html
+
+    def test_ask_sends_recent_history(self, html):
+        assert "history: this.mentorChatHistory.slice(-7, -1).map(t => ({ role: t.role, content: t.content }))" in html
+
+    def test_ask_uses_instruct_task_type(self, html):
+        assert "task_type: 'instruct'," in html
+
+    def test_ask_pushes_user_then_assistant_turns(self, html):
+        assert "this.mentorChatHistory.push({ role: 'user', content: q });" in html
+        assert "this.mentorChatHistory.push({ role: 'assistant', content: (r.answer || '(sem resposta)') });" in html
+
+    def test_ask_guards_empty_and_inflight(self, html):
+        assert "if (!q || this.mentorChatAsking) return;" in html
+
+    def test_ask_handles_failure_gracefully(self, html):
+        assert "Não consegui responder agora" in html
+
+    def test_ask_toggles_asking_flag(self, html):
+        assert "this.mentorChatAsking = true;" in html
+        assert "this.mentorChatAsking = false;" in html
+
+
+class TestMentorChatUI:
+    def test_chat_lives_inside_mentor_aside(self, html):
+        """O chat fica DENTRO do rail Mentor (depois do tradutor de jargão)."""
+        idx_aside = html.find("<aside")
+        idx_jargon = html.find("Tradutor de jargão")
+        idx_chat = html.find("💬 Pergunte ao mentor")
+        idx_aside_close = html.find("</aside>")
+        assert 0 < idx_aside < idx_jargon < idx_chat < idx_aside_close
+
+    def test_chat_is_collapsible(self, html):
+        assert '@click="mentorChatOpen = !mentorChatOpen"' in html
+        assert 'x-show="mentorChatOpen"' in html
+
+    def test_history_is_rendered(self, html):
+        assert 'x-for="(turn, i) in mentorChatHistory"' in html
+        assert "turn.role === 'user'" in html
+        assert 'x-text="turn.content"' in html
+
+    def test_thinking_indicator(self, html):
+        assert 'x-show="mentorChatAsking"' in html
+        assert "Mentor está pensando" in html
+
+    def test_quick_asks_shown_when_empty(self, html):
+        assert 'x-show="!mentorChatHistory.length"' in html
+        assert 'x-for="(q, i) in mentorQuickAsks"' in html
+        assert '@click="askMentor(q)"' in html
+
+    def test_input_bound_and_submits(self, html):
+        assert 'x-model="mentorChatInput"' in html
+        assert '@submit.prevent="askMentor()"' in html
+        assert '@keydown.enter.prevent="askMentor()"' in html
+
+    def test_send_button_guarded(self, html):
+        assert ':disabled="mentorChatAsking || !mentorChatInput.trim()"' in html
+
+    def test_scroll_ref_present(self, html):
+        assert 'x-ref="mentorChatScroll"' in html
+
+    def test_clear_conversation_button(self, html):
+        assert '@click="mentorChatHistory = []"' in html

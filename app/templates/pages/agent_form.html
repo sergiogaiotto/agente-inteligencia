@@ -796,6 +796,61 @@
                            <div><dt class="font-semibold text-brand-700">AI Mesh</dt><dd class="text-surface-500">A rede que liga seus agentes — define quem chama quem. Um Maestro conecta-se aos especialistas que rege.</dd></div>
                        </dl>
                    </details>
+
+                   <!-- ═══ Pergunte ao mentor — chat LLM contextual ═══
+                        Conversa que SABE a camada + o estado do form. Recolhível
+                        (mentorChatOpen) pra não pesar o rail; quando vazio mostra
+                        sugestões por camada (mentorQuickAsks). POST /wizard/mentor. -->
+                   <div class="rounded-lg border border-brand-100 bg-white overflow-hidden">
+                       <button type="button" @click="mentorChatOpen = !mentorChatOpen"
+                               class="w-full flex items-center justify-between gap-2 px-3 py-2 text-[11px] font-semibold text-brand-700 hover:bg-brand-50/40 transition-colors">
+                           <span class="flex items-center gap-1.5">💬 Pergunte ao mentor</span>
+                           <span class="text-surface-300 transition-transform" :class="mentorChatOpen ? 'rotate-180' : ''">⌄</span>
+                       </button>
+                       <div x-show="mentorChatOpen" x-transition class="px-3 pb-3 space-y-2">
+                           <!-- Histórico da conversa (rola sozinho até o fim) -->
+                           <div x-show="mentorChatHistory.length" x-ref="mentorChatScroll"
+                                class="space-y-2 max-h-64 overflow-y-auto pr-0.5">
+                               <template x-for="(turn, i) in mentorChatHistory" :key="i">
+                                   <div :class="turn.role === 'user' ? 'text-right' : 'text-left'">
+                                       <div class="inline-block max-w-[90%] rounded-lg px-2.5 py-1.5 text-[11px] leading-relaxed whitespace-pre-wrap text-left"
+                                            :class="turn.role === 'user' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-brand-900'"
+                                            x-text="turn.content"></div>
+                                   </div>
+                               </template>
+                               <div x-show="mentorChatAsking" class="text-left">
+                                   <span class="inline-block rounded-lg bg-surface-100 px-2.5 py-1.5 text-[11px] text-surface-400">Mentor está pensando…</span>
+                               </div>
+                           </div>
+
+                           <!-- Sugestões rápidas (quando a conversa está vazia) -->
+                           <div x-show="!mentorChatHistory.length" class="space-y-1.5">
+                               <p class="text-[10px] text-surface-400">Não sabe por onde começar? Pergunte:</p>
+                               <template x-for="(q, i) in mentorQuickAsks" :key="i">
+                                   <button type="button" @click="askMentor(q)" :disabled="mentorChatAsking"
+                                           class="block w-full text-left rounded-md border border-surface-100 bg-surface-50 px-2 py-1 text-[10px] text-brand-700 hover:border-brand-300 hover:bg-brand-50/40 transition-colors disabled:opacity-50"
+                                           x-text="q"></button>
+                               </template>
+                           </div>
+
+                           <!-- Caixa de entrada (Enter envia; Shift+Enter quebra linha) -->
+                           <form @submit.prevent="askMentor()" class="flex items-end gap-1.5">
+                               <textarea x-model="mentorChatInput" rows="1"
+                                         @keydown.enter.prevent="askMentor()"
+                                         :disabled="mentorChatAsking"
+                                         placeholder="Pergunte como criar seu agente…"
+                                         class="flex-1 resize-none rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] text-brand-900 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 disabled:opacity-50"></textarea>
+                               <button type="submit" :disabled="mentorChatAsking || !mentorChatInput.trim()"
+                                       class="shrink-0 rounded-lg bg-brand-500 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-brand-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                                   Enviar
+                               </button>
+                           </form>
+                           <div x-show="mentorChatHistory.length" class="text-right">
+                               <button type="button" @click="mentorChatHistory = []"
+                                       class="text-[10px] text-surface-400 hover:text-brand-600 transition-colors">Limpar conversa</button>
+                           </div>
+                       </div>
+                   </div>
                </div>
            </div>
        </aside>
@@ -951,6 +1006,11 @@ function agentForm(editId) {
         pendingMeshTargets: [],   // [{id, name}] criados no save() quando o agente é novo
         // Mentor de Agentes — painel lateral recolhível (default aberto).
         mentorOpen: true,
+        // Chat "Pergunte ao mentor" — conversa contextual no rail (POST /wizard/mentor).
+        mentorChatOpen: false,
+        mentorChatInput: '',
+        mentorChatAsking: false,
+        mentorChatHistory: [],   // [{role:'user'|'assistant', content}]
         form: {
             name: '', description: '', kind: 'subagent', domain: '', skill_id: '',
             task_type: 'tool_calling',  // Onda 7: paradigma novo, default tool_calling
@@ -1117,6 +1177,65 @@ function agentForm(editId) {
             if (act === 'scaffold') { this.step = 2; this.applyScaffold(); return; }
             if (act === 'prompt') { this.step = 2; return; }
             if (act === 'skill' || act === 'basic') { this.step = 0; return; }
+        },
+
+        // ─── Pergunte ao mentor (chat LLM contextual) ──────────────
+        // Sugestões iniciais por camada (quando a conversa está vazia) — dão
+        // um empurrão a quem não sabe o que perguntar.
+        get mentorQuickAsks() {
+            if (this.form.kind === 'aobd') {
+                return [
+                    'O que é um orquestrador e quando devo usar?',
+                    'Como crio boas rotas de delegação?',
+                    'Qual o meu próximo passo agora?',
+                ];
+            }
+            if (this.form.kind === 'router') {
+                return [
+                    'Qual a diferença entre triagem e orquestração?',
+                    'Como trato entradas ambíguas?',
+                    'Qual o meu próximo passo agora?',
+                ];
+            }
+            return [
+                'Como escrevo instruções que funcionam?',
+                'O que é RAG e quando devo ligar?',
+                'Qual o meu próximo passo agora?',
+            ];
+        },
+        // Pergunta ao mentor sabendo a camada + estado atual do form. Reusa o
+        // checklist vivo como "prontidão" para a resposta priorizar a
+        // pendência certa. O histórico recente vai junto (continuidade do
+        // diálogo); o backend trunca por segurança.
+        async askMentor(preset) {
+            const q = (preset || this.mentorChatInput || '').trim();
+            if (!q || this.mentorChatAsking) return;
+            this.mentorChatOpen = true;
+            this.mentorChatInput = '';
+            this.mentorChatHistory.push({ role: 'user', content: q });
+            this.mentorChatAsking = true;
+            this.$nextTick(() => this._scrollMentorChat());
+            try {
+                const r = await api.post('/api/v1/wizard/mentor', {
+                    question: q,
+                    kind: this.form.kind,
+                    agent_name: this.form.name || '',
+                    system_prompt: this.form.system_prompt || '',
+                    checklist: this.mentorChecklist.map(c => ({ label: c.label, done: !!c.done })),
+                    history: this.mentorChatHistory.slice(-7, -1).map(t => ({ role: t.role, content: t.content })),
+                    task_type: 'instruct',
+                });
+                this.mentorChatHistory.push({ role: 'assistant', content: (r.answer || '(sem resposta)') });
+            } catch (e) {
+                this.mentorChatHistory.push({ role: 'assistant', content: '⚠ Não consegui responder agora. Tente novamente em instantes.' });
+            } finally {
+                this.mentorChatAsking = false;
+                this.$nextTick(() => this._scrollMentorChat());
+            }
+        },
+        _scrollMentorChat() {
+            const el = this.$refs.mentorChatScroll;
+            if (el) el.scrollTop = el.scrollHeight;
         },
 
         isDomainSelected(name) {
