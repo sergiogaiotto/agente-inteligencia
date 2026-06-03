@@ -751,6 +751,32 @@
                     </datalist>
                     <p class="mt-1 text-[10px] text-surface-400">Sugestões de skills e agentes reais aparecem ao digitar em "delegar a". Texto livre também é aceito.</p>
                 </div>
+                <!-- Dry-run de roteamento (PR4): classifica cada alvo (agente real /
+                     skill / texto livre) e oferece sincronizar os AGENTES reais com
+                     o AI Mesh (orquestrador → agente). Agente novo: conexões criadas
+                     no save(). Skills e texto livre não viram arestas de mesh. -->
+                <div x-show="missionRuleChecks.length" class="rounded-lg border border-surface-200 bg-surface-50/60 p-3">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-[11px] font-semibold text-brand-700">Verificação de roteamento</span>
+                        <span class="text-[10px] text-surface-400" x-text="missionAgentTargets.length + ' agente(s) sincronizável(is)'"></span>
+                    </div>
+                    <div class="space-y-1">
+                        <template x-for="(chk, i) in missionRuleChecks" :key="i">
+                            <div class="flex items-center gap-2 text-[11px]">
+                                <span class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium shrink-0"
+                                      :class="chk.cls === 'agent' ? 'bg-emerald-100 text-emerald-700' : (chk.cls === 'skill' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700')"
+                                      x-text="chk.cls === 'agent' ? '✓ agente' : (chk.cls === 'skill' ? '🔗 skill' : '⚠ texto livre')"></span>
+                                <span class="text-brand-900 font-mono truncate" x-text="chk.target"></span>
+                            </div>
+                        </template>
+                    </div>
+                    <button @click="syncMissionToMesh()" type="button" :disabled="meshSyncing || !missionAgentTargets.length"
+                            class="mt-2 inline-flex items-center gap-1 rounded-lg bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-40 transition-colors">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z"/></svg>
+                        <span x-text="meshSyncing ? 'Sincronizando...' : ('Aplicar e sincronizar com AI Mesh' + (missionAgentTargets.length ? ' (' + missionAgentTargets.length + ')' : ''))"></span>
+                    </button>
+                    <p x-show="!isEdit && missionAgentTargets.length" class="mt-1 text-[10px] text-surface-400">Agente novo: as conexões serão criadas no AI Mesh ao salvar o agente.</p>
+                </div>
                 <!-- Fallback / entradas ambíguas -->
                 <div>
                     <label class="block text-[11px] font-semibold text-brand-700 mb-1" x-text="composerFallbackLabel()"></label>
@@ -810,6 +836,12 @@ function agentForm(editId) {
             fallback: '',                       // política de fallback / entradas ambíguas
             goldenRule: true,                   // regra de ouro (só AOBD, default ON)
         },
+        // PR4 — Sincronizar com AI Mesh. As regras "delegar a" que apontam pra um
+        // AGENTE real viram conexões orquestrador→agente (skills/texto livre são
+        // ignorados — não são nós de mesh). Agente novo: alvos ficam "staged" e
+        // viram conexões logo após o save() (quando o orquestrador ganha id).
+        meshSyncing: false,
+        pendingMeshTargets: [],   // [{id, name}] criados no save() quando o agente é novo
         form: {
             name: '', description: '', kind: 'subagent', domain: '', skill_id: '',
             task_type: 'tool_calling',  // Onda 7: paradigma novo, default tool_calling
@@ -1129,6 +1161,89 @@ function agentForm(editId) {
             const warn = rules.length === 0 ? ' — sem regras de roteamento; adicione depois ou use "IA, refine"' : '';
             showToast('Missão aplicada ao System Prompt' + warn);
         },
+        // ─── PR4: dry-run de roteamento + Sincronizar com AI Mesh ─────────
+        _normName(s) { return (s || '').trim().toLowerCase(); },
+        resolveAgentByName(name) {
+            // Casa o alvo "delegar a" com um agente real (match normalizado).
+            const n = this._normName(name);
+            if (!n) return null;
+            return this.availableAgents.find(a => this._normName(a.name) === n) || null;
+        },
+        classifyTarget(name) {
+            // Dry-run de um alvo: agente real (vira aresta de mesh), skill
+            // vinculável (referência válida, não é nó) ou texto livre (sem match).
+            const n = this._normName(name);
+            if (!n) return 'empty';
+            if (this.resolveAgentByName(name)) return 'agent';
+            if (this.availableSkills.some(s => this._normName(s.name) === n)) return 'skill';
+            return 'free';
+        },
+        get missionRuleChecks() {
+            // Linhas com alvo preenchido, classificadas — alimenta o dry-run.
+            return (this.mission.rules || [])
+                .filter(r => (r.target || '').trim())
+                .map(r => ({ when: (r.when || '').trim(), target: (r.target || '').trim(), cls: this.classifyTarget(r.target) }));
+        },
+        get missionAgentTargets() {
+            // Alvos únicos que resolvem pra agente real (candidatos a conexão).
+            const seen = new Set(); const out = [];
+            for (const r of (this.mission.rules || [])) {
+                const a = this.resolveAgentByName(r.target);
+                if (a && !seen.has(a.id)) { seen.add(a.id); out.push({ id: a.id, name: a.name }); }
+            }
+            return out;
+        },
+        async _existingDownstreamIds(sourceId) {
+            // Agentes já conectados a partir deste orquestrador (dedup do sync).
+            try {
+                const topo = await api.get('/api/v1/mesh/topology');
+                return new Set((topo.edges || []).filter(e => e.source === sourceId).map(e => e.target));
+            } catch { return new Set(); }
+        },
+        async _createMeshConnections(sourceId, targets) {
+            // POST individual por conexão; tolera falha parcial e reporta agregado.
+            let ok = 0; const failed = [];
+            for (const t of targets) {
+                try {
+                    await api.post('/api/v1/mesh/connections', {
+                        source_agent_id: sourceId, target_agent_id: t.id,
+                        connection_type: 'sequential', config: '{}',
+                    });
+                    ok++;
+                } catch (e) { failed.push(t.name); }
+            }
+            return { ok, failed };
+        },
+        _syncSummary(r, dup) {
+            let msg = r.ok + ' conexão(ões) criada(s)';
+            if (dup) msg += ', ' + dup + ' já existia(m)';
+            if (r.failed.length) msg += ' — falhou: ' + r.failed.join(', ');
+            return msg;
+        },
+        async syncMissionToMesh() {
+            // Aplica o prompt (mantém prosa e topologia consistentes) e sincroniza
+            // as regras que apontam pra agentes reais. Edição: cria conexões já;
+            // agente novo: "staga" os alvos pra criar logo após o save().
+            const targets = this.missionAgentTargets;
+            if (!(this.mission.statement || '').trim()) { showToast('Informe a missão antes de sincronizar', 'error'); return; }
+            if (!targets.length) { showToast('Nenhuma regra aponta para um agente real — nada a sincronizar', 'error'); return; }
+            this.meshSyncing = true;
+            try {
+                this.form.system_prompt = this.composeMissionPrompt();
+                if (this.isEdit) {
+                    const existing = await this._existingDownstreamIds(editId);
+                    const toCreate = targets.filter(t => !existing.has(t.id));
+                    const r = await this._createMeshConnections(editId, toCreate);
+                    const dup = targets.length - toCreate.length;
+                    this.composerOpen = false;
+                    showToast('AI Mesh: ' + this._syncSummary(r, dup), r.failed.length ? 'error' : 'success');
+                } else {
+                    this.pendingMeshTargets = targets.slice();
+                    this.composerOpen = false;
+                    showToast('Missão aplicada — ' + targets.length + ' conexão(ões) serão criadas no AI Mesh ao salvar o agente');
+                }
+            } finally { this.meshSyncing = false; }
+        },
         async loadModels() {
             try {
                 const d = await api.get('/api/v1/wizard/models');
@@ -1307,7 +1422,17 @@ function agentForm(editId) {
             if (!payload.response_language) payload.response_language = null;
             try {
                 if (this.isEdit) { await api.put(`/api/v1/agents/${editId}`, payload); showToast('Agente atualizado'); }
-                else { await api.post('/api/v1/agents', payload); showToast('Agente criado'); }
+                else {
+                    const created = await api.post('/api/v1/agents', payload);
+                    showToast('Agente criado');
+                    // PR4: cria as conexões de mesh "staged" no Composer (agente
+                    // novo só ganha id agora). Falha parcial não impede o redirect.
+                    if (this.pendingMeshTargets.length && created?.id) {
+                        const r = await this._createMeshConnections(created.id, this.pendingMeshTargets);
+                        showToast('AI Mesh: ' + this._syncSummary(r, 0), r.failed.length ? 'error' : 'success');
+                        this.pendingMeshTargets = [];
+                    }
+                }
                 setTimeout(() => window.location.href = '/agents', 800);
             } catch(e) { showToast(e.message, 'error'); }
             this.saving = false;
