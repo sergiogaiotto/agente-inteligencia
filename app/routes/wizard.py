@@ -39,6 +39,9 @@ _DEFAULT_TASK_TYPE = {
     "agent": "reasoning",
     "skill": "skill_generation",
     "refine": "instruct",
+    # "Pergunte ao mentor": conversa-guia é instruction-following — modelo
+    # menor basta, mesmo critério do /refine.
+    "mentor": "instruct",
 }
 
 
@@ -1157,6 +1160,234 @@ async def wizard_refine(data: WizardRefineRequest):
             },
         )
         raise HTTPException(500, f"Erro no wizard: {str(e)}")
+
+
+# ── Pergunte ao mentor (chat contextual) ─────────────────────────────
+# Um chat LLM dentro do painel Mentor da tela de criação de agentes. O
+# iniciante pergunta "como faço X?" e o mentor responde JÁ SABENDO a camada
+# (kind) escolhida e o estado atual do form (nome, prompt, prontidão). Reusa
+# a mesma infra de roteamento do /refine (task_type=instruct por default da
+# rota — conversa-guia é instruction-following, modelo menor basta).
+#
+# Pureza testável: _mentor_persona (qual diretriz por camada) e
+# _build_mentor_context (como serializar o estado do form) são funções puras
+# — testadas isoladamente sem I/O, espelhando o padrão de _refine_persona.
+
+# Regras de comportamento COMUNS a todas as camadas. O mentor é um guia para
+# INICIANTES — fala simples, traduz jargão, é acionável (cita os botões REAIS
+# da tela) e nunca despeja teoria. Estas regras ancoram o tom independente da
+# camada.
+_MENTOR_RULES = (
+    "Você é o Mentor de Agentes da plataforma Maestro — um guia paciente e "
+    "prático que ajuda QUALQUER iniciante a criar um ótimo agente, ali mesmo "
+    "na tela de criação. Siga estas regras SEMPRE:\n\n"
+    "1. Responda em português do Brasil, em tom acolhedor e direto. Seja "
+    "conciso — no máximo ~6 frases curtas, salvo se o usuário pedir mais.\n"
+    "2. Traduza qualquer jargão técnico (RAG, pass-through, task_type, AI "
+    "Mesh, system prompt) para linguagem do dia a dia ANTES de usá-lo.\n"
+    "3. Seja ACIONÁVEL: aponte o próximo passo concreto citando os botões "
+    "REAIS desta tela quando fizer sentido — 'Estrutura' (gera o esqueleto do "
+    "prompt), 'Compor missão' (monta a missão e as rotas de delegação), "
+    "'Sincronizar com AI Mesh' (conecta os agentes de destino), 'Exigir "
+    "Evidência' (liga o RAG) e 'Vincular Skill' (dá conhecimento ao agente).\n"
+    "4. Use o ESTADO ATUAL e a PRONTIDÃO do agente (fornecidos no contexto) "
+    "para personalizar — comece pelo item pendente mais importante.\n"
+    "5. NÃO escreva o system prompt inteiro a menos que o usuário peça "
+    "explicitamente; prefira orientar para que ele use 'Estrutura' ou "
+    "'Compor missão' e depois refine.\n"
+    "6. Se a pergunta fugir do tema (não for sobre criar/configurar este "
+    "agente), reconduza gentilmente ao objetivo da tela.\n"
+    "7. Nunca invente recursos que a tela não tem; baseie-se nos botões e no "
+    "estado informado."
+)
+
+# Foco específico por camada — costurado depois das regras comuns. Cada
+# camada tem um "espírito" diferente (mesmo critério do _refine_persona).
+_MENTOR_PERSONA_AOBD = (
+    "CAMADA EM FOCO: 🎼 Maestro (Orquestrador / AOBD). O usuário está criando "
+    "um agente que NUNCA executa a tarefa final — ele interpreta a intenção e "
+    "DELEGA para outros agentes/skills. Guie-o para: uma missão cristalina, "
+    "pelo menos 2 rotas de delegação ('quando X → delegar a Y'), uma política "
+    "de fallback e conectar os destinos no AI Mesh. Reforce a regra de ouro: "
+    "orquestrador decide quem faz, não faz."
+)
+_MENTOR_PERSONA_AR = (
+    "CAMADA EM FOCO: 🧭 Triagem (Roteador / AR). O usuário está criando um "
+    "agente que CLASSIFICA a entrada e a encaminha para o destino certo. "
+    "Guie-o para: uma missão de triagem clara, pelo menos 2 categorias com "
+    "seus destinos ('quando X → encaminhar para Y') e um comportamento padrão "
+    "para entradas ambíguas ou fora de escopo. Determinismo é a virtude aqui."
+)
+_MENTOR_PERSONA_SA = (
+    "CAMADA EM FOCO: 🎯 Especialista (Subagente / SA). O usuário está criando "
+    "um agente que EXECUTA uma tarefa atômica muito bem. Guie-o para: "
+    "instruções reais e específicas (não genéricas), dar conhecimento ao "
+    "agente (Vincular uma Skill ou ligar 'Exigir Evidência'/RAG) e definir um "
+    "formato de saída claro. Quanto mais concreta a instrução, melhor o "
+    "resultado."
+)
+
+
+def _mentor_persona(kind: str) -> str:
+    """System message do /mentor conforme a camada (kind) do agente.
+
+    aobd → foco em orquestração/delegação; router → triagem/roteamento;
+    subagent/desconhecido/vazio → execução especialista (default).
+
+    Função pura (regras comuns + foco da camada) — fácil de testar.
+    """
+    k = (kind or "").strip().lower()
+    if k == "aobd":
+        focus = _MENTOR_PERSONA_AOBD
+    elif k == "router":
+        focus = _MENTOR_PERSONA_AR
+    else:
+        focus = _MENTOR_PERSONA_SA
+    return _MENTOR_RULES + "\n\n" + focus
+
+
+# Rótulo humano por camada — usado no bloco de contexto do estado.
+_MENTOR_LAYER_LABEL = {
+    "aobd": "🎼 Maestro (Orquestrador)",
+    "router": "🧭 Triagem (Roteador)",
+    "subagent": "🎯 Especialista (Subagente)",
+}
+
+
+def _build_mentor_context(data) -> str:
+    """Serializa o estado atual do form num bloco de contexto pro LLM.
+
+    O mentor responde sabendo: a camada, o nome, um resumo do system prompt e
+    a prontidão (itens feitos vs pendentes). Isso permite respostas
+    personalizadas ("seu próximo passo é …") em vez de genéricas.
+
+    Função pura — recebe o request e devolve string. Sem I/O.
+    """
+    kind = (getattr(data, "kind", "") or "subagent").strip().lower()
+    layer = _MENTOR_LAYER_LABEL.get(kind, _MENTOR_LAYER_LABEL["subagent"])
+    name = (getattr(data, "agent_name", "") or "").strip() or "(sem nome ainda)"
+    prompt = (getattr(data, "system_prompt", "") or "").strip()
+    if prompt:
+        resumo = prompt[:800]
+        if len(prompt) > 800:
+            resumo += " …"
+    else:
+        resumo = "(System Prompt ainda vazio)"
+
+    lines = [
+        "[ESTADO ATUAL DO AGENTE]",
+        f"Camada: {layer}",
+        f"Nome: {name}",
+        f"System Prompt (resumo): {resumo}",
+    ]
+
+    # Prontidão — checklist vivo enviado pelo frontend. Lista o que falta pra
+    # o mentor priorizar o próximo passo concreto.
+    checklist = getattr(data, "checklist", None) or []
+    if checklist:
+        done = [c for c in checklist if (isinstance(c, dict) and c.get("done"))]
+        pending = [
+            c.get("label", "?")
+            for c in checklist
+            if isinstance(c, dict) and not c.get("done")
+        ]
+        lines.append(f"Prontidão: {len(done)}/{len(checklist)} itens concluídos.")
+        if pending:
+            lines.append("Pendências (priorize): " + "; ".join(pending) + ".")
+        else:
+            lines.append("Todos os itens da prontidão estão concluídos.")
+
+    return "\n".join(lines)
+
+
+class WizardMentorRequest(BaseModel):
+    """Request do chat 'Pergunte ao mentor' no painel Mentor.
+
+    O frontend envia a pergunta + o estado atual do form (camada, nome,
+    system prompt, checklist de prontidão) + o histórico recente da conversa.
+    O backend monta system (persona da camada + contexto) e responde.
+    """
+    question: str
+    kind: str = "subagent"
+    agent_name: str = ""
+    system_prompt: str = ""
+    # Checklist vivo do painel Mentor: [{label, done}]. Personaliza a resposta.
+    checklist: list[dict] = Field(default_factory=list)
+    # Histórico recente: [{role: 'user'|'assistant', content: str}].
+    history: list[dict] = Field(default_factory=list)
+    # Wave Wizard Routing: task_type=instruct por default da rota /mentor.
+    task_type: Optional[str] = ""
+    # Legacy (retrocompat).
+    provider: str = "openai"
+    model: Optional[str] = ""
+
+
+# Quantos turnos anteriores reaproveitar como contexto da conversa. 6 (≈3
+# idas e voltas) equilibra continuidade e custo — o estado do form já vai no
+# system, então o histórico só precisa cobrir o fio recente do diálogo.
+_MENTOR_HISTORY_MAX = 6
+
+
+@router.post("/mentor")
+async def wizard_mentor(data: WizardMentorRequest):
+    """Wizard IA: chat contextual do Mentor de Agentes.
+
+    Responde dúvidas do iniciante JÁ SABENDO a camada escolhida e o estado
+    atual do form (nome, prompt, prontidão). Reusa a infra de roteamento do
+    wizard (task_type=instruct por default — conversa-guia é
+    instruction-following).
+    """
+    question = (data.question or "").strip()
+    if not question:
+        raise HTTPException(400, "Pergunta vazia — escreva o que você quer saber.")
+
+    persona_kind = (data.kind or "").strip().lower() or "subagent"
+    try:
+        provider, model, _ = await _resolve_wizard_llm(data, "mentor")
+        llm = get_provider(provider, model=(model or None))
+
+        system_content = (
+            _mentor_persona(data.kind) + "\n\n" + _build_mentor_context(data)
+        )
+        messages = [{"role": "system", "content": system_content}]
+
+        # Histórico recente — sanitizado: só roles válidos, conteúdo truncado
+        # pra não estourar contexto se o frontend mandar turnos enormes.
+        for turn in (data.history or [])[-_MENTOR_HISTORY_MAX:]:
+            if not isinstance(turn, dict):
+                continue
+            role = turn.get("role")
+            content = (turn.get("content") or "").strip()
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content[:2000]})
+
+        messages.append({"role": "user", "content": question})
+
+        response = await llm.generate(messages)
+        logger.info(
+            "wizard.mentor.completed",
+            extra={
+                "event": "wizard.mentor.completed",
+                "kind": persona_kind,
+                "provider": provider,
+                "model": model,
+                "history_turns": min(len(data.history or []), _MENTOR_HISTORY_MAX),
+            },
+        )
+        return {"status": "ok", "answer": response["content"]}
+    except HTTPException:
+        raise
+    except Exception:
+        # Tracing estruturado: kind ajuda a diagnosticar falha por camada
+        # (ex.: provider sem credencial pro task_type da rota).
+        logger.exception(
+            "wizard.mentor.failed",
+            extra={
+                "event": "wizard.mentor.failed",
+                "kind": persona_kind,
+            },
+        )
+        raise HTTPException(500, "Erro no mentor — tente novamente em instantes.")
 
 
 @router.get("/models")
