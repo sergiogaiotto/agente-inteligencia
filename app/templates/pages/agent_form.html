@@ -300,10 +300,14 @@
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                             Empoderar skill
                         </button>
-                        <button @click="refineField('system_prompt', 'Melhore este system prompt: torne-o mais específico, adicione formato de saída e guardrails')" :disabled="refining"
+                        <!-- Refino por camada: a instrução enviada ao /refine depende do
+                             tipo do agente (form.kind). AOBD/AR pedem missão/roteamento
+                             claros; SA mantém o refino histórico (formato + guardrails). -->
+                        <button @click="refineField('system_prompt', refineInstructionForKind())" :disabled="refining"
+                                :title="refineHintForKind()"
                                 class="inline-flex items-center gap-1 rounded-lg bg-red-50 px-2.5 py-1 text-[11px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-40 transition-colors">
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
-                            <span x-text="refining ? 'Refinando...' : 'IA, refine'"></span>
+                            <span x-text="refining ? 'Refinando...' : refineLabelForKind()"></span>
                         </button>
                     </div>
                 </div>
@@ -906,17 +910,39 @@ function agentForm(editId) {
             this.refining = true;
             // Wave Wizard Routing: refinar texto é instruction-following.
             // task_type=instruct (modelo menor configurado em Settings basta).
+            // Refino por camada: enviamos form.kind para o backend escolher a
+            // persona (AOBD=orquestração, AR=roteamento, SA=histórico).
             try {
                 const r = await api.post('/api/v1/wizard/refine', {
                     current_content: this.form[field],
                     instruction,
                     field,
+                    kind: this.form.kind,
                     task_type: 'instruct',
                 });
                 this.form[field] = r.refined;
                 showToast('Campo refinado pela IA');
             } catch(e) { showToast('Erro: ' + e.message, 'error'); }
             this.refining = false;
+        },
+        // ─── Refino por camada (UX) ────────────────────────────
+        // A instrução, o rótulo e o tooltip do botão "IA, refine" se adaptam
+        // ao tipo do agente. AOBD/AR querem missão/roteamento claros; SA
+        // mantém o comportamento histórico (formato de saída + guardrails).
+        refineInstructionForKind() {
+            if (this.form.kind === 'aobd') return 'Reescreva como diretiva de orquestração: missão em 1 frase, critérios de roteamento (quando delegar e a quê), política de fallback e a regra de ouro — o orquestrador nunca executa a tarefa final, só delega. Simples e inequívoco.';
+            if (this.form.kind === 'router') return 'Reescreva como diretiva de classificação/roteamento: missão de triagem, categorias reconhecidas e como diferenciá-las, destino de cada categoria e o comportamento para entradas ambíguas ou fora de escopo.';
+            return 'Melhore este system prompt: torne-o mais específico, adicione formato de saída e guardrails';
+        },
+        refineLabelForKind() {
+            if (this.form.kind === 'aobd') return 'IA, refine missão';
+            if (this.form.kind === 'router') return 'IA, refine roteamento';
+            return 'IA, refine';
+        },
+        refineHintForKind() {
+            if (this.form.kind === 'aobd') return 'Refina como diretiva de orquestração (missão clara + regras de delegação)';
+            if (this.form.kind === 'router') return 'Refina como diretiva de classificação/roteamento';
+            return 'Refina o system prompt (mais específico, formato de saída e guardrails)';
         },
         // ─── Pre-flight (Onda 4) ───────────────────────────────
         async runPreflight() {
