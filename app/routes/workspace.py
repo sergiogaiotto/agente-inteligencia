@@ -881,6 +881,139 @@ class InvokeBindingDirectRequest(_BaseModel):
     timeout: int = 60
     session_id: str = ""
     message: str = ""
+    # Localização opt-in (2026-06-03): invoke direto é stateless/sem-LLM, então
+    # o resultado cru de uma tool MCP (ex: busca Tavily) volta no idioma da
+    # fonte (web em inglês). Quando True, roda UM passe de LLM pós-execução pra
+    # traduzir os campos textuais pro idioma de resposta configurado
+    # (agent.response_language > settings.default_response_language > pt-BR).
+    # Default False preserva a natureza rápida/sem-LLM do caminho. Hoje só o
+    # branch MCP honra esta flag (api/tabular/rag a ignoram).
+    translate_result: bool = False
+
+
+async def _localize_invoke_result(
+    *,
+    result_obj: object,
+    target_lang: str,
+    agent: dict,
+) -> tuple[object, dict]:
+    """Traduz campos textuais de um resultado de invoke direto pro idioma alvo.
+
+    Caminho opt-in (``translate_result=True``). A invocação direta de uma tool
+    MCP é sem-LLM por design — devolve o payload cru, que para buscas web
+    (Tavily) costuma vir em inglês. Aqui rodamos UM passe de LLM reusando as
+    MESMAS regras do chat (:func:`app.agents.engine._build_response_language_directive`):
+    traduz títulos/conteúdo, preserva URLs, IDs/slugs, código e nomes próprios.
+
+    Best-effort e à prova de falha: QUALQUER erro (provider sem config, timeout,
+    JSON inválido na volta, payload grande demais) devolve o resultado ORIGINAL
+    + ``meta.error``. NUNCA levanta — não pode derrubar uma invocação que já
+    obteve o dado da tool.
+
+    Returns:
+        ``(localized_obj, meta)`` com ``meta = {ran, lang, latency_ms, error}``.
+        ``ran=True`` só quando o LLM rodou e devolveu algo utilizável.
+    """
+    import time as _time
+    import json as _json
+    import re as _re
+    from app.agents.engine import (
+        _build_response_language_directive,
+        _LANGUAGE_LABELS,
+    )
+    from app.core.llm_providers import get_provider
+
+    meta: dict = {"ran": False, "lang": target_lang, "latency_ms": 0, "error": None}
+
+    is_str = isinstance(result_obj, str)
+    if is_str:
+        payload_text = result_obj
+        if not payload_text.strip():
+            meta["error"] = "resultado vazio"
+            return result_obj, meta
+    else:
+        try:
+            payload_text = _json.dumps(result_obj, ensure_ascii=False)
+        except (TypeError, ValueError) as e:
+            meta["error"] = f"serializacao falhou: {e}"
+            return result_obj, meta
+
+    # Guarda de tamanho: payload gigante explode custo/latência do passe extra.
+    MAX_CHARS = 24000
+    if len(payload_text) > MAX_CHARS:
+        meta["error"] = f"payload {len(payload_text)} chars > teto {MAX_CHARS}"
+        return result_obj, meta
+
+    label = _LANGUAGE_LABELS.get(target_lang, target_lang)
+    directive = _build_response_language_directive(target_lang)
+    if is_str:
+        sys_prompt = (
+            directive
+            + "\n\nVocê é um tradutor. Receberá um TEXTO e deve devolver o MESMO "
+            f"texto traduzido/adaptado para {label}. Devolva APENAS o texto "
+            "traduzido — sem comentários, sem aspas extras, sem cerca markdown."
+        )
+    else:
+        sys_prompt = (
+            directive
+            + "\n\nVocê é um tradutor de JSON. Receberá um JSON e deve devolver um "
+            f"JSON com EXATAMENTE a mesma estrutura (mesmas chaves, mesmos tipos), "
+            f"com os VALORES textuais traduzidos para {label}. NÃO traduza nomes "
+            "de chaves. NÃO altere números, booleanos nem null. Preserve URLs, "
+            "IDs/slugs, código e nomes próprios. Devolva APENAS o JSON puro — sem "
+            "cerca markdown, sem comentários."
+        )
+
+    t0 = _time.monotonic()
+    try:
+        provider = get_provider(
+            (agent.get("llm_provider") or "openai"),
+            model=agent.get("model"),
+            temperature=0,
+        )
+        resp = await provider.generate([
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": payload_text},
+        ])
+        meta["latency_ms"] = int((_time.monotonic() - t0) * 1000)
+        content = ((resp or {}).get("content") or "").strip()
+        if not content:
+            meta["error"] = "LLM devolveu vazio"
+            return result_obj, meta
+    except Exception as e:  # best-effort — nunca derruba o invoke
+        meta["latency_ms"] = int((_time.monotonic() - t0) * 1000)
+        meta["error"] = str(e)[:200]
+        logger.warning(
+            "workspace.invoke_direct.localize_failed",
+            extra={
+                "event": "workspace.invoke_direct.localize",
+                "agent_id": agent.get("id"),
+                "target_lang": target_lang,
+                "error": str(e)[:300],
+            },
+            exc_info=True,
+        )
+        return result_obj, meta
+
+    if is_str:
+        meta["ran"] = True
+        return content, meta
+
+    # JSON: o LLM às vezes embrulha em cerca markdown — descasca antes de parsear.
+    cleaned = content
+    if cleaned.startswith("```"):
+        m = _re.search(r"```(?:json)?\s*(.*?)```", cleaned, _re.DOTALL)
+        if m:
+            cleaned = m.group(1).strip()
+    try:
+        localized = _json.loads(cleaned)
+    except (ValueError, TypeError) as e:
+        # Tradução veio malformada — preserva o original pra não quebrar o
+        # render estruturado da UI.
+        meta["error"] = f"JSON da traducao invalido: {e}"
+        return result_obj, meta
+    meta["ran"] = True
+    return localized, meta
 
 
 def _build_invoke_trace(
@@ -1202,6 +1335,22 @@ async def invoke_binding_direct(
         isinstance(result_obj, dict)
         and ("error" in result_obj)
     )
+
+    # 7b. Localização opt-in (2026-06-03): invoke direto é sem-LLM, então o
+    # resultado cru de uma tool MCP (busca Tavily etc) volta no idioma da fonte.
+    # Quando data.translate_result=True E a tool não falhou, roda UM passe de
+    # LLM pra traduzir os campos textuais pro idioma de resposta resolvido
+    # (agent.response_language > settings.default_response_language > pt-BR).
+    # Best-effort: erro na tradução devolve o resultado original (não derruba).
+    localize_meta: dict | None = None
+    if data.translate_result and not is_error:
+        from app.agents.engine import _resolve_response_language
+        from app.core.config import get_settings as _get_settings_loc
+        target_lang = _resolve_response_language(agent, _get_settings_loc())
+        result_obj, localize_meta = await _localize_invoke_result(
+            result_obj=result_obj, target_lang=target_lang, agent=agent,
+        )
+
     logger.info(
         "workspace.invoke_direct.completed",
         extra={
@@ -1216,6 +1365,11 @@ async def invoke_binding_direct(
             "latency_ms": latency_ms,
             "ok": not is_error,
             "param_fields_sent": sorted(list((data.params or {}).keys())),
+            "translate_requested": bool(data.translate_result),
+            "localized": bool(localize_meta and localize_meta.get("ran")),
+            "localize_lang": (localize_meta or {}).get("lang"),
+            "localize_latency_ms": (localize_meta or {}).get("latency_ms"),
+            "localize_error": (localize_meta or {}).get("error"),
         },
     )
 
@@ -1245,6 +1399,25 @@ async def invoke_binding_direct(
             "level": "success" if not is_error else "danger",
         },
     ]
+    # Entrada extra no log quando a localização opt-in foi solicitada — mostra
+    # se a tradução rodou (e a latência do passe de LLM) ou por que não aplicou.
+    if localize_meta is not None:
+        from app.agents.engine import _LANGUAGE_LABELS as _LBL
+        _lang = localize_meta.get("lang") or ""
+        if localize_meta.get("ran"):
+            exec_log.append({
+                "cat": "localize", "icon": "🌐",
+                "title": f"Tradução → {_LBL.get(_lang, _lang)}",
+                "detail": f"{localize_meta.get('latency_ms', 0)}ms · LLM",
+                "level": "info",
+            })
+        else:
+            exec_log.append({
+                "cat": "localize", "icon": "🌐",
+                "title": "Tradução não aplicada",
+                "detail": (localize_meta.get("error") or "—")[:120],
+                "level": "warning",
+            })
     mcp_tools_trace = [{
         "name": tool_name,
         "status": "error" if is_error else "completed",
@@ -1259,6 +1432,17 @@ async def invoke_binding_direct(
             + (" retornou erro." if is_error else " concluída.")
         ),
     }]
+    if localize_meta is not None:
+        if localize_meta.get("ran"):
+            diag.append({
+                "level": "info",
+                "text": f"Resultado traduzido para {localize_meta.get('lang')} via LLM (pós-execução, opt-in).",
+            })
+        else:
+            diag.append({
+                "level": "warning",
+                "text": f"Tradução opt-in não aplicada: {localize_meta.get('error') or 'motivo desconhecido'}. Resultado exibido no idioma original.",
+            })
     trace_obj = _build_invoke_trace(
         agent=agent, skill=sk,
         final_state="Failed" if is_error else "LogAndClose",
@@ -1284,6 +1468,7 @@ async def invoke_binding_direct(
         "latency_ms": latency_ms,
         "tool_name": tool_name,
         "interaction_id": interaction_id,
+        "localized": bool(localize_meta and localize_meta.get("ran")),
         "trace": trace_obj,
     }
 
