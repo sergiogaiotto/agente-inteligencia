@@ -253,6 +253,80 @@ class TestDiagnosticsEndpoint:
         score = body["health"]["score"]
         assert 0 <= score <= 100
 
+    def test_logandclose_counts_as_success(self, diag_client, monkeypatch):
+        """LogAndClose é sucesso (paridade engine.py:2147, que loga Recommend
+        E LogAndClose como nível 'success'). Agente determinístico que fecha
+        em LogAndClose não pode ser penalizado no success_rate."""
+        agent = {
+            "id": "a1", "name": "X", "model": "gpt-4o-mini",
+            "llm_provider": "openai", "system_prompt": "x",
+            "skill_id": None, "accepts_images": False, "accepts_documents": False,
+        }
+        now = datetime.now(timezone.utc)
+        # 10 interactions: 4 Recommend + 3 LogAndClose (=7 sucesso) + 3 Refuse
+        states = ["Recommend"] * 4 + ["LogAndClose"] * 3 + ["Refuse"] * 3
+        interactions = [
+            {"id": f"i{i}", "agent_id": "a1", "duration_ms": 100,
+             "state": s, "created_at": now - timedelta(hours=i)}
+            for i, s in enumerate(states)
+        ]
+        _patch_diag_deps(monkeypatch, agent=agent, interactions=interactions)
+        body = diag_client.get("/api/v1/agents/a1/diagnostics").json()
+        # 7/10, não 4/10 — LogAndClose conta
+        assert body["performance"]["success_rate"] == 0.7
+
+    def test_health_unreliable_below_min_sample(self, diag_client, monkeypatch):
+        """< 20 interações → reliable=False (UI: cor neutra + 'provisório').
+        Expõe min_sample e sample_size pro frontend montar o aviso."""
+        agent = {
+            "id": "a1", "name": "X", "model": "gpt-4o-mini",
+            "llm_provider": "openai", "system_prompt": "x",
+            "skill_id": None, "accepts_images": False, "accepts_documents": False,
+        }
+        now = datetime.now(timezone.utc)
+        interactions = [
+            {"id": f"i{i}", "agent_id": "a1", "duration_ms": 100,
+             "state": "Refuse", "created_at": now - timedelta(hours=i)}
+            for i in range(5)
+        ]
+        _patch_diag_deps(monkeypatch, agent=agent, interactions=interactions)
+        h = diag_client.get("/api/v1/agents/a1/diagnostics").json()["health"]
+        assert h["reliable"] is False
+        assert h["min_sample"] == 20
+        assert h["sample_size"] == 5
+
+    def test_health_reliable_at_min_sample(self, diag_client, monkeypatch):
+        """>= 20 interações → reliable=True (amostra suficiente)."""
+        agent = {
+            "id": "a1", "name": "X", "model": "gpt-4o-mini",
+            "llm_provider": "openai", "system_prompt": "x",
+            "skill_id": None, "accepts_images": False, "accepts_documents": False,
+        }
+        now = datetime.now(timezone.utc)
+        interactions = [
+            {"id": f"i{i}", "agent_id": "a1", "duration_ms": 100,
+             "state": "Recommend", "created_at": now - timedelta(minutes=i)}
+            for i in range(20)
+        ]
+        _patch_diag_deps(monkeypatch, agent=agent, interactions=interactions)
+        h = diag_client.get("/api/v1/agents/a1/diagnostics").json()["health"]
+        assert h["reliable"] is True
+        assert h["sample_size"] == 20
+
+    def test_health_unreliable_when_no_history(self, diag_client, monkeypatch):
+        """Cold-start (0 interações): score pode dar 100 (só o 'potencial' de
+        config), mas reliable=False evita pintar verde com falsa confiança."""
+        agent = {
+            "id": "a1", "name": "X", "model": "gpt-4o-mini",
+            "llm_provider": "openai", "system_prompt": "x",
+            "skill_id": "sk1", "accepts_images": False, "accepts_documents": False,
+        }
+        skill = {"id": "sk1", "name": "S", "raw_content": "# S"}
+        _patch_diag_deps(monkeypatch, agent=agent, skill=skill, interactions=[])
+        h = diag_client.get("/api/v1/agents/a1/diagnostics").json()["health"]
+        assert h["reliable"] is False
+        assert h["sample_size"] == 0
+
 
 # ─── UI smoke do template ────────────────────────────────────────────
 
@@ -300,3 +374,29 @@ class TestAgentFormDiagnosticsPanel:
         # Avisa quando model text-only + accepts_images
         assert "multimodal_warning" in src
         assert "Incompatibilidade multimodal" in src
+
+    def test_health_score_neutral_color_when_unreliable(self):
+        """Amostra insuficiente (!reliable) → barra/número em cor neutra
+        (surface), não verde/âmbar/vermelho — evita falso-alarme no cold-start."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "agent_form.html").read_text(encoding="utf-8")
+        assert "!diagnostics.health.reliable ? 'bg-surface-300'" in src
+        assert "!diagnostics.health.reliable ? 'text-surface-400'" in src
+
+    def test_health_score_provisional_warning(self):
+        """Aviso 'provisório' gated por !reliable, mostrando sample_size/min_sample."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "agent_form.html").read_text(encoding="utf-8")
+        assert 'x-show="!diagnostics.health.reliable"' in src
+        assert "provisório" in src
+        assert "diagnostics.health.sample_size" in src
+        assert "diagnostics.health.min_sample" in src
+
+    def test_health_score_scale_legend(self):
+        """Legenda da escala torna o racional explícito (não caixa-preta)."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "agent_form.html").read_text(encoding="utf-8")
+        assert "saudável" in src
+        assert "atenção" in src
+        assert "&lt;50" in src
+        assert "crítico" in src
