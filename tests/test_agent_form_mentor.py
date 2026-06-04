@@ -250,6 +250,38 @@ class TestReadinessSignals:
         assert "!!this.form.skill_id || !!this.form.require_evidence" in html
 
 
+class TestOutputOwnedBySkill:
+    """Empoderar a skill delega a SAÍDA a ela (declarativa: a API responde;
+    LLM: o Output Contract da SKILL.md). O checklist não deve cravar um ⚠
+    eterno em 'Defina o formato de saída' logo após o atalho que o próprio
+    Mentor recomenda — vira falso-negativo confuso. Detecção pelo estado REAL
+    (skill vinculada + prompt delegando), no mesmo espírito dos demais sinais.
+    """
+
+    def test_skill_owns_output_signal_derived_from_real_state(self, html):
+        assert (
+            "const skillOwnsOutput = !!this.form.skill_id "
+            "&& /use a skill .* para responder/i.test(p);"
+        ) in html
+
+    def test_output_done_accepts_skill_ownership(self, html):
+        assert (
+            r"done: skillOwnsOutput || "
+            r"/##\s*Formato|formato de sa|guardrail|restriç/i.test(p)"
+        ) in html
+
+    def test_output_label_explains_when_skill_owns_it(self, html):
+        """Em vez de um ⚠ sem sentido, o label diz POR QUE está ok."""
+        assert (
+            "skillOwnsOutput ? 'Formato de saída — definido pela skill' "
+            ": 'Defina o formato de saída'"
+        ) in html
+
+    def test_define_output_label_preserved_for_manual_prompts(self, html):
+        """Sem skill empoderada, o item segue pedindo o formato (não regrediu)."""
+        assert "Defina o formato de saída" in html
+
+
 class TestMentorActions:
     """O dispatcher leva ao lugar certo / abre a ferramenta da jornada (PR1-4)."""
 
