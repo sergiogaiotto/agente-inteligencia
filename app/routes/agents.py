@@ -25,6 +25,13 @@ _MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024   # 10MB raw (~13MB em base64)
 _MAX_ATTACHMENTS_PER_INVOKE = 5
 _ATTACHMENT_TEXT_TRUNCATE = 50_000          # alinhado com workspace/upload
 
+# Health Score: abaixo deste nº de interações em 30d, success_rate (60% do
+# peso) é ruído estatístico — 1 interação não-Recommend derruba o score de
+# 100→40 num penhasco. O diagnostics expõe `reliable=False` para o frontend
+# tratar como "provisório" (cor neutra + aviso) em vez de pintar verde/
+# vermelho com falsa confiança.
+MIN_RELIABLE_HEALTH_SAMPLE = 20
+
 
 def _decode_attachments(items: list) -> tuple[list, list]:
     """Decodifica AttachmentInput (base64) → formato interno usado pelo engine
@@ -1161,10 +1168,17 @@ async def agent_diagnostics(agent_id: str):
                 perf_p50_ms = durations[len(durations) // 2]
                 idx95 = max(0, int(len(durations) * 0.95) - 1)
                 perf_p95_ms = durations[idx95]
-            recommend_count = sum(
-                1 for itx in recent if (itx.get("state") or "").lower().startswith("recommend")
+            # "Sucesso" = Recommend OU LogAndClose — paridade com engine.py
+            # (~L2147), que loga AMBOS os estados como nível "success". Antes
+            # só Recommend contava, penalizando agentes determinísticos (ex.:
+            # lookup de CEP via skill declarativa) que legitimamente fecham em
+            # LogAndClose sem recomendar nada.
+            success_count = sum(
+                1
+                for itx in recent
+                if (itx.get("state") or "").lower().startswith(("recommend", "logandclose"))
             )
-            success_rate = round(recommend_count / len(recent), 3)
+            success_rate = round(success_count / len(recent), 3)
     except Exception as e:
         logger.warning(
             "agents.diagnostics.perf_query_failed",
@@ -1222,6 +1236,10 @@ async def agent_diagnostics(agent_id: str):
     weighted = sum(v * w for _, v, w in score_components)
     health_score = int(round((weighted / total_weight) * 100)) if total_weight else 50
 
+    # Confiabilidade do score (ver MIN_RELIABLE_HEALTH_SAMPLE). Com amostra
+    # pequena o frontend pinta neutro + "provisório" em vez de verde/vermelho.
+    health_reliable = interactions_30d >= MIN_RELIABLE_HEALTH_SAMPLE
+
     return {
         "agent": {
             "id": agent_id,
@@ -1259,6 +1277,9 @@ async def agent_diagnostics(agent_id: str):
         },
         "health": {
             "score": health_score,
+            "reliable": health_reliable,
+            "min_sample": MIN_RELIABLE_HEALTH_SAMPLE,
+            "sample_size": interactions_30d,
             "components": [
                 {"name": n, "value": v, "weight": w}
                 for n, v, w in score_components
