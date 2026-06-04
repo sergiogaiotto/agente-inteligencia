@@ -22,11 +22,12 @@ Defaults sensatos por wizard:
 - /refine  → instruct           (refinar texto existente é instruction-following)
 """
 import json
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.core.llm_providers import get_provider
-from app.llm_routing import resolve_llm_for_task
+from app.llm_routing import resolve_llm_for_task, load_routing
 import logging
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,118 @@ async def _resolve_wizard_llm(data, route_name: str) -> tuple[str, str, str]:
         },
     )
     return provider, model, fallback_task
+
+
+# ─── Resiliência de LLM no wizard: fallback hospedado quando inacessível ───
+# As rotas do wizard (mentor, refine) resolvem o LLM via task_type. O default
+# de `instruct` aponta para o hub interno (GPT-OSS), que fica INACESSÍVEL fora
+# da rede corporativa/VPN — aí o wizard morria com 500 genérico após ~21s de
+# timeout ("Não consegui responder agora"). Aqui detectamos esse caso e caímos
+# no modelo HOSPEDADO do `multimodal_fallback` (azure/gpt-4o por padrão —
+# acessível pela internet pública), que é o modelo "sempre disponível" da
+# plataforma. Se nem ele responder, devolvemos mensagem CLARA e ACIONÁVEL.
+
+def _is_llm_unreachable(exc: Exception) -> bool:
+    """True quando a falha é de ALCANCE do provider (não request malformado):
+    conexão/timeout de rede, ou URL do provider não configurada. Esses casos
+    merecem fallback + mensagem acionável; os demais seguem como 500.
+    """
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout,
+                        httpx.ReadTimeout, httpx.PoolTimeout,
+                        httpx.TimeoutException)):
+        return True
+    # GPTOSSProvider.generate levanta RuntimeError quando oss{20,120}b_url vazio.
+    if isinstance(exc, RuntimeError) and "url não configurada" in str(exc).lower():
+        return True
+    return False
+
+
+def _wizard_unreachable_message(provider: str, model: str) -> str:
+    """Mensagem acionável quando o modelo (e o fallback) estão inacessíveis."""
+    pm = f"{provider}/{model}" if model else (provider or "desconhecido")
+    return (
+        f"O modelo de IA configurado ({pm}) está inacessível agora — não "
+        "consegui conectar ao servidor dele. Se ele roda no hub interno "
+        "(GPT-OSS), conecte-se à VPN/rede corporativa. Como alternativa, "
+        "ajuste o Roteamento LLM em Configurações para um provedor hospedado "
+        "com credenciais (ex.: Azure/OpenAI)."
+    )
+
+
+async def _wizard_hosted_fallback(
+    failed_provider: str,
+) -> tuple[Optional[str], Optional[str]]:
+    """Alvo de fallback HOSPEDADO quando o provider roteado está inacessível.
+
+    Usa o `multimodal_fallback` do Roteamento LLM (azure/gpt-4o por padrão) —
+    o modelo "sempre disponível" da plataforma, acessível pela internet. Só
+    retorna se for um provider DIFERENTE do que falhou (evita cair no MESMO
+    hub interno inacessível — ex.: gpt-oss-20b → gpt-oss-120b só dobraria o
+    timeout). (None, None) quando não há alternativa distinta.
+    """
+    failed = (failed_provider or "").strip().lower()
+    try:
+        routing = await load_routing()
+    except Exception:
+        return None, None
+    target = (routing.get("multimodal_fallback") or "").strip()
+    if "/" not in target:
+        return None, None
+    fb_provider, fb_model = target.split("/", 1)
+    fb_provider = fb_provider.strip().lower()
+    fb_model = fb_model.strip()
+    if not fb_provider or fb_provider == failed:
+        return None, None
+    return fb_provider, fb_model
+
+
+async def _wizard_llm_complete(
+    messages: list[dict], provider: str, model: str, *, route: str
+) -> tuple[str, str, str]:
+    """Gera com o provider roteado; se INACESSÍVEL, tenta o fallback hospedado.
+
+    Returns (content, used_provider, used_model). Levanta HTTPException(503)
+    com mensagem acionável quando nem o primário nem o fallback respondem.
+    Exceções que NÃO são de alcance propagam (caller mapeia para 500).
+    """
+    try:
+        llm = get_provider(provider, model=(model or None))
+        resp = await llm.generate(messages)
+        return resp["content"], provider, model
+    except Exception as exc:
+        if not _is_llm_unreachable(exc):
+            raise
+        fb_provider, fb_model = await _wizard_hosted_fallback(provider)
+        if fb_provider:
+            logger.warning(
+                "wizard.llm.fallback",
+                extra={
+                    "event": "wizard.llm.fallback",
+                    "wizard_route": route,
+                    "failed_provider": provider,
+                    "failed_model": model,
+                    "fallback_provider": fb_provider,
+                    "fallback_model": fb_model,
+                },
+            )
+            try:
+                fb_llm = get_provider(fb_provider, model=(fb_model or None))
+                resp = await fb_llm.generate(messages)
+                return resp["content"], fb_provider, fb_model
+            except Exception as exc2:
+                if not _is_llm_unreachable(exc2):
+                    raise
+                # fallback também inacessível → cai no 503 acionável abaixo
+        logger.warning(
+            "wizard.llm.unreachable",
+            extra={
+                "event": "wizard.llm.unreachable",
+                "wizard_route": route,
+                "provider": provider,
+                "model": model,
+            },
+        )
+        raise HTTPException(503, _wizard_unreachable_message(provider, model))
 
 
 class WizardAgentRequest(BaseModel):
@@ -1132,22 +1245,26 @@ async def wizard_refine(data: WizardRefineRequest):
     persona_kind = (data.kind or "").strip().lower() or "subagent"
     try:
         provider, model, _ = await _resolve_wizard_llm(data, "refine")
-        llm = get_provider(provider, model=(model or None))
-        response = await llm.generate([
+        messages = [
             {"role": "system", "content": _refine_persona(data.kind)},
             {"role": "user", "content": f"Campo: {data.field}\n\nConteúdo atual:\n{data.current_content}\n\nInstrução de melhoria:\n{data.instruction}"},
-        ])
+        ]
+        refined, used_provider, used_model = await _wizard_llm_complete(
+            messages, provider, model, route="refine"
+        )
         logger.info(
             "wizard.refine.completed",
             extra={
                 "event": "wizard.refine.completed",
                 "kind": persona_kind,
                 "field": data.field,
-                "provider": provider,
-                "model": model,
+                "provider": used_provider,
+                "model": used_model,
             },
         )
-        return {"status": "ok", "refined": response["content"]}
+        return {"status": "ok", "refined": refined}
+    except HTTPException:
+        raise
     except Exception as e:
         # Tracing estruturado: kind/field ajudam a diagnosticar refino que
         # falhou por camada (ex.: provider sem credencial p/ task_type).
@@ -1344,7 +1461,6 @@ async def wizard_mentor(data: WizardMentorRequest):
     persona_kind = (data.kind or "").strip().lower() or "subagent"
     try:
         provider, model, _ = await _resolve_wizard_llm(data, "mentor")
-        llm = get_provider(provider, model=(model or None))
 
         system_content = (
             _mentor_persona(data.kind) + "\n\n" + _build_mentor_context(data)
@@ -1363,18 +1479,20 @@ async def wizard_mentor(data: WizardMentorRequest):
 
         messages.append({"role": "user", "content": question})
 
-        response = await llm.generate(messages)
+        answer, used_provider, used_model = await _wizard_llm_complete(
+            messages, provider, model, route="mentor"
+        )
         logger.info(
             "wizard.mentor.completed",
             extra={
                 "event": "wizard.mentor.completed",
                 "kind": persona_kind,
-                "provider": provider,
-                "model": model,
+                "provider": used_provider,
+                "model": used_model,
                 "history_turns": min(len(data.history or []), _MENTOR_HISTORY_MAX),
             },
         )
-        return {"status": "ok", "answer": response["content"]}
+        return {"status": "ok", "answer": answer}
     except HTTPException:
         raise
     except Exception:

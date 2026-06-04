@@ -1227,7 +1227,12 @@ function agentForm(editId) {
                 });
                 this.mentorChatHistory.push({ role: 'assistant', content: (r.answer || '(sem resposta)') });
             } catch (e) {
-                this.mentorChatHistory.push({ role: 'assistant', content: '⚠ Não consegui responder agora. Tente novamente em instantes.' });
+                // Mostra a mensagem ACIONÁVEL do backend (ex.: 503 "modelo
+                // inacessível — conecte à VPN ou ajuste o Roteamento LLM")
+                // em vez do genérico; cai no default só em falha de rede pura.
+                const detail = (e && e.message) ? String(e.message).trim() : '';
+                const msg = detail || 'Não consegui responder agora. Tente novamente em instantes.';
+                this.mentorChatHistory.push({ role: 'assistant', content: '⚠ ' + msg });
             } finally {
                 this.mentorChatAsking = false;
                 this.$nextTick(() => this._scrollMentorChat());
