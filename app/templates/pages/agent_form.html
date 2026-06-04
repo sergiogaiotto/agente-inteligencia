@@ -1154,11 +1154,16 @@ function agentForm(editId) {
                     { key: 'ambiguous', label: 'Trate entradas ambíguas', done: /ambígu|fora de escopo|outros/i.test(p), act: 'composer', actLabel: 'Compor triagem' },
                 ];
             }
+            // "Empoderar skill" delega a saída à skill vinculada — o formato vira
+            // contrato da skill (declarativa: a API responde; LLM: o Output Contract
+            // da SKILL.md), não do system prompt. Exigir "formato de saída" aqui é
+            // falso-negativo eterno logo após o atalho recomendado pelo Mentor.
+            const skillOwnsOutput = !!this.form.skill_id && /use a skill .* para responder/i.test(p);
             return [
                 { key: 'name', label: 'Nomeie o especialista', done: named, act: 'basic', actLabel: 'Ir para Básico' },
                 { key: 'prompt', label: 'Escreva instruções reais (não genéricas)', done: !this.isPassthrough, act: 'scaffold', actLabel: 'Gerar estrutura' },
                 { key: 'knowledge', label: 'Dê conhecimento (Skill ou RAG)', done: !!this.form.skill_id || !!this.form.require_evidence, act: 'skill', actLabel: 'Vincular Skill' },
-                { key: 'output', label: 'Defina o formato de saída', done: /##\s*Formato|formato de sa|guardrail|restriç/i.test(p), act: 'prompt', actLabel: 'Editar prompt' },
+                { key: 'output', label: skillOwnsOutput ? 'Formato de saída — definido pela skill' : 'Defina o formato de saída', done: skillOwnsOutput || /##\s*Formato|formato de sa|guardrail|restriç/i.test(p), act: 'prompt', actLabel: 'Editar prompt' },
             ];
         },
         get mentorReady() {
