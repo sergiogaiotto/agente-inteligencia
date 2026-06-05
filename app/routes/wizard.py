@@ -22,6 +22,7 @@ Defaults sensatos por wizard:
 - /refine  → instruct           (refinar texto existente é instruction-following)
 """
 import json
+import re
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -43,6 +44,9 @@ _DEFAULT_TASK_TYPE = {
     # "Pergunte ao mentor": conversa-guia é instruction-following — modelo
     # menor basta, mesmo critério do /refine.
     "mentor": "instruct",
+    # "IA, me ajude!" do Composer: compor missão + regras de delegação é
+    # planejamento (qual destino para qual intenção) — mesmo espírito do /agent.
+    "compose": "reasoning",
 }
 
 
@@ -1506,6 +1510,259 @@ async def wizard_mentor(data: WizardMentorRequest):
             },
         )
         raise HTTPException(500, "Erro no mentor — tente novamente em instantes.")
+
+
+# ─── "IA, me ajude!" — compor missão/triagem estruturada no Composer ──────
+# O Composer monta o System Prompt por CAMPOS (missão, regras quando→destino,
+# fallback, regra de ouro). Antes ele abria VAZIO: o usuário olhava a tela em
+# branco sem saber por onde começar. Aqui a IA gera um RASCUNHO desses campos a
+# partir de uma intenção em linguagem natural — ANCORADO no catálogo real de
+# skills/agentes do usuário (reduz alucinação de destinos que não existem). O
+# frontend NÃO auto-aplica: preenche os campos como rascunho e o usuário revisa
+# antes de "Aplicar ao System Prompt". A "Verificação de roteamento" existente
+# sinaliza destinos sem match (⚠ texto livre).
+
+# Regras de saída comuns às duas camadas (orquestrador/roteador). Não usa
+# f-string: as chaves do exemplo JSON são literais.
+_COMPOSE_RULES = (
+    "Você é um arquiteto de agentes de IA ajudando o usuário a COMPOR a "
+    "configuração de um agente coordenador. Você devolve um RASCUNHO que o "
+    "usuário vai REVISAR — seja concreto e fiel ao catálogo de destinos "
+    "fornecido.\n"
+    "REGRAS DE SAÍDA (obrigatórias):\n"
+    "- Responda APENAS com JSON válido. Sem markdown, sem cercas ```, sem "
+    "nenhum texto fora do JSON.\n"
+    "- Use EXATAMENTE esta estrutura:\n"
+    "{\n"
+    '  "statement": "missão em 1-2 frases, na voz do agente",\n'
+    '  "rules": [{"when": "intenção/condição da entrada", "target": "nome do destino"}],\n'
+    '  "fallback": "o que fazer quando nenhuma regra se aplica",\n'
+    '  "goldenRule": true\n'
+    "}\n"
+    "- Em cada 'target', PREFIRA os nomes EXATOS do catálogo de skills/agentes "
+    "fornecido abaixo. Só proponha um destino fora do catálogo quando ele não "
+    "cobrir a necessidade — e então use um nome curto e descritivo.\n"
+    "- Gere de 2 a 5 regras cobrindo os principais caminhos.\n"
+    "- Escreva em português do Brasil."
+)
+
+_COMPOSE_PERSONA_AOBD = (
+    "CAMADA: 🎼 Orquestrador (AOBD). Ele interpreta a intenção do usuário e "
+    "DELEGA para outros agentes/skills — nunca executa a tarefa final. As "
+    "regras são critérios de delegação ('quando X → delegar a Y'). Defina "
+    "goldenRule=true: o orquestrador decide quem faz, não faz."
+)
+_COMPOSE_PERSONA_AR = (
+    "CAMADA: 🧭 Roteador (AR). Ele CLASSIFICA a entrada e a encaminha para o "
+    "destino certo. As regras são categorias com destinos ('quando a entrada "
+    "for X → encaminhar para Y'). Defina goldenRule=false (não se aplica ao "
+    "roteador). O 'fallback' descreve o comportamento para entradas ambíguas "
+    "ou fora de escopo."
+)
+
+
+def _compose_persona(kind: str) -> str:
+    """System message do /compose conforme a camada (aobd vs router).
+
+    Função pura (regras comuns + foco da camada) — fácil de testar.
+    """
+    k = (kind or "").strip().lower()
+    focus = _COMPOSE_PERSONA_AR if k == "router" else _COMPOSE_PERSONA_AOBD
+    return _COMPOSE_RULES + "\n\n" + focus
+
+
+def _compose_catalog_names(items) -> list[str]:
+    """Normaliza uma lista de skills/agentes (strings OU dicts {name}) em nomes
+    únicos não-vazios, preservando a ordem. Tolerante ao que o frontend manda."""
+    out: list[str] = []
+    for it in (items or []):
+        if isinstance(it, str):
+            name = it.strip()
+        elif isinstance(it, dict):
+            name = str(it.get("name") or "").strip()
+        else:
+            name = ""
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def _build_compose_catalog(skills, agents) -> str:
+    """Bloco de contexto com o catálogo REAL de destinos disponíveis.
+
+    Aterra a IA nos nomes que existem de verdade — principal mitigação contra
+    alucinar destinos inexistentes. Listas vazias viram aviso explícito.
+
+    Função pura — recebe as listas e devolve string. Sem I/O.
+    """
+    sk = _compose_catalog_names(skills)
+    ag = _compose_catalog_names(agents)
+    lines = ["[CATÁLOGO DE DESTINOS DISPONÍVEIS]"]
+    lines.append(
+        "Skills vinculáveis: " + (", ".join(sk) if sk else "(nenhuma cadastrada)") + "."
+    )
+    lines.append(
+        "Agentes existentes: " + (", ".join(ag) if ag else "(nenhum cadastrado)") + "."
+    )
+    lines.append(
+        "Ao escolher 'target' nas regras, use PREFERENCIALMENTE nomes desta "
+        "lista. Se nenhum servir, proponha um destino novo com nome claro."
+    )
+    return "\n".join(lines)
+
+
+def _parse_compose_json(content: str, kind: str) -> dict:
+    """Extrai o rascunho estruturado da resposta do LLM.
+
+    Tolera cercas ```json. Em falha de parse, devolve rascunho mínimo com o
+    texto bruto na missão e parsed=False (frontend avisa "revise"). SEMPRE
+    devolve as chaves esperadas, sanitizadas — o frontend confia no shape.
+
+    Função pura — fácil de testar contra respostas reais/quebradas do LLM.
+    """
+    raw = (content or "").strip()
+    text = raw
+    if text.startswith("```"):
+        m = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+        if m:
+            text = m.group(1).strip()
+    is_router = (kind or "").strip().lower() == "router"
+    try:
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError("resposta não é um objeto JSON")
+    except (json.JSONDecodeError, ValueError):
+        # Graceful: a IA respondeu em texto livre. Não joga fora — vira missão
+        # rascunho pro usuário aproveitar/reescrever; parsed=False sinaliza isso.
+        return {
+            "statement": raw[:1000],
+            "rules": [],
+            "fallback": "",
+            "goldenRule": not is_router,
+            "parsed": False,
+        }
+    statement = str(data.get("statement") or "").strip()
+    fallback = str(data.get("fallback") or "").strip()
+    rules: list[dict] = []
+    for r in (data.get("rules") or []):
+        if not isinstance(r, dict):
+            continue
+        when = str(r.get("when") or "").strip()
+        target = str(r.get("target") or "").strip()
+        if when or target:
+            rules.append({"when": when, "target": target})
+    golden = data.get("goldenRule")
+    golden_rule = golden if isinstance(golden, bool) else (not is_router)
+    return {
+        "statement": statement,
+        "rules": rules,
+        "fallback": fallback,
+        "goldenRule": golden_rule,
+        "parsed": True,
+    }
+
+
+def _ground_compose_targets(draft: dict, skills, agents) -> dict:
+    """Canoniza os 'target' das regras para o nome EXATO do catálogo.
+
+    Match por nome normalizado (caixa/espaços). Quando casa, troca pelo nome
+    canônico — isso faz a "Verificação de roteamento" do frontend classificar
+    como agente/skill em vez de ⚠ texto livre por mera divergência de caixa.
+    Sem match: mantém como veio (texto livre — o frontend sinaliza).
+
+    Muta e devolve o próprio draft (conveniência de encadeamento).
+    """
+    canon: dict[str, str] = {}
+    # Agentes primeiro: se um nome colidir, o agente (nó de mesh) é o canônico.
+    for name in _compose_catalog_names(agents) + _compose_catalog_names(skills):
+        canon.setdefault(name.strip().lower(), name)
+    for rule in draft.get("rules", []):
+        key = (rule.get("target") or "").strip().lower()
+        if key in canon:
+            rule["target"] = canon[key]
+    return draft
+
+
+class WizardComposeRequest(BaseModel):
+    """Request do "IA, me ajude!" no Composer de Missão/Triagem.
+
+    O usuário descreve em linguagem natural a intenção do agente coordenador, e
+    a IA devolve um RASCUNHO estruturado (missão, regras, fallback, regra de
+    ouro) ANCORADO no catálogo real de skills/agentes — para que os destinos de
+    delegação casem com alvos que existem de verdade.
+    """
+    intent: str
+    kind: str = "aobd"  # aobd (orquestrador) | router (roteador)
+    # Catálogo real do form (frontend manda os nomes de availableSkills/Agents).
+    # Aceita strings OU dicts {name} — _compose_catalog_names normaliza.
+    skills: list = Field(default_factory=list)
+    agents: list = Field(default_factory=list)
+    # Wave Wizard Routing: task_type=reasoning por default da rota /compose.
+    task_type: Optional[str] = ""
+    # Legacy (retrocompat — quando task_type vier, ignora).
+    provider: str = "openai"
+    model: Optional[str] = ""
+
+
+@router.post("/compose")
+async def wizard_compose(data: WizardComposeRequest):
+    """Wizard IA: "me ajude!" do Composer — gera rascunho de missão/triagem.
+
+    Recebe a intenção em linguagem natural + o catálogo real de destinos e
+    devolve {statement, rules:[{when,target}], fallback, goldenRule, parsed}.
+    Reusa a infra resiliente do wizard (task_type=reasoning; fallback hospedado
+    + 503 acionável quando o modelo está inacessível). O frontend trata como
+    RASCUNHO (não auto-aplica).
+    """
+    intent = (data.intent or "").strip()
+    if not intent:
+        raise HTTPException(
+            400, "Descreva a intenção — o que este agente deve coordenar/triar?"
+        )
+
+    kind = (data.kind or "").strip().lower() or "aobd"
+    try:
+        provider, model, _ = await _resolve_wizard_llm(data, "compose")
+
+        system_content = (
+            _compose_persona(kind)
+            + "\n\n"
+            + _build_compose_catalog(data.skills, data.agents)
+        )
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": intent},
+        ]
+
+        content, used_provider, used_model = await _wizard_llm_complete(
+            messages, provider, model, route="compose"
+        )
+        draft = _parse_compose_json(content, kind)
+        draft = _ground_compose_targets(draft, data.skills, data.agents)
+
+        logger.info(
+            "wizard.compose.completed",
+            extra={
+                "event": "wizard.compose.completed",
+                "kind": kind,
+                "provider": used_provider,
+                "model": used_model,
+                "rules": len(draft.get("rules", [])),
+                "parsed": draft.get("parsed", True),
+                "catalog_skills": len(_compose_catalog_names(data.skills)),
+                "catalog_agents": len(_compose_catalog_names(data.agents)),
+            },
+        )
+        return {"status": "ok", "draft": draft}
+    except HTTPException:
+        raise
+    except Exception:
+        # Tracing estruturado: kind ajuda a diagnosticar falha por camada.
+        logger.exception(
+            "wizard.compose.failed",
+            extra={"event": "wizard.compose.failed", "kind": kind},
+        )
+        raise HTTPException(500, "Erro ao compor — tente novamente em instantes.")
 
 
 @router.get("/models")
