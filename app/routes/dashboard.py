@@ -837,12 +837,21 @@ class LLMRoutingUpdate(BaseModel):
     classification: Optional[str] = None
     skill_generation: Optional[str] = None
     multimodal_fallback: Optional[str] = None
+    # Checkbox "Mostrar contingência na rastreabilidade" (bloco Multimodal
+    # Fallback). Controla SOMENTE a nota VISÍVEL no painel do Workspace; a
+    # observabilidade (metadata) e os LOGs do fallback são SEMPRE gravados,
+    # independente deste flag. Persistido via settings_store, não save_routing
+    # (que só aceita strings provider/model).
+    fallback_show_in_trace: Optional[bool] = None
 
 
 @router.get("/dashboard/llm-routing")
 async def get_llm_routing():
     """Retorna o routing config atual + defaults + lista de task types."""
-    from app.llm_routing import load_routing, DEFAULT_ROUTING, TASK_TYPES, global_primary_routing
+    from app.llm_routing import (
+        load_routing, DEFAULT_ROUTING, TASK_TYPES, global_primary_routing,
+        fallback_show_in_trace,
+    )
     routing = await load_routing()
     # skill_generation: default efetivo segue o Modelo Primário global da
     # plataforma (não o hardcoded). Reflete no botão "padrões recomendados".
@@ -853,6 +862,10 @@ async def get_llm_routing():
     return {
         "routing": routing,
         "defaults": defaults,
+        # Flag do checkbox "Mostrar contingência na rastreabilidade" (bloco
+        # Multimodal Fallback). Default True = transparência. Só afeta a nota
+        # visível; observabilidade/LOGs do fallback são sempre registrados.
+        "fallback_show_in_trace": await fallback_show_in_trace(),
         "task_types": list(TASK_TYPES),
         "task_descriptions": {
             "tool_calling": "Uso de ferramentas (function calls). Pra tarefas complexas que precisam invocar APIs/MCPs externas. Default: GPT-OSS-120B (open-weight via hub interno).",
@@ -868,13 +881,38 @@ async def get_llm_routing():
 @router.put("/dashboard/llm-routing")
 async def put_llm_routing(data: LLMRoutingUpdate):
     """Atualiza routing config. Aceita subset (só keys não-None mudam).
-    Cada valor é validado como `provider/model` antes de persistir."""
-    from app.llm_routing import save_routing
-    payload = {k: v for k, v in data.model_dump().items() if v is not None}
-    if not payload:
+    Cada valor de roteamento é validado como `provider/model` antes de persistir.
+
+    `fallback_show_in_trace` (bool) é tratado à parte: persiste via settings_store
+    (não save_routing, que só aceita strings provider/model). Controla apenas a
+    nota visível no painel — observabilidade/LOGs do fallback são sempre gravados.
+    """
+    from app.llm_routing import (
+        save_routing, set_fallback_show_in_trace, fallback_show_in_trace,
+    )
+    raw = {k: v for k, v in data.model_dump().items() if v is not None}
+    # separa o flag booleano dos campos de roteamento (strings provider/model)
+    show_in_trace = raw.pop("fallback_show_in_trace", None)
+    if not raw and show_in_trace is None:
         raise HTTPException(400, "Nenhum campo para atualizar")
-    final = await save_routing(payload)
-    return {"routing": final, "updated": list(payload.keys())}
+    updated: list[str] = []
+    # save_routing({}) é no-op de escrita e só relê o estado atual mesclado com
+    # defaults — usamos isso pra sempre devolver `routing` mesmo quando só o flag
+    # mudou.
+    final = await save_routing(raw)
+    if raw:
+        updated.extend(raw.keys())
+    if show_in_trace is not None:
+        await set_fallback_show_in_trace(bool(show_in_trace))
+        updated.append("fallback_show_in_trace")
+        show_now = bool(show_in_trace)
+    else:
+        show_now = await fallback_show_in_trace()
+    return {
+        "routing": final,
+        "fallback_show_in_trace": show_now,
+        "updated": updated,
+    }
 
 
 @router.post("/eval-runs/execute")

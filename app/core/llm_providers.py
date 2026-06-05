@@ -21,6 +21,63 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+def is_llm_unreachable(exc: BaseException, _depth: int = 0) -> bool:
+    """True quando a falha é de ALCANCE do provider (rede/timeout/URL ausente),
+    NÃO um request malformado. Detector canônico, compartilhado pelo wizard
+    (``app/routes/wizard.py``) e pela cadeia de resiliência do runtime
+    (``app/agents/engine.py``).
+
+    Cobre os DOIS caminhos de chamada da plataforma:
+    - path httpx direto (``provider.generate`` dos OpenAI-compatible: Maritaca,
+      Ollama, GPT-OSS) → levanta ``httpx.ConnectError``/``TimeoutException``;
+    - path LangChain (``provider.get_langchain_llm().ainvoke``, usado pelo
+      harness em runtime) → o SDK ``openai`` envelopa a httpx em
+      ``openai.APIConnectionError`` (cujo ``str()`` é "Connection error.") /
+      ``openai.APITimeoutError``. ESTE é o caso do erro que o usuário viu no
+      Workspace e que um detector só-httpx NÃO pegaria.
+
+    Provider sem URL/key ("não configurado") também conta como inalcançável —
+    do ponto de vista do agente, ele não responde. Já erros de request
+    (401/404/429 → ``openai.APIStatusError``) retornam False de propósito: são
+    erro de configuração/uso que deve aparecer pro operador corrigir, não
+    disparar fallback silencioso que mascara o problema.
+
+    Anda na cadeia ``__cause__`` (profundidade limitada) porque o LangChain às
+    vezes re-levanta o erro do SDK encadeado.
+    """
+    # 1) httpx direto (path .generate dos providers OpenAI-compatible)
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout,
+                        httpx.ReadTimeout, httpx.PoolTimeout,
+                        httpx.TimeoutException)):
+        return True
+    # 2) SDK openai (path LangChain) — SÓ conexão/timeout. NÃO APIStatusError
+    #    (4xx/5xx): esses são request/serviço, não "não responde".
+    try:
+        import openai as _openai
+        if isinstance(exc, (_openai.APIConnectionError, _openai.APITimeoutError)):
+            return True
+    except Exception:
+        pass
+    msg = str(exc).lower()
+    # 3) provider sem URL/key configurada — inalcançável na prática.
+    #    GPTOSSProvider.generate levanta "url não configurada"; Azure/OpenAI
+    #    público levantam "não configurado" em get_langchain_llm().
+    if isinstance(exc, RuntimeError) and (
+        "url não configurada" in msg or "não configurado" in msg
+    ):
+        return True
+    # 4) fallback por string — "Connection error." do SDK openai, caso o tipo
+    #    escape (versões/wrappers diferentes do openai/langchain).
+    if "connection error" in msg:
+        return True
+    # 5) cadeia de causas — LangChain pode encadear o erro original do SDK.
+    if _depth < 4:
+        cause = getattr(exc, "__cause__", None)
+        if cause is not None and cause is not exc:
+            return is_llm_unreachable(cause, _depth + 1)
+    return False
+
+
 class LLMProvider(ABC):
     """Interface base para provedores de LLM.
 

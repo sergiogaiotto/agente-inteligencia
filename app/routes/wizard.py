@@ -23,11 +23,10 @@ Defaults sensatos por wizard:
 """
 import json
 import re
-import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
-from app.core.llm_providers import get_provider
+from app.core.llm_providers import get_provider, is_llm_unreachable
 from app.llm_routing import resolve_llm_for_task, load_routing
 import logging
 
@@ -131,18 +130,12 @@ async def _resolve_wizard_llm(data, route_name: str) -> tuple[str, str, str]:
 # plataforma. Se nem ele responder, devolvemos mensagem CLARA e ACIONÁVEL.
 
 def _is_llm_unreachable(exc: Exception) -> bool:
-    """True quando a falha é de ALCANCE do provider (não request malformado):
-    conexão/timeout de rede, ou URL do provider não configurada. Esses casos
-    merecem fallback + mensagem acionável; os demais seguem como 500.
+    """Wrapper fino — lógica canônica em
+    ``app.core.llm_providers.is_llm_unreachable`` (compartilhada com a cadeia
+    de resiliência do runtime do engine). Mantido como nome local pra não
+    quebrar os testes existentes do wizard e os call-sites abaixo.
     """
-    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout,
-                        httpx.ReadTimeout, httpx.PoolTimeout,
-                        httpx.TimeoutException)):
-        return True
-    # GPTOSSProvider.generate levanta RuntimeError quando oss{20,120}b_url vazio.
-    if isinstance(exc, RuntimeError) and "url não configurada" in str(exc).lower():
-        return True
-    return False
+    return is_llm_unreachable(exc)
 
 
 def _wizard_unreachable_message(provider: str, model: str) -> str:
