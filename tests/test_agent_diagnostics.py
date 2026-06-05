@@ -400,3 +400,83 @@ class TestAgentFormDiagnosticsPanel:
         assert "atenção" in src
         assert "&lt;50" in src
         assert "crítico" in src
+
+
+# ─── UI smoke: "IA, me ajude!" no Composer (slice atual) ──────────────
+
+
+def _form_html() -> str:
+    from pathlib import Path
+    return (
+        Path(__file__).resolve().parent.parent
+        / "app" / "templates" / "pages" / "agent_form.html"
+    ).read_text(encoding="utf-8")
+
+
+class TestComposerAiAssist:
+    """O Composer ganhou um botão "IA, me ajude!" que preenche um RASCUNHO dos
+    campos (missão/regras/fallback/regra de ouro) via /api/v1/wizard/compose,
+    ancorado no catálogo real. Smoke estrutural do HTML/JS Alpine."""
+
+    def test_botao_ia_me_ajude_presente(self):
+        src = _form_html()
+        assert "IA, me ajude!" in src
+
+    def test_estado_composeai_inicializado(self):
+        src = _form_html()
+        # State Alpine com os 4 campos do painel.
+        assert "composeAi: { intent: '', loading: false, error: '', isDraft: false }" in src
+
+    def test_metodo_compose_chama_endpoint(self):
+        src = _form_html()
+        assert "async composeWithAi()" in src
+        assert "/api/v1/wizard/compose" in src
+
+    def test_envia_catalogo_real_para_ancorar(self):
+        """Manda nomes de skills + agentes reais — mitiga alucinação de destino."""
+        src = _form_html()
+        assert "(this.availableSkills || []).map(s => s.name)" in src
+        assert "(this.availableAgents || []).map(a => a.name)" in src
+
+    def test_preenche_como_rascunho_nao_aplica(self):
+        """Preenche mission.* e marca isDraft; NÃO chama applyMissionComposer
+        nem mexe direto em form.system_prompt (humano no loop)."""
+        src = _form_html()
+        # bloco do composeWithAi seta o rascunho
+        start = src.index("async composeWithAi()")
+        end = src.index("composeAi.loading = false;", start)
+        block = src[start:end + 60]
+        assert "this.mission = {" in block
+        assert "this.composeAi.isDraft = true;" in block
+        assert "applyMissionComposer" not in block
+        assert "form.system_prompt" not in block
+
+    def test_afford_rascunho_revise_visivel(self):
+        """Affordance 'rascunho da IA — revise' gated por isDraft."""
+        src = _form_html()
+        assert "rascunho da IA — revise" in src
+        assert 'x-show="composeAi.isDraft' in src
+
+    def test_input_de_intencao_presente(self):
+        src = _form_html()
+        assert 'x-model="composeAi.intent"' in src
+        assert "composeAiPlaceholder()" in src
+
+    def test_loading_e_erro_no_painel(self):
+        src = _form_html()
+        # botão desabilita enquanto carrega; erro acionável renderiza
+        assert 'composeAi.loading || !composeAi.intent.trim()' in src
+        assert 'x-text="composeAi.error"' in src
+
+    def test_parsed_false_avisa_texto_livre(self):
+        """Quando a IA não devolve JSON (parsed=false), avisa o usuário."""
+        src = _form_html()
+        assert "d.parsed === false" in src
+
+    def test_reset_do_rascunho_ao_abrir_composer(self):
+        """openComposer limpa o estado do painel IA (não vaza rascunho antigo)."""
+        src = _form_html()
+        # Âncora na DEFINIÇÃO do método (com '{'), não no @click="openComposer()".
+        start = src.index("openComposer() {")
+        block = src[start:start + 400]
+        assert "this.composeAi = { intent: '', loading: false, error: '', isDraft: false };" in block
