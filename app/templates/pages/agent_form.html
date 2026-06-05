@@ -885,6 +885,33 @@
                 <button @click="composerOpen = false" type="button" class="text-surface-400 hover:text-brand-600 text-lg leading-none">×</button>
             </div>
             <div class="space-y-4 text-[12px]">
+                <!-- ✨ IA, me ajude! — gera um RASCUNHO dos campos abaixo a partir
+                     de uma intenção em linguagem natural, ANCORADO no catálogo real
+                     (skills + agentes). NÃO auto-aplica: preenche os campos para o
+                     usuário revisar. A "Verificação de roteamento" abaixo sinaliza
+                     destinos que ainda não existem (⚠ texto livre). -->
+                <div class="rounded-lg border border-red-200 bg-red-50/70 p-3">
+                    <div class="flex items-center justify-between mb-1.5">
+                        <span class="inline-flex items-center gap-1.5 text-[11px] font-bold text-red-700">✨ IA, me ajude!</span>
+                        <span x-show="composeAi.isDraft && !composeAi.error" class="text-[10px] font-medium text-red-500">rascunho da IA — revise</span>
+                    </div>
+                    <p class="text-[10px] text-surface-500 mb-2" x-text="composeAiHint()"></p>
+                    <div class="flex items-start gap-2">
+                        <textarea x-model="composeAi.intent" rows="2"
+                                  @keydown.meta.enter.prevent="composeWithAi()" @keydown.ctrl.enter.prevent="composeWithAi()"
+                                  :placeholder="composeAiPlaceholder()"
+                                  class="flex-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-[12px] text-brand-900 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100"></textarea>
+                        <button @click="composeWithAi()" type="button" :disabled="composeAi.loading || !composeAi.intent.trim()"
+                                class="shrink-0 inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-2 text-[12px] font-medium text-white hover:bg-red-700 disabled:opacity-40 transition-colors">
+                            <span x-show="!composeAi.loading">Gerar rascunho</span>
+                            <span x-show="composeAi.loading">Gerando…</span>
+                        </button>
+                    </div>
+                    <p x-show="composeAi.error" x-text="composeAi.error" class="mt-1.5 text-[11px] text-rose-600"></p>
+                    <p x-show="composeAi.isDraft && !composeAi.error" class="mt-1.5 text-[10px] text-red-600 leading-snug">
+                        ✓ Rascunho preenchido abaixo. Revise missão, regras e destinos antes de aplicar — a IA pode sugerir destinos que ainda não existem (confira em "Verificação de roteamento").
+                    </p>
+                </div>
                 <!-- Missão (obrigatório) -->
                 <div>
                     <label class="block text-[11px] font-semibold text-brand-700 mb-1" x-text="composerMissionLabel()"></label>
@@ -1012,6 +1039,10 @@ function agentForm(editId) {
             fallback: '',                       // política de fallback / entradas ambíguas
             goldenRule: true,                   // regra de ouro (só AOBD, default ON)
         },
+        // "IA, me ajude!" — gera um RASCUNHO da missão/regras/fallback a partir
+        // de uma intenção em linguagem natural (POST /wizard/compose), ancorado
+        // no catálogo real. isDraft=true após preencher (afford. "revise").
+        composeAi: { intent: '', loading: false, error: '', isDraft: false },
         // PR4 — Sincronizar com AI Mesh. As regras "delegar a" que apontam pra um
         // AGENTE real viram conexões orquestrador→agente (skills/texto livre são
         // ignorados — não são nós de mesh). Agente novo: alvos ficam "staged" e
@@ -1455,7 +1486,60 @@ function agentForm(editId) {
         openComposer() {
             // v1 sempre abre limpo — não faz parse reverso do System Prompt.
             this.mission = { statement: '', rules: [{ when: '', target: '' }], fallback: '', goldenRule: true };
+            this.composeAi = { intent: '', loading: false, error: '', isDraft: false };
             this.composerOpen = true;
+        },
+        composeAiHint() {
+            return this.form.kind === 'router'
+                ? 'Descreva o que este roteador recebe e classifica — a IA propõe missão, categorias e destinos com base nas suas skills/agentes.'
+                : 'Descreva o que este orquestrador coordena — a IA propõe missão, regras de delegação e fallback com base nas suas skills/agentes.';
+        },
+        composeAiPlaceholder() {
+            return this.form.kind === 'router'
+                ? 'Ex.: recebo mensagens de clientes e preciso separar cobrança, suporte técnico e vendas.'
+                : 'Ex.: coordeno o atendimento ao cliente, decidindo entre cobrança, suporte técnico e vendas.';
+        },
+        async composeWithAi() {
+            const intent = (this.composeAi.intent || '').trim();
+            if (!intent || this.composeAi.loading) return;
+            this.composeAi.loading = true;
+            this.composeAi.error = '';
+            try {
+                // Aterra a IA no catálogo REAL: nomes de skills vinculáveis +
+                // agentes existentes. Reduz alucinação de destinos inexistentes.
+                const r = await api.post('/api/v1/wizard/compose', {
+                    intent,
+                    kind: this.form.kind,
+                    skills: (this.availableSkills || []).map(s => s.name).filter(Boolean),
+                    agents: (this.availableAgents || []).map(a => a.name).filter(Boolean),
+                    task_type: 'reasoning',
+                });
+                const d = (r && r.draft) ? r.draft : {};
+                // Preenche os campos como RASCUNHO (não aplica ao System Prompt).
+                const rules = Array.isArray(d.rules)
+                    ? d.rules.map(x => ({ when: (x.when || ''), target: (x.target || '') })).filter(x => x.when || x.target)
+                    : [];
+                this.mission = {
+                    statement: d.statement || '',
+                    rules: rules.length ? rules : [{ when: '', target: '' }],
+                    fallback: d.fallback || '',
+                    goldenRule: (typeof d.goldenRule === 'boolean') ? d.goldenRule : (this.form.kind !== 'router'),
+                };
+                this.composeAi.isDraft = true;
+                // parsed=false → a IA não devolveu JSON estruturado; avisa o usuário.
+                if (d.parsed === false) {
+                    showToast('A IA respondeu em texto livre — revisei como missão; ajuste as regras manualmente', 'error');
+                } else {
+                    showToast('Rascunho da IA preenchido — revise antes de aplicar');
+                }
+            } catch (e) {
+                // Mensagem ACIONÁVEL do backend (ex.: 503 "modelo inacessível —
+                // conecte à VPN ou ajuste o Roteamento LLM"); default em rede pura.
+                const detail = (e && e.message) ? String(e.message).trim() : '';
+                this.composeAi.error = '⚠ ' + (detail || 'Não consegui gerar agora. Tente novamente em instantes.');
+            } finally {
+                this.composeAi.loading = false;
+            }
         },
         addMissionRule() {
             this.mission.rules.push({ when: '', target: '' });
