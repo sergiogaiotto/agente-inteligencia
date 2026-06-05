@@ -240,3 +240,90 @@ class TestGoldenRuleScopedToAobd:
         """Roteador não tem regra de ouro no scaffold — checkbox só para AOBD."""
         assert 'x-show="form.kind === \'aobd\'"' in html
         assert 'x-model="mission.goldenRule"' in html
+
+
+class TestComposerTargetFilters:
+    """2026-06-05 (Melhoria UI): filtros no alvo "delegar a"/"encaminhar para" dos
+    DOIS modais (Missão do orquestrador + Triagem do roteador — mesmo markup):
+    - checkbox "incluir inativos" (default OFF → sugere só ATIVOS; antes o datalist
+      mostrava inativos sem querer, dava pra rotear pra agente desativado);
+    - filtro de DOMÍNIOS multi-seleção em chips, derivado dos próprios agentes-alvo
+      (não dos domínios globais), some quando há <2 domínios distintos.
+    É filtro de SUGESTÃO: texto livre segue aceito e resolve normalmente — por isso
+    o dry-run ganha um badge "inativo" quando o alvo resolvido está desativado
+    (honestidade / sem falsa confiança). 100% frontend (Alpine só roda no browser →
+    travamos contratos ESTRUTURAIS no HTML).
+    """
+
+    # --- estado ---
+    @pytest.mark.parametrize("marker", ["composerIncludeInactive: false,", "composerDomainFilter: [],"])
+    def test_state_props_defined(self, html, marker):
+        assert marker in html, f"estado {marker!r} ausente no x-data()"
+
+    # --- getters / helpers ---
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "_agentDomains(a) {",
+            "get composerDomains() {",
+            "get composerTargetAgents() {",
+            "toggleComposerDomain(d) {",
+        ],
+    )
+    def test_methods_defined(self, html, method):
+        assert method in html, f"método/getter {method!r} ausente no x-data()"
+
+    def test_agent_domains_splits_csv(self, html):
+        # domínio do agente é CSV ("Cobrança, Suporte") → lista
+        assert "return ((a && a.domain) || '').split(',').map(d => d.trim()).filter(Boolean);" in html
+
+    def test_domains_derived_from_target_agents_not_global(self, html):
+        # composerDomains itera os agentes-alvo (não /api/v1/domains)
+        assert "for (const d of this._agentDomains(a)) set.add(d);" in html
+
+    # --- lógica de filtro ---
+    def test_active_only_by_default(self, html):
+        assert "if (!active && !this.composerIncludeInactive) return false;" in html
+        assert "const active = (a.status || 'active') === 'active';" in html
+
+    def test_domain_filter_is_or_match(self, html):
+        # passa se casar ≥1 domínio selecionado (multi-seleção = OR)
+        assert "if (!ds.some(d => dom.includes(d))) return false;" in html
+
+    def test_resolution_unaffected_by_filter(self, html):
+        # texto livre resolve contra TODOS os agentes (filtro é só de sugestão)
+        assert "this.availableAgents.find(a => this._normName(a.name) === n)" in html
+
+    # --- datalist consome a lista FILTRADA ---
+    def test_datalist_iterates_filtered_list(self, html):
+        assert 'x-for="ag in composerTargetAgents"' in html
+
+    # --- UI: checkbox + chips ---
+    def test_include_inactive_checkbox_wired(self, html):
+        assert 'x-model="composerIncludeInactive"' in html
+
+    def test_domain_chips_gated_by_count(self, html):
+        # só renderiza com ≥2 domínios distintos (senão é ruído)
+        assert 'x-if="composerDomains.length >= 2"' in html
+
+    def test_domain_chip_toggles_and_highlights(self, html):
+        assert '@click="toggleComposerDomain(d)"' in html
+        assert "composerDomainFilter.includes(d) ? 'bg-brand-600 text-white border-brand-600'" in html
+
+    def test_domain_clear_button(self, html):
+        assert '@click="composerDomainFilter = []"' in html
+
+    # --- dry-run: flag + badge "inativo" ---
+    def test_checks_compute_inactive_flag(self, html):
+        assert "const inactive = !!(agent && (agent.status || 'active') !== 'active');" in html
+        assert "cls, routing, expr, inactive };" in html
+
+    def test_inactive_badge_rendered(self, html):
+        assert 'x-show="chk.inactive"' in html
+        assert ">inativo</span>" in html
+        assert "bg-red-100 text-red-700" in html
+
+    def test_palette_no_purple_tones(self, html):
+        # constraint do projeto: roxo proibido (usar vermelho/branco)
+        for banned in ("violet", "fuchsia", "purple"):
+            assert banned not in html, f"tom proibido {banned!r} no template"
