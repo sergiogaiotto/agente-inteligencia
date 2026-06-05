@@ -2470,9 +2470,10 @@ async def execute_pipeline(
     if not entry_agent:
         raise ValueError(f"Agente '{entry_agent_id}' não encontrado.")
 
-    chain = await _resolve_ordered_chain(entry_agent_id)
+    chain, parent_of = await _resolve_ordered_chain_with_parents(entry_agent_id)
     if not chain:
         chain = [entry_agent_id]
+        parent_of = {}
 
     async def _emit(event: dict) -> None:
         if progress_callback is None:
@@ -2498,6 +2499,15 @@ async def execute_pipeline(
     last_result = None
     master_interaction_id = None
     child_interaction_ids = []
+    # Tracking por-id pro roteamento contra o PARENT REAL (fan-out / branch).
+    # outputs_by_id[id]/final_states_by_id[id]/names_by_id[id] guardam o
+    # resultado de cada agente `completed`. Usados quando o parent de um nó
+    # NÃO é o irmão anterior na lista BFS (fan-out 1→N): aí o gate/scope/input
+    # avaliam contra o output do PARENT, não do anterior. Cadeia linear não
+    # usa esses mapas (parent == anterior) → comportamento byte-idêntico.
+    outputs_by_id: dict = {}
+    final_states_by_id: dict = {}
+    names_by_id: dict = {}
 
     for i, agent_id in enumerate(chain):
         agent = await agents_repo.find_by_id(agent_id)
@@ -2566,18 +2576,54 @@ async def execute_pipeline(
             # O próximo agente receberá o input original
             continue
 
-        # Conditional routing (2026-06-01): se a conexão upstream→current
-        # é do tipo `conditional` e a expr configurada avaliou false contra
-        # o output do agente anterior, skipa este agente — passthrough.
-        # Decisão de design: "gate de continuação" e não "branch", pra não
-        # exigir refator do BFS chain. Operador implementa branch real
-        # criando 2 conditionals do mesmo nó com exprs opostas.
-        if i > 0 and last_result:
+        # ══════════════════════════════════════════════════════
+        # UPSTREAM REAL (parent) — 2026-06-05
+        # Resolve contra QUEM este nó avalia gate/scope/input:
+        # - Cadeia linear: o parent É o anterior na lista BFS (chain[i-1]).
+        #   Usa `last_result` → byte-idêntico ao comportamento histórico.
+        # - Fan-out (1 source → N filhos): o parent REAL (parent_of[agent_id])
+        #   difere do irmão anterior na lista. Avaliamos contra o output DO
+        #   PARENT (outputs_by_id) — é isso que habilita roteamento 1-de-N.
+        # Fallback p/ linear quando o parent não produziu output
+        # (passthrough/inativo): fail-safe, nunca pior que o antigo.
+        # ══════════════════════════════════════════════════════
+        parent_id = parent_of.get(agent_id)
+        if (
+            parent_id is not None
+            and i > 0
+            and parent_id != chain[i - 1]
+            and parent_id in outputs_by_id
+        ):
+            upstream_id = parent_id
+            upstream_output = outputs_by_id[parent_id]
+            upstream_final_state = final_states_by_id.get(parent_id, "")
+            upstream_name = names_by_id.get(parent_id, "")
+            have_upstream = True
+        elif i > 0 and last_result:
+            upstream_id = chain[i - 1]
+            upstream_output = last_result.get("output", "")
+            upstream_final_state = last_result.get("final_state", "")
+            upstream_name = steps[-1].get("agent_name", "") if steps else ""
+            have_upstream = True
+        else:
+            upstream_id = None
+            upstream_output = ""
+            upstream_final_state = ""
+            upstream_name = ""
+            have_upstream = False
+
+        # Conditional routing (2026-06-01; parent-aware 2026-06-05): se a
+        # conexão parent→current é `conditional` e a expr avaliou false contra
+        # o output do PARENT (+ a solicitação original do usuário via `input`),
+        # skipa este agente — passthrough. Em fan-out, cada filho avalia contra
+        # o MESMO source comum → 1-de-N elege o ramo certo (branch real).
+        if have_upstream:
             skip_by_conditional = await _should_skip_conditional(
-                source_id=chain[i - 1],
+                source_id=upstream_id,
                 target_id=agent_id,
-                last_output=last_result.get("output", ""),
-                last_final_state=last_result.get("final_state", ""),
+                last_output=upstream_output,
+                last_final_state=upstream_final_state,
+                user_input=user_input,
             )
             if skip_by_conditional:
                 steps.append({
@@ -2586,7 +2632,7 @@ async def execute_pipeline(
                     "agent_kind": agent.get("kind", ""),
                     "agent_model": agent.get("model", ""),
                     "status": "skipped_conditional",
-                    "output": last_result.get("output", ""),
+                    "output": upstream_output,
                     "final_state": "SkippedConditional",
                     "duration_ms": 0,
                     "evidence_score": 0,
@@ -2618,12 +2664,13 @@ async def execute_pipeline(
         # - isolated: próximo agente recebe SÓ user_input, sem prefix
         # Fail-OPEN no runtime — ver `_resolve_context_scope`.
         scope_resolution = None
-        if i > 0 and last_result:
+        if have_upstream:
             scope_resolution = await _resolve_context_scope(
-                source_id=chain[i - 1],
+                source_id=upstream_id,
                 target_id=agent_id,
-                last_output=last_result.get("output", ""),
-                last_final_state=last_result.get("final_state", ""),
+                last_output=upstream_output,
+                last_final_state=upstream_final_state,
+                user_input=user_input,
             )
             if scope_resolution["skip_prefix"]:
                 # mode=isolated → próximo agente recebe SÓ a solicitação
@@ -2632,7 +2679,7 @@ async def execute_pipeline(
             else:
                 scoped_output = scope_resolution["output"]
                 current_input = (
-                    f"## Contexto do agente anterior ({steps[-1].get('agent_name','')}):\n"
+                    f"## Contexto do agente anterior ({upstream_name}):\n"
                     f"{scoped_output}\n\n"
                     f"## Solicitação original:\n{user_input}"
                 )
@@ -2642,7 +2689,7 @@ async def execute_pipeline(
                 await _emit({
                     "type": "context_scope_applied",
                     "step_index": i,
-                    "source_id": chain[i - 1],
+                    "source_id": upstream_id,
                     "target_id": agent_id,
                     "mode": scope_resolution["mode"],
                     "chars_before": scope_resolution["chars_before"],
@@ -2667,8 +2714,8 @@ async def execute_pipeline(
             pipeline_ctx = None
         elif scope_resolution:
             pipeline_ctx = scope_resolution["output"]
-        elif i > 0 and last_result:
-            pipeline_ctx = last_result.get("output", "")
+        elif have_upstream:
+            pipeline_ctx = upstream_output
         else:
             pipeline_ctx = None
 
@@ -2706,6 +2753,12 @@ async def execute_pipeline(
                 "interaction_id": iid,
             })
             last_result = result
+            # Tracking por-id pro roteamento parent-aware (fan-out): registra
+            # output/estado/nome deste nó pra que filhos cujo parent NÃO é o
+            # irmão anterior avaliem contra o output correto.
+            outputs_by_id[agent_id] = result.get("output", "")
+            final_states_by_id[agent_id] = result.get("final_state", "")
+            names_by_id[agent_id] = agent.get("name", "")
             await _emit({
                 "type": "agent_done",
                 "step_index": i,
@@ -2778,12 +2831,29 @@ async def execute_pipeline(
     passthrough_count = sum(1 for s in steps if s.get("status") == "passthrough")
     executed_count = sum(1 for s in steps if s.get("status") == "completed")
 
+    # Tipo de conexão REAL por nó (display honesto: não cravar "sequential"
+    # quando a aresta parent→nó é `conditional`). Lookup leve por step, contra
+    # o parent real. Fail-open → "sequential" se a busca falhar.
+    from app.core.database import mesh_repo as _mesh_repo_disp
+    conn_type_by_id: dict = {}
+    for s in steps:
+        _aid = s.get("agent_id", "")
+        _pid = parent_of.get(_aid)
+        if not _pid:
+            continue
+        try:
+            _conns = await _mesh_repo_disp.find_all(source_agent_id=_pid, limit=20)
+            _c = next((c for c in _conns if c.get("target_agent_id") == _aid), None)
+            conn_type_by_id[_aid] = (_c or {}).get("connection_type", "sequential")
+        except Exception:
+            conn_type_by_id[_aid] = "sequential"
+
     pipeline_mesh = [
         {
             "id": s.get("agent_id",""), "name": s.get("agent_name",""),
             "kind": s.get("agent_kind",""), "model": s.get("agent_model",""),
             "role": "entry_point" if idx==0 else "downstream",
-            "connection": "sequential",
+            "connection": conn_type_by_id.get(s.get("agent_id",""), "sequential"),
             "passthrough": s.get("status") == "passthrough",
         }
         for idx, s in enumerate(steps) if s.get("status") in ("completed", "passthrough")
@@ -2863,6 +2933,7 @@ def _get_conditional_jinja_env():
 def _build_conditional_context(
     output: str | None = None,
     final_state: str | None = None,
+    user_input: str | None = None,
 ) -> dict:
     """Monta o dict de variáveis disponíveis para expressões condicionais.
 
@@ -2883,11 +2954,24 @@ def _build_conditional_context(
     - `contains_url` (bool): output menciona URL (http:// ou https://)
     - `contains_pdf` (bool): output menciona pdf
     - `lines_count` (int): número de linhas (\\n + 1)
+
+    Vars (2026-06-05 — roteamento 1-de-N / fan-out):
+    - `input` (str): solicitação ORIGINAL do usuário (entrada do pipeline)
+    - `input_lower` (str): input em lowercase
+
+    Por que `input`: o roteamento condicional (fan-out AOBD/SR → N SAs)
+    quase sempre quer ramificar pela PERGUNTA do usuário ("quando o usuário
+    pede X → delegar ao SA-X"), não pelo texto que o agente anterior
+    devolveu. Sem `input`, a expr derivada do "quando …" só casaria se o
+    upstream ecoasse a palavra-chave no output — frágil. Aditivo: exprs
+    antigas (sobre `output`) continuam idênticas.
     """
     out = output or ""
     out_lower = out.lower()
     fs = final_state or ""
     fs_lower = fs.lower()
+    inp = user_input or ""
+    inp_lower = inp.lower()
     return {
         "output": out,
         "output_lower": out_lower,
@@ -2904,6 +2988,8 @@ def _build_conditional_context(
         "contains_url": "http://" in out_lower or "https://" in out_lower,
         "contains_pdf": ".pdf" in out_lower or " pdf " in out_lower,
         "lines_count": out.count("\n") + 1 if out else 0,
+        "input": inp,
+        "input_lower": inp_lower,
     }
 
 
@@ -2923,6 +3009,8 @@ CONDITIONAL_VARS_META: list[dict] = [
     {"name": "contains_url", "type": "bool", "desc": "True se output contém http:// ou https://"},
     {"name": "contains_pdf", "type": "bool", "desc": "True se output menciona pdf"},
     {"name": "lines_count", "type": "int", "desc": "Quantas linhas tem output"},
+    {"name": "input", "type": "str", "desc": "Solicitação original do usuário (entrada do pipeline) — útil p/ rotear pela pergunta"},
+    {"name": "input_lower", "type": "str", "desc": "input em lowercase (case-insensitive matching da pergunta do usuário)"},
 ]
 
 
@@ -2945,6 +3033,7 @@ async def _should_skip_conditional(
     target_id: str,
     last_output: str,
     last_final_state: str,
+    user_input: str = "",
 ) -> bool:
     """True se a conexão source→target é `connection_type=conditional` e
     a expressão configurada em `config.expr` avaliou para `False`.
@@ -2987,7 +3076,9 @@ async def _should_skip_conditional(
         result = _eval_conditional(
             expr,
             _build_conditional_context(
-                output=last_output, final_state=last_final_state
+                output=last_output,
+                final_state=last_final_state,
+                user_input=user_input,
             ),
         )
     except Exception as e:
@@ -3052,6 +3143,7 @@ async def _resolve_context_scope(
     target_id: str,
     last_output: str,
     last_final_state: str,
+    user_input: str = "",
 ) -> dict:
     """Resolve a política de scope da conexão `source→target` e aplica-a
     ao `last_output`. Retorna dict com:
@@ -3167,7 +3259,9 @@ async def _resolve_context_scope(
         scoped_output = _apply_context_scope_template(
             template,
             _build_conditional_context(
-                output=last_output, final_state=last_final_state
+                output=last_output,
+                final_state=last_final_state,
+                user_input=user_input,
             ),
         )
     except Exception as e:
@@ -3211,19 +3305,34 @@ async def _resolve_context_scope(
     }
 
 
-async def _resolve_ordered_chain(entry_agent_id: str) -> list:
-    """Resolve cadeia ordenada downstream a partir do agente de entrada (BFS).
+async def _resolve_ordered_chain_with_parents(entry_agent_id: str) -> tuple[list, dict]:
+    """Resolve a cadeia ordenada downstream (BFS) **e** o mapa `parent_of`.
+
+    Devolve `(chain, parent_of)`:
+    - `chain`: agent_ids em ordem BFS a partir do entry.
+    - `parent_of`: `{child_id: source_id}` — o agente que DESCOBRIU cada
+      filho (a aresta real `source→child` que o trouxe à cadeia). O entry
+      é raiz e não aparece como chave.
 
     Importante: ESTA função NÃO consulta `connection_type` — ela devolve
     a topologia completa (todos os possíveis filhos). A decisão de pular
     nós condicionais é tomada em runtime por `execute_pipeline` via
-    `_should_skip_conditional`, depois que o output do agente anterior
-    está disponível.
+    `_should_skip_conditional`, contra o PARENT REAL (`parent_of`) e o
+    output DELE — habilitando roteamento 1-de-N (fan-out / branch), não só
+    cadeia linear.
+
+    Invariante útil do BFS: como o source é visitado antes de qualquer
+    filho, `parent_of[child]` sempre aponta pra um nó de índice MENOR na
+    chain. Logo, ao processar um filho em runtime, o output do parent já
+    foi computado. Em fan-out (1 source → N filhos), todos os N recebem o
+    MESMO `parent_of` (o source comum) — e o gate de cada um avalia contra
+    o output do source, não do irmão anterior na lista (que era o bug).
     """
     from app.core.database import mesh_repo
     chain = [entry_agent_id]
     visited = {entry_agent_id}
     queue = [entry_agent_id]
+    parent_of: dict = {}
     while queue:
         current = queue.pop(0)
         conns = await mesh_repo.find_all(source_agent_id=current, limit=20)
@@ -3232,5 +3341,17 @@ async def _resolve_ordered_chain(entry_agent_id: str) -> list:
             if tid and tid not in visited:
                 visited.add(tid)
                 chain.append(tid)
+                parent_of[tid] = current
                 queue.append(tid)
+    return chain, parent_of
+
+
+async def _resolve_ordered_chain(entry_agent_id: str) -> list:
+    """Compat: devolve só a chain BFS (sem `parent_of`).
+
+    Mantida por retrocompatibilidade; delega a
+    `_resolve_ordered_chain_with_parents`. Call-sites que precisam rotear
+    contra o parent real devem usar a versão `_with_parents`.
+    """
+    chain, _ = await _resolve_ordered_chain_with_parents(entry_agent_id)
     return chain

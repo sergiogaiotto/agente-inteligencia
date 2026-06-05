@@ -75,8 +75,8 @@ class TestTargetClassification:
 
     def test_agent_targets_are_unique(self, html):
         """missionAgentTargets dedupa por id (não cria conexão duplicada)."""
-        assert "const seen = new Set();" in html
-        assert "if (a && !seen.has(a.id))" in html
+        assert "const seen = new Map();" in html
+        assert "if (!seen.has(a.id))" in html
 
 
 class TestMeshApiUsage:
@@ -85,7 +85,8 @@ class TestMeshApiUsage:
 
     def test_connection_payload_shape(self, html):
         assert "source_agent_id: sourceId, target_agent_id: t.id," in html
-        assert "connection_type: 'sequential', config: '{}'," in html
+        # 2026-06-05: tipo/config agora vêm de cada target (conditional/sequential)
+        assert "connection_type, config," in html
 
     def test_dedup_reads_topology(self, html):
         assert "api.get('/api/v1/mesh/topology')" in html
@@ -161,3 +162,45 @@ class TestDryRunUI:
     def test_new_agent_hint(self, html):
         assert 'x-show="!isEdit && missionAgentTargets.length"' in html
         assert "as conexões serão criadas no AI Mesh ao salvar" in html
+
+
+class TestConditionalRoutingGeneration:
+    """2026-06-05 (Fix completo Composer+motor): regra COM "quando" vira aresta
+    CONDITIONAL (roteamento 1-de-N), sem "quando" vira SEQUENTIAL. A expr é
+    derivada das keywords do gatilho e casada contra `input_lower` (a pergunta
+    do usuário) — não contra o output do agente anterior."""
+
+    def test_derive_expr_helper_defined(self, html):
+        assert "_deriveConditionalExpr(when) {" in html
+        assert "_stopwords() {" in html
+
+    def test_expr_matches_user_input_not_output(self, html):
+        # keywords casam contra input_lower (pergunta do usuário)
+        assert "in input_lower" in html
+
+    def test_targets_carry_connection_type_and_expr(self, html):
+        assert "connection_type: conditional ? 'conditional' : 'sequential'," in html
+        assert "s.exprs.map(e => `(${e})`).join(' or ')" in html
+
+    def test_rule_without_when_marks_unconditional(self, html):
+        # qualquer regra sem "quando"/expr torna o alvo incondicional (sequential)
+        assert "slot.unconditional = true;" in html
+
+    def test_create_uses_per_target_type_and_config(self, html):
+        assert "const connection_type = t.connection_type || 'sequential';" in html
+        assert "JSON.stringify({ expr: t.expr })" in html
+
+    def test_summary_reports_conditional_and_sequential_counts(self, html):
+        assert "condicional(is)" in html
+        assert "sequencial(is)" in html
+
+    def test_dry_run_shows_routing_badge(self, html):
+        assert "chk.routing === 'conditional' ? 'bg-sky-100 text-sky-700'" in html
+        assert "'→ sequencial'" in html
+
+    def test_routing_rationale_exposed_in_tooltip(self, html):
+        # rationale visível (sem falsa confiança): a expr derivada aparece no title
+        assert "só roteia quando: ' + chk.expr" in html
+
+    def test_legend_explains_conditional_vs_sequential(self, html):
+        assert "roteia 1-de-N pela pergunta do usuário" in html

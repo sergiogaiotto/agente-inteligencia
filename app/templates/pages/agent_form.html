@@ -970,9 +970,19 @@
                                       :class="chk.cls === 'agent' ? 'bg-emerald-100 text-emerald-700' : (chk.cls === 'skill' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700')"
                                       x-text="chk.cls === 'agent' ? '✓ agente' : (chk.cls === 'skill' ? '🔗 skill' : '⚠ texto livre')"></span>
                                 <span class="text-brand-900 font-mono truncate" x-text="chk.target"></span>
+                                <span x-show="chk.cls === 'agent'"
+                                      class="ml-auto inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium shrink-0"
+                                      :class="chk.routing === 'conditional' ? 'bg-sky-100 text-sky-700' : 'bg-surface-200 text-surface-600'"
+                                      x-text="chk.routing === 'conditional' ? '⤿ condicional' : '→ sequencial'"
+                                      :title="chk.routing === 'conditional' ? ('Aresta condicional — só roteia quando: ' + chk.expr) : 'Aresta sequencial (sem \'quando\' → sempre roteia)'"></span>
                             </div>
                         </template>
                     </div>
+                    <p class="mt-1.5 text-[10px] text-surface-400 leading-snug">
+                        Regra <b>com "quando"</b> vira aresta <span class="text-sky-700 font-medium">condicional</span>
+                        (roteia 1-de-N pela pergunta do usuário); <b>sem "quando"</b> vira <span class="text-surface-600 font-medium">sequencial</span>
+                        (sempre roteia). A expressão derivada é editável depois no AI Mesh.
+                    </p>
                     <button @click="syncMissionToMesh()" type="button" :disabled="meshSyncing || !missionAgentTargets.length"
                             class="mt-2 inline-flex items-center gap-1 rounded-lg bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-40 transition-colors">
                         <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z"/></svg>
@@ -1618,6 +1628,40 @@ function agentForm(editId) {
         },
         // ─── PR4: dry-run de roteamento + Sincronizar com AI Mesh ─────────
         _normName(s) { return (s || '').trim().toLowerCase(); },
+        // ─── Roteamento condicional (2026-06-05): deriva a expr Jinja do "quando" ─
+        _stopwords() {
+            // Stopwords PT/EN comuns — removidas pra sobrar só termos com sinal.
+            // Inclui palavras de "gatilho" frequentes ("quando", "cliente", "pede")
+            // que não discriminam um ramo do outro.
+            if (!this._stopwordsCache) {
+                this._stopwordsCache = new Set((
+                    'a o os as um uma uns umas de do da dos das em no na nos nas e ou que ' +
+                    'qual quais quando quanto como onde porque por para pra pro com sem se ' +
+                    'sobre ao aos a as the of in on to for and or what when which how where ' +
+                    'is are be meu minha seu sua melhor forma modo jeito caso cliente usuario ' +
+                    'usuário pede pedir quer querer preciso necessito sobre tipo algo isso'
+                ).split(/\s+/));
+            }
+            return this._stopwordsCache;
+        },
+        _deriveConditionalExpr(when) {
+            // Deriva uma expr Jinja best-effort a partir do texto livre do "quando".
+            // Casa palavras-chave do gatilho contra `input_lower` (a PERGUNTA do
+            // usuário) — que é o que decide o ramo num fan-out 1-de-N. Editável
+            // depois no AI Mesh. Sem keywords úteis → '' (a aresta vira sequential).
+            const raw = (when || '').toLowerCase();
+            const tokens = raw
+                .replace(/[^\p{L}\p{N}\s]/gu, ' ')   // tira pontuação, mantém acentos
+                .split(/\s+/)
+                .filter(t => t.length > 2 && !this._stopwords().has(t));
+            const seen = new Set(); const kw = [];
+            for (const t of tokens) {
+                if (!seen.has(t)) { seen.add(t); kw.push(t); }
+                if (kw.length >= 5) break;
+            }
+            if (!kw.length) return '';
+            return kw.map(t => `'${t}' in input_lower`).join(' or ');
+        },
         resolveAgentByName(name) {
             // Casa o alvo "delegar a" com um agente real (match normalizado).
             const n = this._normName(name);
@@ -1635,18 +1679,46 @@ function agentForm(editId) {
         },
         get missionRuleChecks() {
             // Linhas com alvo preenchido, classificadas — alimenta o dry-run.
+            // routing: 'conditional' quando o alvo é agente real E há "quando"
+            // com keywords úteis; senão 'sequential'. expr é a regra derivada
+            // (exposta no tooltip — rationale visível, sem falsa confiança).
             return (this.mission.rules || [])
                 .filter(r => (r.target || '').trim())
-                .map(r => ({ when: (r.when || '').trim(), target: (r.target || '').trim(), cls: this.classifyTarget(r.target) }));
+                .map(r => {
+                    const when = (r.when || '').trim();
+                    const cls = this.classifyTarget(r.target);
+                    const expr = this._deriveConditionalExpr(when);
+                    const routing = (cls === 'agent' && when && expr) ? 'conditional' : 'sequential';
+                    return { when, target: (r.target || '').trim(), cls, routing, expr };
+                });
         },
         get missionAgentTargets() {
             // Alvos únicos que resolvem pra agente real (candidatos a conexão).
-            const seen = new Set(); const out = [];
+            // Carrega o "quando" de cada regra → aresta CONDITIONAL com expr
+            // derivada (roteamento 1-de-N). Regra sem "quando" → SEQUENTIAL
+            // (sempre roda). Mesmo agente em N regras: OR das exprs; QUALQUER
+            // regra sem condição torna a aresta incondicional (sequential).
+            const seen = new Map(); const out = [];
             for (const r of (this.mission.rules || [])) {
                 const a = this.resolveAgentByName(r.target);
-                if (a && !seen.has(a.id)) { seen.add(a.id); out.push({ id: a.id, name: a.name }); }
+                if (!a) continue;
+                const when = (r.when || '').trim();
+                const expr = this._deriveConditionalExpr(when);
+                if (!seen.has(a.id)) {
+                    const slot = { id: a.id, name: a.name, exprs: [], unconditional: false };
+                    seen.set(a.id, slot); out.push(slot);
+                }
+                const slot = seen.get(a.id);
+                if (!when || !expr) slot.unconditional = true; else slot.exprs.push(expr);
             }
-            return out;
+            return out.map(s => {
+                const conditional = !s.unconditional && s.exprs.length > 0;
+                return {
+                    id: s.id, name: s.name,
+                    connection_type: conditional ? 'conditional' : 'sequential',
+                    expr: conditional ? s.exprs.map(e => `(${e})`).join(' or ') : '',
+                };
+            });
         },
         async _existingDownstreamIds(sourceId) {
             // Agentes já conectados a partir deste orquestrador (dedup do sync).
@@ -1657,20 +1729,32 @@ function agentForm(editId) {
         },
         async _createMeshConnections(sourceId, targets) {
             // POST individual por conexão; tolera falha parcial e reporta agregado.
-            let ok = 0; const failed = [];
+            // connection_type e config (expr) vêm de cada target: regra com
+            // "quando" vira CONDITIONAL (1-de-N) com config={"expr": "<jinja>"},
+            // sem "quando" vira SEQUENTIAL com config '{}'.
+            let ok = 0; let conditional = 0; let sequential = 0; const failed = [];
             for (const t of targets) {
                 try {
+                    const connection_type = t.connection_type || 'sequential';
+                    const config = (connection_type === 'conditional' && t.expr)
+                        ? JSON.stringify({ expr: t.expr })
+                        : '{}';
                     await api.post('/api/v1/mesh/connections', {
                         source_agent_id: sourceId, target_agent_id: t.id,
-                        connection_type: 'sequential', config: '{}',
+                        connection_type, config,
                     });
                     ok++;
+                    if (connection_type === 'conditional') conditional++; else sequential++;
                 } catch (e) { failed.push(t.name); }
             }
-            return { ok, failed };
+            return { ok, failed, conditional, sequential };
         },
         _syncSummary(r, dup) {
             let msg = r.ok + ' conexão(ões) criada(s)';
+            const parts = [];
+            if (r.conditional) parts.push(r.conditional + ' condicional(is)');
+            if (r.sequential) parts.push(r.sequential + ' sequencial(is)');
+            if (parts.length) msg += ' (' + parts.join(', ') + ')';
             if (dup) msg += ', ' + dup + ' já existia(m)';
             if (r.failed.length) msg += ' — falhou: ' + r.failed.join(', ');
             return msg;
