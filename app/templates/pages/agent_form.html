@@ -943,13 +943,35 @@
                             </div>
                         </template>
                     </div>
+                    <!-- Filtros do alvo: só ATIVOS por default (checkbox inclui inativos)
+                         + chips de domínio (multi; só aparecem com ≥2 domínios distintos
+                         entre os agentes). Filtro de SUGESTÃO — texto livre segue aceito. -->
+                    <div x-show="availableAgents.length" class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                        <label class="inline-flex items-center gap-1.5 text-[11px] text-surface-600 cursor-pointer select-none">
+                            <input type="checkbox" x-model="composerIncludeInactive" class="rounded border-surface-300 text-brand-600 focus:ring-brand-400 focus:ring-offset-0">
+                            incluir inativos
+                        </label>
+                        <template x-if="composerDomains.length >= 2">
+                            <div class="flex flex-wrap items-center gap-1">
+                                <span class="text-[10px] text-surface-400">domínios:</span>
+                                <template x-for="d in composerDomains" :key="d">
+                                    <button type="button" @click="toggleComposerDomain(d)"
+                                            class="rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors"
+                                            :class="composerDomainFilter.includes(d) ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-surface-600 border-surface-300 hover:border-brand-400'"
+                                            x-text="d"></button>
+                                </template>
+                                <button type="button" x-show="composerDomainFilter.length" @click="composerDomainFilter = []"
+                                        class="text-[10px] text-surface-400 hover:text-brand-600 underline">limpar</button>
+                            </div>
+                        </template>
+                    </div>
                     <!-- datalist: SÓ agentes reais → autocomplete em "delegar a".
                          Roteamento no AI Mesh é agente→agente: só agente vira aresta.
                          Skill NÃO é nó do Mesh — para citá-la na prosa, digite como
                          texto livre (a verificação marca como "skill", sem sincronizar).
                          value = nome (o que entra na prosa). -->
                     <datalist id="composer-targets">
-                        <template x-for="ag in availableAgents" :key="'ag-' + ag.id">
+                        <template x-for="ag in composerTargetAgents" :key="'ag-' + ag.id">
                             <option :value="ag.name" label="agente"></option>
                         </template>
                     </datalist>
@@ -971,11 +993,15 @@
                                       :class="chk.cls === 'agent' ? 'bg-emerald-100 text-emerald-700' : (chk.cls === 'skill' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700')"
                                       x-text="chk.cls === 'agent' ? '✓ agente' : (chk.cls === 'skill' ? '🔗 skill' : '⚠ texto livre')"></span>
                                 <span class="text-brand-900 font-mono truncate" x-text="chk.target"></span>
-                                <span x-show="chk.cls === 'agent'"
-                                      class="ml-auto inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium shrink-0"
-                                      :class="chk.routing === 'conditional' ? 'bg-sky-100 text-sky-700' : 'bg-surface-200 text-surface-600'"
-                                      x-text="chk.routing === 'conditional' ? '⤿ condicional' : '→ sequencial'"
-                                      :title="chk.routing === 'conditional' ? ('Aresta condicional — só roteia quando: ' + chk.expr) : 'Aresta sequencial (sem \'quando\' → sempre roteia)'"></span>
+                                <span x-show="chk.cls === 'agent'" class="ml-auto flex items-center gap-1 shrink-0">
+                                    <span x-show="chk.inactive"
+                                          class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-red-100 text-red-700"
+                                          title="Agente desativado — ative antes de rotear. A conexão pode ser criada, mas o pipeline não vai executá-lo.">inativo</span>
+                                    <span class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                                          :class="chk.routing === 'conditional' ? 'bg-sky-100 text-sky-700' : 'bg-surface-200 text-surface-600'"
+                                          x-text="chk.routing === 'conditional' ? '⤿ condicional' : '→ sequencial'"
+                                          :title="chk.routing === 'conditional' ? ('Aresta condicional — só roteia quando: ' + chk.expr) : 'Aresta sequencial (sem \'quando\' → sempre roteia)'"></span>
+                                </span>
                             </div>
                         </template>
                     </div>
@@ -1044,6 +1070,15 @@ function agentForm(editId) {
         // "delegar a" com alvos REAIS (skills vinculáveis + agentes) via datalist.
         composerOpen: false,
         availableAgents: [],
+        // Filtros do alvo "delegar a" (2026-06-05). Por default sugere só
+        // agentes ATIVOS (antes o datalist mostrava inativos sem querer →
+        // dava pra rotear pra um agente desativado). Filtro de domínios
+        // (multi, chips) estreita as sugestões — só renderiza com ≥2 domínios
+        // distintos entre os agentes-alvo. É filtro de SUGESTÃO apenas: texto
+        // livre continua aceito e resolve normalmente (o dry-run mostra badge
+        // "inativo" quando o alvo resolvido está desativado — honestidade).
+        composerIncludeInactive: false,
+        composerDomainFilter: [],
         mission: {
             statement: '',                      // missão / triagem (obrigatório)
             rules: [{ when: '', target: '' }],  // regras repetíveis: quando → delegar a
@@ -1678,19 +1713,58 @@ function agentForm(editId) {
             if (this.availableSkills.some(s => this._normName(s.name) === n)) return 'skill';
             return 'free';
         },
+        _agentDomains(a) {
+            // Domínios de um agente: campo CSV ("Cobrança, Suporte") → lista.
+            return ((a && a.domain) || '').split(',').map(d => d.trim()).filter(Boolean);
+        },
+        get composerDomains() {
+            // Domínios distintos ENTRE OS AGENTES-alvo (não os domínios globais):
+            // só faz sentido filtrar por domínio que tem agente roteável. Some
+            // (via x-if length>=2) quando não há o que filtrar.
+            const set = new Set();
+            for (const a of (this.availableAgents || [])) {
+                for (const d of this._agentDomains(a)) set.add(d);
+            }
+            return Array.from(set).sort((x, y) => x.localeCompare(y));
+        },
+        get composerTargetAgents() {
+            // Lista FILTRADA que alimenta o datalist "delegar a":
+            // (ativo OU incluir-inativos) E (sem filtro de domínio OU casa ≥1
+            // domínio). Filtro de SUGESTÃO apenas — resolveAgentByName segue
+            // usando availableAgents (texto livre resolve mesmo se filtrado).
+            const dom = this.composerDomainFilter || [];
+            return (this.availableAgents || []).filter(a => {
+                const active = (a.status || 'active') === 'active';
+                if (!active && !this.composerIncludeInactive) return false;
+                if (dom.length) {
+                    const ds = this._agentDomains(a);
+                    if (!ds.some(d => dom.includes(d))) return false;
+                }
+                return true;
+            });
+        },
+        toggleComposerDomain(d) {
+            const i = this.composerDomainFilter.indexOf(d);
+            if (i === -1) this.composerDomainFilter.push(d);
+            else this.composerDomainFilter.splice(i, 1);
+        },
         get missionRuleChecks() {
             // Linhas com alvo preenchido, classificadas — alimenta o dry-run.
             // routing: 'conditional' quando o alvo é agente real E há "quando"
             // com keywords úteis; senão 'sequential'. expr é a regra derivada
             // (exposta no tooltip — rationale visível, sem falsa confiança).
+            // inactive: alvo resolve pra agente desativado (badge de aviso —
+            // pode acontecer via texto livre, já que o datalist esconde inativos).
             return (this.mission.rules || [])
                 .filter(r => (r.target || '').trim())
                 .map(r => {
                     const when = (r.when || '').trim();
                     const cls = this.classifyTarget(r.target);
+                    const agent = this.resolveAgentByName(r.target);
+                    const inactive = !!(agent && (agent.status || 'active') !== 'active');
                     const expr = this._deriveConditionalExpr(when);
                     const routing = (cls === 'agent' && when && expr) ? 'conditional' : 'sequential';
-                    return { when, target: (r.target || '').trim(), cls, routing, expr };
+                    return { when, target: (r.target || '').trim(), cls, routing, expr, inactive };
                 });
         },
         get missionAgentTargets() {
