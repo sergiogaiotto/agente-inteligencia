@@ -874,8 +874,9 @@
     <!-- ═══ MODAL: Compor missão (PR3) — AOBD/AR ═══════════════════════════
          Monta o System Prompt por campos estruturados. Determinístico, sem
          parse reverso na v1: ao Aplicar, serializa (composeMissionPrompt) e
-         sobrescreve form.system_prompt. O campo "delegar a" oferece skills
-         vinculáveis + agentes REAIS (datalist) + texto livre. -->
+         sobrescreve form.system_prompt. O campo "delegar a" sugere apenas
+         agentes REAIS (datalist) — só agente vira aresta de mesh; texto livre
+         também é aceito (skill citada na prosa não vira nó/aresta). -->
     <div x-show="composerOpen" @keydown.escape.window="composerOpen = false"
          x-transition.opacity
          class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
@@ -942,17 +943,17 @@
                             </div>
                         </template>
                     </div>
-                    <!-- datalist: skills vinculáveis + agentes reais → autocomplete em "delegar a".
-                         value = nome (o que entra na prosa); texto livre também é aceito. -->
+                    <!-- datalist: SÓ agentes reais → autocomplete em "delegar a".
+                         Roteamento no AI Mesh é agente→agente: só agente vira aresta.
+                         Skill NÃO é nó do Mesh — para citá-la na prosa, digite como
+                         texto livre (a verificação marca como "skill", sem sincronizar).
+                         value = nome (o que entra na prosa). -->
                     <datalist id="composer-targets">
-                        <template x-for="sk in availableSkills" :key="'sk-' + sk.id">
-                            <option :value="sk.name" label="skill"></option>
-                        </template>
                         <template x-for="ag in availableAgents" :key="'ag-' + ag.id">
                             <option :value="ag.name" label="agente"></option>
                         </template>
                     </datalist>
-                    <p class="mt-1 text-[10px] text-surface-400">Sugestões de skills e agentes reais aparecem ao digitar em "delegar a". Texto livre também é aceito.</p>
+                    <p class="mt-1 text-[10px] text-surface-400">Sugestões de <b>agentes reais</b> ao digitar em "delegar a" — só agente vira roteamento no AI Mesh. Texto livre também é aceito (ex.: citar uma skill na prosa, sem virar aresta).</p>
                 </div>
                 <!-- Dry-run de roteamento (PR4): classifica cada alvo (agente real /
                      skill / texto livre) e oferece sincronizar os AGENTES reais com
