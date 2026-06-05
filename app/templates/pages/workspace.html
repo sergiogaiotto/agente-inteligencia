@@ -433,6 +433,45 @@
                             <span x-text="(lastTrace.trace?.evidence_count||0)+' evidências'"></span>
                         </div>
                     </div>
+
+                    <!-- Nota de contingência da cadeia de resiliência LLM.
+                         Aparece SOMENTE quando houve fallback E o operador deixou
+                         o checkbox "Mostrar contingência na rastreabilidade"
+                         (Configurações → Roteamento LLM → Multimodal Fallback)
+                         ligado. show_in_trace gateia APENAS esta nota — o evento
+                         é sempre gravado em observabilidade + LOGs. -->
+                    <template x-if="lastTrace.trace?.llm_fallback?.show_in_trace">
+                        <div class="rounded-xl border p-3"
+                             :class="lastTrace.trace.llm_fallback.all_failed?'bg-rose-50 border-rose-200':'bg-amber-50 border-amber-200'">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-base" x-text="lastTrace.trace.llm_fallback.all_failed?'🔺':'⚠'"></span>
+                                <span class="text-[12px] font-bold"
+                                      :class="lastTrace.trace.llm_fallback.all_failed?'text-rose-800':'text-amber-800'"
+                                      x-text="lastTrace.trace.llm_fallback.all_failed?'Todos os modelos indisponíveis':'Resposta por contingência'"></span>
+                            </div>
+                            <!-- Caso 1: recuperou via fallback (modelo escolhido caiu, outro respondeu) -->
+                            <template x-if="!lastTrace.trace.llm_fallback.all_failed">
+                                <p class="text-[11px] text-amber-700 leading-relaxed">
+                                    O modelo escolhido
+                                    (<span class="font-mono font-semibold" x-text="lastTrace.trace.llm_fallback.chosen_provider+'/'+lastTrace.trace.llm_fallback.chosen_model"></span>)
+                                    não respondeu; a resposta veio de
+                                    <span class="font-mono font-semibold" x-text="lastTrace.trace.llm_fallback.used_provider+'/'+lastTrace.trace.llm_fallback.used_model"></span>.
+                                </p>
+                            </template>
+                            <!-- Caso 2: cadeia esgotada (nenhum modelo respondeu) -->
+                            <template x-if="lastTrace.trace.llm_fallback.all_failed">
+                                <p class="text-[11px] text-rose-700 leading-relaxed">
+                                    Nenhum modelo da cadeia de resiliência respondeu. Se rodam no hub interno,
+                                    conecte-se à VPN/rede corporativa; ou ajuste o Roteamento LLM em Configurações.
+                                </p>
+                            </template>
+                            <p class="text-[10px] mt-1.5"
+                               :class="lastTrace.trace.llm_fallback.all_failed?'text-rose-500':'text-amber-500'">
+                                Cadeia tentada:
+                                <span class="font-mono" x-text="(lastTrace.trace.llm_fallback.attempted||[]).join(' → ')"></span>
+                            </p>
+                        </div>
+                    </template>
                     <div x-show="lastTrace.pipeline_steps?.length>0">
                         <h3 class="text-[11px] font-bold text-brand-900 uppercase tracking-wider mb-3">Pipeline — Etapas</h3>
                         <div class="space-y-0">

@@ -103,6 +103,27 @@
                     <strong>Recomendado:</strong> escolher um modelo com 🖼 (suporte oficial a image input).
                     Modelos text-only aparecem para uso avançado — o input com imagem é descartado antes da chamada, o que pode degradar a resposta.
                 </p>
+
+                <!-- Cadeia de resiliência LLM (runtime fallback): quando o modelo
+                     escolhido não responde, a plataforma tenta o Modelo Primário e,
+                     por fim, este Multimodal Fallback. Este checkbox controla SOMENTE
+                     a nota VISÍVEL no painel de Rastreabilidade do Workspace — a
+                     observabilidade e os LOGs do fallback são SEMPRE registrados. -->
+                <div class="mt-3 pt-3 border-t border-red-200">
+                    <label class="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" x-model="routingForm.fallback_show_in_trace" @change="routingDirty = true"
+                               class="mt-0.5 h-4 w-4 rounded border-red-300 text-red-600 focus:ring-red-400">
+                        <span class="flex-1 min-w-0">
+                            <span class="block text-[12px] font-bold text-red-900">Mostrar contingência na rastreabilidade</span>
+                            <span class="block text-[10px] text-red-700 leading-relaxed mt-0.5">
+                                Quando o modelo do agente não responde e a plataforma cai pro Modelo Primário ou pro
+                                Fallback, exibe uma nota no painel de Rastreabilidade do Workspace informando que a resposta
+                                veio por contingência. <strong>Independente desta opção</strong>, o fallback é sempre
+                                gravado em observabilidade e nos LOGs (auditoria nunca é silenciada).
+                            </span>
+                        </span>
+                    </label>
+                </div>
             </div>
         </div>
     </div>
@@ -1070,7 +1091,7 @@ function settingsPage() {
         },
 
         /* ── Roteamento LLM (Onda 7) ── */
-        routingForm: {tool_calling:'', reasoning:'', instruct:'', classification:'', skill_generation:'', multimodal_fallback:''},
+        routingForm: {tool_calling:'', reasoning:'', instruct:'', classification:'', skill_generation:'', multimodal_fallback:'', fallback_show_in_trace:true},
         routingDefaults: {},
         routingDescriptions: {},
         routingDirty: false, routingSaving: false, routingLastSaved: '',
@@ -1176,6 +1197,8 @@ function settingsPage() {
                     classification: r.routing?.classification || '',
                     skill_generation: r.routing?.skill_generation || '',
                     multimodal_fallback: r.routing?.multimodal_fallback || '',
+                    // Default true (transparência) quando o backend não informa.
+                    fallback_show_in_trace: r.fallback_show_in_trace !== false,
                 };
                 this.routingDefaults = r.defaults || {};
                 this.routingDescriptions = r.task_descriptions || {};
@@ -1199,6 +1222,8 @@ function settingsPage() {
                 classification: this.routingDefaults.classification || 'maritaca/sabia-4',
                 skill_generation: this.routingDefaults.skill_generation || 'azure/gpt-4o',
                 multimodal_fallback: this.routingDefaults.multimodal_fallback || 'azure/gpt-4o',
+                // Padrão recomendado: mostrar a contingência (transparência).
+                fallback_show_in_trace: true,
             };
             this.routingDirty = true;
         },

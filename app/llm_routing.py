@@ -193,6 +193,54 @@ async def save_routing(updates: dict[str, str]) -> dict[str, str]:
     return await load_routing()
 
 
+# ─── Contingência LLM — nota visível no painel ─────────────────────
+
+# Key no settings_store que controla SE a nota de contingência (cadeia de
+# resiliência caiu pro prioritário/fallback) aparece no painel de
+# Rastreabilidade do Workspace. Default "true": transparência por padrão.
+#
+# IMPORTANTE: este flag controla SOMENTE a nota VISÍVEL na UI. A observabilidade
+# (ctx.metadata["llm_fallback"]) e os LOGs estruturados (event=agent.llm.fallback*)
+# são SEMPRE registrados, independente deste valor — auditoria nunca é silenciada.
+_FALLBACK_SHOW_IN_TRACE_KEY = "llm_fallback.show_in_trace"
+_FALLBACK_SHOW_IN_TRACE_DEFAULT = True
+
+
+def _coerce_bool(raw: str, default: bool) -> bool:
+    """'true'/'1'/'yes'/'on' → True; 'false'/'0'/'no'/'off' → False.
+    String vazia/desconhecida → default."""
+    v = (raw or "").strip().lower()
+    if v in ("true", "1", "yes", "on"):
+        return True
+    if v in ("false", "0", "no", "off"):
+        return False
+    return default
+
+
+async def fallback_show_in_trace() -> bool:
+    """True se a nota de contingência LLM deve aparecer no painel de
+    Rastreabilidade. Lê settings_store (key llm_fallback.show_in_trace).
+    Default True (transparência). Erro de leitura → default (não esconde)."""
+    try:
+        from app.core.database import settings_store
+        raw = await settings_store.get(
+            _FALLBACK_SHOW_IN_TRACE_KEY, ""
+        )
+    except Exception as e:
+        logger.warning(f"fallback_show_in_trace: leitura falhou ({e}); usando default")
+        return _FALLBACK_SHOW_IN_TRACE_DEFAULT
+    return _coerce_bool(raw, _FALLBACK_SHOW_IN_TRACE_DEFAULT)
+
+
+async def set_fallback_show_in_trace(value: bool) -> bool:
+    """Persiste o flag da nota de contingência. Retorna o valor salvo."""
+    from app.core.database import settings_store
+    await settings_store.set(
+        _FALLBACK_SHOW_IN_TRACE_KEY, "true" if value else "false"
+    )
+    return bool(value)
+
+
 async def resolve_llm_for_task(
     task_type: str,
     has_image: bool = False,

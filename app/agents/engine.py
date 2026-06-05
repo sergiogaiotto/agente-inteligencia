@@ -22,7 +22,7 @@ from dataclasses import asdict
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
-from app.core.llm_providers import get_provider
+from app.core.llm_providers import get_provider, is_llm_unreachable
 from app.core.observability import get_langfuse_handler, tracker
 from app.core.database import (
     agents_repo, skills_repo, interactions_repo, turns_repo,
@@ -202,6 +202,235 @@ def _resolve_provider_config(provider: str, settings) -> tuple[str, Optional[str
         return settings.oss120b_api_key or "not-needed", None
 
     return "", f"Provider '{provider}' desconhecido — sem mapeamento de configuração"
+
+
+# ═══════════════════════════════════════════════════
+# Helpers — Cadeia de resiliência LLM em runtime
+# ═══════════════════════════════════════════════════
+
+async def _runtime_llm_candidates(agent: dict, settings) -> list[tuple[str, str]]:
+    """Cadeia de resiliência LLM em runtime, na ordem pedida pelo operador:
+    1) modelo escolhido para o Agente (já resolvido via task_type/primário
+       antes desta chamada);
+    2) Modelo Primário da plataforma (``primary_provider``/``primary_model``);
+    3) Multimodal Fallback (modelo "sempre disponível", default azure/gpt-4o).
+
+    Dedup por (provider, model) exato preservando ordem — no caso comum em que
+    agente == primário (ex.: tudo gpt-oss-120b) os passos 1 e 2 colapsam e a
+    cadeia vira ``[gpt-oss-120b, azure/gpt-4o]``, sem dobrar timeout no mesmo
+    hub inalcançável.
+
+    Pré-filtra candidatos sem configuração mínima (ex.: GPT-OSS sem URL) pra não
+    "tentar" — e quebrar com AttributeError — um provider que nunca responderia.
+    O candidato #0 (do agente) sempre entra: já foi validado pelo gate de
+    ``_resolve_provider_config`` no caller antes de chegarmos aqui.
+    """
+    raw: list[tuple[str, str]] = []
+    ap = (agent.get("llm_provider") or "").strip()
+    am = (agent.get("model") or "").strip()
+    if ap and am:
+        raw.append((ap, am))
+    pp = (getattr(settings, "primary_provider", "") or "").strip()
+    pm = (getattr(settings, "primary_model", "") or "").strip()
+    if pp and pm:
+        raw.append((pp, pm))
+    try:
+        from app.llm_routing import load_routing as _load_routing
+        routing = await _load_routing()
+        fb = (routing.get("multimodal_fallback") or "").strip()
+        if "/" in fb:
+            fp, fm = fb.split("/", 1)
+            fp, fm = fp.strip(), fm.strip()
+            if fp and fm:
+                raw.append((fp, fm))
+    except Exception as e:
+        logger.warning(f"_runtime_llm_candidates: load_routing falhou: {e}")
+
+    seen: set = set()
+    out: list[tuple[str, str]] = []
+    for i, (p, m) in enumerate(raw):
+        key = (p.lower(), m.lower())
+        if key in seen:
+            continue
+        if i > 0:
+            # candidatos de contingência só entram se tiverem config mínima
+            _, missing = _resolve_provider_config(p, settings)
+            if missing:
+                logger.info(
+                    f"_runtime_llm_candidates: pulando {p}/{m} (sem config: {missing})"
+                )
+                continue
+        seen.add(key)
+        out.append((p, m))
+    return out
+
+
+async def _fallback_show_in_trace() -> bool:
+    """Wrapper — lê o checkbox 'exibir aviso de contingência no painel'
+    (canônico em ``app.llm_routing``). NÃO afeta observabilidade/LOGs (que
+    registram o fallback sempre); só controla a NOTA visível pro usuário."""
+    try:
+        from app.llm_routing import fallback_show_in_trace
+        return await fallback_show_in_trace()
+    except Exception:
+        return True
+
+
+def _collect_token_usage(result: dict, agent: dict, agent_id: str) -> dict:
+    """Coleta usage por chamada LLM e calcula tokens da interação.
+
+    Extraído de ``execute_interaction`` sem mudança de comportamento — a cadeia
+    de resiliência só chama isto quando houve resposta real (``result`` não-None).
+
+    IMPORTANTE: somar input_tokens ingenuamente conta o histórico/system prompt
+    N vezes (cada chamada da reflexão/tool-loop reenvia tudo). Convenção:
+        input  = input da ÚLTIMA chamada (tamanho final do prompt)
+        output = SOMA dos outputs (cada geração é única)
+        total  = input + output
+        calls  = quantas chamadas LLM aconteceram nesta interação
+    """
+    per_call: list[dict] = []
+    for _m in (result.get("messages") or []):
+        um = getattr(_m, "usage_metadata", None) or {}
+        if um:
+            per_call.append({
+                "input": int(um.get("input_tokens") or 0),
+                "output": int(um.get("output_tokens") or 0),
+            })
+            continue
+        rm = getattr(_m, "response_metadata", None) or {}
+        tu = (rm.get("token_usage") or rm.get("usage") or {}) if isinstance(rm, dict) else {}
+        if tu:
+            per_call.append({
+                "input": int(tu.get("prompt_tokens") or tu.get("input_tokens") or 0),
+                "output": int(tu.get("completion_tokens") or tu.get("output_tokens") or 0),
+            })
+    if per_call:
+        tin_last = per_call[-1]["input"]
+        tout_sum = sum(c["output"] for c in per_call)
+        tin_billed_sum = sum(c["input"] for c in per_call)  # útil para custo/billing
+        tokens = {
+            "input": tin_last,
+            "output": tout_sum,
+            "total": tin_last + tout_sum,
+            "calls": len(per_call),
+            "input_billed_sum": tin_billed_sum,
+            "total_billed": tin_billed_sum + tout_sum,
+        }
+        # Cap de tokens — defesa LLM04 contra runaway loops e abuso de custo.
+        # Não é interrupção retroativa (já consumiu) — sinaliza no trace e em log
+        # para que ratelimit/quotas externas possam agir.
+        from app.core.config import get_settings as _gs
+        _cap = _gs().interaction_max_tokens
+        _billed = tin_billed_sum + tout_sum
+        if _cap and _billed > _cap:
+            logger.warning(
+                f"Token cap ultrapassado: agent={agent_id} billed={_billed} cap={_cap} calls={len(per_call)}"
+            )
+            tokens["cap_exceeded"] = True
+            tokens["cap"] = _cap
+        return tokens
+    # Diagnóstico: nenhuma das messages tinha usage_metadata nem
+    # response_metadata.token_usage / .usage. Provavelmente provider fora do
+    # padrão LangChain (Maritaca/Sabia-4 reporta diferente). Loga shape pra
+    # inspeção; follow-up: fallback via tiktoken.
+    try:
+        _shapes = []
+        for _m in (result.get("messages") or [])[:5]:
+            _shapes.append({
+                "cls": type(_m).__name__,
+                "has_usage_meta": bool(getattr(_m, "usage_metadata", None)),
+                "rm_keys": sorted(list(getattr(_m, "response_metadata", {}) or {}).keys())[:8],
+            })
+        logger.info(
+            f"Tokens=0 (provider={agent.get('llm_provider')} model={agent.get('model')}): "
+            f"messages_shape={json.dumps(_shapes, ensure_ascii=False)[:500]}"
+        )
+    except Exception:
+        pass
+    return {"input": 0, "output": 0, "total": 0, "calls": 0, "input_billed_sum": 0, "total_billed": 0}
+
+
+async def _run_llm_chain(
+    candidates: list[tuple[str, str]],
+    agent: dict,
+    run_attempt,
+    agent_id: str,
+) -> tuple[Optional[dict], list[str]]:
+    """Executa a cadeia de resiliência: tenta cada candidato em ordem até um
+    responder. Orquestração PURA (sem construir harness/state) pra ser testável
+    isolada do ``execute_interaction`` pesado — segue a convenção do projeto
+    (cf. ``tests/test_platform_primary_model.py``).
+
+    Args:
+        candidates: lista ordenada ``[(provider, model), ...]`` (já deduplicada
+            por ``_runtime_llm_candidates``). Índice 0 = modelo escolhido.
+        agent: dict do agente; ESTE helper seta ``agent['llm_provider']`` e
+            ``agent['model']`` em cada tentativa, então ao retornar eles refletem
+            o ÚLTIMO candidato tentado (o que respondeu, em caso de sucesso).
+        run_attempt: ``async (provider, model) -> result`` — constrói/roda a
+            tentativa (harness+graph no caller). Pode levantar exceção.
+        agent_id: pra logs.
+
+    Returns:
+        ``(result, attempted)``. ``result`` é ``None`` quando TODOS os candidatos
+        foram inalcançáveis (cadeia esgotada). ``attempted`` é a lista
+        ``["provider/model", ...]`` tentada, em ordem.
+
+    Raises:
+        Propaga QUALQUER exceção que NÃO seja de alcance (``is_llm_unreachable``
+        False) — ex.: 401/404/429. O caller mapeia pra mensagem acionável. Só
+        falhas de "não responde" (conexão/timeout/URL ausente) disparam fallback.
+    """
+    attempted: list[str] = []
+    result = None
+    for ci, (cand_p, cand_m) in enumerate(candidates):
+        agent["llm_provider"] = cand_p
+        agent["model"] = cand_m
+        attempted.append(f"{cand_p}/{cand_m}")
+        try:
+            result = await run_attempt(cand_p, cand_m)
+        except Exception as attempt_exc:
+            if not is_llm_unreachable(attempt_exc):
+                # Não é "não responder" (404/401/etc) → propaga pro except
+                # externo, que mapeia pra mensagem acionável específica.
+                raise
+            has_next = ci + 1 < len(candidates)
+            # SEMPRE registra em observabilidade + LOG (independente do checkbox
+            # show_in_trace, que só controla a NOTA visível na UI).
+            logger.warning(
+                "agent.llm.fallback",
+                extra={
+                    "event": "agent.llm.fallback",
+                    "agent_id": agent_id,
+                    "attempt_index": ci,
+                    "failed_provider": cand_p,
+                    "failed_model": cand_m,
+                    "next_in_chain": (
+                        f"{candidates[ci + 1][0]}/{candidates[ci + 1][1]}"
+                        if has_next else None
+                    ),
+                    "error_type": type(attempt_exc).__name__,
+                },
+                exc_info=True,
+            )
+            result = None
+            if has_next:
+                continue
+            # cadeia esgotada — todos os modelos inalcançáveis
+            logger.error(
+                "agent.llm.chain.exhausted",
+                extra={
+                    "event": "agent.llm.chain.exhausted",
+                    "agent_id": agent_id,
+                    "attempted": attempted,
+                },
+                exc_info=True,
+            )
+            break
+        # sucesso nesta tentativa — encerra a cadeia
+        break
+    return result, attempted
 
 
 # ═══════════════════════════════════════════════════
@@ -1389,92 +1618,103 @@ async def execute_interaction(
             except Exception as _pd_exc:
                 logger.warning(f"pre_discover_input_schemas falhou: {_pd_exc}")
 
-        harness = DeepAgentHarness(
-            agent, max_iterations=_max_iter, mcp_tools=mcp_tools,
-            interaction_id=ctx.interaction_id, skill_md=skill_md_for_engine or "",
-        )
-        graph = harness.build_graph()
-        state = {
-            "messages": [HumanMessage(content=enriched_input)],
-            "current_agent": agent_id,
-            "agent_kind": agent.get("kind", "subagent"),
-            "iteration": 0,
-            "max_iterations": _max_iter,
-            "context": {},
-            "envelope": {},
-            "skill_data": skill_data,
-            "metadata": {},
-        }
-        result = await graph.ainvoke(state)
-        draft = result["messages"][-1].content if result["messages"] else ""
-        # Coleta usage por chamada LLM e calcula tokens da interação.
-        # IMPORTANTE: somar input_tokens ingenuamente conta o histórico/system
-        # prompt N vezes (cada chamada da reflexão/tool-loop reenvia tudo).
-        # Convenção da métrica:
-        #   input  = input da ÚLTIMA chamada (representa o tamanho final do prompt)
-        #   output = SOMA dos outputs (cada geração é única)
-        #   total  = input + output
-        #   calls  = quantas chamadas LLM aconteceram nesta interação
-        per_call: list[dict] = []
-        for _m in (result.get("messages") or []):
-            um = getattr(_m, "usage_metadata", None) or {}
-            if um:
-                per_call.append({
-                    "input": int(um.get("input_tokens") or 0),
-                    "output": int(um.get("output_tokens") or 0),
-                })
-                continue
-            rm = getattr(_m, "response_metadata", None) or {}
-            tu = (rm.get("token_usage") or rm.get("usage") or {}) if isinstance(rm, dict) else {}
-            if tu:
-                per_call.append({
-                    "input": int(tu.get("prompt_tokens") or tu.get("input_tokens") or 0),
-                    "output": int(tu.get("completion_tokens") or tu.get("output_tokens") or 0),
-                })
-        if per_call:
-            tin_last = per_call[-1]["input"]
-            tout_sum = sum(c["output"] for c in per_call)
-            tin_billed_sum = sum(c["input"] for c in per_call)  # útil para custo/billing
-            ctx.metadata["tokens"] = {
-                "input": tin_last,
-                "output": tout_sum,
-                "total": tin_last + tout_sum,
-                "calls": len(per_call),
-                "input_billed_sum": tin_billed_sum,
-                "total_billed": tin_billed_sum + tout_sum,
+        # ── Cadeia de resiliência LLM (modelo do agente → prioritário →
+        #    fallback) ───────────────────────────────────────────────────────
+        # Pedido do operador: "1) usar o modelo escolhido para o Agente; 2) se
+        # não responder, chamar o modelo prioritário; 3) se não responder, usar
+        # o fallback". "Não responder" = conexão/timeout/inalcançável
+        # (is_llm_unreachable, compartilhado com o wizard). Erros de request/
+        # config (401/404) NÃO disparam fallback: propagam pro except externo,
+        # que dá mensagem acionável pro operador corrigir.
+        #
+        # Cada tentativa reconstrói harness+graph (o provider é fixado no
+        # __init__ do harness) com um state fresco. O dedup em
+        # _runtime_llm_candidates colapsa o caso comum agente==primário
+        # (ex.: tudo gpt-oss-120b → [gpt-oss-120b, azure/gpt-4o]).
+        _candidates = await _runtime_llm_candidates(agent, settings)
+        if not _candidates:
+            _candidates = [(provider, agent.get("model") or "")]
+        _chosen_p, _chosen_m = _candidates[0]
+
+        async def _run_attempt(_cand_p: str, _cand_m: str):
+            # agent['llm_provider']/['model'] já foram setados por _run_llm_chain
+            # antes desta chamada — o harness lê do agent. Cada tentativa
+            # reconstrói harness+graph (provider é fixado no __init__) e usa
+            # um state fresco.
+            harness = DeepAgentHarness(
+                agent, max_iterations=_max_iter, mcp_tools=mcp_tools,
+                interaction_id=ctx.interaction_id, skill_md=skill_md_for_engine or "",
+            )
+            graph = harness.build_graph()
+            state = {
+                "messages": [HumanMessage(content=enriched_input)],
+                "current_agent": agent_id,
+                "agent_kind": agent.get("kind", "subagent"),
+                "iteration": 0,
+                "max_iterations": _max_iter,
+                "context": {},
+                "envelope": {},
+                "skill_data": skill_data,
+                "metadata": {},
             }
-            # Cap de tokens — defesa LLM04 contra runaway loops e abuso de custo.
-            # Não é interrupção retroativa (já consumiu) — sinaliza no trace
-            # e em log para que ratelimit/quotas externas possam agir.
-            from app.core.config import get_settings as _gs
-            _cap = _gs().interaction_max_tokens
-            _billed = tin_billed_sum + tout_sum
-            if _cap and _billed > _cap:
-                logger.warning(
-                    f"Token cap ultrapassado: agent={agent_id} billed={_billed} cap={_cap} calls={len(per_call)}"
-                )
-                ctx.metadata["tokens"]["cap_exceeded"] = True
-                ctx.metadata["tokens"]["cap"] = _cap
+            return await graph.ainvoke(state)
+
+        result, _attempted = await _run_llm_chain(
+            _candidates, agent, _run_attempt, agent_id
+        )
+        # Mantém `provider` sincronizado com o último candidato tentado (usado
+        # nas mensagens de erro do except externo).
+        provider = agent.get("llm_provider", provider)
+
+        if result is None:
+            # Todos os modelos da cadeia inalcançáveis — draft acionável. O
+            # evento já foi logado (chain.exhausted); registramos também em
+            # metadata pra observabilidade, independente do checkbox.
+            ctx.metadata["llm_fallback"] = {
+                "chosen_provider": _chosen_p,
+                "chosen_model": _chosen_m,
+                "attempted": _attempted,
+                "degraded": True,
+                "all_failed": True,
+                "show_in_trace": await _fallback_show_in_trace(),
+            }
+            draft = (
+                "⚠ Todos os modelos da cadeia de resiliência estão inacessíveis "
+                f"agora (tentei: {', '.join(_attempted)}). Se eles rodam no hub "
+                "interno (GPT-OSS), conecte-se à VPN/rede corporativa; ou ajuste "
+                "o Roteamento LLM em Configurações para um provedor hospedado "
+                "(ex.: Azure/OpenAI)."
+            )
         else:
-            # Diagnóstico: nenhuma das messages tinha usage_metadata nem
-            # response_metadata.token_usage / .usage. Provavelmente provider
-            # fora do padrão LangChain (Maritaca/Sabia-4 reporta diferente).
-            # Loga shape pra inspeção; follow-up: fallback via tiktoken.
-            try:
-                _shapes = []
-                for _m in (result.get("messages") or [])[:5]:
-                    _shapes.append({
-                        "cls": type(_m).__name__,
-                        "has_usage_meta": bool(getattr(_m, "usage_metadata", None)),
-                        "rm_keys": sorted(list(getattr(_m, "response_metadata", {}) or {}).keys())[:8],
-                    })
-                logger.info(
-                    f"Tokens=0 (provider={agent.get('llm_provider')} model={agent.get('model')}): "
-                    f"messages_shape={json.dumps(_shapes, ensure_ascii=False)[:500]}"
+            draft = result["messages"][-1].content if result["messages"] else ""
+            # Respondeu por contingência (candidato != o escolhido): SEMPRE
+            # registra em observabilidade + LOG; show_in_trace só decide se a
+            # NOTA aparece pro usuário no painel de Rastreabilidade.
+            _used_p = agent.get("llm_provider", "")
+            _used_m = agent.get("model", "")
+            if (_used_p, _used_m) != (_chosen_p, _chosen_m):
+                _show = await _fallback_show_in_trace()
+                ctx.metadata["llm_fallback"] = {
+                    "chosen_provider": _chosen_p,
+                    "chosen_model": _chosen_m,
+                    "used_provider": _used_p,
+                    "used_model": _used_m,
+                    "attempted": _attempted,
+                    "degraded": True,
+                    "show_in_trace": _show,
+                }
+                logger.warning(
+                    "agent.llm.fallback.recovered",
+                    extra={
+                        "event": "agent.llm.fallback.recovered",
+                        "agent_id": agent_id,
+                        "chosen": f"{_chosen_p}/{_chosen_m}",
+                        "used": f"{_used_p}/{_used_m}",
+                        "attempts": len(_attempted),
+                        "show_in_trace": _show,
+                    },
                 )
-            except Exception:
-                pass
-            ctx.metadata["tokens"] = {"input": 0, "output": 0, "total": 0, "calls": 0, "input_billed_sum": 0, "total_billed": 0}
+            ctx.metadata["tokens"] = _collect_token_usage(result, agent, agent_id)
     except Exception as llm_err:
         err_str = str(llm_err)
         if "404" in err_str or "not found" in err_str.lower():
@@ -1975,6 +2215,15 @@ async def _build_result(
             "output_truncated_by_preset": bool(ctx.metadata.get("output_truncated_by_preset")),
             "output_preset_applied": ctx.metadata.get("output_preset_applied") or "",
             "tokens": ctx.metadata.get("tokens") or {"input": 0, "output": 0, "total": 0},
+            # Cadeia de resiliência LLM (runtime fallback). Presente APENAS quando
+            # houve degradação: o modelo escolhido falhou e a engine caiu pro
+            # prioritário/fallback (ou todos falharam). Observabilidade é SEMPRE
+            # registrada aqui + nos LOGs (event=agent.llm.fallback*). A nota
+            # VISÍVEL no painel de Rastreabilidade é gateada por show_in_trace
+            # (checkbox "Mostrar contingência na rastreabilidade" em /settings →
+            # Multimodal Fallback). show_in_trace=False ⇒ frontend não mostra a
+            # nota, mas o dado continua aqui pra auditoria via API/log.
+            "llm_fallback": ctx.metadata.get("llm_fallback"),
             "execution_log": exec_log,
         },
     }
