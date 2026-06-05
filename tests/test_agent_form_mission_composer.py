@@ -4,8 +4,8 @@ No passo Prompt, agentes ORQUESTRADORES (aobd) e ROTEADORES (router) ganham um
 botão "Compor missão / Compor triagem" que abre um MODAL com campos estruturados:
 
 - Missão (obrigatória)
-- Regras de roteamento repetíveis: quando … → delegar a … (datalist com skills
-  vinculáveis + agentes REAIS + texto livre)
+- Regras de roteamento repetíveis: quando … → delegar a … (datalist com agentes
+  REAIS + texto livre; skills NÃO são sugeridas — não viram aresta de mesh)
 - Política de fallback / entradas ambíguas
 - Regra de ouro (só AOBD, checkbox default ON)
 
@@ -210,17 +210,29 @@ class TestComposerModal:
 
 
 class TestRoutingTargetDatalist:
-    """Requisito 'Skills + Agentes reais': o campo "delegar a" sugere AMBOS."""
+    """Requisito 'Só agentes' (2026-06-05): roteamento no AI Mesh é agente→agente,
+    então o autocomplete de "delegar a" sugere APENAS agentes reais. Skill não é
+    nó do Mesh — citá-la vira texto livre (a verificação marca como "skill", sem
+    sincronizar). Isso evita a armadilha do "no-op silencioso": antes o usuário
+    podia escolher uma skill achando que rotearia, e a regra nunca virava aresta.
+    """
 
     def test_datalist_exists_and_wired(self, html):
         assert 'id="composer-targets"' in html
         assert 'list="composer-targets"' in html
 
-    def test_datalist_offers_skills(self, html):
-        assert 'x-for="sk in availableSkills"' in html
+    def test_datalist_omits_skills(self, html):
+        """O datalist NÃO oferece skills (marcador específico da option de skill).
+        Nota: 'x-for=\"sk in availableSkills\"' ainda existe no seletor de skill do
+        próprio agente (linha ~131), por isso checamos o marcador do datalist."""
+        assert 'label="skill"' not in html
+        assert ":key=\"'sk-' + sk.id\"" not in html
+        assert ':value="sk.name"' not in html
 
     def test_datalist_offers_real_agents(self, html):
-        assert 'x-for="ag in availableAgents"' in html
+        # marcador específico da option de agente no datalist (não a string genérica)
+        assert ':value="ag.name" label="agente"' in html
+        assert ":key=\"'ag-' + ag.id\"" in html
 
 
 class TestGoldenRuleScopedToAobd:
