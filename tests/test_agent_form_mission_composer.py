@@ -201,6 +201,16 @@ class TestComposerModal:
         assert 'x-model="rule.when"' in html
         assert 'x-model="rule.target"' in html
 
+    def test_when_field_is_multiline_textarea(self, html):
+        """As descrições de condição ('quando') são longas e não cabiam numa
+        linha (ficavam cortadas no input). O campo virou textarea de 3 linhas,
+        com resize-y para expandir mais. O alvo segue <input> — <datalist>/
+        autocomplete só funciona em input, e o nome do agente é curto."""
+        assert '<textarea x-model="rule.when" rows="3"' in html
+        assert "resize-y" in html
+        # alvo continua input com datalist (não pode virar textarea)
+        assert '<input x-model="rule.target" type="text" list="composer-targets"' in html
+
     def test_add_and_remove_rule_buttons(self, html):
         assert '@click="addMissionRule()"' in html
         assert '@click="removeMissionRule(i)"' in html
