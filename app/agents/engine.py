@@ -2651,6 +2651,7 @@ async def execute_pipeline(
                 last_output=upstream_output,
                 last_final_state=upstream_final_state,
                 user_input=user_input,
+                target_name=agent.get("name", ""),
             )
             if skip_by_conditional:
                 steps.append({
@@ -3085,6 +3086,51 @@ def _eval_conditional(expr: str, ctx: dict) -> bool:
     return bool(env.compile_expression(expr)(**ctx))
 
 
+def _output_names_target(output: str | None, target_name: str | None) -> bool:
+    r"""True se o texto do agente upstream NOMEIA explicitamente o agente alvo.
+
+    Racional (2026-06-06 — bug "AR roteou certo mas o SA foi pulado"): o
+    roteamento condicional fan-out tem DOIS decisores que podem discordar:
+
+    1. o LLM do roteador/orquestrador, que decide *semanticamente* e escreve
+       p.ex. "Encaminhar a pergunta ao agente **Rentab**."; e
+    2. o gate de keywords da `expr`, que casa contra a PERGUNTA do usuário
+       (`input_lower`).
+
+    Quando o usuário usa vocabulário que não bate as keywords (ex.: a pergunta
+    "como gerar **receita**" → nenhuma keyword de Rentab casa), o gate burro
+    PULAVA o alvo que o roteador acabara de nomear — o oposto do esperado.
+
+    A decisão EXPLÍCITA do roteador é a autoridade do roteamento: se o texto
+    dele cita o nome do alvo, honramos (NÃO skipamos), independente da expr.
+    É fail-safe (roda o agente que o roteador escolheu) e casa o modelo mental
+    do operador ("o AR decidiu pelo SA → o SA deve responder").
+
+    Robustez:
+    - case- e acento-insensível (NFKD): "Retenção" casa "retencao"/"retenção";
+    - fronteira de palavra (\b): "Rentab" casa "**Rentab**" mas NÃO casa dentro
+      de "rentabilidade" — só o naming EXPLÍCITO dispara o override;
+    - guard de nome curto (< 3 chars): nomes ambíguos (ex.: "A") casariam
+      qualquer texto → não disparam; cai no fluxo normal da expr.
+    """
+    name = (target_name or "").strip().lower()
+    if len(name) < 3:
+        return False
+    out = (output or "").lower()
+    if not out:
+        return False
+    import re as _re
+    import unicodedata as _ud
+
+    def _no_accents(s: str) -> str:
+        return "".join(
+            ch for ch in _ud.normalize("NFKD", s) if not _ud.combining(ch)
+        )
+
+    pattern = r"\b" + _re.escape(_no_accents(name)) + r"\b"
+    return _re.search(pattern, _no_accents(out)) is not None
+
+
 async def _should_skip_conditional(
     *,
     source_id: str,
@@ -3092,9 +3138,16 @@ async def _should_skip_conditional(
     last_output: str,
     last_final_state: str,
     user_input: str = "",
+    target_name: str = "",
 ) -> bool:
     """True se a conexão source→target é `connection_type=conditional` e
     a expressão configurada em `config.expr` avaliou para `False`.
+
+    Override "o roteador mandou" (2026-06-06): se o agente upstream NOMEIA
+    explicitamente este alvo no output (`target_name` aparece em `last_output`),
+    a decisão do roteador vence o heurístico de keywords e NÃO skipamos — ver
+    `_output_names_target`. Isto corrige o caso em que o AR/AOBD roteia certo
+    pela semântica mas o vocabulário da pergunta não bate a expr.
 
     Política de erro: **fail-open** — qualquer falha (config malformado,
     expr inválida, exception no Jinja) loga warning e devolve `False`
@@ -3106,6 +3159,25 @@ async def _should_skip_conditional(
     conns = await mesh_repo.find_all(source_agent_id=source_id, limit=20)
     conn = next((c for c in conns if c.get("target_agent_id") == target_id), None)
     if not conn or conn.get("connection_type") != "conditional":
+        return False
+
+    # ── Override "o roteador mandou" (2026-06-06) ──────────────────────
+    # Se o agente upstream NOMEIA explicitamente este alvo (ex.: o AR responde
+    # "Encaminhar ao agente Rentab"), a decisão do roteador vence o heurístico
+    # de keywords: NÃO skipa. Sem isto, perguntas cujo vocabulário não bate a
+    # expr (mas que o LLM roteou certo) eram puladas — o SA nomeado nunca
+    # respondia. Ver _output_names_target.
+    if _output_names_target(last_output, target_name):
+        logger.info(
+            "mesh.conditional.router_named_target",
+            extra={
+                "event": "mesh.conditional",
+                "source_id": source_id,
+                "target_id": target_id,
+                "target_name": target_name,
+                "decision": "run_not_skip",
+            },
+        )
         return False
 
     cfg = conn.get("config") or "{}"
