@@ -326,7 +326,8 @@ class TestComposerTargetFilters:
     # --- dry-run: flag + badge "inativo" ---
     def test_checks_compute_inactive_flag(self, html):
         assert "const inactive = !!(agent && (agent.status || 'active') !== 'active');" in html
-        assert "cls, routing, expr, inactive, kind };" in html
+        # 2026-06-06: `unwired` (alerta de drift) entrou no objeto do dry-run.
+        assert "cls, routing, expr, inactive, kind, unwired };" in html
 
     def test_inactive_badge_rendered(self, html):
         assert 'x-show="chk.inactive"' in html
