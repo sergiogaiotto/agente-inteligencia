@@ -1697,28 +1697,89 @@ function agentForm(editId) {
                     'qual quais quando quanto como onde porque por para pra pro com sem se ' +
                     'sobre ao aos a as the of in on to for and or what when which how where ' +
                     'is are be meu minha seu sua melhor forma modo jeito caso cliente usuario ' +
-                    'usuário pede pedir quer querer preciso necessito sobre tipo algo isso'
+                    'usuário pede pedir quer querer preciso necessito sobre tipo algo isso ' +
+                    // 2026-06-06: verbos-gatilho e rótulos genéricos de agente — alto
+                    // ruído, não discriminam ramo. Sem isso, ao stemizar viram ímãs
+                    // (ex.: 'fala'→'fal' casaria "fale/falar" em quase tudo).
+                    'fala falar fale trata tratar questão questao questões questoes ' +
+                    'aborda abordar menciona mencionar refere referir pergunta perguntar ' +
+                    'assunto agente agentes subagente especialista assistente'
                 ).split(/\s+/));
             }
             return this._stopwordsCache;
         },
-        _deriveConditionalExpr(when) {
-            // Deriva uma expr Jinja best-effort a partir do texto livre do "quando".
-            // Casa palavras-chave do gatilho contra `input_lower` (a PERGUNTA do
-            // usuário) — que é o que decide o ramo num fan-out 1-de-N. Editável
-            // depois no AI Mesh. Sem keywords úteis → '' (a aresta vira sequential).
-            const raw = (when || '').toLowerCase();
-            const tokens = raw
+        _stemPt(word) {
+            // Stemmer PT leve e CONSERVADOR: tira sufixos derivacionais/flexionais
+            // comuns pra unificar a família morfológica de uma palavra, NUNCA
+            // cortando abaixo de 4 chars (radical curto demais → falso-positivo de
+            // roteamento). Ex.: rentabilidade/rentabilização/rentabilizar → 'rentabil';
+            // retenção → 'reten'; fidelização → 'fideliz'; clientes → 'client'.
+            // É o que faz keyword casar a flexão que o usuário realmente digita.
+            let w = word;
+            if (w.length <= 4) return w;
+            // maximal munch: sufixos mais longos primeiro.
+            const suffixes = [
+                'izações', 'izacoes', 'ização', 'izacao', 'izar', 'izam', 'izou',
+                'ações', 'acoes', 'ação', 'acao',
+                'amento', 'imento',
+                'idades', 'idade', 'mente',
+                'ções', 'coes', 'ção', 'cao',
+                'ões', 'oes', 'ães', 'aes',
+                'ável', 'avel', 'ível', 'ivel',
+                'ismo', 'ista',
+                'eiros', 'eiras', 'eiro', 'eira',
+                'ados', 'adas', 'idos', 'idas', 'ado', 'ada', 'ido', 'ida',
+                'ando', 'endo', 'indo',
+                'ares', 'eres', 'ires',
+                'ais', 'éis', 'eis',
+                'ns', 'es', 'os', 'as', 's',
+            ];
+            for (const suf of suffixes) {
+                if (w.endsWith(suf) && w.length - suf.length >= 4) {
+                    return w.slice(0, -suf.length);
+                }
+            }
+            return w;
+        },
+        _kwTokens(text) {
+            // Tokeniza texto livre → radicais com sinal (stopwords fora, stem aplicado).
+            // Compartilhado pelo "quando" E pelo NOME do agente-alvo (que costuma SER
+            // o radical do domínio — "Rentab", "Retenção"). Dedup preservando ordem.
+            const raw = (text || '').toLowerCase();
+            const toks = raw
                 .replace(/[^\p{L}\p{N}\s]/gu, ' ')   // tira pontuação, mantém acentos
                 .split(/\s+/)
-                .filter(t => t.length > 2 && !this._stopwords().has(t));
-            const seen = new Set(); const kw = [];
-            for (const t of tokens) {
-                if (!seen.has(t)) { seen.add(t); kw.push(t); }
-                if (kw.length >= 5) break;
+                .filter(t => t.length > 2 && !this._stopwords().has(t))
+                .map(t => this._stemPt(t))
+                .filter(t => t.length >= 3);
+            const seen = new Set(); const out = [];
+            for (const t of toks) { if (!seen.has(t)) { seen.add(t); out.push(t); } }
+            return out;
+        },
+        _deriveConditionalExpr(when, targetName) {
+            // Deriva uma expr Jinja best-effort que casa a PERGUNTA do usuário
+            // (input_lower) — é ela que decide o ramo num fan-out 1-de-N. Editável
+            // depois no AI Mesh. Sem "quando" → '' (a aresta vira sequential).
+            //
+            // 2026-06-06 (fix roteamento "rentabilização não rodava"): casar palavra
+            // INTEIRA derrubava a morfologia do PT — a keyword 'rentabilidade' NUNCA
+            // casava 'rentabilizar'/'rentabilização'/'rentab' que o usuário digita, e
+            // o ramo era pulado (skipped_conditional). Agora:
+            //   (1) STEMMING leve unifica a família (rentabil*, reten*);
+            //   (2) SEMEIA o radical do NOME do agente-alvo ("Rentab" → 'rentab') como
+            //       keyword prioritária — alto sinal: casa as variações do domínio E
+            //       aparece no próprio output do roteador ("encaminhando ao agente
+            //       Rentab"). Mantém o contrato: exprs continuam `'kw' in input_lower`
+            //       em OR, só que com RADICAIS no lugar de palavras inteiras.
+            const w = (when || '').trim();
+            if (!w) return '';   // sem condição → aresta sequencial (sempre roda), como antes
+            const merged = []; const seen = new Set();
+            for (const t of [...this._kwTokens(targetName), ...this._kwTokens(w)]) {
+                if (!seen.has(t)) { seen.add(t); merged.push(t); }
+                if (merged.length >= 6) break;
             }
-            if (!kw.length) return '';
-            return kw.map(t => `'${t}' in input_lower`).join(' or ');
+            if (!merged.length) return '';
+            return merged.map(t => `'${t}' in input_lower`).join(' or ');
         },
         resolveAgentByName(name) {
             // Casa o alvo "delegar a" com um agente real (match normalizado).
@@ -1813,7 +1874,9 @@ function agentForm(editId) {
                     const agent = this.resolveAgentByName(r.target);
                     const inactive = !!(agent && (agent.status || 'active') !== 'active');
                     const kind = agent ? (agent.kind || 'subagent') : '';
-                    const expr = this._deriveConditionalExpr(when);
+                    // semeia o radical do NOME do agente resolvido (alto sinal); cai
+                    // pro texto livre do alvo se ainda não resolveu.
+                    const expr = this._deriveConditionalExpr(when, (agent && agent.name) || r.target);
                     const routing = (cls === 'agent' && when && expr) ? 'conditional' : 'sequential';
                     return { when, target: (r.target || '').trim(), cls, routing, expr, inactive, kind };
                 });
@@ -1829,7 +1892,7 @@ function agentForm(editId) {
                 const a = this.resolveAgentByName(r.target);
                 if (!a) continue;
                 const when = (r.when || '').trim();
-                const expr = this._deriveConditionalExpr(when);
+                const expr = this._deriveConditionalExpr(when, a.name);
                 if (!seen.has(a.id)) {
                     const slot = { id: a.id, name: a.name, exprs: [], unconditional: false };
                     seen.set(a.id, slot); out.push(slot);
