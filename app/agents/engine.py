@@ -144,6 +144,122 @@ def _build_response_language_closing(lang_tag: str) -> str:
 
 
 # ═══════════════════════════════════════════════════
+# Helpers — Grounded-by-default (2026-06-06)
+# ═══════════════════════════════════════════════════
+# Princípio global: o conhecimento paramétrico do modelo NUNCA é usado para
+# compor respostas — só evidências (anexos, RAG, tools). Layer A (estas funções)
+# injeta a diretiva no prompt; Layer B (_grounding_guard) recusa no VerifyEvidence
+# quando não há evidência. Escape hatch por agente: allow_general_knowledge.
+
+
+def _build_grounding_directive() -> str:
+    """Diretiva estrita de fundamentação — prependida ao system prompt.
+
+    Modelos (sobretudo open-weight) tendem a "preencher lacunas" com
+    conhecimento próprio quando a evidência é fraca/ausente. Esta diretiva
+    imperativa corta o impulso: a resposta deve derivar SÓ do contexto
+    fornecido. Complementa a regra "Nunca fabrique o Output Contract" da
+    seção de Ferramentas. Suprimida quando o agente tem
+    allow_general_knowledge (escape hatch de "solicitado CLARAMENTE").
+    """
+    return (
+        "[FONTE DA RESPOSTA — APENAS EVIDÊNCIAS]\n"
+        "Responda EXCLUSIVAMENTE com base nas evidências fornecidas neste "
+        "contexto: documentos anexados, trechos de base de conhecimento (RAG) "
+        "e resultados de ferramentas (MCP/APIs). É TERMINANTEMENTE PROIBIDO "
+        "usar conhecimento geral ou paramétrico do modelo, suposições, ou "
+        "qualquer informação que não esteja explicitamente nas evidências. Se "
+        "as evidências forem insuficientes ou ausentes, diga isso CLARAMENTE e "
+        "NÃO invente — peça o documento ou dado faltante. Nunca preencha "
+        "lacunas com conhecimento próprio."
+    )
+
+
+def _build_grounding_closing() -> str:
+    """Reminder curto de fundamentação no fim do prompt (estratégia sanduíche)."""
+    return (
+        "[LEMBRETE FINAL — FUNDAMENTAÇÃO]\n"
+        "Antes de responder: cada afirmação deve derivar de uma evidência "
+        "fornecida. Se não há evidência que a sustente, declare a ausência em "
+        "vez de recorrer ao conhecimento geral do modelo."
+    )
+
+
+# Mensagem de recusa quando a guarda de grounding dispara. Constante pra UI/teste
+# poderem casar sem duplicar o texto.
+GROUNDING_REFUSAL_REASON = (
+    "Não há evidências para fundamentar uma resposta (nenhum documento anexado, "
+    "base de conhecimento ou resultado de ferramenta), e este agente não está "
+    "autorizado a usar conhecimento geral do modelo. Anexe um documento, vincule "
+    "uma base de conhecimento, habilite uma ferramenta de busca, ou ative "
+    "'Permitir conhecimento geral' na edição do agente."
+)
+
+
+def _grounding_guard(
+    *,
+    strict: bool,
+    allow_general_knowledge: bool,
+    has_evidences: bool,
+    has_attachments: bool,
+    has_pipeline_context: bool,
+    has_tool_output: bool,
+    draft: str = "",
+) -> tuple[bool, str]:
+    """Decide se a resposta deve ser RECUSADA por falta de fundamentação.
+
+    Coração do princípio grounded-by-default (2026-06-06): quando `strict` e o
+    agente não tem o escape hatch (`allow_general_knowledge`), a resposta só é
+    permitida se houver ao menos UMA fonte de evidência — RAG, anexo, output de
+    ferramenta (MCP/API) ou contexto de pipeline upstream. Sem nenhuma, a
+    resposta só poderia vir do conhecimento paramétrico do modelo → recusa
+    controlada (honesta) em vez de alucinação silenciosa.
+
+    Drafts de erro do próprio sistema (começam com "⚠") são poupados: já são
+    mensagens acionáveis, não respostas paramétricas.
+
+    Returns:
+        (deve_recusar, motivo). motivo == "" quando não recusa.
+    """
+    if not strict or allow_general_knowledge:
+        return False, ""
+    if draft and draft.lstrip().startswith("⚠"):
+        return False, ""
+    grounded = (
+        has_evidences or has_attachments or has_pipeline_context or has_tool_output
+    )
+    if grounded:
+        return False, ""
+    return True, GROUNDING_REFUSAL_REASON
+
+
+async def _has_tool_grounding(interaction_id: str | None) -> bool:
+    """True se houve ≥1 invocação REAL de ferramenta (MCP tool_call ou API
+    binding execution) nesta interação.
+
+    Reconhece respostas fundamentadas só em tools (ex.: busca web sem RAG/anexo)
+    para o _grounding_guard não recusá-las por engano. As invocações já foram
+    persistidas pelo harness ANTES do VerifyEvidence. Best-effort: erro de query
+    → False (a guarda erra para o lado seguro — recusa — em vez de liberar).
+    """
+    if not interaction_id:
+        return False
+    try:
+        from app.core.database import tool_calls_repo
+        if await tool_calls_repo.find_all(interaction_id=interaction_id, limit=1):
+            return True
+    except Exception:
+        pass
+    try:
+        from app.core.database import binding_executions_repo
+        if await binding_executions_repo.find_all(interaction_id=interaction_id, limit=1):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+# ═══════════════════════════════════════════════════
 # Helpers — Pre-check de configuração do LLM provider
 # ═══════════════════════════════════════════════════
 
@@ -661,6 +777,16 @@ class DeepAgentHarness:
         # ter precedência forte na atenção do LLM.
         _lang = _resolve_response_language(self.config, _get_settings_lang())
         parts.append(_build_response_language_directive(_lang))
+        # Grounded-by-default — diretiva estrita de fundamentação. Gated por
+        # settings.grounding_strict E pela ausência do escape hatch do agente
+        # (allow_general_knowledge). Quando o agente PODE usar conhecimento geral,
+        # não injeta — libera o modelo. Enforcement real (recusa) vive no
+        # _grounding_guard do execute_interaction (defesa em profundidade).
+        _gk_allowed = bool(self.config.get("allow_general_knowledge") or 0)
+        _grounding_on = bool(getattr(_get_settings_lang(), "grounding_strict", True))
+        _inject_grounding = _grounding_on and not _gk_allowed
+        if _inject_grounding:
+            parts.append(_build_grounding_directive())
         # Output Shape — diretiva de TAMANHO da resposta. Quando skill declara
         # length_preset em ## Output Shape, engine injeta limite explícito.
         # Sem declaração, usa default ('digest' = 1500 chars) — comportamento
@@ -715,6 +841,8 @@ class DeepAgentHarness:
                 "listadas acima) e `query` (a consulta ou parâmetros em string). "
                 "Aguarde o retorno antes de gerar sua resposta final."
             )
+        if _inject_grounding:
+            parts.append(_build_grounding_closing())
         parts.append(_build_response_language_closing(_lang))
         return "\n".join(parts)
 
@@ -1273,6 +1401,7 @@ async def execute_interaction(
     attachments: list = None,
     pipeline_context: str = None,
     context_mode: str = "auto",
+    grounding_strict: Optional[bool] = None,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
 
@@ -1280,6 +1409,12 @@ async def execute_interaction(
     da sessão é reinjetado no LLM. 'none' = stateless (legado); 'auto' (default)
     = reconstrói a janela por camada (router médio / aobd leve / subagent off).
     Só age quando há `session_id`. Ver `app.agents.conversation_memory`.
+
+    `grounding_strict` (2026-06-06 — grounded-by-default): None (default) lê
+    settings.grounding_strict; True/False força explicitamente. Quando efetivo
+    e o agente não tem allow_general_knowledge, o VerifyEvidence RECUSA respostas
+    sem nenhuma evidência (anexo/RAG/tool/pipeline). Ver `_grounding_guard`.
+    Harness/golden e recipes pinam False para reprodutibilidade (caminho legado).
     """
     start = time.time()
     agent = await agents_repo.find_by_id(agent_id)
@@ -1843,7 +1978,68 @@ async def execute_interaction(
     ctx.metadata["evidence_min_relevance"] = _min_relevance
     ctx.metadata["evidence_min_relevance_source"] = _min_relevance_source
 
-    if pipeline_context or skip_evidence:
+    # ── Grounded-by-default (2026-06-06) — guarda anti-conhecimento paramétrico ──
+    # ANTES de qualquer verificação: se strict e o agente não pode usar
+    # conhecimento geral, a resposta PRECISA de fundamentação (RAG / anexo /
+    # output de tool / contexto de pipeline). Sem nenhuma fonte, a resposta só
+    # poderia vir do conhecimento do modelo → recusa controlada honesta em vez
+    # de alucinação silenciosa. Esta guarda SOBREPÕE o auto-pass de
+    # `skip_evidence` (require_evidence=0) — a porta dos fundos que deixava o
+    # verifier aprovar respostas sem evidência. `grounding_strict` (param) força
+    # explicitamente; None lê settings.grounding_strict.
+    _grounding_strict_eff = (
+        bool(getattr(settings, "grounding_strict", True))
+        if grounding_strict is None else bool(grounding_strict)
+    )
+    _gk_allowed = bool(agent.get("allow_general_knowledge") or 0)
+    _has_attach_grounding = bool(attachment_context)
+    # Só consultamos tool grounding (query no DB) quando a guarda PODE disparar:
+    # strict ligado, sem escape hatch e sem nenhuma outra fonte (RAG/anexo/
+    # pipeline). Caso contrário a decisão já está selada e a query seria
+    # desperdício — e superfície de erro desnecessária no caminho feliz.
+    _grounding_could_refuse = (
+        _grounding_strict_eff and not _gk_allowed
+        and not evidences and not _has_attach_grounding and not pipeline_context
+    )
+    _has_tool_grounding_flag = (
+        await _has_tool_grounding(ctx.interaction_id)
+        if _grounding_could_refuse else False
+    )
+    _refuse_ungrounded, _grounding_reason = _grounding_guard(
+        strict=_grounding_strict_eff,
+        allow_general_knowledge=_gk_allowed,
+        has_evidences=bool(evidences),
+        has_attachments=_has_attach_grounding,
+        has_pipeline_context=bool(pipeline_context),
+        has_tool_output=_has_tool_grounding_flag,
+        draft=draft,
+    )
+    ctx.metadata["grounding"] = {
+        "strict": _grounding_strict_eff,
+        "allow_general_knowledge": _gk_allowed,
+        "refused": _refuse_ungrounded,
+        "has_evidence": bool(evidences),
+        "has_attachment": _has_attach_grounding,
+        "has_tool_output": _has_tool_grounding_flag,
+        "has_pipeline_context": bool(pipeline_context),
+    }
+
+    if _refuse_ungrounded:
+        logger.warning(
+            "grounding.refused",
+            extra={
+                "event": "grounding.refused",
+                "agent_id": agent_id,
+                "agent_kind": agent.get("kind"),
+                "interaction_id": ctx.interaction_id,
+                "has_evidence": bool(evidences),
+                "has_attachment": _has_attach_grounding,
+                "has_tool_output": _has_tool_grounding_flag,
+                "has_pipeline_context": bool(pipeline_context),
+            },
+        )
+        await fsm.run_verify_evidence({"ok": False, "confidence": 0.0})
+    elif pipeline_context or skip_evidence:
         await fsm.run_verify_evidence({"ok": True, "confidence": 1.0})
     elif _pg_settings.verifier_v2_enabled and _pg_settings.verifier_production_async:
         # ─── Production sample async (§14.2) ──
@@ -1923,7 +2119,14 @@ async def execute_interaction(
     if ctx.current_state == State.RECOMMEND:
         await fsm.run_recommend(draft)
     elif ctx.current_state == State.REFUSE:
-        await fsm.run_refuse("Evidência insuficiente para recomendação segura.")
+        # Quando a recusa veio da guarda de grounding, usa o motivo acionável
+        # (peça documento / habilite tool / ative conhecimento geral). Senão,
+        # o motivo legado de evidência insuficiente.
+        _refuse_reason = (
+            _grounding_reason if _refuse_ungrounded
+            else "Evidência insuficiente para recomendação segura."
+        )
+        await fsm.run_refuse(_refuse_reason)
     elif ctx.current_state == State.ESCALATE:
         await fsm.run_escalate("Risco alto detectado.")
 
@@ -2292,6 +2495,15 @@ async def _build_result(
             # sessão nova ou sem histórico. Observabilidade p/ API/audit — espelha
             # o LOG event=context.injected.
             "context_injected": ctx.metadata.get("context_injected"),
+            # Grounded-by-default (2026-06-06). Presente SEMPRE que o agente passou
+            # pela guarda anti-conhecimento-paramétrico: {strict, allow_general_
+            # knowledge, refused, has_evidence, has_attachment, has_tool_output,
+            # has_pipeline_context}. refused=True ⇒ a resposta foi recusada por
+            # não ter nenhuma fonte de fundamentação e o agente não estar
+            # autorizado a usar conhecimento geral. Espelha o LOG
+            # event=grounding.refused. None p/ subagent/pipeline que não chegou
+            # à verificação.
+            "grounding": ctx.metadata.get("grounding"),
             "execution_log": exec_log,
         },
     }

@@ -2162,6 +2162,10 @@ class SettingsSave(BaseModel):
         default="pt-BR",
         pattern=r"^[a-z]{2}(-[A-Z]{2})?$",
     )
+    # Grounded-by-default (2026-06-06): True = agentes respondem SÓ com base em
+    # evidências; respostas sem evidência são recusadas. False fura o princípio
+    # anti-alucinação globalmente (preferir o escape hatch por agente).
+    grounding_strict: Optional[bool] = True
     # GPT-OSS (open-weight) — Onda 4 plataforma
     oss120b_url: Optional[str] = ""
     oss120b_model: Optional[str] = "openai/gpt-oss-120b"

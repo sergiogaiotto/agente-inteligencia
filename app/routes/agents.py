@@ -162,7 +162,7 @@ async def get_agent(agent_id: str):
     if not a: raise HTTPException(404, "Agente não encontrado")
     return a
 
-_BOOL_FIELDS = ("require_evidence", "accepts_images", "accepts_documents")
+_BOOL_FIELDS = ("require_evidence", "accepts_images", "accepts_documents", "allow_general_knowledge")
 
 
 @router.post("/preflight", response_model=PreflightReport)

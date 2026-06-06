@@ -95,6 +95,11 @@ async def _invoke_step(
         # Passo de recipe = stateless (a saída de um passo alimenta o próximo via
         # current_input, não via memória de sessão). 'none' mantém determinismo.
         context_mode="none",
+        # Grounded-by-default (2026-06-06): replay de recipe é determinístico e
+        # a saída de um passo alimenta o próximo via current_input (não via
+        # evidência RAG). strict=True recusaria passos sem fonte e quebraria o
+        # encadeamento. Fixamos False — a guarda é runtime de produção.
+        grounding_strict=False,
     )
     trace = result.get("trace") or {}
     tokens = trace.get("tokens") or {}

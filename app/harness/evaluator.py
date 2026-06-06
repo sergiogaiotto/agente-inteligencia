@@ -195,6 +195,12 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
                 # pura. 'none' blinda a métrica contra vazamento de histórico
                 # entre casos (reprodutibilidade), independente do default 'auto'.
                 context_mode="none",
+                # Grounded-by-default (2026-06-06): golden datasets foram
+                # calibrados ANTES da guarda anti-conhecimento-paramétrico e
+                # muitos casos não anexam evidência. strict=True recusaria esses
+                # casos e quebraria a métrica. Fixamos False p/ reprodutibilidade
+                # — a guarda é runtime de produção, não critério de avaliação.
+                grounding_strict=False,
             )
             latency = (time.time() - start) * 1000
             total_latency += latency
