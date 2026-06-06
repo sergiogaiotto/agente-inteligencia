@@ -2946,6 +2946,10 @@ async def execute_pipeline(
                 target_name=agent.get("name", ""),
                 attachments=attachments,
                 session_text=session_text,
+                # Override "o anexo manda": handler declarado não é pulado quando
+                # chega o tipo de anexo que ele aceita (router como dispatcher).
+                target_accepts_documents=bool(agent.get("accepts_documents") or 0),
+                target_accepts_images=bool(agent.get("accepts_images") or 0),
             )
             if skip_by_conditional:
                 steps.append({
@@ -3087,12 +3091,43 @@ async def execute_pipeline(
         else:
             pipeline_ctx = None
 
+        # ── Dispatcher de anexos (2026-06-06 — "router como dispatcher") ──
+        # Entry (i==0) recebe TODOS os anexos (inalterado — zero regressão).
+        # Downstream (i>0) recebe só o subconjunto que DECLARA aceitar; antes
+        # recebia None → o especialista era CEGO ao arquivo bruto (via apenas o
+        # texto do upstream em pipeline_context). Ver _filter_attachments_by_agent.
+        _forwarded_atts = (
+            attachments if i == 0 else _filter_attachments_by_agent(agent, attachments)
+        )
+        _fwd_names: list[str] = []
+        if i > 0 and _forwarded_atts:
+            _fwd_names = [str(a.get("name", "") or "") for a in _forwarded_atts]
+            logger.info(
+                "mesh.dispatch.attachments_forwarded",
+                extra={
+                    "event": "mesh.dispatch",
+                    "source_id": upstream_id,
+                    "target_id": agent_id,
+                    "target_name": agent.get("name", ""),
+                    "count": len(_forwarded_atts),
+                    "names": _fwd_names,
+                },
+            )
+            await _emit({
+                "type": "attachments_dispatched",
+                "step_index": i,
+                "agent_id": agent_id,
+                "agent_name": agent.get("name", ""),
+                "count": len(_forwarded_atts),
+                "names": _fwd_names,
+            })
+
         try:
             result = await execute_interaction(
                 agent_id=agent_id,
                 user_input=current_input,
                 channel=channel,
-                attachments=attachments if i == 0 else None,
+                attachments=_forwarded_atts,
                 pipeline_context=pipeline_ctx,
                 # Só o primeiro agente reutiliza a session_id do request.
                 # Subsequentes criam sub-interactions próprias (child_interaction_ids)
@@ -3123,6 +3158,9 @@ async def execute_pipeline(
                 "transitions": result.get("transitions", []),
                 "trace": result.get("trace"),
                 "interaction_id": iid,
+                # Dispatcher: anexos efetivamente entregues a este SA (i>0). Surge
+                # no painel de rastreabilidade — operador vê que o arquivo chegou.
+                **({"dispatched_attachments": _fwd_names} if _fwd_names else {}),
             })
             last_result = result
             # Tracking por-id pro roteamento parent-aware (fan-out): registra
@@ -3374,6 +3412,75 @@ def _classify_attachment_kind(att: dict | None) -> str:
     return "other"
 
 
+def _filter_attachments_by_agent(
+    agent: dict | None, attachments: list | None
+) -> list | None:
+    """Subconjunto de `attachments` cujo TIPO o agente DECLARA aceitar.
+
+    "Router como dispatcher" (2026-06-06): antes, no pipeline multi-agente, só o
+    nó de entrada (i==0) recebia os anexos; todo SA downstream recebia ``None``
+    (ver execute_pipeline). Resultado: o especialista era CEGO ao arquivo bruto —
+    via apenas o TEXTO do upstream via pipeline_context. Um SA de documentos não
+    conseguia analisar o documento que o usuário soltou; pior, "se fundamentava"
+    na prosa do upstream (buraco de grounding que o PR A não pega, pois
+    pipeline_context conta como evidência).
+
+    Agora cada SA downstream recebe só o que sabe tratar:
+    - ``accepts_documents`` → anexos kind 'document' (e 'other', best-effort: se
+      o markitdown não classificou, é melhor entregar os bytes ao handler de
+      documentos do que descartá-los);
+    - ``accepts_images``   → anexos kind 'image'.
+
+    Defaults da tabela agents são 0 → forwarding é OPT-IN: um SA só recebe anexo
+    se o operador marcou a capacidade. Retorna ``None`` (não ``[]``) quando nada
+    passa, para casar a assinatura de execute_interaction e o caminho legado
+    (sem anexos → sem attachment_context).
+    """
+    atts = attachments or []
+    if not atts:
+        return None
+    accepts_doc = bool((agent or {}).get("accepts_documents") or 0)
+    accepts_img = bool((agent or {}).get("accepts_images") or 0)
+    if not accepts_doc and not accepts_img:
+        return None
+    out: list = []
+    for a in atts:
+        kind = _classify_attachment_kind(a)
+        if kind == "image" and accepts_img:
+            out.append(a)
+        elif kind in ("document", "other") and accepts_doc:
+            out.append(a)
+    return out or None
+
+
+def _target_handles_attachment(
+    *,
+    accepts_documents: bool,
+    accepts_images: bool,
+    attachments: list | None,
+) -> bool:
+    """True se o agente-alvo DECLARA capacidade para algum anexo presente.
+
+    Override de roteamento por CAPACIDADE (2026-06-06 — "router como dispatcher"),
+    irmão do override "o roteador mandou" (`_output_names_target`): um especialista
+    que marcou `accepts_documents`/`accepts_images` NUNCA deve ser pulado quando
+    chega um anexo do tipo que ele declarou tratar — independente da expr de
+    keyword. É a autoridade de CAPACIDADE: roda o agente que o desenho elegeu para
+    aquele tipo de arquivo, em vez de perder o anexo por vocabulário que não bate a
+    regra (a causa-raiz do bug "Doc Analise": SA pulado com documento anexado).
+
+    Fail-safe (roda o SA) e opt-in (defaults 0 → só dispara para handlers
+    explícitos). 'other' conta como documento — ver _filter_attachments_by_agent.
+    """
+    atts = attachments or []
+    if not atts:
+        return False
+    kinds = {_classify_attachment_kind(a) for a in atts}
+    has_doc = "document" in kinds or "other" in kinds
+    has_img = "image" in kinds
+    return bool((accepts_documents and has_doc) or (accepts_images and has_img))
+
+
 def _build_conditional_context(
     output: str | None = None,
     final_state: str | None = None,
@@ -3570,6 +3677,8 @@ async def _should_skip_conditional(
     target_name: str = "",
     attachments: list | None = None,
     session_text: str = "",
+    target_accepts_documents: bool = False,
+    target_accepts_images: bool = False,
 ) -> bool:
     """True se a conexão source→target é `connection_type=conditional` e
     a expressão configurada em `config.expr` avaliou para `False`.
@@ -3579,6 +3688,13 @@ async def _should_skip_conditional(
     a decisão do roteador vence o heurístico de keywords e NÃO skipamos — ver
     `_output_names_target`. Isto corrige o caso em que o AR/AOBD roteia certo
     pela semântica mas o vocabulário da pergunta não bate a expr.
+
+    Override "o anexo manda" (2026-06-06 — router como dispatcher): se o alvo
+    DECLARA `accepts_documents`/`accepts_images` e chega um anexo do tipo
+    declarado, NÃO skipamos — independente da expr. Um especialista de documentos
+    não pode ser pulado quando o usuário soltou um documento (a causa-raiz do bug
+    "Doc Analise"). Ver `_target_handles_attachment`. Defaults False → opt-in:
+    só dispara para handlers explícitos, comportamento legado preservado.
 
     Política de erro: **fail-open** — qualquer falha (config malformado,
     expr inválida, exception no Jinja) loga warning e devolve `False`
@@ -3607,6 +3723,30 @@ async def _should_skip_conditional(
                 "target_id": target_id,
                 "target_name": target_name,
                 "decision": "run_not_skip",
+            },
+        )
+        return False
+
+    # ── Override "o anexo manda" (2026-06-06 — router como dispatcher) ──
+    # Se este alvo DECLARA capacidade para o tipo de anexo presente
+    # (accepts_documents + documento, ou accepts_images + imagem), NÃO skipa,
+    # qualquer que seja a expr. Corrige o bug "Doc Analise": SA de documentos
+    # pulado quando o usuário soltou um documento mas o texto digitado não tinha
+    # keyword. É a autoridade de CAPACIDADE — ver _target_handles_attachment.
+    if _target_handles_attachment(
+        accepts_documents=target_accepts_documents,
+        accepts_images=target_accepts_images,
+        attachments=attachments,
+    ):
+        logger.info(
+            "mesh.conditional.target_handles_attachment",
+            extra={
+                "event": "mesh.conditional",
+                "source_id": source_id,
+                "target_id": target_id,
+                "target_name": target_name,
+                "decision": "run_not_skip",
+                "reason": "capability",
             },
         )
         return False
@@ -3722,10 +3862,17 @@ async def _should_skip_default(
     for sib in siblings:
         sib_target_id = sib.get("target_agent_id")
         sib_name = ""
+        sib_accepts_doc = False
+        sib_accepts_img = False
         try:
             sib_agent = await agents_repo.find_by_id(sib_target_id)
             if sib_agent:
                 sib_name = sib_agent.get("name", "")
+                # Capability do irmão p/ o override "o anexo manda" propagar aqui:
+                # se um irmão é handler do anexo presente, ele "casa" → o default
+                # (else) não roda (o especialista responde). Ver _should_skip_conditional.
+                sib_accepts_doc = bool(sib_agent.get("accepts_documents") or 0)
+                sib_accepts_img = bool(sib_agent.get("accepts_images") or 0)
         except Exception:
             sib_name = ""  # fail-open: sem nome, o override de roteador não dispara
 
@@ -3738,6 +3885,8 @@ async def _should_skip_default(
             target_name=sib_name,
             attachments=attachments,
             session_text=session_text,
+            target_accepts_documents=sib_accepts_doc,
+            target_accepts_images=sib_accepts_img,
         )
         if not sib_skip:
             # um irmão condicional disparou → o default (else) NÃO roda.
