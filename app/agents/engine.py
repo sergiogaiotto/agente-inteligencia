@@ -2446,6 +2446,33 @@ async def _resolve_mesh_chain(agent_id: str, agent: dict) -> list:
     return chain if len(chain) > 1 else []
 
 
+def _build_pipeline_trace_data(
+    master_interaction_id: str, entry_agent_id: str, final_result: dict
+) -> dict:
+    """Monta o trace_data agregado do pipeline pra persistir no interaction
+    mestre.
+
+    Sem persistir isto, sessões de pipeline rodadas via /chat/stream (o
+    caminho padrão do workspace) perdiam Rastreabilidade + Execution Log ao
+    recarregar, e o toggle Agente/Pipeline caía pra 'agent' — porque o
+    GET /workspace/sessions infere mode/log a partir de pipeline_steps +
+    trace.execution_log, que ficavam ausentes (só o /chat sync persistia).
+    As chaves abaixo espelham o que aquele endpoint e o frontend
+    (loadSession/_restoreLog) esperam. `mode` é cravado em 'pipeline'.
+    """
+    return {
+        "interaction_id": master_interaction_id,
+        "agent_id": entry_agent_id,
+        "final_state": final_result.get("final_state"),
+        "evidence_score": final_result.get("evidence_score", 0),
+        "transitions": final_result.get("transitions", []),
+        "duration_ms": final_result.get("duration_ms", 0),
+        "trace": final_result.get("trace", {}),
+        "pipeline_steps": final_result.get("pipeline_steps", []),
+        "mode": "pipeline",
+    }
+
+
 async def execute_pipeline(
     entry_agent_id: str,
     user_input: str,
@@ -2906,6 +2933,37 @@ async def execute_pipeline(
             "execution_log": all_exec_logs,
         },
     }
+
+    # ── Persistir trace_data agregado no interaction mestre (2026-06-06) ──
+    # Mirror do que o POST /chat sync já faz pós-execução. Garante que ao
+    # recarregar a sessão de pipeline o GET /sessions devolva mode='pipeline'
+    # + pipeline_steps + execution_log — assim a Rastreabilidade e o Execution
+    # Log voltam e o toggle fica em Pipeline (antes sumiam e caía em 'agent',
+    # porque o caminho /chat/stream nunca gravava trace_data). Cobre stream E
+    # sync num lugar só. Falha de persist não derruba a resposta (já temos
+    # final_result) — só loga pra troubleshooting.
+    if master_interaction_id:
+        try:
+            await interactions_repo.update(
+                master_interaction_id,
+                {"trace_data": json.dumps(
+                    _build_pipeline_trace_data(
+                        master_interaction_id, entry_agent_id, final_result
+                    ),
+                    ensure_ascii=False,
+                    default=str,
+                )},
+            )
+        except Exception as _persist_err:
+            logger.warning(
+                "pipeline.trace_data_persist_failed",
+                extra={
+                    "event": "pipeline.trace_data_persist",
+                    "interaction_id": master_interaction_id,
+                    "error_type": type(_persist_err).__name__,
+                },
+                exc_info=True,
+            )
 
     await _emit({"type": "pipeline_done", "result": final_result})
 
