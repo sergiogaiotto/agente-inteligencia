@@ -1013,6 +1013,9 @@
                                     <span x-show="chk.inactive"
                                           class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-red-100 text-red-700"
                                           title="Agente desativado — ative antes de rotear. A conexão pode ser criada, mas o pipeline não vai executá-lo.">inativo</span>
+                                    <span x-show="chk.unwired"
+                                          class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700"
+                                          title="Agente real, mas SEM aresta a partir deste orquestrador no AI Mesh. O roteador vai nomeá-lo e o mesh não vai roteá-lo (dead-end). Clique em 'Aplicar e sincronizar com AI Mesh' para criar a conexão.">fora do mesh</span>
                                     <span class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
                                           :class="chk.routing === 'conditional' ? 'bg-sky-100 text-sky-700' : 'bg-surface-200 text-surface-600'"
                                           x-text="chk.routing === 'conditional' ? '⤿ condicional' : '→ sequencial'"
@@ -1034,12 +1037,39 @@
                     </button>
                     <p x-show="!isEdit && missionAgentTargets.length" class="mt-1 text-[10px] text-surface-400">Agente novo: as conexões serão criadas no AI Mesh ao salvar o agente.</p>
                 </div>
-                <!-- Fallback / entradas ambíguas -->
+                <!-- Fallback / entradas ambíguas — escolha estruturada (2026-06-06).
+                     'graceful' (default) gera um else que RESPONDE fora-de-escopo
+                     sem citar agente (mata o drift "encaminhar pro FAQ Claro");
+                     'custom' usa o texto livre como antes. Em ambos, o prompt ganha
+                     uma trava anti-drift (só cita destinos listados). -->
                 <div>
                     <label class="block text-[11px] font-semibold text-brand-700 mb-1" x-text="composerFallbackLabel()"></label>
+                    <div class="space-y-1.5 mb-2">
+                        <label class="flex items-start gap-2 cursor-pointer">
+                            <input type="radio" value="graceful" x-model="mission.fallbackMode" class="mt-0.5 border-surface-300">
+                            <span class="text-[12px] text-brand-900">
+                                <b x-text="form.kind === 'router' ? 'Responder que está fora do escopo' : 'Responder que está fora do escopo de coordenação'"></b>
+                                <span class="text-surface-500">(recomendado) — pede reformulação e <b>não</b> cita nenhum agente.</span>
+                            </span>
+                        </label>
+                        <label class="flex items-start gap-2 cursor-pointer">
+                            <input type="radio" value="custom" x-model="mission.fallbackMode" class="mt-0.5 border-surface-300">
+                            <span class="text-[12px] text-brand-900">Comportamento personalizado (texto abaixo)</span>
+                        </label>
+                    </div>
                     <input x-model="mission.fallback" type="text"
                            class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400"
-                           placeholder="Ex.: Se nenhuma regra se aplicar, pedir esclarecimento ao usuário.">
+                           :placeholder="mission.fallbackMode === 'custom' ? 'Ex.: Se nenhuma regra se aplicar, pedir esclarecimento ao usuário.' : 'Opcional: complemento ao texto padrão de fora-de-escopo.'">
+                    <p class="mt-1 text-[10px] text-surface-400 leading-snug">
+                        Em ambos os casos o prompt ganha uma <b>trava anti-drift</b>: o agente só pode citar os destinos listados acima — <b>nunca</b> inventa um agente fora da lista.
+                    </p>
+                    <!-- Alerta de drift do fallback CUSTOM: nomeia agente real sem aresta -->
+                    <template x-if="missionFallbackDrift.length">
+                        <p class="mt-1.5 text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1 leading-snug">
+                            ⚠ O fallback cita <b x-text="missionFallbackDrift.map(a => a.name).join(', ')"></b>
+                            — agente real <b>sem aresta</b> a partir deste orquestrador. Transforme em regra (com "quando") e sincronize, ou o agente vai apontar pra um destino que o AI Mesh não roteia.
+                        </p>
+                    </template>
                 </div>
                 <!-- Regra de ouro: só AOBD (o roteador não tem essa seção no scaffold) -->
                 <label x-show="form.kind === 'aobd'" class="flex items-center gap-2 cursor-pointer">
@@ -1105,6 +1135,11 @@ function agentForm(editId) {
             statement: '',                      // missão / triagem (obrigatório)
             rules: [{ when: '', target: '' }],  // regras repetíveis: quando → delegar a
             fallback: '',                       // política de fallback / entradas ambíguas
+            // 2026-06-06: fallback estruturado. 'graceful' (default) gera um else
+            // que RESPONDE estar fora do escopo sem citar agente algum — mata o
+            // drift "encaminhar pro FAQ Claro" (agente que nem está cabeado no
+            // mesh). 'custom' usa o texto livre de `fallback` como antes.
+            fallbackMode: 'graceful',
             goldenRule: true,                   // regra de ouro (só AOBD, default ON)
         },
         // "IA, me ajude!" — gera um RASCUNHO da missão/regras/fallback a partir
@@ -1117,6 +1152,11 @@ function agentForm(editId) {
         // viram conexões logo após o save() (quando o orquestrador ganha id).
         meshSyncing: false,
         pendingMeshTargets: [],   // [{id, name}] criados no save() quando o agente é novo
+        // 2026-06-06: ids dos agentes JÁ cabeados a partir deste orquestrador
+        // (GET topology no openComposer, modo edição). Alimenta o alerta de
+        // DRIFT: regra/fallback nomeia agente real SEM aresta → badge "fora do
+        // mesh". Vazio em agente novo (nada cabeado ainda → sync no save()).
+        meshDownstreamIds: [],
         // Mentor de Agentes — painel lateral recolhível (default aberto).
         mentorOpen: true,
         // Chat "Pergunte ao mentor" — conversa contextual no rail (POST /wizard/mentor).
@@ -1553,8 +1593,17 @@ function agentForm(editId) {
         },
         openComposer() {
             // v1 sempre abre limpo — não faz parse reverso do System Prompt.
-            this.mission = { statement: '', rules: [{ when: '', target: '' }], fallback: '', goldenRule: true };
+            this.mission = { statement: '', rules: [{ when: '', target: '' }], fallback: '', fallbackMode: 'graceful', goldenRule: true };
             this.composeAi = { intent: '', loading: false, error: '', isDraft: false };
+            // Alerta de drift: carrega quais alvos já têm aresta (só faz sentido
+            // editando — agente novo ainda não tem downstream). Assíncrono: a UI
+            // abre sem avisos e eles aparecem quando a topologia chega.
+            this.meshDownstreamIds = [];
+            if (this.isEdit && editId) {
+                this._existingDownstreamIds(editId)
+                    .then(set => { this.meshDownstreamIds = Array.from(set); })
+                    .catch(() => {});
+            }
             this.composerOpen = true;
         },
         composeAiHint() {
@@ -1591,6 +1640,9 @@ function agentForm(editId) {
                     statement: d.statement || '',
                     rules: rules.length ? rules : [{ when: '', target: '' }],
                     fallback: d.fallback || '',
+                    // IA trouxe prosa de fallback → modo custom; senão mantém o
+                    // else gracioso (responde fora-de-escopo sem nomear agente).
+                    fallbackMode: d.fallback ? 'custom' : 'graceful',
                     goldenRule: (typeof d.goldenRule === 'boolean') ? d.goldenRule : (this.form.kind !== 'router'),
                 };
                 this.composeAi.isDraft = true;
@@ -1624,6 +1676,9 @@ function agentForm(editId) {
             const isRouter = this.form.kind === 'router';
             const stmt = (this.mission.statement || '').trim();
             const fb = (this.mission.fallback || '').trim();
+            // Modo do fallback (2026-06-06): gracioso = else que responde
+            // fora-de-escopo SEM nomear agente (mata o drift). custom = prosa livre.
+            const graceful = (this.mission.fallbackMode || 'graceful') === 'graceful';
             const rules = (this.mission.rules || []).filter(r => (r.when || '').trim() || (r.target || '').trim());
             const out = [];
             if (isRouter) {
@@ -1642,7 +1697,16 @@ function agentForm(editId) {
                 }
                 out.push('');
                 out.push('## Entradas ambíguas ou fora de escopo');
-                out.push(fb || '<comportamento padrão: pedir esclarecimento, categoria "outros"...>');
+                if (graceful) {
+                    out.push('Se a entrada não casar nenhuma categoria acima, responda que o assunto está fora do seu escopo e peça uma reformulação — NÃO encaminhe para nenhum agente nesse caso.');
+                    if (fb) out.push(fb);
+                } else {
+                    out.push(fb || '<comportamento padrão: pedir esclarecimento, categoria "outros"...>');
+                }
+                // Trava anti-drift SEMPRE presente: impede o roteador de citar um
+                // agente fora das Categorias (causa do bug "encaminhar pro FAQ Claro").
+                out.push('');
+                out.push('Importante: só encaminhe para os destinos listados em Categorias; NUNCA invente nem cite agentes que não estejam nessa lista.');
             } else {
                 out.push('## Missão');
                 out.push(stmt || '<descreva em 1 frase o que este orquestrador coordena>');
@@ -1659,7 +1723,15 @@ function agentForm(editId) {
                 }
                 out.push('');
                 out.push('## Política de fallback');
-                out.push(fb || '<o que fazer quando nenhuma rota se aplica: pedir esclarecimento, rota padrão...>');
+                if (graceful) {
+                    out.push('Se nenhum critério de roteamento se aplicar, responda que o pedido está fora do escopo de coordenação e peça uma reformulação — NÃO delegue para nenhum agente nesse caso.');
+                    if (fb) out.push(fb);
+                } else {
+                    out.push(fb || '<o que fazer quando nenhuma rota se aplica: pedir esclarecimento, rota padrão...>');
+                }
+                // Trava anti-drift SEMPRE presente (espelha a do roteador).
+                out.push('');
+                out.push('Importante: só delegue aos agentes listados em Critérios de roteamento; NUNCA invente nem cite agentes que não estejam nessa lista.');
                 if (this.mission.goldenRule) {
                     out.push('');
                     out.push('## Regra de ouro');
@@ -1874,11 +1946,17 @@ function agentForm(editId) {
                     const agent = this.resolveAgentByName(r.target);
                     const inactive = !!(agent && (agent.status || 'active') !== 'active');
                     const kind = agent ? (agent.kind || 'subagent') : '';
+                    // DRIFT (2026-06-06): alvo é agente real mas — em modo edição —
+                    // ainda NÃO tem aresta a partir deste orquestrador → vira
+                    // dead-end no runtime (o roteador nomeia, o mesh não roteia).
+                    // Sincronizar resolve. Em agente novo não dispara (nada cabeado
+                    // ainda; o sync acontece no save()).
+                    const unwired = this.isEdit && cls === 'agent' && !!agent && !this._isAgentWired(agent.id);
                     // semeia o radical do NOME do agente resolvido (alto sinal); cai
                     // pro texto livre do alvo se ainda não resolveu.
                     const expr = this._deriveConditionalExpr(when, (agent && agent.name) || r.target);
                     const routing = (cls === 'agent' && when && expr) ? 'conditional' : 'sequential';
-                    return { when, target: (r.target || '').trim(), cls, routing, expr, inactive, kind };
+                    return { when, target: (r.target || '').trim(), cls, routing, expr, inactive, kind, unwired };
                 });
         },
         get missionAgentTargets() {
@@ -1915,6 +1993,46 @@ function agentForm(editId) {
                 const topo = await api.get('/api/v1/mesh/topology');
                 return new Set((topo.edges || []).filter(e => e.source === sourceId).map(e => e.target));
             } catch { return new Set(); }
+        },
+        _isAgentWired(agentId) {
+            // True se o agente já tem aresta a partir deste orquestrador
+            // (meshDownstreamIds carregado no openComposer, modo edição). Em
+            // agente novo retorna sempre false — mas o alerta de drift só dispara
+            // em isEdit (ver missionRuleChecks/missionFallbackDrift).
+            return (this.meshDownstreamIds || []).includes(agentId);
+        },
+        _mentionsName(text, name) {
+            // Espelha _output_names_target() do engine.py em JS: fronteira de
+            // palavra, case/acento-insensível (NFKD + remove diacríticos). Usado
+            // pra detectar quando o fallback custom NOMEIA um agente real — o
+            // mesmo sinal que o engine usa pra deixar o roteador rodar o alvo.
+            const strip = s => (s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
+            const n = strip(name).trim();
+            if (n.length < 3) return false;          // nome curto: guard (evita falso positivo)
+            const hay = strip(text);
+            if (!hay) return false;
+            const esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp('\\b' + esc + '\\b').test(hay);
+        },
+        get missionFallbackDrift() {
+            // Valida o ALVO do fallback CUSTOM contra o mesh: se a prosa nomeia um
+            // agente real que NÃO está cabeado a partir deste orquestrador, é
+            // drift — o roteador vai citar um destino que o mesh não roteia (o bug
+            // "encaminhar pro FAQ Claro"). Só em modo edição + custom (o gracioso,
+            // por construção, não nomeia agente algum).
+            if (!this.isEdit) return [];
+            if ((this.mission.fallbackMode || 'graceful') !== 'custom') return [];
+            const text = (this.mission.fallback || '').trim();
+            if (!text) return [];
+            const hits = [];
+            for (const a of (this.availableAgents || [])) {
+                const name = (a.name || '').trim();
+                if (name.length < 3) continue;
+                if (this._mentionsName(text, name) && !this._isAgentWired(a.id)) {
+                    hits.push({ id: a.id, name });
+                }
+            }
+            return hits;
         },
         async _createMeshConnections(sourceId, targets) {
             // POST individual por conexão; tolera falha parcial e reporta agregado.
