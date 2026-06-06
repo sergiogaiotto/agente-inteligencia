@@ -332,3 +332,49 @@ class TestWorkspaceUiHardening:
         com contexto (sessionId + error) pra troubleshooting no DevTools."""
         src = _workspace_html()
         assert "console.error('[workspace] loadSession falhou'" in src
+
+
+class TestEntryModeAutoDetectsPipeline:
+    """2026-06-06: bug frequente — clicar em "Testar"/play num Roteador(AR) ou
+    Orquestrador(AOBD) na tela de Agentes abria o Workspace em modo AGENTE
+    (o link é `/workspace?agent=<id>` SEM &mode=), rodando só o prompt da raiz
+    e PULANDO o fan-out — os subagentes nunca eram acionados. O modo decide o
+    backend (workspace.py: só `mode=='pipeline'` chama execute_pipeline).
+
+    Fix: o caminho de entrada `?agent=` passa a AUTO-DETECTAR — se o agente é
+    RAIZ de um mesh (pipelineRoots, chainLen>1), abre em Pipeline; folha abre
+    em Agente. Reusa o MESMO sinal (pipelineRoots) que loadSession já usava
+    via isPipelineRoot — play e reabrir-sessão não divergem mais de modo. Um
+    `?mode=` explícito na URL continua tendo prioridade (override manual)."""
+
+    def test_entry_autodetects_pipeline_for_root(self):
+        src = _workspace_html()
+        # isRoot derivado da topologia já carregada (pipelineRoots)
+        assert "const isRoot=(this.pipelineRoots||[]).some(pr=>pr.id===aid);" in src
+        # ?mode= explícito vence; senão raiz→pipeline, folha→agent
+        assert "this.execMode=p.get('mode')||(isRoot?'pipeline':'agent');" in src
+
+    def test_old_unconditional_agent_default_removed(self):
+        """Regressão guard: a linha antiga que SEMPRE caía em 'agent' sumiu."""
+        src = _workspace_html()
+        assert "this.execMode=p.get('mode')||'agent'" not in src
+
+    def test_pipeline_roots_loaded_before_url_param_handling(self):
+        """A auto-detecção depende de pipelineRoots já estar populado quando o
+        `?agent=` é processado. Garante a ordem em load(): loadPipelineRoots()
+        é AGUARDADO antes de ler os params da URL."""
+        src = _workspace_html()
+        i_roots = src.find("await this.loadPipelineRoots()")
+        i_params = src.find("const p=new URLSearchParams(window.location.search)")
+        assert i_roots != -1 and i_params != -1
+        assert i_roots < i_params, "loadPipelineRoots deve ser aguardado antes de ler ?agent="
+
+    def test_entry_consistent_with_loadsession_detection(self):
+        """Simetria: loadSession marca pipeline quando o agente da sessão é
+        raiz (isPipelineRoot). A entrada `?agent=` usa o MESMO sinal
+        (pipelineRoots), evitando que play e reabrir-sessão divirjam."""
+        src = _workspace_html()
+        # loadSession continua com a detecção por raiz (a fonte que reusamos)
+        assert "const isPipelineRoot = (this.pipelineRoots || []).some(p => p.id === sessionAgentId);" in src
+        # entrada ?agent= também consulta pipelineRoots
+        assert "(this.pipelineRoots||[]).some(pr=>pr.id===aid)" in src

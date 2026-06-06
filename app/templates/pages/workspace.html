@@ -1595,7 +1595,20 @@ function workspacePage() {
             await this.loadPipelineRoots();
             const p=new URLSearchParams(window.location.search);
             if(p.get('session')) this.loadSession(p.get('session'));
-            else if(p.get('agent')){this.selectedAgentId=p.get('agent');this.execMode=p.get('mode')||'agent';this.newSession();}
+            else if(p.get('agent')){
+                const aid=p.get('agent');this.selectedAgentId=aid;
+                // Modo na entrada via ?agent= (botão "Testar"/play da tela de
+                // Agentes): se a URL trouxer ?mode= honra; senão AUTO-DETECTA —
+                // agente que é RAIZ de um mesh (pipelineRoots, já carregado em
+                // load() antes daqui) abre em Pipeline pra disparar o fan-out.
+                // Sem isto, o play de um Roteador(AR)/Orquestrador(AOBD) caía
+                // sempre em 'agent' e PULAVA a delegação (rodava só o prompt da
+                // raiz; subagentes nunca eram acionados). Mesma detecção que
+                // loadSession usa via isPipelineRoot (:2188) — fonte única.
+                const isRoot=(this.pipelineRoots||[]).some(pr=>pr.id===aid);
+                this.execMode=p.get('mode')||(isRoot?'pipeline':'agent');
+                this.newSession();
+            }
         },
         async loadPipelineRoots(){
             try{
