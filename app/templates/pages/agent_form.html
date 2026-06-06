@@ -932,8 +932,11 @@
                     <div class="space-y-2">
                         <template x-for="(rule, i) in mission.rules" :key="i">
                             <div class="flex items-center gap-2">
-                                <input x-model="rule.when" type="text" :placeholder="composerRuleWhenPlaceholder()"
-                                       class="flex-1 rounded-lg border border-surface-200 px-2.5 py-1.5 text-[12px] outline-none focus:border-brand-400">
+                                <!-- "quando" é textarea de 3 linhas: as descrições de
+                                     condição costumam ser longas e não cabiam numa linha
+                                     (ficavam cortadas). resize-y deixa expandir mais. -->
+                                <textarea x-model="rule.when" rows="3" :placeholder="composerRuleWhenPlaceholder()"
+                                          class="flex-1 resize-y rounded-lg border border-surface-200 px-2.5 py-1.5 text-[12px] leading-snug outline-none focus:border-brand-400"></textarea>
                                 <span class="text-surface-400 shrink-0">→</span>
                                 <input x-model="rule.target" type="text" list="composer-targets" :placeholder="composerRuleTargetPlaceholder()"
                                        class="flex-1 rounded-lg border border-surface-200 px-2.5 py-1.5 text-[12px] outline-none focus:border-brand-400">
