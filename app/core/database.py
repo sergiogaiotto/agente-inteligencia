@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS agents (
     accepts_images INTEGER DEFAULT 0,
     accepts_documents INTEGER DEFAULT 0,
     require_evidence INTEGER DEFAULT 1,
+    allow_general_knowledge INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now()
 );
@@ -757,6 +758,9 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE tools ADD COLUMN IF NOT EXISTS auth_token TEXT",
     "ALTER TABLE tools ADD COLUMN IF NOT EXISTS auth_config TEXT DEFAULT '{}'",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS require_evidence INTEGER DEFAULT 1",
+    # Escape hatch grounded-by-default (2026-06-06): 0 = só evidências (global);
+    # 1 = agente autorizado a usar conhecimento geral do modelo.
+    "ALTER TABLE agents ADD COLUMN IF NOT EXISTS allow_general_knowledge INTEGER DEFAULT 0",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS temperature REAL DEFAULT 0.7",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS accepts_images INTEGER DEFAULT 0",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS accepts_documents INTEGER DEFAULT 0",

@@ -22,6 +22,12 @@ class AgentCreate(BaseModel):
     status: Optional[str] = "active"
     config: Optional[str] = "{}"
     require_evidence: Optional[bool] = True
+    # Escape hatch do princípio grounded-by-default (2026-06-06). Quando True,
+    # o agente PODE usar conhecimento geral/paramétrico do modelo (ex: agente de
+    # brainstorming). Default False = comportamento global: responde SÓ com base
+    # em evidências (anexos/RAG/tools). É a única porta de "solicitado CLARAMENTE".
+    # Ver app/agents/engine.py (_build_grounding_directive + _grounding_guard).
+    allow_general_knowledge: Optional[bool] = False
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     accepts_images: Optional[bool] = False
     accepts_documents: Optional[bool] = False
@@ -52,6 +58,7 @@ class AgentUpdate(BaseModel):
         pattern="^(tool_calling|reasoning|instruct|classification)$",
     )
     require_evidence: Optional[bool] = None
+    allow_general_knowledge: Optional[bool] = None
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     accepts_images: Optional[bool] = None
     accepts_documents: Optional[bool] = None

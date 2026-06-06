@@ -156,6 +156,17 @@ class Settings(BaseSettings):
     prompt_leak_guard_enabled: bool = True
     prompt_leak_preview_chars: int = 60
 
+    # ── Grounded-by-default (2026-06-06) ──
+    # Princípio global: o conhecimento paramétrico do modelo NUNCA é usado para
+    # compor respostas — o agente responde SÓ com base em evidências (anexos,
+    # RAG, resultados de tools). Quando True (default), o engine (1) injeta uma
+    # diretiva estrita de grounding no system prompt e (2) faz o VerifyEvidence
+    # RECUSAR respostas sem nenhuma evidência (anexo/RAG/tool/pipeline). Escape
+    # hatch por agente: allow_general_knowledge=1 (ex: brainstorming). Override
+    # global via env GROUNDING_STRICT=false ou Settings UI. Ver engine.py
+    # (_build_grounding_directive + _grounding_guard).
+    grounding_strict: bool = True
+
     # ── Verifier v2 (judge multi-dimensional + ContractValidator) ──
     # Promove EvidenceChecker (Onda 0) a 1ª classe, separando RAG de Verification.
     # OFF por default → comportamento legacy preservado (_LegacyVerifier roda no lugar).
@@ -310,6 +321,9 @@ _UI_TO_ENV_MAP = {
     "primary_model":    "PRIMARY_MODEL",
     # Idioma de resposta global (BCP-47: pt-BR, en-US, ...)
     "default_response_language": "DEFAULT_RESPONSE_LANGUAGE",
+    # Grounded-by-default: 'true'/'false'. Desliga a recusa global de respostas
+    # sem evidência (não recomendado — fura o princípio anti-alucinação).
+    "grounding_strict": "GROUNDING_STRICT",
     # Embedding (Qwen3 reusa URL/key do OSS source)
     "embedding_provider": "EMBEDDING_PROVIDER",
     "qwen3_source":       "QWEN3_SOURCE",
