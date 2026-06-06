@@ -316,7 +316,7 @@ class TestComposerTargetFilters:
     # --- dry-run: flag + badge "inativo" ---
     def test_checks_compute_inactive_flag(self, html):
         assert "const inactive = !!(agent && (agent.status || 'active') !== 'active');" in html
-        assert "cls, routing, expr, inactive };" in html
+        assert "cls, routing, expr, inactive, kind };" in html
 
     def test_inactive_badge_rendered(self, html):
         assert 'x-show="chk.inactive"' in html
@@ -327,3 +327,68 @@ class TestComposerTargetFilters:
         # constraint do projeto: roxo proibido (usar vermelho/branco)
         for banned in ("violet", "fuchsia", "purple"):
             assert banned not in html, f"tom proibido {banned!r} no template"
+
+
+class TestComposerLayerBadge:
+    """2026-06-05 (Melhoria UI): destino de regra é agente→agente, mas um agente
+    pode ser ele próprio ORQUESTRADOR/ROTEADOR (re-delega = camada de decisão
+    extra) em vez de SUBAGENTE (folha que executa). Antes a Verificação mostrava
+    "✓ agente" igual pros dois → falsa confiança. Agora:
+    - selo de CAMADA (subagente/orquestrador/roteador) em cada linha do dry-run;
+    - checkbox "incluir orquestradores/roteadores" (default OFF → sugere só
+      subagentes), gated por composerHasOrchestrators (some quando não há nenhum).
+    É filtro de SUGESTÃO: texto livre/resolução seguem; o selo é a honestidade.
+    100% frontend (Alpine só roda no browser → travamos contratos no HTML).
+    """
+
+    # --- estado (default OFF = sugere só subagentes) ---
+    def test_state_include_orchestrators_default_false(self, html):
+        assert "composerIncludeOrchestrators: false," in html
+
+    # --- helpers de camada ---
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "_isOrchestratorKind(a) {",
+            "_kindLabel(kind) {",
+            "_kindBadgeClass(kind) {",
+            "get composerHasOrchestrators() {",
+        ],
+    )
+    def test_layer_helpers_defined(self, html, method):
+        assert method in html, f"helper {method!r} ausente no x-data()"
+
+    def test_is_orchestrator_covers_aobd_and_router(self, html):
+        # aobd/router = camada; subagent (default) = folha
+        assert "return k === 'aobd' || k === 'router';" in html
+
+    def test_kind_label_maps_three_layers(self, html):
+        assert "k === 'aobd' ? 'orquestrador' : (k === 'router' ? 'roteador' : 'subagente')" in html
+
+    def test_kind_badge_colors_no_purple(self, html):
+        # orquestrador=âmbar, roteador=índigo, subagente=neutro (sem roxo)
+        assert "if (k === 'aobd') return 'bg-amber-100 text-amber-700';" in html
+        assert "if (k === 'router') return 'bg-indigo-100 text-indigo-700';" in html
+        assert "return 'bg-surface-100 text-surface-600';" in html
+
+    # --- filtro de SUGESTÃO: só subagentes por default ---
+    def test_datalist_hides_orchestrators_by_default(self, html):
+        assert "if (this._isOrchestratorKind(a) && !this.composerIncludeOrchestrators) return false;" in html
+
+    # --- dry-run carrega kind do alvo resolvido ---
+    def test_checks_compute_kind(self, html):
+        assert "const kind = agent ? (agent.kind || 'subagent') : '';" in html
+
+    # --- UI: checkbox (gated) ---
+    def test_include_orchestrators_checkbox_wired(self, html):
+        assert 'x-model="composerIncludeOrchestrators"' in html
+
+    def test_orchestrators_checkbox_gated(self, html):
+        # só aparece quando há orquestrador/roteador entre os agentes
+        assert 'x-if="composerHasOrchestrators"' in html
+
+    # --- UI: selo de camada no dry-run ---
+    def test_layer_badge_rendered(self, html):
+        assert 'x-show="chk.kind"' in html
+        assert 'x-text="_kindLabel(chk.kind)"' in html
+        assert ':class="_kindBadgeClass(chk.kind)"' in html
