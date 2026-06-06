@@ -2132,7 +2132,7 @@ function workspacePage() {
 <div class="space-y-2 text-[12px]">
   <div class="font-bold text-brand-900 text-[13px]">${this._esc(a.name||'Agente')}</div>
   <div class="flex flex-wrap gap-1.5 text-[10px]">
-    <span class="rounded-full bg-brand-50 px-2 py-0.5 text-brand-700 font-semibold">${this._esc(a.kind||'')}</span>
+    <span class="rounded-full px-2 py-0.5 font-semibold ${a.kind==='aobd'?'bg-rose-50 text-rose-700':a.kind==='router'?'bg-orange-50 text-orange-700':'bg-teal-50 text-teal-700'}">${this._esc(a.kind||'')}</span>
     <span class="rounded-full bg-surface-100 px-2 py-0.5 text-surface-600 font-mono">${this._esc(a.model||'')}</span>
     <span class="rounded-full bg-surface-100 px-2 py-0.5 text-surface-600">v${this._esc(a.version||'?')}</span>
     <span class="rounded-full bg-${modeColor}-50 px-2 py-0.5 text-${modeColor}-700 font-semibold">mode: ${this._esc(mode)}</span>
