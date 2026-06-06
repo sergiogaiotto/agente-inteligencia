@@ -426,6 +426,9 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
                 # — só o primeiro agente do pipeline reaproveita (subagentes
                 # geram child_interaction_ids próprios em execute_pipeline).
                 session_id=data.session_id,
+                # Memória de conversa (2026-06-06): 'auto' reinjeta o histórico
+                # da sessão no roteador/orquestrador. 'none' = stateless.
+                context_mode=data.context_mode or "auto",
             )
         except Exception as e:
             await queue.put({"type": "stream_error", "error": str(e)[:300]})
@@ -488,6 +491,7 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                 channel=data.channel,
                 attachments=attachments,
                 session_id=data.session_id,
+                context_mode=data.context_mode or "auto",
             )
         else:
             # Auto-rotear para engine declarativo se a skill do agente declara
@@ -664,6 +668,7 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                     channel=data.channel,
                     journey=data.journey or "",
                     attachments=attachments,
+                    context_mode=data.context_mode or "auto",
                 )
 
         # Persistir trace_data. Estabilizar defaults pra evitar campos
