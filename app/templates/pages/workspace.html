@@ -2395,6 +2395,12 @@ function workspacePage() {
                 const i = event.step_index;
                 if (this.progressSteps[i]) this.progressSteps[i].status = 'error';
                 this._addLog('agent', '⊘', `${event.agent_name}: ignorado (${event.reason || 'inativo'})`, '', 'warning');
+            } else if (name === 'attachments_rejected') {
+                // Anexo podado na porta (nenhum agente da cadeia aceita o tipo).
+                // Mostra no liveLog pra matar o dead-end silencioso "0 Anexos".
+                const rej = Array.isArray(event.rejected) ? event.rejected : [];
+                rej.forEach(r => this._addLog('attachment', '📎',
+                    `Anexo descartado: ${r.name || 'arquivo'}`, r.reason || '', 'warning'));
             } else if (name === 'agent_error' || name === 'stream_error') {
                 const i = event.step_index;
                 if (typeof i === 'number' && this.progressSteps[i]) this.progressSteps[i].status = 'error';

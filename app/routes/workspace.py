@@ -351,18 +351,79 @@ def _classify_attachment(mime: str) -> str:
     return "document"  # fallback — melhor assumir doc e deixar a flag decidir
 
 
-async def _filter_attachments_by_agent(attachments: list, agent_id: str) -> tuple[list, list]:
-    """Filtra attachments conforme flags accepts_images / accepts_documents
-    do agente. Retorna (aceitos, rejeitados_meta) — rejeitados vão para
-    o trace para o usuário ver o que foi podado."""
+async def _chain_capabilities(entry_agent_id: str, entry: dict | None = None) -> tuple[bool, bool]:
+    """União de accepts_images / accepts_documents da CADEIA do mesh a partir de
+    `entry_agent_id` (entrada + todos os agentes downstream alcançáveis via BFS).
+    Retorna (accepts_images, accepts_documents).
+
+    Motivo (bug real "Doc Analise", 2026-06-06): um ROTEADOR *dispatcher* não
+    ingere anexos — ele roteia. Filtrar a porta do pipeline só pelas flags do
+    dispatcher PODA o documento ANTES de ele chegar ao especialista que o aceita
+    (sintoma observado: "0 Anexos", SAs skipped_conditional, Refuse por evidência
+    insuficiente). Unindo a cadeia, o anexo passa pela porta sse QUALQUER agente
+    do pipeline aceita aquele tipo; o motor (forwarding por step, PR B) já entrega
+    cada anexo só ao SA com capacidade — então não há vazamento p/ quem não trata.
+
+    Degrada com elegância: agente-folha sem downstream → união = as próprias flags
+    (idêntico ao comportamento legado). Fail-open: erro no traversal cai pras flags
+    do agente de entrada (nunca poda demais por falha de infra)."""
+    from app.core.database import agents_repo
+    if entry is None:
+        entry = await agents_repo.find_by_id(entry_agent_id) or {}
+    accepts_img = bool(entry.get("accepts_images") or 0)
+    accepts_doc = bool(entry.get("accepts_documents") or 0)
+    if accepts_img and accepts_doc:
+        return True, True  # entrada já cobre ambos — nada a unir
+    try:
+        from app.agents.engine import _resolve_ordered_chain
+        chain = await _resolve_ordered_chain(entry_agent_id)
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger("app.routes.workspace").warning(
+            "chain_capabilities: traversal do mesh falhou — fail-open p/ flags da entrada",
+            extra={
+                "event": "workspace.chain_capabilities.error",
+                "entry_agent_id": entry_agent_id,
+                "error": str(e)[:200],
+            },
+        )
+        return accepts_img, accepts_doc
+    for aid in chain:
+        if aid == entry_agent_id:
+            continue
+        a = await agents_repo.find_by_id(aid)
+        if not a:
+            continue
+        accepts_img = accepts_img or bool(a.get("accepts_images") or 0)
+        accepts_doc = accepts_doc or bool(a.get("accepts_documents") or 0)
+        if accepts_img and accepts_doc:
+            break  # short-circuit: a cadeia já cobre os dois tipos
+    return accepts_img, accepts_doc
+
+
+async def _filter_attachments_by_agent(
+    attachments: list, agent_id: str, *, include_chain: bool = False
+) -> tuple[list, list]:
+    """Filtra attachments conforme flags accepts_images / accepts_documents.
+    Retorna (aceitos, rejeitados_meta) — rejeitados vão para o trace para o
+    usuário ver o que foi podado.
+
+    `include_chain` (default False = comportamento legado, decide só pelo agente
+    de entrada): quando True, decide pela UNIÃO de capacidades da cadeia do mesh
+    (entrada + downstream). Use True em modo pipeline — assim um roteador
+    dispatcher (accepts_*=0) não poda o anexo destinado ao especialista
+    downstream que o aceita. Ver `_chain_capabilities`."""
     if not attachments:
         return [], []
     from app.core.database import agents_repo
     agent = await agents_repo.find_by_id(agent_id)
     if not agent:
-        return attachments, []
-    accepts_img = bool(agent.get("accepts_images") or 0)
-    accepts_doc = bool(agent.get("accepts_documents") or 0)
+        return attachments, []  # fail-open: agente desconhecido não poda nada
+    if include_chain:
+        accepts_img, accepts_doc = await _chain_capabilities(agent_id, entry=agent)
+    else:
+        accepts_img = bool(agent.get("accepts_images") or 0)
+        accepts_doc = bool(agent.get("accepts_documents") or 0)
     accepted, rejected = [], []
     for att in attachments:
         kind = _classify_attachment(att.get("type", ""))
@@ -370,12 +431,35 @@ async def _filter_attachments_by_agent(attachments: list, agent_id: str) -> tupl
         if allowed:
             accepted.append(att)
         else:
+            reason = (
+                f"Nenhum agente do pipeline aceita {kind}s — habilite em 'Editar Agente'"
+                if include_chain else
+                f"Agente não aceita {kind}s — habilite em 'Editar Agente'"
+            )
             rejected.append({
                 "name": att.get("name", ""),
                 "type": att.get("type", ""),
                 "kind": kind,
-                "reason": f"Agente não aceita {kind}s — habilite em 'Editar Agente'",
+                "reason": reason,
             })
+    if rejected:
+        # Observabilidade: anexo podado nunca mais some em silêncio (foi o que
+        # escondeu o bug "Doc Analise"). Log estruturado + (no SSE) evento de
+        # trace pro usuário VER o que foi descartado e por quê.
+        import logging as _logging
+        _logging.getLogger("app.routes.workspace").info(
+            "anexo(s) podado(s) na porta do pipeline",
+            extra={
+                "event": "workspace.attachment.rejected",
+                "entry_agent_id": agent_id,
+                "include_chain": include_chain,
+                "chain_accepts_images": accepts_img,
+                "chain_accepts_documents": accepts_doc,
+                "rejected_count": len(rejected),
+                "rejected_names": [r["name"] for r in rejected],
+                "rejected_kinds": [r["kind"] for r in rejected],
+            },
+        )
     return accepted, rejected
 
 
@@ -405,7 +489,12 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
                 "size": att.get("size", 0),
                 "content": att.get("text_content", ""),
             })
-    attachments, _rejected = await _filter_attachments_by_agent(attachments, data.agent_id)
+    # include_chain=True: a porta decide pela UNIÃO das capacidades da cadeia
+    # do mesh (entrada + downstream). Um roteador dispatcher (accepts_*=0) deixa
+    # de podar o anexo destinado ao especialista — fix do dead-end "Doc Analise".
+    attachments, _rejected = await _filter_attachments_by_agent(
+        attachments, data.agent_id, include_chain=True
+    )
 
     queue: asyncio.Queue = asyncio.Queue()
     _DONE = object()  # sentinela pra encerrar o consumidor
@@ -442,6 +531,15 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
         # confirme a conexão antes do primeiro evento real (que pode demorar
         # alguns segundos por causa do LLM).
         yield ":ok\n\n"
+        # Anexo(s) podado(s) na porta: avisa o usuário ANTES dos steps pra que
+        # ele veja por que o arquivo não foi usado (em vez do dead-end silencioso
+        # "0 Anexos"). Só dispara quando há rejeição.
+        if _rejected:
+            _rej_payload = json.dumps(
+                {"type": "attachments_rejected", "rejected": _rejected},
+                ensure_ascii=False, default=str,
+            )
+            yield f"event: attachments_rejected\ndata: {_rej_payload}\n\n"
         while True:
             item = await queue.get()
             if item is _DONE:
@@ -480,8 +578,12 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                     "size": att.get("size", 0),
                     "content": att.get("text_content", ""),
                 })
-        # Filtra conforme flags do agente
-        attachments, rejected_attachments = await _filter_attachments_by_agent(attachments, data.agent_id)
+        # Filtra conforme flags do agente. Em pipeline, decide pela UNIÃO da
+        # cadeia do mesh (dispatcher não poda anexo do especialista downstream);
+        # em modo agente único, mantém a decisão só pelo agente de entrada.
+        attachments, rejected_attachments = await _filter_attachments_by_agent(
+            attachments, data.agent_id, include_chain=(data.mode == "pipeline")
+        )
 
         if data.mode == "pipeline":
             from app.agents.engine import execute_pipeline
