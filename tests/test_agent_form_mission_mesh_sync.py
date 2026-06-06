@@ -109,7 +109,8 @@ class TestSyncBehavior:
 
     def test_guards_mission_and_targets(self, html):
         assert "Informe a missão antes de sincronizar" in html
-        assert "Nenhuma regra aponta para um agente real" in html
+        # 2026-06-06: guarda passou a considerar também o agente-padrão (else)
+        assert "Nenhuma regra (nem agente-padrão) aponta para um agente real" in html
 
 
 class TestSaveIntegration:
@@ -138,7 +139,8 @@ class TestPartialFailureHandling:
 
 class TestDryRunUI:
     def test_section_shown_when_rules_have_targets(self, html):
-        assert 'x-show="missionRuleChecks.length"' in html
+        # 2026-06-06: o painel também aparece com SÓ o agente-padrão (else) setado.
+        assert 'x-show="missionRuleChecks.length || missionDefaultTarget"' in html
 
     def test_renders_per_target_classification(self, html):
         assert 'x-for="(chk, i) in missionRuleChecks"' in html
@@ -153,14 +155,15 @@ class TestDryRunUI:
         assert "⚠ texto livre" in html
 
     def test_sync_button_wired_and_guarded(self, html):
+        # 2026-06-06: passou a usar missionSyncTargets (regras + aresta default/else)
         assert '@click="syncMissionToMesh()"' in html
-        assert ':disabled="meshSyncing || !missionAgentTargets.length"' in html
+        assert ':disabled="meshSyncing || !missionSyncTargets.length"' in html
 
     def test_syncable_count_displayed(self, html):
-        assert "missionAgentTargets.length + ' agente(s) sincronizável(is)'" in html
+        assert "missionSyncTargets.length + ' agente(s) sincronizável(is)'" in html
 
     def test_new_agent_hint(self, html):
-        assert 'x-show="!isEdit && missionAgentTargets.length"' in html
+        assert 'x-show="!isEdit && missionSyncTargets.length"' in html
         assert "as conexões serão criadas no AI Mesh ao salvar" in html
 
 
@@ -178,8 +181,12 @@ class TestConditionalRoutingGeneration:
         assert "_stopwords() {" in html
 
     def test_expr_matches_user_input_not_output(self, html):
-        # keywords casam contra input_lower (pergunta do usuário)
-        assert "in input_lower" in html
+        # 2026-06-06 (fix dead-end "Doc Analise"): keywords agora casam contra
+        # text_all (pergunta + NOME/EXTENSÃO do anexo), não só input_lower — assim
+        # um drop de arquivo com texto vago ("o que temos aqui" + x.pptx) ainda casa
+        # o ramo. Segue sendo a ENTRADA do usuário (text_all deriva dela + do anexo),
+        # nunca o output do agente anterior.
+        assert "in text_all" in html
 
     def test_targets_carry_connection_type_and_expr(self, html):
         assert "connection_type: conditional ? 'conditional' : 'sequential'," in html

@@ -57,9 +57,10 @@ class TestFallbackModeState:
 
     def test_open_composer_resets_fallback_mode(self, html):
         # openComposer abre limpo, com o modo gracioso por padrão.
+        # 2026-06-06: o reset passou a incluir defaultAgent: '' (agente-padrão/else).
         assert (
             "this.mission = { statement: '', rules: [{ when: '', target: '' }], "
-            "fallback: '', fallbackMode: 'graceful', goldenRule: true };"
+            "fallback: '', fallbackMode: 'graceful', defaultAgent: '', goldenRule: true };"
         ) in html
 
     def test_open_composer_loads_downstream_in_edit(self, html):
