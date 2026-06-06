@@ -163,7 +163,7 @@
                     <div class="flex flex-wrap gap-3">
                         <template x-for="node in groupAgents(group)" :key="node.id">
                             <div class="flex items-center gap-2.5 rounded-xl border border-surface-200 bg-white px-3.5 py-2.5 shadow-sm hover:shadow-md transition-shadow">
-                                <div class="flex h-9 w-9 items-center justify-center rounded-full text-[10px] font-bold text-white shrink-0" :class="node.kind==='aobd'?'bg-red-500':node.kind==='router'?'bg-brand-500':'bg-teal-500'" x-text="node.name?.substring(0,2).toUpperCase()"></div>
+                                <div class="flex h-9 w-9 items-center justify-center rounded-full text-[10px] font-bold text-white shrink-0" :class="node.kind==='aobd'?'bg-rose-500':node.kind==='router'?'bg-orange-500':'bg-teal-500'" x-text="node.name?.substring(0,2).toUpperCase()"></div>
                                 <div><div class="text-[12px] font-semibold text-brand-900" x-text="node.name"></div><div class="text-[9px] text-surface-400" x-text="node.kind+' · '+node.model+' · v'+(node.version||'1.0.0')"></div></div>
                                 <button @click="unassignFromGroup(group.id, node.id)" class="ml-1 p-0.5 rounded text-surface-300 hover:text-rose-500"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
                             </div>
@@ -186,7 +186,7 @@
                     <div class="flex flex-wrap gap-3">
                         <template x-for="node in unassignedNodes" :key="node.id">
                             <div class="flex items-center gap-2.5 rounded-xl border border-dashed border-surface-200 bg-surface-50 px-3.5 py-2.5">
-                                <div class="flex h-9 w-9 items-center justify-center rounded-full text-[10px] font-bold text-white shrink-0" :class="node.kind==='aobd'?'bg-red-500':node.kind==='router'?'bg-brand-500':'bg-teal-500'" x-text="node.name?.substring(0,2).toUpperCase()"></div>
+                                <div class="flex h-9 w-9 items-center justify-center rounded-full text-[10px] font-bold text-white shrink-0" :class="node.kind==='aobd'?'bg-rose-500':node.kind==='router'?'bg-orange-500':'bg-teal-500'" x-text="node.name?.substring(0,2).toUpperCase()"></div>
                                 <div><div class="text-[12px] font-semibold text-brand-900" x-text="node.name"></div><div class="text-[9px] text-surface-400" x-text="node.kind+' · '+node.model+' · v'+(node.version||'1.0.0')"></div></div>
                             </div>
                         </template>
@@ -234,7 +234,7 @@
                         <div class="flex gap-3">
                             <div class="flex flex-col items-center">
                                 <div class="flex h-8 w-8 items-center justify-center rounded-full text-[9px] font-bold shrink-0"
-                                     :class="ag._passthrough ? 'bg-amber-100 text-amber-700 border-2 border-dashed border-amber-300' : (ag.kind==='aobd'?'bg-red-100 text-red-700':ag.kind==='router'?'bg-brand-100 text-brand-700':'bg-teal-100 text-teal-700')"
+                                     :class="ag._passthrough ? 'bg-amber-100 text-amber-700 border-2 border-dashed border-amber-300' : (ag.kind==='aobd'?'bg-rose-100 text-rose-700':ag.kind==='router'?'bg-orange-100 text-orange-700':'bg-teal-100 text-teal-700')"
                                      x-text="i+1"></div>
                                 <div x-show="i < detailChain.length - 1" class="w-px flex-1 min-h-[16px]" :class="ag._passthrough ? 'bg-amber-200 border-l border-dashed border-amber-300' : 'bg-surface-200'"></div>
                             </div>
@@ -243,7 +243,7 @@
                                 <div class="flex items-center gap-1.5 flex-wrap">
                                     <span class="text-[12px] font-semibold text-brand-900" x-text="ag.name"></span>
                                     <span class="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase"
-                                          :class="ag.kind==='aobd'?'bg-red-50 text-red-600':ag.kind==='router'?'bg-brand-50 text-brand-600':'bg-teal-50 text-teal-600'"
+                                          :class="ag.kind==='aobd'?'bg-rose-50 text-rose-600':ag.kind==='router'?'bg-orange-50 text-orange-600':'bg-teal-50 text-teal-600'"
                                           x-text="ag.kind==='aobd'?'AOBD':ag.kind==='router'?'AR':'SA'"></span>
                                     <span x-show="ag._passthrough" class="rounded-full bg-amber-50 px-1.5 py-0.5 text-[8px] font-bold text-amber-600">PASS-THROUGH</span>
                                 </div>
@@ -884,7 +884,7 @@ function meshPage() {
         groupAgents(g) { return g.agent_ids.map(id => this.topology.nodes.find(n => n.id === id)).filter(Boolean); },
         nodeName(id) { return this.topology.nodes.find(n => n.id === id)?.name || id?.substring(0,8) || '?'; },
         nodeKind(id) { const n=this.topology.nodes.find(x=>x.id===id); return n ? n.kind : ''; },
-        nodeKindColor(id) { const k=this.topology.nodes.find(x=>x.id===id)?.kind; return k==='aobd'?'bg-red-500':k==='router'?'bg-brand-500':'bg-teal-500'; },
+        nodeKindColor(id) { const k=this.topology.nodes.find(x=>x.id===id)?.kind; return k==='aobd'?'bg-rose-500':k==='router'?'bg-orange-500':'bg-teal-500'; },
 
         openConnEditor(edge) {
             // Reset wizard state — não vazar entre aberturas
