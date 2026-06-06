@@ -2652,6 +2652,7 @@ async def execute_pipeline(
                 last_final_state=upstream_final_state,
                 user_input=user_input,
                 target_name=agent.get("name", ""),
+                attachments=attachments,
             )
             if skip_by_conditional:
                 steps.append({
@@ -2684,6 +2685,50 @@ async def execute_pipeline(
                 # last_result NÃO muda — próximo agente recebe output do anterior
                 continue
 
+            # Aresta default / "else" (2026-06-06): se a conexão parent→current
+            # é `default` (catch-all) e ALGUM irmão condicional do mesmo parent
+            # casou, este agente NÃO roda — o ramo condicional já respondeu. Só
+            # roda quando NENHUM condicional casou (o "else" do roteamento 1-de-N).
+            # Mata o dead-end do drift: pergunta fora de escopo cai num SA real.
+            skip_by_default = await _should_skip_default(
+                source_id=upstream_id,
+                target_id=agent_id,
+                last_output=upstream_output,
+                last_final_state=upstream_final_state,
+                user_input=user_input,
+                attachments=attachments,
+            )
+            if skip_by_default:
+                steps.append({
+                    "agent_id": agent_id,
+                    "agent_name": agent.get("name", ""),
+                    "agent_kind": agent.get("kind", ""),
+                    "agent_model": agent.get("model", ""),
+                    "status": "skipped_default",
+                    "output": upstream_output,
+                    "final_state": "SkippedDefault",
+                    "duration_ms": 0,
+                    "evidence_score": 0,
+                    "transitions": [],
+                    "trace": {
+                        "diagnostics": [
+                            {
+                                "level": "info",
+                                "text": f"Aresta default — {agent.get('name','')} pulado porque um ramo condicional casou (passthrough)",
+                            }
+                        ],
+                    },
+                })
+                await _emit({
+                    "type": "agent_skipped",
+                    "step_index": i,
+                    "agent_id": agent_id,
+                    "agent_name": agent.get("name", ""),
+                    "reason": "default_sibling_matched",
+                })
+                # last_result NÃO muda — próximo agente recebe output do anterior
+                continue
+
         # Context scope (2026-06-01): aplica política inherit/scoped/isolated
         # ao output do agente anterior ANTES de montar o prompt do próximo.
         # - inherit: comportamento padrão (output cru vira prefix)
@@ -2699,6 +2744,7 @@ async def execute_pipeline(
                 last_output=upstream_output,
                 last_final_state=upstream_final_state,
                 user_input=user_input,
+                attachments=attachments,
             )
             if scope_resolution["skip_prefix"]:
                 # mode=isolated → próximo agente recebe SÓ a solicitação
@@ -2989,10 +3035,52 @@ def _get_conditional_jinja_env():
     return _conditional_jinja_env
 
 
+# Extensões reconhecidas para classificar anexos sem depender só do MIME
+# (o browser às vezes manda type vazio/genérico). Espelha _classify_attachment
+# da camada de rotas, mas vive aqui pra o gate condicional não importar rotas.
+_IMAGE_EXTS = {"jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "heic", "heif", "tif", "tiff"}
+_DOC_EXTS = {
+    "pdf", "doc", "docx", "ppt", "pptx", "pps", "ppsx", "xls", "xlsx",
+    "csv", "txt", "md", "markdown", "rtf", "odt", "ods", "odp", "json",
+}
+
+
+def _attachment_ext(name: str | None) -> str:
+    """Extensão (sem ponto, lowercase) do nome de arquivo — '' se não tiver."""
+    n = (name or "").strip().lower()
+    if "." not in n:
+        return ""
+    return n.rsplit(".", 1)[-1]
+
+
+def _classify_attachment_kind(att: dict | None) -> str:
+    """'image' | 'document' | 'other' — por MIME (prioritário) ou extensão.
+
+    O roteamento por anexo precisa de um sinal de TIPO robusto: alguns uploads
+    chegam com `type` vazio do browser, então caímos pra extensão do nome.
+    """
+    t = str((att or {}).get("type", "")).lower()
+    ext = _attachment_ext((att or {}).get("name", ""))
+    if t.startswith("image/") or ext in _IMAGE_EXTS:
+        return "image"
+    doc_mime_prefixes = (
+        "application/pdf",
+        "application/msword",
+        "application/vnd",  # openxmlformats (docx/pptx/xlsx) + oasis (odt/ods)
+        "application/rtf",
+        "application/json",
+        "text/",  # txt/csv/markdown
+    )
+    if ext in _DOC_EXTS or any(t.startswith(m) for m in doc_mime_prefixes):
+        return "document"
+    return "other"
+
+
 def _build_conditional_context(
     output: str | None = None,
     final_state: str | None = None,
     user_input: str | None = None,
+    attachments: list | None = None,
 ) -> dict:
     """Monta o dict de variáveis disponíveis para expressões condicionais.
 
@@ -3031,6 +3119,19 @@ def _build_conditional_context(
     fs_lower = fs.lower()
     inp = user_input or ""
     inp_lower = inp.lower()
+    # ── Sinais de anexo (2026-06-06) ──────────────────────────────────
+    # Roteamento fan-out muitas vezes ramifica pelo ARQUIVO que o usuário
+    # soltou (ex.: "documento → SA Documentos"), não pelo texto digitado —
+    # frequentemente vazio/genérico ("o que temos aqui"). Sem isto, drops de
+    # arquivo não casavam nenhuma expr → todos os SAs pulados (dead-end).
+    atts = attachments or []
+    att_names = " ".join(str(a.get("name", "") or "") for a in atts).lower().strip()
+    att_types = " ".join(str(a.get("type", "") or "") for a in atts).lower().strip()
+    att_exts = " ".join(e for e in (_attachment_ext(a.get("name", "")) for a in atts) if e)
+    _kinds = {_classify_attachment_kind(a) for a in atts}
+    # text_all: pergunta + nome/extensão do anexo num só campo — a expr derivada
+    # casa keyword tanto no texto digitado quanto no arquivo (1 var, não duas).
+    text_all = " ".join(p for p in (inp_lower, att_names, att_exts) if p).strip()
     return {
         "output": out,
         "output_lower": out_lower,
@@ -3049,6 +3150,15 @@ def _build_conditional_context(
         "lines_count": out.count("\n") + 1 if out else 0,
         "input": inp,
         "input_lower": inp_lower,
+        # Anexos (2026-06-06) — roteamento por arquivo
+        "has_attachments": bool(atts),
+        "attachment_count": len(atts),
+        "attachment_names": att_names,
+        "attachment_types": att_types,
+        "attachment_exts": att_exts,
+        "has_document": "document" in _kinds,
+        "has_image": "image" in _kinds,
+        "text_all": text_all,
     }
 
 
@@ -3070,6 +3180,14 @@ CONDITIONAL_VARS_META: list[dict] = [
     {"name": "lines_count", "type": "int", "desc": "Quantas linhas tem output"},
     {"name": "input", "type": "str", "desc": "Solicitação original do usuário (entrada do pipeline) — útil p/ rotear pela pergunta"},
     {"name": "input_lower", "type": "str", "desc": "input em lowercase (case-insensitive matching da pergunta do usuário)"},
+    {"name": "text_all", "type": "str", "desc": "input + nome/extensão dos anexos (lowercase) — casa keyword tanto na pergunta quanto no arquivo"},
+    {"name": "has_attachments", "type": "bool", "desc": "True se o usuário anexou algum arquivo"},
+    {"name": "has_document", "type": "bool", "desc": "True se há anexo do tipo documento (pdf/doc/docx/ppt/pptx/xls/xlsx/csv/txt/…)"},
+    {"name": "has_image", "type": "bool", "desc": "True se há anexo do tipo imagem (jpg/png/gif/webp/…)"},
+    {"name": "attachment_names", "type": "str", "desc": "Nomes dos anexos concatenados (lowercase) — ex.: 'relatorio.pdf foto.png'"},
+    {"name": "attachment_exts", "type": "str", "desc": "Extensões dos anexos (lowercase) — ex.: 'pdf png'"},
+    {"name": "attachment_types", "type": "str", "desc": "MIME types dos anexos (lowercase) — ex.: 'application/pdf image/png'"},
+    {"name": "attachment_count", "type": "int", "desc": "Quantidade de anexos"},
 ]
 
 
@@ -3139,6 +3257,7 @@ async def _should_skip_conditional(
     last_final_state: str,
     user_input: str = "",
     target_name: str = "",
+    attachments: list | None = None,
 ) -> bool:
     """True se a conexão source→target é `connection_type=conditional` e
     a expressão configurada em `config.expr` avaliou para `False`.
@@ -3209,6 +3328,7 @@ async def _should_skip_conditional(
                 output=last_output,
                 final_state=last_final_state,
                 user_input=user_input,
+                attachments=attachments,
             ),
         )
     except Exception as e:
@@ -3226,6 +3346,109 @@ async def _should_skip_conditional(
         return False  # fail-open
 
     return not result
+
+
+async def _should_skip_default(
+    *,
+    source_id: str,
+    target_id: str,
+    last_output: str,
+    last_final_state: str,
+    user_input: str = "",
+    attachments: list | None = None,
+) -> bool:
+    """True se a conexão source→target é `connection_type=default` (aresta
+    catch-all / "else") E algum IRMÃO condicional do mesmo source disparou.
+
+    Semântica do agente-padrão (2026-06-06 — bug "AR roteou para SA fora do
+    mesh"): numa árvore fan-out 1-de-N, o operador pode marcar UM alvo como
+    `default`. Ele é o "else" do roteamento: roda SOMENTE quando NENHUM irmão
+    condicional casou. Assim a pergunta fora de escopo sempre cai num agente
+    REAL (mata o dead-end do drift) em vez de ficar sem resposta ou o roteador
+    citar um agente que nem está cabeado.
+
+    Como o resolver da chain (BFS) ignora connection_type, o alvo default JÁ
+    está na chain; este gate só decide SE ele roda. A avaliação é
+    ORDEM-INDEPENDENTE: reavaliamos cada irmão condicional aqui (reusando
+    `_should_skip_conditional`, que já honra o override "o roteador mandou")
+    — não dependemos de o irmão ter rodado antes na chain.
+
+    Política de erro: **fail-open** — qualquer falha NÃO skipa (roda o
+    default). É melhor responder pelo else do que cair em silêncio.
+    """
+    from app.core.database import mesh_repo
+
+    conns = await mesh_repo.find_all(source_agent_id=source_id, limit=50)
+    conn = next((c for c in conns if c.get("target_agent_id") == target_id), None)
+    if not conn or conn.get("connection_type") != "default":
+        return False
+
+    # Irmãos condicionais do MESMO source (exclui o próprio default). Apenas
+    # `conditional` conta como "ramo" — `sequential` é incondicional e roda
+    # sempre, não é alternativa que o else substitua.
+    siblings = [
+        c
+        for c in conns
+        if c.get("connection_type") == "conditional"
+        and c.get("target_agent_id") != target_id
+    ]
+    if not siblings:
+        # default sem irmãos condicionais = roda sempre (equivale a sequencial).
+        logger.info(
+            "mesh.default.no_conditional_siblings",
+            extra={
+                "event": "mesh.default",
+                "source_id": source_id,
+                "target_id": target_id,
+                "decision": "run_default",
+            },
+        )
+        return False
+
+    for sib in siblings:
+        sib_target_id = sib.get("target_agent_id")
+        sib_name = ""
+        try:
+            sib_agent = await agents_repo.find_by_id(sib_target_id)
+            if sib_agent:
+                sib_name = sib_agent.get("name", "")
+        except Exception:
+            sib_name = ""  # fail-open: sem nome, o override de roteador não dispara
+
+        sib_skip = await _should_skip_conditional(
+            source_id=source_id,
+            target_id=sib_target_id,
+            last_output=last_output,
+            last_final_state=last_final_state,
+            user_input=user_input,
+            target_name=sib_name,
+            attachments=attachments,
+        )
+        if not sib_skip:
+            # um irmão condicional disparou → o default (else) NÃO roda.
+            logger.info(
+                "mesh.default.sibling_matched",
+                extra={
+                    "event": "mesh.default",
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "matched_sibling_id": sib_target_id,
+                    "decision": "skip_default",
+                },
+            )
+            return True
+
+    # nenhum irmão condicional casou → roda o default (else).
+    logger.info(
+        "mesh.default.no_sibling_matched",
+        extra={
+            "event": "mesh.default",
+            "source_id": source_id,
+            "target_id": target_id,
+            "decision": "run_default",
+        },
+    )
+    return False
 
 
 # ─── Context Scope (2026-06-01) ───
@@ -3274,6 +3497,7 @@ async def _resolve_context_scope(
     last_output: str,
     last_final_state: str,
     user_input: str = "",
+    attachments: list | None = None,
 ) -> dict:
     """Resolve a política de scope da conexão `source→target` e aplica-a
     ao `last_output`. Retorna dict com:
@@ -3392,6 +3616,7 @@ async def _resolve_context_scope(
                 output=last_output,
                 final_state=last_final_state,
                 user_input=user_input,
+                attachments=attachments,
             ),
         )
     except Exception as e:

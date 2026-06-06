@@ -992,10 +992,10 @@
                      skill / texto livre) e oferece sincronizar os AGENTES reais com
                      o AI Mesh (orquestrador → agente). Agente novo: conexões criadas
                      no save(). Skills e texto livre não viram arestas de mesh. -->
-                <div x-show="missionRuleChecks.length" class="rounded-lg border border-surface-200 bg-surface-50/60 p-3">
+                <div x-show="missionRuleChecks.length || missionDefaultTarget" class="rounded-lg border border-surface-200 bg-surface-50/60 p-3">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-[11px] font-semibold text-brand-700">Verificação de roteamento</span>
-                        <span class="text-[10px] text-surface-400" x-text="missionAgentTargets.length + ' agente(s) sincronizável(is)'"></span>
+                        <span class="text-[10px] text-surface-400" x-text="missionSyncTargets.length + ' agente(s) sincronizável(is)'"></span>
                     </div>
                     <div class="space-y-1">
                         <template x-for="(chk, i) in missionRuleChecks" :key="i">
@@ -1023,19 +1023,39 @@
                                 </span>
                             </div>
                         </template>
+                        <!-- Aresta DEFAULT (else): o agente-padrão, quando resolvido,
+                             aparece como linha extra — roda só quando nenhum ramo
+                             condicional casou (rede de segurança / mata o dead-end). -->
+                        <template x-if="missionDefaultTarget">
+                            <div class="flex items-center gap-2 text-[11px]">
+                                <span class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium shrink-0 bg-emerald-100 text-emerald-700">✓ agente</span>
+                                <span class="text-brand-900 font-mono truncate" x-text="missionDefaultTarget.name"></span>
+                                <span class="ml-auto flex items-center gap-1 shrink-0">
+                                    <span class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-rose-100 text-rose-700"
+                                          title="Aresta default (else) — roda SOMENTE quando nenhum ramo condicional casou. Rede de segurança: garante que a mensagem sempre cai num agente real (mata o dead-end).">⤸ default / else</span>
+                                </span>
+                            </div>
+                        </template>
                     </div>
+                    <!-- Aviso de drift do agente-padrão: coincide com um alvo de regra. -->
+                    <template x-if="missionDefaultDrift">
+                        <p class="mt-1.5 text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1 leading-snug">
+                            ⚠ O agente-padrão (else) já é alvo de uma regra acima — a aresta <b>default</b> seria redundante. Mantenho só a aresta da regra ao sincronizar.
+                        </p>
+                    </template>
                     <p class="mt-1.5 text-[10px] text-surface-400 leading-snug">
                         Regra <b>com "quando"</b> vira aresta <span class="text-sky-700 font-medium">condicional</span>
                         (roteia 1-de-N pela pergunta do usuário); <b>sem "quando"</b> vira <span class="text-surface-600 font-medium">sequencial</span>
                         (sempre roteia). A expressão derivada é editável depois no AI Mesh.
                         O <b>selo de camada</b> (subagente/orquestrador/roteador) mostra o que recebe a regra — rotear a um orquestrador/roteador delega a <b>outra camada de decisão</b> (hop extra), em vez de uma folha que responde.
+                        O <b class="text-rose-700">agente-padrão (else)</b> vira aresta <b>default</b>: roda só quando <b>nenhum</b> ramo condicional casa — rede de segurança que evita o <b>dead-end</b> (mensagem que não cai em agente nenhum).
                     </p>
-                    <button @click="syncMissionToMesh()" type="button" :disabled="meshSyncing || !missionAgentTargets.length"
+                    <button @click="syncMissionToMesh()" type="button" :disabled="meshSyncing || !missionSyncTargets.length"
                             class="mt-2 inline-flex items-center gap-1 rounded-lg bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-40 transition-colors">
                         <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z"/></svg>
-                        <span x-text="meshSyncing ? 'Sincronizando...' : ('Aplicar e sincronizar com AI Mesh' + (missionAgentTargets.length ? ' (' + missionAgentTargets.length + ')' : ''))"></span>
+                        <span x-text="meshSyncing ? 'Sincronizando...' : ('Aplicar e sincronizar com AI Mesh' + (missionSyncTargets.length ? ' (' + missionSyncTargets.length + ')' : ''))"></span>
                     </button>
-                    <p x-show="!isEdit && missionAgentTargets.length" class="mt-1 text-[10px] text-surface-400">Agente novo: as conexões serão criadas no AI Mesh ao salvar o agente.</p>
+                    <p x-show="!isEdit && missionSyncTargets.length" class="mt-1 text-[10px] text-surface-400">Agente novo: as conexões serão criadas no AI Mesh ao salvar o agente.</p>
                 </div>
                 <!-- Fallback / entradas ambíguas — escolha estruturada (2026-06-06).
                      'graceful' (default) gera um else que RESPONDE fora-de-escopo
@@ -1068,6 +1088,26 @@
                         <p class="mt-1.5 text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1 leading-snug">
                             ⚠ O fallback cita <b x-text="missionFallbackDrift.map(a => a.name).join(', ')"></b>
                             — agente real <b>sem aresta</b> a partir deste orquestrador. Transforme em regra (com "quando") e sincronize, ou o agente vai apontar pra um destino que o AI Mesh não roteia.
+                        </p>
+                    </template>
+                </div>
+                <!-- Agente-padrão (else) — rede de segurança que mata o dead-end
+                     (2026-06-06, bug "Doc Analise"): UM agente real que recebe a
+                     mensagem quando NENHUM ramo condicional casa. Vira aresta
+                     `connection_type='default'` no AI Mesh (roda só no "else").
+                     Diferente do fallback acima (que é PROSA do roteador): aqui um
+                     SA real executa de fato. Opcional — vazio = sem else. -->
+                <div>
+                    <label class="block text-[11px] font-semibold text-brand-700 mb-1">Agente-padrão (else) <span class="font-normal text-surface-400">— opcional</span></label>
+                    <input x-model="mission.defaultAgent" type="text" list="composer-targets" placeholder="Ex.: deixe vazio, ou escolha um SA para receber o que nenhuma regra cobrir"
+                           class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400">
+                    <p class="mt-1 text-[10px] text-surface-400 leading-snug">
+                        Cria uma aresta <b class="text-rose-700">default</b> no AI Mesh: roda <b>só</b> quando nenhuma regra condicional casa — garante que a mensagem sempre cai num agente real (mata o <b>dead-end</b>). Vazio = sem else (comportamento atual).
+                    </p>
+                    <!-- alvo digitado não resolve pra agente real → não vira aresta -->
+                    <template x-if="(mission.defaultAgent || '').trim() && !missionDefaultTarget">
+                        <p class="mt-1.5 text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1 leading-snug">
+                            ⚠ "<span x-text="(mission.defaultAgent || '').trim()"></span>" não corresponde a um agente real — o else <b>não</b> será criado. Escolha um agente da lista.
                         </p>
                     </template>
                 </div>
@@ -1140,6 +1180,12 @@ function agentForm(editId) {
             // drift "encaminhar pro FAQ Claro" (agente que nem está cabeado no
             // mesh). 'custom' usa o texto livre de `fallback` como antes.
             fallbackMode: 'graceful',
+            // 2026-06-06 (fix dead-end "Doc Analise"): agente-PADRÃO (else). Nome de
+            // um agente real que vira aresta `default` no AI Mesh — roda SOMENTE
+            // quando NENHUM ramo condicional casou. Rede de segurança que garante
+            // que a mensagem sempre cai num SA real (mata o dead-end do drift). ''
+            // = sem else (mantém o comportamento atual).
+            defaultAgent: '',
             goldenRule: true,                   // regra de ouro (só AOBD, default ON)
         },
         // "IA, me ajude!" — gera um RASCUNHO da missão/regras/fallback a partir
@@ -1281,7 +1327,7 @@ function agentForm(editId) {
         // ≥1 conexão de mesh? Edit: lê diagnostics; novo: alvos staged/sincronizáveis.
         get meshConnected() {
             if (this.isEdit) return (this.diagnostics?.capabilities?.mesh_downstream_count || 0) > 0;
-            return (this.pendingMeshTargets?.length || 0) > 0 || (this.missionAgentTargets?.length || 0) > 0;
+            return (this.pendingMeshTargets?.length || 0) > 0 || (this.missionAgentTargets?.length || 0) > 0 || !!this.missionDefaultTarget;
         },
 
         // Checklist viva por camada. Item: {key,label,done,act,actLabel}.
@@ -1593,7 +1639,7 @@ function agentForm(editId) {
         },
         openComposer() {
             // v1 sempre abre limpo — não faz parse reverso do System Prompt.
-            this.mission = { statement: '', rules: [{ when: '', target: '' }], fallback: '', fallbackMode: 'graceful', goldenRule: true };
+            this.mission = { statement: '', rules: [{ when: '', target: '' }], fallback: '', fallbackMode: 'graceful', defaultAgent: '', goldenRule: true };
             this.composeAi = { intent: '', loading: false, error: '', isDraft: false };
             // Alerta de drift: carrega quais alvos já têm aresta (só faz sentido
             // editando — agente novo ainda não tem downstream). Assíncrono: a UI
@@ -1643,6 +1689,8 @@ function agentForm(editId) {
                     // IA trouxe prosa de fallback → modo custom; senão mantém o
                     // else gracioso (responde fora-de-escopo sem nomear agente).
                     fallbackMode: d.fallback ? 'custom' : 'graceful',
+                    // agente-padrão (else): a IA pode sugerir um catch-all real.
+                    defaultAgent: (d.defaultAgent || d.default_agent || ''),
                     goldenRule: (typeof d.goldenRule === 'boolean') ? d.goldenRule : (this.form.kind !== 'router'),
                 };
                 this.composeAi.isDraft = true;
@@ -1828,9 +1876,23 @@ function agentForm(editId) {
             for (const t of toks) { if (!seen.has(t)) { seen.add(t); out.push(t); } }
             return out;
         },
+        _attachmentIntent(text) {
+            // 2026-06-06 (fix dead-end "Doc Analise"): detecta intenção de ANEXO no
+            // "quando"/nome do alvo → liga has_document/has_image na expr, pra o gate
+            // CLASSIFICAR o drop do arquivo (não só o texto digitado). Espelha
+            // _DOC_EXTS/_IMAGE_EXTS do engine.py a nível de palavra (acento-insensível).
+            const t = (text || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
+            const DOC = ['document', 'arquiv', 'pdf', 'planilha', 'docx', 'pptx', 'ppt',
+                         'apresenta', 'slide', 'xlsx', 'xls', 'excel', 'csv', 'relatorio',
+                         'word', 'texto', 'txt'];
+            const IMG = ['imagem', 'imagens', 'imagi', 'foto', 'figura', 'print',
+                         'screenshot', 'captura', 'png', 'jpg', 'jpeg', 'gif', 'webp'];
+            const has = arr => arr.some(k => t.includes(k));
+            return { doc: has(DOC), img: has(IMG) };
+        },
         _deriveConditionalExpr(when, targetName) {
-            // Deriva uma expr Jinja best-effort que casa a PERGUNTA do usuário
-            // (input_lower) — é ela que decide o ramo num fan-out 1-de-N. Editável
+            // Deriva uma expr Jinja best-effort que casa a PERGUNTA do usuário + o
+            // ANEXO (text_all) — é ela que decide o ramo num fan-out 1-de-N. Editável
             // depois no AI Mesh. Sem "quando" → '' (a aresta vira sequential).
             //
             // 2026-06-06 (fix roteamento "rentabilização não rodava"): casar palavra
@@ -1841,8 +1903,14 @@ function agentForm(editId) {
             //   (2) SEMEIA o radical do NOME do agente-alvo ("Rentab" → 'rentab') como
             //       keyword prioritária — alto sinal: casa as variações do domínio E
             //       aparece no próprio output do roteador ("encaminhando ao agente
-            //       Rentab"). Mantém o contrato: exprs continuam `'kw' in input_lower`
-            //       em OR, só que com RADICAIS no lugar de palavras inteiras.
+            //       Rentab"). Mantém o contrato: exprs em OR, com RADICAIS.
+            //
+            // 2026-06-06 (fix dead-end "Doc Analise"): (3) casa contra `text_all`
+            // (pergunta + NOME/EXTENSÃO do anexo) no lugar de `input_lower` — assim
+            // "o que temos aqui" + EncontroLideranca-TI.pptx ainda casa 'pptx'/o radical
+            // do nome (o texto digitado sozinho não tinha keyword → dead-end). (4) Quando
+            // o "quando"/nome do alvo sinaliza documento/imagem, liga has_document/
+            // has_image — classifica o DROP do arquivo, não só as palavras digitadas.
             const w = (when || '').trim();
             if (!w) return '';   // sem condição → aresta sequencial (sempre roda), como antes
             const merged = []; const seen = new Set();
@@ -1850,8 +1918,12 @@ function agentForm(editId) {
                 if (!seen.has(t)) { seen.add(t); merged.push(t); }
                 if (merged.length >= 6) break;
             }
-            if (!merged.length) return '';
-            return merged.map(t => `'${t}' in input_lower`).join(' or ');
+            const parts = merged.map(t => `'${t}' in text_all`);
+            const intent = this._attachmentIntent(w + ' ' + (targetName || ''));
+            if (intent.doc) parts.push('has_document');
+            if (intent.img) parts.push('has_image');
+            if (!parts.length) return '';
+            return parts.join(' or ');
         },
         resolveAgentByName(name) {
             // Casa o alvo "delegar a" com um agente real (match normalizado).
@@ -1987,6 +2059,34 @@ function agentForm(editId) {
                 };
             });
         },
+        get missionDefaultTarget() {
+            // Agente-PADRÃO (else) resolvido → aresta `connection_type='default'`.
+            // Roda só quando NENHUM ramo condicional casou (rede de segurança que
+            // mata o dead-end). null quando vazio OU quando o nome não resolve pra
+            // agente real (texto livre não vira aresta). Dedup: se o agente já é
+            // alvo de uma regra, NÃO duplica como default (a regra já o cabeia) —
+            // o getter combinado (missionSyncTargets) faz o skip.
+            const a = this.resolveAgentByName(this.mission.defaultAgent || '');
+            if (!a) return null;
+            return { id: a.id, name: a.name, connection_type: 'default', expr: '' };
+        },
+        get missionDefaultDrift() {
+            // O agente-padrão coincide com um alvo de regra? Então `default` é
+            // redundante/contraditório (a regra já decide quando ele roda). Avisa
+            // (sem bloquear) — o sync deduplica e mantém a aresta da regra.
+            const def = this.missionDefaultTarget;
+            if (!def) return false;
+            return (this.missionAgentTargets || []).some(t => t.id === def.id);
+        },
+        get missionSyncTargets() {
+            // Lista COMPLETA pro AI Mesh: alvos das regras (conditional/sequential)
+            // + a aresta DEFAULT (else), se houver e não duplicar um alvo de regra.
+            // É esta que o botão "Aplicar e sincronizar" e os contadores usam.
+            const out = (this.missionAgentTargets || []).slice();
+            const def = this.missionDefaultTarget;
+            if (def && !out.some(t => t.id === def.id)) out.push(def);
+            return out;
+        },
         async _existingDownstreamIds(sourceId) {
             // Agentes já conectados a partir deste orquestrador (dedup do sync).
             try {
@@ -2038,8 +2138,9 @@ function agentForm(editId) {
             // POST individual por conexão; tolera falha parcial e reporta agregado.
             // connection_type e config (expr) vêm de cada target: regra com
             // "quando" vira CONDITIONAL (1-de-N) com config={"expr": "<jinja>"},
-            // sem "quando" vira SEQUENTIAL com config '{}'.
-            let ok = 0; let conditional = 0; let sequential = 0; const failed = [];
+            // sem "quando" vira SEQUENTIAL com config '{}'; o agente-padrão vira
+            // DEFAULT (else) com config '{}'.
+            let ok = 0; let conditional = 0; let sequential = 0; let dflt = 0; const failed = [];
             for (const t of targets) {
                 try {
                     const connection_type = t.connection_type || 'sequential';
@@ -2051,16 +2152,19 @@ function agentForm(editId) {
                         connection_type, config,
                     });
                     ok++;
-                    if (connection_type === 'conditional') conditional++; else sequential++;
+                    if (connection_type === 'conditional') conditional++;
+                    else if (connection_type === 'default') dflt++;
+                    else sequential++;
                 } catch (e) { failed.push(t.name); }
             }
-            return { ok, failed, conditional, sequential };
+            return { ok, failed, conditional, sequential, dflt };
         },
         _syncSummary(r, dup) {
             let msg = r.ok + ' conexão(ões) criada(s)';
             const parts = [];
             if (r.conditional) parts.push(r.conditional + ' condicional(is)');
             if (r.sequential) parts.push(r.sequential + ' sequencial(is)');
+            if (r.dflt) parts.push(r.dflt + ' default/else');
             if (parts.length) msg += ' (' + parts.join(', ') + ')';
             if (dup) msg += ', ' + dup + ' já existia(m)';
             if (r.failed.length) msg += ' — falhou: ' + r.failed.join(', ');
@@ -2068,11 +2172,12 @@ function agentForm(editId) {
         },
         async syncMissionToMesh() {
             // Aplica o prompt (mantém prosa e topologia consistentes) e sincroniza
-            // as regras que apontam pra agentes reais. Edição: cria conexões já;
-            // agente novo: "staga" os alvos pra criar logo após o save().
-            const targets = this.missionAgentTargets;
+            // as regras que apontam pra agentes reais MAIS a aresta default (else).
+            // Edição: cria conexões já; agente novo: "staga" os alvos pra criar
+            // logo após o save().
+            const targets = this.missionSyncTargets;
             if (!(this.mission.statement || '').trim()) { showToast('Informe a missão antes de sincronizar', 'error'); return; }
-            if (!targets.length) { showToast('Nenhuma regra aponta para um agente real — nada a sincronizar', 'error'); return; }
+            if (!targets.length) { showToast('Nenhuma regra (nem agente-padrão) aponta para um agente real — nada a sincronizar', 'error'); return; }
             this.meshSyncing = true;
             try {
                 this.form.system_prompt = this.composeMissionPrompt();
