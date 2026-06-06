@@ -1,8 +1,12 @@
 """Configuração central da aplicação."""
 
+import logging
+
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -271,6 +275,43 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
         extra = "ignore"
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        """SSOT: o arquivo .env NUNCA fornece credenciais/seleção de modelo.
+
+        Pedido do operador (2026-06-06): todos os modelos da plataforma —
+        provedores (Azure, OpenAI público, Maritaca, Ollama, GPT-OSS 120b/20b),
+        embedding (Qwen3/Azure), Modelo Primário e Langfuse — devem usar
+        EXCLUSIVAMENTE as chaves/acessos da tela de Configurações (persistidos
+        em platform_settings e aplicados a os.environ por apply_settings_to_env).
+        O .env passa a ser ignorado para esses campos.
+
+        Implementação: filtra as chaves seladas (_SEALED_ENV_VARS) da fonte
+        dotenv. Assim, mesmo que a chave exista no arquivo .env, ela não entra
+        em Settings — cai no default da classe quando os.environ não a tiver.
+
+        Precedência (inalterada): init > env (os.environ, escrito pela tela via
+        apply_settings_to_env) > dotenv(FILTRADO) > secrets > defaults. Campos
+        fora do escopo (infra, flags de segurança, default_llm_provider,
+        grounding_strict, idioma) continuam lendo o .env normalmente.
+        """
+        def sealed_dotenv_settings():
+            raw = dotenv_settings()
+            return {
+                key: value
+                for key, value in raw.items()
+                if key.upper() not in _SEALED_ENV_VARS
+            }
+
+        return (init_settings, env_settings, sealed_dotenv_settings, file_secret_settings)
+
 
 # ═══════════════════════════════════════════════════════════════
 # UI override → env vars
@@ -284,8 +325,13 @@ class Settings(BaseSettings):
 #  - lifespan startup do FastAPI (após init_db)
 #  - PUT /settings (após set_many)
 #
-# Ausência de valor (string vazia ou chave faltando) NÃO sobrescreve env —
-# preserva o .env como fallback de boot.
+# Regra por escopo (SSOT de modelos, 2026-06-06):
+#  - Chaves SELADAS (_SEALED_ENV_VARS: provedores, embedding, primário, Langfuse):
+#    valor no banco → escreve em os.environ; banco vazio → REMOVE de os.environ
+#    (apaga resíduo injetado pelo docker env_file) pra cair no default da classe.
+#    O .env nunca alimenta essas chaves.
+#  - Demais chaves (grounding_strict, default_response_language): valor no banco
+#    sobrescreve; ausência NÃO mexe em os.environ — preserva o .env como fallback.
 # ═══════════════════════════════════════════════════════════════
 
 # Mapa chave-do-banco → nome-da-env-var. Pydantic é case-insensitive,
@@ -340,13 +386,50 @@ _UI_TO_ENV_MAP = {
 }
 
 
+# ═══════════════════════════════════════════════════════════════
+# SSOT de modelos: env vars SELADAS (o .env é ignorado para elas)
+# ═══════════════════════════════════════════════════════════════
+# Pedido do operador (2026-06-06): a tela de Configurações é a ÚNICA fonte de
+# verdade para credenciais/seleção de modelo. Estas env vars vêm só do banco
+# (platform_settings → os.environ via apply_settings_to_env) ou do default da
+# classe — NUNCA do .env.
+#
+# Subconjunto NÃO-modelo de _UI_TO_ENV_MAP: chaves que continuam podendo vir do
+# .env porque não são credencial/seleção de modelo. Tudo o mais no mapa é selado.
+_NON_MODEL_UI_KEYS = {
+    "grounding_strict",          # flag de comportamento anti-alucinação
+    "default_response_language", # idioma de resposta global (BCP-47)
+}
+
+# Cobre: Azure, OpenAI público, Maritaca, Ollama, GPT-OSS 120b/20b, embedding
+# (Qwen3/Azure), Modelo Primário (provider/model + timeout) e Langfuse.
+# Usado em 2 lugares: (1) Settings.settings_customise_sources filtra estas chaves
+# da fonte dotenv; (2) apply_settings_to_env remove resíduos do .env de os.environ
+# quando o banco não tem valor — forçando o default da classe.
+_SEALED_ENV_VARS = frozenset(
+    env_name
+    for ui_key, env_name in _UI_TO_ENV_MAP.items()
+    if ui_key not in _NON_MODEL_UI_KEYS
+)
+
+
 async def apply_settings_to_env() -> int:
-    """Lê settings_store (Postgres) e popula os.environ com valores não-vazios.
+    """Aplica as settings do banco (tela de Configurações) a os.environ.
 
-    Invalida caches downstream (get_settings.lru_cache, _embedder singleton)
-    pra que próxima leitura pegue os valores novos sem restart.
+    SSOT de modelos (2026-06-06): para as chaves SELADAS (_SEALED_ENV_VARS),
+    esta função é AUTORITATIVA sobre os.environ:
+      - valor não-vazio no banco → escreve em os.environ (a tela vence);
+      - banco vazio/ausente → REMOVE de os.environ qualquer resíduo (ex: o
+        docker injeta o .env inteiro via env_file no boot) pra que Settings caia
+        no default da classe — o .env nunca alimenta essas chaves.
+    Para as demais chaves do mapa (não-modelo: grounding_strict, idioma), mantém
+    o comportamento legado: só sobrescreve quando há valor; ausência preserva o
+    .env como fallback de boot.
 
-    Retorna o número de chaves aplicadas. 0 se banco indisponível ou tudo vazio.
+    Invalida caches downstream (get_settings.lru_cache, _embedder singleton) pra
+    que a próxima leitura pegue os valores novos sem restart.
+
+    Retorna o número de chaves aplicadas (escritas). 0 se banco indisponível.
     """
     import os
     try:
@@ -354,15 +437,32 @@ async def apply_settings_to_env() -> int:
         from app.core.database import settings_store
         data = await settings_store.get_all()
     except Exception:
-        # Banco offline ou tabela ainda não criada (init_db não rodou).
+        # Banco offline ou tabela ainda não criada (init_db não rodou). Não dá
+        # pra selar sem o banco — loga pra troubleshooting e mantém o boot.
+        logger.warning(
+            "event=settings.apply_skipped reason=store_unavailable "
+            "detail='settings_store.get_all() falhou; seal de modelos NÃO aplicado'",
+            exc_info=True,
+        )
         return 0
 
     applied = 0
+    removed = 0
     for ui_key, env_name in _UI_TO_ENV_MAP.items():
         val = data.get(ui_key)
-        if val and str(val).strip():
+        if val is not None and str(val).strip():
             os.environ[env_name] = str(val).strip()
             applied += 1
+        elif env_name in _SEALED_ENV_VARS:
+            # Selada e sem valor no banco → remove resíduo do .env de os.environ
+            # (injetado pelo docker env_file) pra cair no default da classe.
+            if os.environ.pop(env_name, None) is not None:
+                removed += 1
+
+    logger.info(
+        "event=settings.model_seal applied=%d removed=%d sealed_total=%d",
+        applied, removed, len(_SEALED_ENV_VARS),
+    )
 
     # Invalida cache pra próxima chamada de get_settings() rebuild com novas envs
     get_settings.cache_clear()
