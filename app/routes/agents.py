@@ -628,6 +628,12 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
                 user_input=user_input,
                 channel=data.channel or "api",
                 attachments=attachments_internal or None,
+                # Multi-turno via API: reusa a session quando o caller informa
+                # session_id (consistente com /workspace/chat). Sem ele → nova
+                # interaction. context_mode='auto' reinjeta histórico; 'none'
+                # = stateless (integração idempotente).
+                session_id=data.session_id,
+                context_mode=data.context_mode or "auto",
             )
         except ValueError as e:
             raise HTTPException(404, str(e))
@@ -684,6 +690,7 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
             journey=data.journey or "",
             attachments=attachments_internal or None,
             pipeline_context=pipeline_context,
+            context_mode=data.context_mode or "auto",
         )
     except ValueError as e:
         raise HTTPException(404, str(e))

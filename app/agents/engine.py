@@ -24,6 +24,12 @@ from langgraph.graph import StateGraph, END
 
 from app.core.llm_providers import get_provider, is_llm_unreachable
 from app.core.observability import get_langfuse_handler, tracker
+from app.agents.conversation_memory import (
+    build_history_messages as _build_history_messages,
+    session_text_window as _session_text_window,
+    context_enabled,
+    normalize_context_mode as _cm_normalize,
+)
 from app.core.database import (
     agents_repo, skills_repo, interactions_repo, turns_repo,
     envelopes_repo, audit_repo, car_repo,
@@ -1266,8 +1272,15 @@ async def execute_interaction(
     journey: str = "",
     attachments: list = None,
     pipeline_context: str = None,
+    context_mode: str = "auto",
 ) -> dict:
-    """Execução completa de uma interação pela FSM §15."""
+    """Execução completa de uma interação pela FSM §15.
+
+    `context_mode` (2026-06-06 — memória de conversa): controla se o histórico
+    da sessão é reinjetado no LLM. 'none' = stateless (legado); 'auto' (default)
+    = reconstrói a janela por camada (router médio / aobd leve / subagent off).
+    Só age quando há `session_id`. Ver `app.agents.conversation_memory`.
+    """
     start = time.time()
     agent = await agents_repo.find_by_id(agent_id)
     if not agent:
@@ -1419,6 +1432,52 @@ async def execute_interaction(
     # fragmentando conversas no workspace (user reportou sidebar com várias
     # entries quando esperava uma só).
     await fsm.run_intake(user_input, agent_id, journey, channel, session_id=session_id)
+
+    # ── Memória de conversa (2026-06-06) ───────────────────────
+    # Reconstrói o histórico da sessão e o reinjeta no seed do grafo (abaixo).
+    # `run_intake` JÁ persistiu o turno atual (no Intake), então excluímos
+    # turnos >= ctx.next_user_turn pra não duplicar o input corrente. Janela por
+    # camada (router médio / aobd leve / subagent off). Fail-open: erro → [].
+    history_messages: list = []
+    context_meta = {"mode": _cm_normalize(context_mode), "turns_used": 0, "chars": 0}
+    if session_id and context_enabled(context_mode):
+        try:
+            history_messages = await _build_history_messages(
+                session_id,
+                agent.get("kind", "subagent"),
+                context_mode,
+                before_turn=fsm.ctx.next_user_turn,
+            )
+        except Exception as _hist_exc:  # histórico é opcional, nunca derruba
+            logger.warning(
+                "context.history_build_failed",
+                extra={
+                    "event": "context.injected",
+                    "session_id": session_id,
+                    "agent_id": agent_id,
+                    "error_type": type(_hist_exc).__name__,
+                    "error_msg": str(_hist_exc)[:200],
+                },
+            )
+            history_messages = []
+        if history_messages:
+            context_meta["turns_used"] = len(history_messages)
+            context_meta["chars"] = sum(
+                len(getattr(m, "content", "") or "") for m in history_messages
+            )
+            ctx.metadata["context_injected"] = dict(context_meta)
+            logger.info(
+                "context.injected",
+                extra={
+                    "event": "context.injected",
+                    "session_id": session_id,
+                    "agent_id": agent_id,
+                    "agent_kind": agent.get("kind", ""),
+                    "mode": context_meta["mode"],
+                    "turns_used": context_meta["turns_used"],
+                    "chars": context_meta["chars"],
+                },
+            )
 
     # ── Prompt-injection guard (LLM01) ─────────────────────────
     # Aplicado ANTES do policy_check para bloquear payloads adversariais
@@ -1647,7 +1706,10 @@ async def execute_interaction(
             )
             graph = harness.build_graph()
             state = {
-                "messages": [HumanMessage(content=enriched_input)],
+                # Memória de conversa: histórico recente (já escopado por camada)
+                # ANTES do turno atual. Lista vazia quando context_mode='none',
+                # sem session_id ou camada off → seed byte-idêntico ao legado.
+                "messages": [*history_messages, HumanMessage(content=enriched_input)],
                 "current_agent": agent_id,
                 "agent_kind": agent.get("kind", "subagent"),
                 "iteration": 0,
@@ -2224,6 +2286,12 @@ async def _build_result(
             # Multimodal Fallback). show_in_trace=False ⇒ frontend não mostra a
             # nota, mas o dado continua aqui pra auditoria via API/log.
             "llm_fallback": ctx.metadata.get("llm_fallback"),
+            # Memória de conversa (2026-06-06). Presente APENAS quando o histórico
+            # foi reinjetado no seed (router/aobd com session_id + turnos prévios):
+            # {mode, turns_used, chars}. None p/ subagent, context_mode='none',
+            # sessão nova ou sem histórico. Observabilidade p/ API/audit — espelha
+            # o LOG event=context.injected.
+            "context_injected": ctx.metadata.get("context_injected"),
             "execution_log": exec_log,
         },
     }
@@ -2480,6 +2548,7 @@ async def execute_pipeline(
     attachments: list = None,
     progress_callback=None,
     session_id: str | None = None,
+    context_mode: str = "auto",
 ) -> dict:
     """Executa pipeline completo pelo AI Mesh.
 
@@ -2523,6 +2592,17 @@ async def execute_pipeline(
 
     steps = []
     current_input = user_input
+    # Sinal pegajoso da sessão (2026-06-06): texto das perguntas recentes do
+    # usuário. Misturado em `text_all` no gate condicional pra casar follow-ups
+    # por keyword ("liste os pontos" no t1 → "sobre qual o tema" no t2). Lido
+    # AGORA (antes do loop): `run_intake` ainda não persistiu o turno atual,
+    # então isto traz só turnos ANTERIORES. '' quando context_mode='none'.
+    session_text = ""
+    if session_id and context_enabled(context_mode):
+        try:
+            session_text = await _session_text_window(session_id, context_mode)
+        except Exception:
+            session_text = ""  # fail-open: sinal pegajoso é melhoria, não requisito
     last_result = None
     master_interaction_id = None
     child_interaction_ids = []
@@ -2653,6 +2733,7 @@ async def execute_pipeline(
                 user_input=user_input,
                 target_name=agent.get("name", ""),
                 attachments=attachments,
+                session_text=session_text,
             )
             if skip_by_conditional:
                 steps.append({
@@ -2697,6 +2778,7 @@ async def execute_pipeline(
                 last_final_state=upstream_final_state,
                 user_input=user_input,
                 attachments=attachments,
+                session_text=session_text,
             )
             if skip_by_default:
                 steps.append({
@@ -2804,6 +2886,10 @@ async def execute_pipeline(
                 # Subsequentes criam sub-interactions próprias (child_interaction_ids)
                 # que se ligam à master via execute_pipeline:2298+ depois.
                 session_id=session_id if i == 0 else None,
+                # Memória de conversa: só o entry (i==0) tem session_id → só ele
+                # carrega histórico. Subagentes (i>0) recebem session_id=None e,
+                # por política de camada, janela 0 — seguem stateless.
+                context_mode=context_mode,
             )
             iid = result.get("interaction_id")
             # Primeiro agente executado (não pass-through) vira o master
@@ -3081,6 +3167,7 @@ def _build_conditional_context(
     final_state: str | None = None,
     user_input: str | None = None,
     attachments: list | None = None,
+    session_text: str | None = None,
 ) -> dict:
     """Monta o dict de variáveis disponíveis para expressões condicionais.
 
@@ -3129,9 +3216,17 @@ def _build_conditional_context(
     att_types = " ".join(str(a.get("type", "") or "") for a in atts).lower().strip()
     att_exts = " ".join(e for e in (_attachment_ext(a.get("name", "")) for a in atts) if e)
     _kinds = {_classify_attachment_kind(a) for a in atts}
-    # text_all: pergunta + nome/extensão do anexo num só campo — a expr derivada
-    # casa keyword tanto no texto digitado quanto no arquivo (1 var, não duas).
-    text_all = " ".join(p for p in (inp_lower, att_names, att_exts) if p).strip()
+    # ── Sinal pegajoso da sessão (2026-06-06 — memória de conversa) ─────
+    # Texto das perguntas recentes do usuário (lowercase) vindo de
+    # `conversation_memory.session_text_window`. Sob context_mode ativo, isto
+    # faz o gate casar follow-ups por keyword mesmo quando o turno ATUAL é vago
+    # ("sobre qual o tema") — a keyword do turno anterior ainda conta. '' quando
+    # context off → text_all byte-idêntico ao legado.
+    sess_text = (session_text or "").lower().strip()
+    # text_all: pergunta + nome/extensão do anexo + perguntas recentes da sessão
+    # num só campo — a expr derivada casa keyword no texto digitado, no arquivo
+    # OU no histórico recente (1 var, não três).
+    text_all = " ".join(p for p in (inp_lower, att_names, att_exts, sess_text) if p).strip()
     return {
         "output": out,
         "output_lower": out_lower,
@@ -3159,6 +3254,9 @@ def _build_conditional_context(
         "has_document": "document" in _kinds,
         "has_image": "image" in _kinds,
         "text_all": text_all,
+        # Memória de conversa: perguntas recentes do usuário (já em text_all;
+        # exposta isolada p/ exprs que queiram olhar só o histórico).
+        "session_text": sess_text,
     }
 
 
@@ -3180,7 +3278,8 @@ CONDITIONAL_VARS_META: list[dict] = [
     {"name": "lines_count", "type": "int", "desc": "Quantas linhas tem output"},
     {"name": "input", "type": "str", "desc": "Solicitação original do usuário (entrada do pipeline) — útil p/ rotear pela pergunta"},
     {"name": "input_lower", "type": "str", "desc": "input em lowercase (case-insensitive matching da pergunta do usuário)"},
-    {"name": "text_all", "type": "str", "desc": "input + nome/extensão dos anexos (lowercase) — casa keyword tanto na pergunta quanto no arquivo"},
+    {"name": "text_all", "type": "str", "desc": "input + nome/extensão dos anexos + perguntas recentes da sessão (lowercase) — casa keyword na pergunta, no arquivo ou no histórico"},
+    {"name": "session_text", "type": "str", "desc": "Perguntas recentes do usuário na sessão (memória de conversa) — pega follow-ups vagos ('sobre qual o tema') pela keyword de turnos anteriores"},
     {"name": "has_attachments", "type": "bool", "desc": "True se o usuário anexou algum arquivo"},
     {"name": "has_document", "type": "bool", "desc": "True se há anexo do tipo documento (pdf/doc/docx/ppt/pptx/xls/xlsx/csv/txt/…)"},
     {"name": "has_image", "type": "bool", "desc": "True se há anexo do tipo imagem (jpg/png/gif/webp/…)"},
@@ -3258,6 +3357,7 @@ async def _should_skip_conditional(
     user_input: str = "",
     target_name: str = "",
     attachments: list | None = None,
+    session_text: str = "",
 ) -> bool:
     """True se a conexão source→target é `connection_type=conditional` e
     a expressão configurada em `config.expr` avaliou para `False`.
@@ -3329,6 +3429,7 @@ async def _should_skip_conditional(
                 final_state=last_final_state,
                 user_input=user_input,
                 attachments=attachments,
+                session_text=session_text,
             ),
         )
     except Exception as e:
@@ -3356,6 +3457,7 @@ async def _should_skip_default(
     last_final_state: str,
     user_input: str = "",
     attachments: list | None = None,
+    session_text: str = "",
 ) -> bool:
     """True se a conexão source→target é `connection_type=default` (aresta
     catch-all / "else") E algum IRMÃO condicional do mesmo source disparou.
@@ -3423,6 +3525,7 @@ async def _should_skip_default(
             user_input=user_input,
             target_name=sib_name,
             attachments=attachments,
+            session_text=session_text,
         )
         if not sib_skip:
             # um irmão condicional disparou → o default (else) NÃO roda.

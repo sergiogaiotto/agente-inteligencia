@@ -92,6 +92,9 @@ async def _invoke_step(
         user_input=current_input,
         channel="recipe",
         journey=f"recipe:{target_entry.get('id')}",
+        # Passo de recipe = stateless (a saída de um passo alimenta o próximo via
+        # current_input, não via memória de sessão). 'none' mantém determinismo.
+        context_mode="none",
     )
     trace = result.get("trace") or {}
     tokens = trace.get("tokens") or {}

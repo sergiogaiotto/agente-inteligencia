@@ -191,6 +191,10 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
                 user_input=case["input_text"],
                 channel=case.get("channel", "api"),
                 journey=case.get("journey", ""),
+                # Golden dataset = avaliação idempotente: cada caso é uma função
+                # pura. 'none' blinda a métrica contra vazamento de histórico
+                # entre casos (reprodutibilidade), independente do default 'auto'.
+                context_mode="none",
             )
             latency = (time.time() - start) * 1000
             total_latency += latency

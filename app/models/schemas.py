@@ -96,6 +96,12 @@ class ChatMessage(BaseModel):
     channel: str = "api"; journey: Optional[str] = ""
     attachments: Optional[list] = None
     mode: Optional[str] = "agent"
+    # Memória de conversa multi-turno (2026-06-06). 'auto' (default) reconstrói
+    # a janela da sessão (escopada por camada: router médio / aobd leve / SA off)
+    # e a reinjeta no LLM + nos sinais do gate. 'none' = stateless (função pura,
+    # p/ integrações idempotentes). 'client'/'summary' reservados (hoje = auto).
+    # Só age quando há session_id. Ver app/agents/conversation_memory.py.
+    context_mode: Optional[str] = "auto"
 
 class InvokeOptions(BaseModel):
     timeout_ms: Optional[int] = None
@@ -117,6 +123,11 @@ class AgentInvokeRequest(BaseModel):
     message: Optional[str] = None
     options: Optional[InvokeOptions] = None
     attachments: Optional[list[AttachmentInput]] = None  # máx 5 itens, 10MB cada
+    # Memória de conversa multi-turno (2026-06-06). Igual ChatMessage: 'auto'
+    # (default) reconstrói a janela da sessão e reinjeta no LLM + gate; 'none'
+    # = stateless (função pura, p/ integrações idempotentes via API). Só age
+    # quando session_id está presente. Ver app/agents/conversation_memory.py.
+    context_mode: Optional[str] = "auto"
 
 class AgentInvokeResponse(BaseModel):
     session_id: Optional[str] = None
