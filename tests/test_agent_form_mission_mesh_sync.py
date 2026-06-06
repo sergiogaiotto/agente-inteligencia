@@ -171,7 +171,10 @@ class TestConditionalRoutingGeneration:
     do usuário) — não contra o output do agente anterior."""
 
     def test_derive_expr_helper_defined(self, html):
-        assert "_deriveConditionalExpr(when) {" in html
+        # 2026-06-06: assinatura passou a receber o NOME do agente-alvo, cujo
+        # radical é semeado como keyword prioritária (alto sinal — casa a família
+        # morfológica do domínio e o próprio output do roteador).
+        assert "_deriveConditionalExpr(when, targetName) {" in html
         assert "_stopwords() {" in html
 
     def test_expr_matches_user_input_not_output(self, html):

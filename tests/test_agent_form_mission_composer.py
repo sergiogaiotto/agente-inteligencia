@@ -372,6 +372,61 @@ class TestComposerLayerBadge:
         # aobd/router = camada; subagent (default) = folha
         assert "return k === 'aobd' || k === 'router';" in html
 
+
+class TestConditionalExprMorphology:
+    """2026-06-06 (fix roteamento): a regra condicional derivada do "quando"
+    casava PALAVRA INTEIRA contra input_lower → 'rentabilidade' nunca casava
+    'rentabilizar'/'rentabilização'/'rentab' que o usuário digita, e o ramo era
+    pulado (skipped_conditional). Agora: stemming PT leve unifica a família +
+    SEMEIA o radical do NOME do agente-alvo (alto sinal, casa o domínio e o
+    output do roteador) + stopwords expandidas. (Comportamento provado no motor
+    em test_pipeline_conditional_routing.py; aqui travamos os contratos no HTML,
+    já que Alpine/JS só roda no browser.)"""
+
+    # --- stemmer leve ---
+    def test_stemmer_defined(self, html):
+        assert "_stemPt(word) {" in html
+
+    def test_stemmer_has_key_derivational_suffixes(self, html):
+        # os sufixos que unificam rentabil*/reten*/fideliz* têm que existir
+        for suf in ("'ização'", "'idade'", "'ção'", "'izar'"):
+            assert suf in html, f"sufixo {suf} ausente no _stemPt"
+
+    def test_stemmer_floor_prevents_overshort_stems(self, html):
+        # nunca corta abaixo de 4 chars (radical curto → falso-positivo)
+        assert "w.length - suf.length >= 4" in html
+
+    # --- tokenizer compartilhado ---
+    def test_kwtokens_defined_and_stems(self, html):
+        assert "_kwTokens(text) {" in html
+        assert ".map(t => this._stemPt(t))" in html
+
+    # --- derivação semeia o NOME do agente-alvo ---
+    def test_derive_takes_target_name(self, html):
+        assert "_deriveConditionalExpr(when, targetName) {" in html
+
+    def test_derive_seeds_target_name_first(self, html):
+        # nome do alvo entra ANTES das keywords do "quando" (prioridade)
+        assert "[...this._kwTokens(targetName), ...this._kwTokens(w)]" in html
+
+    def test_empty_when_stays_sequential(self, html):
+        # sem "quando" → '' → aresta sequential (contrato preservado)
+        assert "if (!w) return '';" in html
+
+    # --- call sites passam o nome do agente RESOLVIDO ---
+    def test_callsite_checks_passes_agent_name(self, html):
+        assert "this._deriveConditionalExpr(when, (agent && agent.name) || r.target)" in html
+
+    def test_callsite_targets_passes_agent_name(self, html):
+        assert "this._deriveConditionalExpr(when, a.name)" in html
+
+    # --- stopwords: verbos-gatilho / rótulos genéricos fora ---
+    def test_noise_words_added_to_stopwords(self, html):
+        # pin na LINHA exata da string de stopwords expandida (2026-06-06):
+        # verbos-gatilho não discriminam ramo e, ao stemizar, viram ímãs.
+        assert "'fala falar fale trata tratar questão questao questões questoes " in html
+        assert "assunto agente agentes subagente especialista assistente'" in html
+
     def test_kind_label_maps_three_layers(self, html):
         assert "k === 'aobd' ? 'orquestrador' : (k === 'router' ? 'roteador' : 'subagente')" in html
 
