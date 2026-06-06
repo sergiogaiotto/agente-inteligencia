@@ -944,13 +944,21 @@
                         </template>
                     </div>
                     <!-- Filtros do alvo: só ATIVOS por default (checkbox inclui inativos)
-                         + chips de domínio (multi; só aparecem com ≥2 domínios distintos
-                         entre os agentes). Filtro de SUGESTÃO — texto livre segue aceito. -->
+                         + só SUBAGENTES por default (checkbox inclui orquestradores/
+                         roteadores — só aparece quando há algum) + chips de domínio
+                         (multi; só aparecem com ≥2 domínios distintos entre os agentes).
+                         Filtro de SUGESTÃO — texto livre segue aceito e resolve. -->
                     <div x-show="availableAgents.length" class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
                         <label class="inline-flex items-center gap-1.5 text-[11px] text-surface-600 cursor-pointer select-none">
                             <input type="checkbox" x-model="composerIncludeInactive" class="rounded border-surface-300 text-brand-600 focus:ring-brand-400 focus:ring-offset-0">
                             incluir inativos
                         </label>
+                        <template x-if="composerHasOrchestrators">
+                            <label class="inline-flex items-center gap-1.5 text-[11px] text-surface-600 cursor-pointer select-none">
+                                <input type="checkbox" x-model="composerIncludeOrchestrators" class="rounded border-surface-300 text-brand-600 focus:ring-brand-400 focus:ring-offset-0">
+                                incluir orquestradores/roteadores
+                            </label>
+                        </template>
                         <template x-if="composerDomains.length >= 2">
                             <div class="flex flex-wrap items-center gap-1">
                                 <span class="text-[10px] text-surface-400">domínios:</span>
@@ -975,7 +983,7 @@
                             <option :value="ag.name" label="agente"></option>
                         </template>
                     </datalist>
-                    <p class="mt-1 text-[10px] text-surface-400">Sugestões de <b>agentes reais</b> ao digitar em "delegar a" — só agente vira roteamento no AI Mesh. Texto livre também é aceito (ex.: citar uma skill na prosa, sem virar aresta).</p>
+                    <p class="mt-1 text-[10px] text-surface-400">Sugestões de <b>subagentes</b> (folhas que executam) ao digitar em "delegar a"; orquestrador/roteador entram com o checkbox acima (delegar a outra camada). Só agente vira roteamento no AI Mesh — texto livre também é aceito (ex.: citar uma skill na prosa, sem virar aresta).</p>
                 </div>
                 <!-- Dry-run de roteamento (PR4): classifica cada alvo (agente real /
                      skill / texto livre) e oferece sincronizar os AGENTES reais com
@@ -994,6 +1002,11 @@
                                       x-text="chk.cls === 'agent' ? '✓ agente' : (chk.cls === 'skill' ? '🔗 skill' : '⚠ texto livre')"></span>
                                 <span class="text-brand-900 font-mono truncate" x-text="chk.target"></span>
                                 <span x-show="chk.cls === 'agent'" class="ml-auto flex items-center gap-1 shrink-0">
+                                    <span x-show="chk.kind"
+                                          class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                                          :class="_kindBadgeClass(chk.kind)"
+                                          x-text="_kindLabel(chk.kind)"
+                                          :title="chk.kind === 'subagent' ? 'Subagente — executa a tarefa (folha do pipeline).' : ('Delega a outro ' + _kindLabel(chk.kind) + ' — camada de decisão extra: re-roteia em vez de responder.')"></span>
                                     <span x-show="chk.inactive"
                                           class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-red-100 text-red-700"
                                           title="Agente desativado — ative antes de rotear. A conexão pode ser criada, mas o pipeline não vai executá-lo.">inativo</span>
@@ -1009,6 +1022,7 @@
                         Regra <b>com "quando"</b> vira aresta <span class="text-sky-700 font-medium">condicional</span>
                         (roteia 1-de-N pela pergunta do usuário); <b>sem "quando"</b> vira <span class="text-surface-600 font-medium">sequencial</span>
                         (sempre roteia). A expressão derivada é editável depois no AI Mesh.
+                        O <b>selo de camada</b> (subagente/orquestrador/roteador) mostra o que recebe a regra — rotear a um orquestrador/roteador delega a <b>outra camada de decisão</b> (hop extra), em vez de uma folha que responde.
                     </p>
                     <button @click="syncMissionToMesh()" type="button" :disabled="meshSyncing || !missionAgentTargets.length"
                             class="mt-2 inline-flex items-center gap-1 rounded-lg bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-40 transition-colors">
@@ -1079,6 +1093,11 @@ function agentForm(editId) {
         // "inativo" quando o alvo resolvido está desativado — honestidade).
         composerIncludeInactive: false,
         composerDomainFilter: [],
+        // Camada do alvo: por default o datalist sugere só SUBAGENTES (folhas que
+        // executam). Orquestrador/roteador re-delegam (camada de decisão extra) →
+        // só entram nas sugestões com este checkbox. A Verificação SEMPRE mostra
+        // a camada de cada alvo (selo) — honestidade / sem falsa confiança.
+        composerIncludeOrchestrators: false,
         mission: {
             statement: '',                      // missão / triagem (obrigatório)
             rules: [{ when: '', target: '' }],  // regras repetíveis: quando → delegar a
@@ -1717,6 +1736,29 @@ function agentForm(editId) {
             // Domínios de um agente: campo CSV ("Cobrança, Suporte") → lista.
             return ((a && a.domain) || '').split(',').map(d => d.trim()).filter(Boolean);
         },
+        _isOrchestratorKind(a) {
+            // aobd/router são CAMADAS (re-delegam); subagent é folha (executa).
+            const k = ((a && a.kind) || 'subagent');
+            return k === 'aobd' || k === 'router';
+        },
+        _kindLabel(kind) {
+            // Rótulo curto da camada pro selo da Verificação de roteamento.
+            const k = (kind || 'subagent');
+            return k === 'aobd' ? 'orquestrador' : (k === 'router' ? 'roteador' : 'subagente');
+        },
+        _kindBadgeClass(kind) {
+            // Cores por camada (sem roxo — paleta vermelho/branco do projeto):
+            // orquestrador=âmbar, roteador=índigo, subagente=neutro (caso comum).
+            const k = (kind || 'subagent');
+            if (k === 'aobd') return 'bg-amber-100 text-amber-700';
+            if (k === 'router') return 'bg-indigo-100 text-indigo-700';
+            return 'bg-surface-100 text-surface-600';
+        },
+        get composerHasOrchestrators() {
+            // Gate do checkbox: só ofereço "incluir orquestradores/roteadores"
+            // se existir algum entre os agentes carregados (senão é ruído).
+            return (this.availableAgents || []).some(a => this._isOrchestratorKind(a));
+        },
         get composerDomains() {
             // Domínios distintos ENTRE OS AGENTES-alvo (não os domínios globais):
             // só faz sentido filtrar por domínio que tem agente roteável. Some
@@ -1729,13 +1771,15 @@ function agentForm(editId) {
         },
         get composerTargetAgents() {
             // Lista FILTRADA que alimenta o datalist "delegar a":
-            // (ativo OU incluir-inativos) E (sem filtro de domínio OU casa ≥1
-            // domínio). Filtro de SUGESTÃO apenas — resolveAgentByName segue
-            // usando availableAgents (texto livre resolve mesmo se filtrado).
+            // (ativo OU incluir-inativos) E (subagente OU incluir-orquestradores)
+            // E (sem filtro de domínio OU casa ≥1 domínio). Filtro de SUGESTÃO
+            // apenas — resolveAgentByName segue usando availableAgents (texto
+            // livre resolve mesmo se filtrado).
             const dom = this.composerDomainFilter || [];
             return (this.availableAgents || []).filter(a => {
                 const active = (a.status || 'active') === 'active';
                 if (!active && !this.composerIncludeInactive) return false;
+                if (this._isOrchestratorKind(a) && !this.composerIncludeOrchestrators) return false;
                 if (dom.length) {
                     const ds = this._agentDomains(a);
                     if (!ds.some(d => dom.includes(d))) return false;
@@ -1755,6 +1799,9 @@ function agentForm(editId) {
             // (exposta no tooltip — rationale visível, sem falsa confiança).
             // inactive: alvo resolve pra agente desativado (badge de aviso —
             // pode acontecer via texto livre, já que o datalist esconde inativos).
+            // kind: camada do alvo resolvido (subagent/aobd/router) → selo na
+            // Verificação. Rotear a orquestrador/roteador delega a outra camada
+            // de decisão (hop extra) — o selo deixa isso explícito.
             return (this.mission.rules || [])
                 .filter(r => (r.target || '').trim())
                 .map(r => {
@@ -1762,9 +1809,10 @@ function agentForm(editId) {
                     const cls = this.classifyTarget(r.target);
                     const agent = this.resolveAgentByName(r.target);
                     const inactive = !!(agent && (agent.status || 'active') !== 'active');
+                    const kind = agent ? (agent.kind || 'subagent') : '';
                     const expr = this._deriveConditionalExpr(when);
                     const routing = (cls === 'agent' && when && expr) ? 'conditional' : 'sequential';
-                    return { when, target: (r.target || '').trim(), cls, routing, expr, inactive };
+                    return { when, target: (r.target || '').trim(), cls, routing, expr, inactive, kind };
                 });
         },
         get missionAgentTargets() {
