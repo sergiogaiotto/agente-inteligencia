@@ -2170,17 +2170,22 @@ function workspacePage() {
                 this.currentSessionId=sid;this.messages=d.messages||[];
                 this.lastTrace=d.trace||null;
                 // ── Toggle Agente/Pipeline ao carregar sessão (2026-06-01) ──
-                // Backend já estabiliza d.trace.mode (sempre 'agent' ou
-                // 'pipeline' quando trace_data existe). Quando trace é null
-                // (sessão muito antiga), inferir por pipeline_steps no que
-                // sobrou ou cair em 'agent' como default seguro.
+                // Backend estabiliza d.trace.mode ('agent'/'pipeline') quando
+                // trace_data existe. Defesa em profundidade (2026-06-06): se a
+                // sessão foi gravada SEM trace (pipelines antigos rodados via
+                // /chat/stream, que não persistiam trace_data), ainda assim
+                // detectamos pipeline pelo agente da sessão ser uma RAIZ de
+                // pipeline (pipelineRoots — já carregado no boot, antes de
+                // loadSession). Sem isso o toggle caía erradamente em 'agent'.
+                // Sessões realmente de agente caem em 'agent' (default seguro).
                 // selectedAgentId prioriza session.agent_id (campo persistido
                 // na criação da interaction) — sempre confiável, vence o
                 // pipeline_steps[0] que pode estar ausente em sessões antigas.
                 const sessionAgentId = d.session?.agent_id || '';
                 const pipelineSteps = d.trace?.pipeline_steps || [];
                 const hasPipelineSteps = pipelineSteps.length > 0;
-                const isPipelineSession = d.trace?.mode === 'pipeline' || hasPipelineSteps;
+                const isPipelineRoot = (this.pipelineRoots || []).some(p => p.id === sessionAgentId);
+                const isPipelineSession = d.trace?.mode === 'pipeline' || hasPipelineSteps || isPipelineRoot;
                 this.execMode = isPipelineSession ? 'pipeline' : 'agent';
                 this.selectedAgentId = sessionAgentId || pipelineSteps[0]?.agent_id || d.trace?.agent_id || '';
                 this.activeTraceIdx=-1;this.richViewMsgs={};
