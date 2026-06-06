@@ -68,9 +68,28 @@ class TestComposePersona:
         assert wizard._COMPOSE_PERSONA_AOBD != wizard._COMPOSE_PERSONA_AR
 
     def test_regras_pedem_ancoragem_no_catalogo(self):
-        """A persona instrui o LLM a preferir nomes EXATOS do catálogo."""
+        """A persona instrui o LLM a usar o nome EXATO do catálogo."""
         assert "catálogo" in wizard._COMPOSE_RULES
-        assert "EXATOS" in wizard._COMPOSE_RULES
+        assert "EXATO" in wizard._COMPOSE_RULES
+
+    def test_regras_dizem_target_e_agente_nao_skill(self):
+        """O 'target' deve ser um AGENTE; skills não são destinos válidos.
+
+        Consistente com o autocomplete manual (só agentes): roteamento na malha
+        é agente→agente; regra apontando pra skill é no-op silencioso.
+        """
+        assert "AGENTE do catálogo" in wizard._COMPOSE_RULES
+        assert "skills NÃO são destinos válidos" in wizard._COMPOSE_RULES
+
+    def test_persona_aobd_delega_so_a_agentes(self):
+        p = wizard._compose_persona("aobd")
+        assert "DELEGA para outros AGENTES" in p
+        assert "SEMPRE um agente" in p
+
+    def test_persona_router_encaminha_so_a_agentes(self):
+        p = wizard._compose_persona("router")
+        assert "encaminha para o AGENTE certo" in p
+        assert "SEMPRE um agente" in p
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -126,9 +145,18 @@ class TestBuildComposeCatalog:
         cat = wizard._build_compose_catalog(["S"], [])
         assert "nenhum cadastrado" in cat
 
-    def test_instrui_a_preferir_o_catalogo(self):
+    def test_instrui_target_agente(self):
         cat = wizard._build_compose_catalog(["S"], ["A"])
-        assert "PREFERENCIALMENTE" in cat
+        # 'target' deve ser um AGENTE; o catálogo deixa isso explícito.
+        assert "use estes nomes em 'target'" in cat
+        assert "skills não recebem roteamento" in cat
+
+    def test_agentes_sao_destinos_skills_sao_contexto(self):
+        cat = wizard._build_compose_catalog(["Resumir Boleto"], ["Faturador"])
+        # Agentes rotulados como destino; skills como contexto não-destino.
+        assert "Agentes (DESTINOS de roteamento" in cat
+        assert "Skills (capacidades internas" in cat
+        assert "NÃO são destinos de regra" in cat
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -232,11 +260,23 @@ class TestGroundComposeTargets:
         )
         assert d["rules"][0]["target"] == "Faturador X"
 
-    def test_canoniza_caixa_de_skill(self):
+    def test_skill_target_nao_e_canonizada(self):
+        # Skills NÃO são destinos de roteamento: a IA não deveria propô-las, mas
+        # se propuser, NÃO canonizamos — o frontend sinaliza (skill = no-op).
         d = wizard._ground_compose_targets(
             self._draft("RESUMIR boleto"), skills=["Resumir Boleto"], agents=[]
         )
-        assert d["rules"][0]["target"] == "Resumir Boleto"
+        assert d["rules"][0]["target"] == "RESUMIR boleto"
+
+    def test_skills_arg_ignorado(self):
+        # `skills` é aceito por compat de assinatura, mas IGNORADO: sem agente
+        # correspondente, o target permanece como veio (não vira skill canônica).
+        d = wizard._ground_compose_targets(
+            self._draft("duplicado"),
+            skills=[{"name": "Duplicado"}],
+            agents=[],
+        )
+        assert d["rules"][0]["target"] == "duplicado"
 
     def test_sem_match_mantem_texto_livre(self):
         d = wizard._ground_compose_targets(
@@ -244,8 +284,8 @@ class TestGroundComposeTargets:
         )
         assert d["rules"][0]["target"] == "Algo Inexistente"
 
-    def test_agente_tem_precedencia_em_colisao(self):
-        # Mesmo nome em skill e agente: o agente (nó de mesh) é o canônico.
+    def test_agente_canoniza_mesmo_havendo_skill_homonima(self):
+        # Mesmo nome em skill e agente: só o agente (nó de mesh) é o canônico.
         d = wizard._ground_compose_targets(
             self._draft("duplicado"),
             skills=[{"name": "Duplicado"}],

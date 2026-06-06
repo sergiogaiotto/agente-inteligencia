@@ -1532,25 +1532,29 @@ _COMPOSE_RULES = (
     '  "fallback": "o que fazer quando nenhuma regra se aplica",\n'
     '  "goldenRule": true\n'
     "}\n"
-    "- Em cada 'target', PREFIRA os nomes EXATOS do catálogo de skills/agentes "
-    "fornecido abaixo. Só proponha um destino fora do catálogo quando ele não "
-    "cobrir a necessidade — e então use um nome curto e descritivo.\n"
+    "- Em cada 'target', use SEMPRE o nome EXATO de um AGENTE do catálogo "
+    "fornecido abaixo. Os destinos de roteamento são AGENTES (nós da malha) — "
+    "skills NÃO são destinos válidos (são capacidades internas de um agente, "
+    "não recebem roteamento). Só proponha um AGENTE fora do catálogo quando "
+    "nenhum existente cobrir a necessidade — e então use um nome curto e "
+    "descritivo de agente (ex.: 'Agente de Cobrança').\n"
     "- Gere de 2 a 5 regras cobrindo os principais caminhos.\n"
     "- Escreva em português do Brasil."
 )
 
 _COMPOSE_PERSONA_AOBD = (
     "CAMADA: 🎼 Orquestrador (AOBD). Ele interpreta a intenção do usuário e "
-    "DELEGA para outros agentes/skills — nunca executa a tarefa final. As "
-    "regras são critérios de delegação ('quando X → delegar a Y'). Defina "
-    "goldenRule=true: o orquestrador decide quem faz, não faz."
+    "DELEGA para outros AGENTES — nunca executa a tarefa final. As regras são "
+    "critérios de delegação ('quando X → delegar ao agente Y'); o 'target' é "
+    "SEMPRE um agente (skills não recebem delegação). Defina goldenRule=true: "
+    "o orquestrador decide quem faz, não faz."
 )
 _COMPOSE_PERSONA_AR = (
     "CAMADA: 🧭 Roteador (AR). Ele CLASSIFICA a entrada e a encaminha para o "
-    "destino certo. As regras são categorias com destinos ('quando a entrada "
-    "for X → encaminhar para Y'). Defina goldenRule=false (não se aplica ao "
-    "roteador). O 'fallback' descreve o comportamento para entradas ambíguas "
-    "ou fora de escopo."
+    "AGENTE certo. As regras são categorias com destinos ('quando a entrada "
+    "for X → encaminhar para o agente Y'); o 'target' é SEMPRE um agente. "
+    "Defina goldenRule=false (não se aplica ao roteador). O 'fallback' "
+    "descreve o comportamento para entradas ambíguas ou fora de escopo."
 )
 
 
@@ -1583,7 +1587,10 @@ def _compose_catalog_names(items) -> list[str]:
 def _build_compose_catalog(skills, agents) -> str:
     """Bloco de contexto com o catálogo REAL de destinos disponíveis.
 
-    Aterra a IA nos nomes que existem de verdade — principal mitigação contra
+    Os DESTINOS de roteamento são AGENTES (nós da malha). Skills aparecem só
+    como CONTEXTO de capacidades já existentes — NÃO são destinos de regra (não
+    recebem roteamento na malha; uma regra apontando pra skill é no-op). Aterra
+    a IA nos agentes que existem de verdade — principal mitigação contra
     alucinar destinos inexistentes. Listas vazias viram aviso explícito.
 
     Função pura — recebe as listas e devolve string. Sem I/O.
@@ -1592,14 +1599,18 @@ def _build_compose_catalog(skills, agents) -> str:
     ag = _compose_catalog_names(agents)
     lines = ["[CATÁLOGO DE DESTINOS DISPONÍVEIS]"]
     lines.append(
-        "Skills vinculáveis: " + (", ".join(sk) if sk else "(nenhuma cadastrada)") + "."
+        "Agentes (DESTINOS de roteamento — use estes nomes em 'target'): "
+        + (", ".join(ag) if ag else "(nenhum cadastrado)") + "."
     )
     lines.append(
-        "Agentes existentes: " + (", ".join(ag) if ag else "(nenhum cadastrado)") + "."
+        "Skills (capacidades internas dos agentes — apenas CONTEXTO, NÃO são "
+        "destinos de regra): "
+        + (", ".join(sk) if sk else "(nenhuma cadastrada)") + "."
     )
     lines.append(
-        "Ao escolher 'target' nas regras, use PREFERENCIALMENTE nomes desta "
-        "lista. Se nenhum servir, proponha um destino novo com nome claro."
+        "Em 'target', use SEMPRE o nome de um AGENTE da lista acima — skills "
+        "não recebem roteamento. Se nenhum agente servir, proponha um novo "
+        "agente com nome claro."
     )
     return "\n".join(lines)
 
@@ -1656,18 +1667,23 @@ def _parse_compose_json(content: str, kind: str) -> dict:
 
 
 def _ground_compose_targets(draft: dict, skills, agents) -> dict:
-    """Canoniza os 'target' das regras para o nome EXATO do catálogo.
+    """Canoniza os 'target' das regras para o nome EXATO de um AGENTE do catálogo.
 
-    Match por nome normalizado (caixa/espaços). Quando casa, troca pelo nome
-    canônico — isso faz a "Verificação de roteamento" do frontend classificar
-    como agente/skill em vez de ⚠ texto livre por mera divergência de caixa.
-    Sem match: mantém como veio (texto livre — o frontend sinaliza).
+    Match por nome normalizado (caixa/espaços) SÓ contra AGENTES — os únicos
+    destinos válidos de roteamento na malha. Quando casa, troca pelo nome
+    canônico do agente, fazendo a "Verificação de roteamento" do frontend
+    classificar como agente em vez de ⚠ texto livre por mera divergência de
+    caixa. Skills NÃO são canonizadas de propósito: se a IA insistir numa skill
+    como destino, ela permanece como veio e o frontend a sinaliza (skill =
+    no-op de roteamento). Sem match: mantém como veio (texto livre — sinalizado).
+
+    `skills` é aceito por compatibilidade de assinatura/chamada, mas IGNORADO:
+    skills não são destinos de roteamento.
 
     Muta e devolve o próprio draft (conveniência de encadeamento).
     """
     canon: dict[str, str] = {}
-    # Agentes primeiro: se um nome colidir, o agente (nó de mesh) é o canônico.
-    for name in _compose_catalog_names(agents) + _compose_catalog_names(skills):
+    for name in _compose_catalog_names(agents):
         canon.setdefault(name.strip().lower(), name)
     for rule in draft.get("rules", []):
         key = (rule.get("target") or "").strip().lower()
