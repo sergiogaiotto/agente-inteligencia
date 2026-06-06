@@ -35,6 +35,16 @@ logger = logging.getLogger(__name__)
 _tracer = get_tracer(__name__)
 
 
+# Expressão tsquery OR-PT reusada em rank + WHERE do BM25. $1 é o parâmetro
+# (sem injeção); só a FORMA da expressão é interpolada na SQL. Promovida a
+# constante de módulo (2026-06-06) para ser importável/testável sem tocar no
+# Postgres. Detalhes do porquê 'portuguese' + OR + NULLIF: ver _bm25_search.
+_BM25_TSQUERY_PT = (
+    "to_tsquery('portuguese', NULLIF(regexp_replace("
+    "plainto_tsquery('portuguese', $1)::text, ' & ', ' | ', 'g'), ''))"
+)
+
+
 def _get_vector_search_fn():
     """Retorna a função search() do pgvector_store (único backend desde Onda Q).
 
@@ -151,11 +161,24 @@ class Retriever:
 
     async def _bm25_search(self, query: str, top_n: int,
                            allowed_source_ids: list[str] | None = None) -> list[dict]:
-        """BM25 nativo via tsvector + ts_rank_cd. plainto_tsquery converte
-        a query em formato tsquery seguro (não exige sintaxe especial).
+        """BM25 nativo via tsvector + ts_rank_cd.
+
+        Recall PT (fix 2026-06-06): a query é normalizada por
+        ``plainto_tsquery('portuguese', …)`` (stemming PT) e os termos são unidos
+        por OR (``|``) em vez do AND (``&``) implícito — casa QUALQUER termo e o
+        ``ts_rank_cd`` rankeia por frequência/proximidade. ANTES era
+        ``plainto_tsquery('simple', …)``: sem stemming e exigindo TODOS os termos,
+        perguntas em linguagem natural ("como subir a receita") não casavam com o
+        documento ("aumentar receita") → 0 evidência (bug do pipeline Retenção).
+        ``NULLIF`` blinda query só-stopword (vira NULL → não casa, sem erro de
+        sintaxe do ``to_tsquery``). A coluna ``tsv`` é gerada com 'portuguese'
+        (ver ``app/core/database.py`` + migração idempotente).
 
         Wave 2: filtro opcional por knowledge_source_id quando skill restringe.
         """
+        # Expressão tsquery OR-PT reusada em rank + WHERE (constante de módulo,
+        # testável). $1 é parametrizado (sem injeção); só a FORMA é interpolada.
+        tsq = _BM25_TSQUERY_PT
         with _tracer.start_as_current_span("evidence.retrieve.bm25") as span:
             span.set_attribute("bm25.top_n", top_n)
             if allowed_source_ids:
@@ -164,13 +187,13 @@ class Retriever:
             async with pool.acquire() as con:
                 if allowed_source_ids:
                     rows = await con.fetch(
-                        """
+                        f"""
                         SELECT ec.id AS chunk_id, ec.knowledge_source_id AS source_id,
                                ec.ordinal, ec.text,
-                               ts_rank_cd(ec.tsv, plainto_tsquery('simple', $1)) AS rank
+                               ts_rank_cd(ec.tsv, {tsq}) AS rank
                         FROM evidence_chunks ec
                         JOIN knowledge_sources ks ON ks.id = ec.knowledge_source_id
-                        WHERE ec.tsv @@ plainto_tsquery('simple', $1)
+                        WHERE ec.tsv @@ {tsq}
                           AND ks.authorized = 1
                           AND ec.knowledge_source_id = ANY($3::text[])
                         ORDER BY rank DESC
@@ -180,13 +203,13 @@ class Retriever:
                     )
                 else:
                     rows = await con.fetch(
-                        """
+                        f"""
                         SELECT ec.id AS chunk_id, ec.knowledge_source_id AS source_id,
                                ec.ordinal, ec.text,
-                               ts_rank_cd(ec.tsv, plainto_tsquery('simple', $1)) AS rank
+                               ts_rank_cd(ec.tsv, {tsq}) AS rank
                         FROM evidence_chunks ec
                         JOIN knowledge_sources ks ON ks.id = ec.knowledge_source_id
-                        WHERE ec.tsv @@ plainto_tsquery('simple', $1)
+                        WHERE ec.tsv @@ {tsq}
                           AND ks.authorized = 1
                         ORDER BY rank DESC
                         LIMIT $2

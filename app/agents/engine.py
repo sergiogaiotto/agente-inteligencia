@@ -259,6 +259,32 @@ async def _has_tool_grounding(interaction_id: str | None) -> bool:
     return False
 
 
+def _pipeline_should_self_retrieve(
+    *,
+    has_pipeline_context: bool,
+    declared_sources: bool,
+    skip_evidence: bool,
+) -> bool:
+    """Decide se um agente DENTRO de um pipeline deve consultar suas PRÓPRIAS
+    bases (RAG), em vez de só herdar o texto do upstream.
+
+    Fix 2026-06-06 (RAG em pipeline): historicamente QUALQUER agente com
+    `pipeline_context` pulava o retrieval — então um especialista downstream
+    ficava CEGO às KBs que declarou em `evidence_policy.sources`. Bug relatado:
+    "router → Retenção" devolvia evidência vazia apesar das KBs corretas.
+
+    Regra (opt-in ESTRITO, zero regressão): só auto-recupera quando há contexto
+    de pipeline E o agente DECLARA sources (lista populada — sinal explícito de
+    que tem KBs próprias) E o retrieval não foi explicitamente pulado. Pipelines
+    sem declaração seguem idênticos ao comportamento antigo; `sources=None`
+    (legado) e `sources=[]` (bloqueado) NÃO contam como declaração.
+
+    `declared_sources` deve ser pré-computado pelo chamador como
+    ``isinstance(allowed_sources, list) and len(allowed_sources) > 0``.
+    """
+    return has_pipeline_context and declared_sources and not skip_evidence
+
+
 # ═══════════════════════════════════════════════════
 # Helpers — Pre-check de configuração do LLM provider
 # ═══════════════════════════════════════════════════
@@ -1402,6 +1428,7 @@ async def execute_interaction(
     pipeline_context: str = None,
     context_mode: str = "auto",
     grounding_strict: Optional[bool] = None,
+    retrieval_query: Optional[str] = None,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
 
@@ -1415,6 +1442,12 @@ async def execute_interaction(
     e o agente não tem allow_general_knowledge, o VerifyEvidence RECUSA respostas
     sem nenhuma evidência (anexo/RAG/tool/pipeline). Ver `_grounding_guard`.
     Harness/golden e recipes pinam False para reprodutibilidade (caminho legado).
+
+    `retrieval_query` (2026-06-06 — RAG em pipeline): query LIMPA usada na busca
+    de evidências. None (default) → usa `user_input`. Em pipeline, `user_input`
+    do subagente já vem prefixado com "## Contexto do agente anterior… / ##
+    Solicitação original…"; passar a pergunta ORIGINAL aqui evita poluir o BM25/
+    vetorial com o texto do upstream. Ver `execute_pipeline`.
     """
     start = time.time()
     agent = await agents_repo.find_by_id(agent_id)
@@ -1678,31 +1711,55 @@ async def execute_interaction(
         or agent.get("require_evidence") == 0
         or exec_profile == "fast"
     )
+    # Onda 6 Wave 2: skill pode declarar evidence_policy.sources pra restringir
+    # quais fontes essa skill consulta. None = legacy (todas autorizadas);
+    # [] = bloqueia tudo; populada = filtro estrito.
+    _ev_policy = (skill_data.get("_evidence_policy_parsed") or {})
+    _allowed_sources = _ev_policy.get("sources")  # None | list
+
+    # ── Fix 2026-06-06 (RAG em pipeline) ──────────────────────────────────────
+    # ANTES: QUALQUER agente com pipeline_context PULAVA o retrieval e usava só o
+    # TEXTO do upstream como "evidência" — então um especialista downstream ficava
+    # CEGO às suas próprias bases: as KBs declaradas em evidence_policy.sources
+    # NUNCA eram consultadas em pipeline. Bug relatado: "router → Retenção"
+    # devolvia {tips:[], source_chunks:[]} apesar das KBs corretas e populadas.
+    # AGORA: se o agente DECLARA sources (lista populada) — opt-in explícito de que
+    # tem KBs próprias — ele consulta seus KBs MESMO em pipeline, somando o
+    # resultado ao contexto do upstream (que já vem embutido em user_input).
+    # Opt-in ESTRITO por sources populada → pipelines sem declaração ficam
+    # IDÊNTICOS (zero regressão). sources=None (legado) e [] (bloqueado) seguem o
+    # caminho antigo (skip / retorno vazio do retriever).
+    _declares_sources = isinstance(_allowed_sources, list) and len(_allowed_sources) > 0
+    _pipeline_own_rag = _pipeline_should_self_retrieve(
+        has_pipeline_context=bool(pipeline_context),
+        declared_sources=_declares_sources,
+        skip_evidence=bool(skip_evidence),
+    )
+
     evidences = []
-    if pipeline_context or skip_evidence:
+    if (pipeline_context and not _pipeline_own_rag) or skip_evidence:
         await fsm.run_retrieve_evidence([])
         enriched_input = user_input if not attachment_context else f"{user_input}{attachment_context}"
     else:
         # Spans separados para retrieve e rerank — facilita identificar gargalo
         # (no Onda 3, search vai virar busca vetorial e o rerank um cross-encoder real).
-        # Onda 6 Wave 2: skill pode declarar evidence_policy.sources pra restringir
-        # quais fontes essa skill consulta. None = legacy (todas autorizadas);
-        # [] = bloqueia tudo; populada = filtro estrito.
-        _ev_policy = (skill_data.get("_evidence_policy_parsed") or {})
-        _allowed_sources = _ev_policy.get("sources")  # None | list
+        # `retrieval_query` (pipeline) = pergunta ORIGINAL limpa; fora de pipeline
+        # = user_input. Evita poluir BM25/vetorial com o texto do upstream.
+        _search_query = retrieval_query or user_input
         with _tracer.start_as_current_span("evidence.retrieve") as _span_r:
             _span_r.set_attribute("evidence.top_n", 5)
+            _span_r.set_attribute("evidence.pipeline_own_rag", _pipeline_own_rag)
             if _allowed_sources is not None:
                 _span_r.set_attribute("evidence.allowed_sources_count", len(_allowed_sources))
             evidences = await retriever.search(
-                user_input,
+                _search_query,
                 top_n=5,
                 allowed_source_ids=_allowed_sources,
             )
             _span_r.set_attribute("evidence.retrieved_count", len(evidences))
         with _tracer.start_as_current_span("evidence.rerank") as _span_rr:
             _span_rr.set_attribute("evidence.input_count", len(evidences))
-            evidences = await reranker.rerank(user_input, evidences, top_n=5)
+            evidences = await reranker.rerank(_search_query, evidences, top_n=5)
             _span_rr.set_attribute("evidence.output_count", len(evidences))
         await fsm.run_retrieve_evidence([asdict(e) if hasattr(e, '__dataclass_fields__') else e for e in evidences])
 
@@ -1992,13 +2049,23 @@ async def execute_interaction(
         if grounding_strict is None else bool(grounding_strict)
     )
     _gk_allowed = bool(agent.get("allow_general_knowledge") or 0)
+    # Causa 2 (2026-06-06): router é DISPATCHER — sua saída é decisão de
+    # triagem/roteamento (consumida como contexto pelo especialista downstream),
+    # NUNCA a resposta final fundamentada ao usuário. Logo é ISENTO da recusa de
+    # grounding: senão a triagem "recusa por falta de evidência" e a recusa vira
+    # o pipeline_context do especialista (lixo no prompt). subagent/aobd seguem
+    # ESTRITOS — quem entrega a resposta fundamentada é o especialista. Aplicado
+    # no call site (não em `_grounding_guard`, que é função pura testada) reusando
+    # o mesmo caminho do escape hatch (allow_general_knowledge).
+    _router_grounding_exempt = (str(agent.get("kind") or "").lower() == "router")
+    _grounding_exempt = _gk_allowed or _router_grounding_exempt
     _has_attach_grounding = bool(attachment_context)
     # Só consultamos tool grounding (query no DB) quando a guarda PODE disparar:
-    # strict ligado, sem escape hatch e sem nenhuma outra fonte (RAG/anexo/
-    # pipeline). Caso contrário a decisão já está selada e a query seria
+    # strict ligado, sem escape hatch/isenção e sem nenhuma outra fonte (RAG/
+    # anexo/pipeline). Caso contrário a decisão já está selada e a query seria
     # desperdício — e superfície de erro desnecessária no caminho feliz.
     _grounding_could_refuse = (
-        _grounding_strict_eff and not _gk_allowed
+        _grounding_strict_eff and not _grounding_exempt
         and not evidences and not _has_attach_grounding and not pipeline_context
     )
     _has_tool_grounding_flag = (
@@ -2007,7 +2074,7 @@ async def execute_interaction(
     )
     _refuse_ungrounded, _grounding_reason = _grounding_guard(
         strict=_grounding_strict_eff,
-        allow_general_knowledge=_gk_allowed,
+        allow_general_knowledge=_grounding_exempt,
         has_evidences=bool(evidences),
         has_attachments=_has_attach_grounding,
         has_pipeline_context=bool(pipeline_context),
@@ -2017,6 +2084,7 @@ async def execute_interaction(
     ctx.metadata["grounding"] = {
         "strict": _grounding_strict_eff,
         "allow_general_knowledge": _gk_allowed,
+        "router_exempt": _router_grounding_exempt,
         "refused": _refuse_ungrounded,
         "has_evidence": bool(evidences),
         "has_attachment": _has_attach_grounding,
@@ -3129,6 +3197,10 @@ async def execute_pipeline(
                 channel=channel,
                 attachments=_forwarded_atts,
                 pipeline_context=pipeline_ctx,
+                # RAG em pipeline (2026-06-06): busca de evidências usa a pergunta
+                # ORIGINAL e limpa — não o `current_input` prefixado com o texto do
+                # upstream. Assim o BM25/vetorial do especialista não é poluído.
+                retrieval_query=user_input,
                 # Só o primeiro agente reutiliza a session_id do request.
                 # Subsequentes criam sub-interactions próprias (child_interaction_ids)
                 # que se ligam à master via execute_pipeline:2298+ depois.

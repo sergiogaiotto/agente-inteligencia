@@ -450,8 +450,11 @@ CREATE TABLE IF NOT EXISTS evidence_chunks (
     token_count INTEGER,
     char_count INTEGER,
     -- Coluna gerada: tsvector mantido em sync automaticamente pelo Postgres.
-    -- 'simple' não faz stemming agressivo — bom para mistura PT/EN sem dicionário.
-    tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(text, ''))) STORED,
+    -- 'portuguese' (fix 2026-06-06): stemming PT (cancelamento→cancel,
+    -- benefícios→benefíci) eleva o recall do BM25 para perguntas em linguagem
+    -- natural. ANTES era 'simple' (sem stemming) → "subir a receita" não casava
+    -- com "aumentar receita". DBs antigos migram via _IDEMPOTENT_MIGRATIONS.
+    tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('portuguese', coalesce(text, ''))) STORED,
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMP DEFAULT now()
 );
@@ -866,6 +869,30 @@ _IDEMPOTENT_MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_interactions_agent_id ON interactions(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_api_call_logs_agent_id ON api_call_logs(agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_binding_executions_agent_id ON binding_executions(agent_id)",
+    # Recall PT (fix 2026-06-06): migra a coluna gerada `tsv` de 'simple' →
+    # 'portuguese' (stemming) em DBs antigos. Coluna GENERATED não aceita ALTER
+    # da expressão → recria (DROP + ADD regenera todas as linhas) sob guarda: só
+    # roda quando a expressão atual ainda referencia 'simple' (idempotente — após
+    # migrar, o IF é falso e vira no-op). O índice GIN é recriado junto. Falha
+    # vira WARNING (não derruba startup), igual às demais migrations.
+    """
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_attribute a
+        JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+        WHERE a.attrelid = 'evidence_chunks'::regclass
+          AND a.attname = 'tsv'
+          AND pg_get_expr(d.adbin, d.adrelid) LIKE '%simple%'
+      ) THEN
+        DROP INDEX IF EXISTS idx_evidence_chunks_tsv;
+        ALTER TABLE evidence_chunks DROP COLUMN tsv;
+        ALTER TABLE evidence_chunks ADD COLUMN tsv TSVECTOR
+          GENERATED ALWAYS AS (to_tsvector('portuguese', coalesce(text, ''))) STORED;
+        CREATE INDEX idx_evidence_chunks_tsv ON evidence_chunks USING GIN (tsv);
+      END IF;
+    END $$;
+    """,
 ]
 
 
