@@ -3186,12 +3186,30 @@ async def execute_pipeline(
                 target_accepts_images=bool(agent.get("accepts_images") or 0),
             )
             if skip_by_conditional:
+                # Rastreabilidade do MOTIVO (Fatia 3a — 2026-06-07): distinguir
+                # "preterido pelo roteador" de "condição não satisfeita". O override
+                # de target estruturado roda ANTES da expr em _should_skip_conditional
+                # → skip COM bloco {"target": OUTRO} ⟺ preterido (1-de-N); skip SEM
+                # bloco ⟺ a expr de keyword não casou. Re-derivamos barato aqui (sem
+                # refatorar o gate, que é chamado direto por dezenas de testes).
+                _agent_nm = agent.get("name", "")
+                _routed = _extract_routed_target(upstream_output)
+                if _routed is not None and _norm_routing_name(_routed) != _norm_routing_name(_agent_nm):
+                    skip_reason = "structured_target_not_chosen"
+                    skip_text = (
+                        f"Roteador selecionou «{_routed}» (target estruturado) — "
+                        f"{_agent_nm} preterido"
+                    )
+                else:
+                    skip_reason = "conditional_false"
+                    skip_text = f"Condição não satisfeita — {_agent_nm} pulado (passthrough)"
                 steps.append({
                     "agent_id": agent_id,
-                    "agent_name": agent.get("name", ""),
+                    "agent_name": _agent_nm,
                     "agent_kind": agent.get("kind", ""),
                     "agent_model": agent.get("model", ""),
                     "status": "skipped_conditional",
+                    "skip_reason": skip_reason,
                     "output": upstream_output,
                     "final_state": "SkippedConditional",
                     "duration_ms": 0,
@@ -3199,10 +3217,7 @@ async def execute_pipeline(
                     "transitions": [],
                     "trace": {
                         "diagnostics": [
-                            {
-                                "level": "info",
-                                "text": f"Conexão condicional avaliou false — {agent.get('name','')} pulado (passthrough)",
-                            }
+                            {"level": "info", "text": skip_text}
                         ],
                     },
                 })
@@ -3210,8 +3225,9 @@ async def execute_pipeline(
                     "type": "agent_skipped",
                     "step_index": i,
                     "agent_id": agent_id,
-                    "agent_name": agent.get("name", ""),
-                    "reason": "conditional_false",
+                    "agent_name": _agent_nm,
+                    "reason": skip_reason,
+                    "reason_text": skip_text,
                 })
                 # last_result NÃO muda — próximo agente recebe output do anterior
                 continue
