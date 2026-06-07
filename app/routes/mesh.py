@@ -129,6 +129,41 @@ async def test_conditional(payload: dict):
 # ═══════════════════════════════════════════════════════════════════
 
 
+# Metadata de ajuda dos TIPOS DE CONEXÃO — fonte ÚNICA para o popover `?` ao
+# lado de cada card no wizard (mesh.html). No backend (não hardcoded no template)
+# pra não dar drift. Mesma filosofia de CONTEXT_SCOPE_VARS_META / os `desc` dos
+# modos de escopo. `what` = "o que é", `when` = "quando usar".
+MESH_CONNECTION_TYPES_HELP: list[dict] = [
+    {
+        "id": "sequential",
+        "label": "Sequencial",
+        "what": "O destino roda SEMPRE depois da origem e recebe o output dela como contexto.",
+        "when": "Encadear etapas onde uma alimenta a outra — A produz, B consome (ex.: Busca endereço → Tavily busca a partir do endereço resolvido).",
+    },
+    {
+        "id": "parallel",
+        "label": "Paralelo",
+        "what": "Vários destinos da mesma origem rodam TODOS, com o mesmo input (sem o roteador escolher um).",
+        "when": "Quando você quer respostas independentes de cada destino para combinar depois — não é roteamento 1-de-N.",
+    },
+    {
+        "id": "conditional",
+        "label": "Condicional",
+        "what": "O destino roda só se a regra (expressão) casar contra a entrada/output do upstream.",
+        "when": "Roteamento 1-de-N: o roteador escolhe UM destino conforme a mensagem. Combine com um destino 'default' como else (se nenhum casar).",
+    },
+]
+
+
+@router.get("/connection-types")
+async def connection_types():
+    """Metadata de ajuda dos tipos de conexão (o que é / quando usar) — fonte
+    única para o popover `?` ao lado de cada card no wizard de conexão. Estática;
+    espelha o padrão de `/context-scope-vars`.
+    """
+    return {"types": MESH_CONNECTION_TYPES_HELP}
+
+
 @router.get("/context-scope-vars")
 async def context_scope_vars():
     """Lista as variáveis disponíveis em templates Jinja do modo `scoped`
