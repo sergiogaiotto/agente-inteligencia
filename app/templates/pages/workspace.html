@@ -477,7 +477,7 @@
                         <div class="space-y-0">
                             <template x-for="(step,i) in lastTrace.pipeline_steps||[]" :key="i">
                                 <div class="flex gap-3"><div class="flex flex-col items-center"><div class="flex h-7 w-7 items-center justify-center rounded-full text-[9px] font-bold shrink-0" :class="step.status==='completed'?(step.agent_kind==='aobd'?'bg-rose-100 text-rose-700':step.agent_kind==='router'?'bg-orange-100 text-orange-700':'bg-teal-100 text-teal-700'):'bg-rose-100 text-rose-700'" x-text="i+1"></div><div x-show="i<(lastTrace.pipeline_steps?.length||1)-1" class="w-px flex-1 min-h-[12px] bg-surface-200"></div></div>
-                                <div class="pb-3 flex-1 min-w-0"><div class="text-[12px] font-semibold text-brand-900" x-text="step.agent_name"></div><div class="flex items-center gap-2 mt-0.5"><span class="rounded-full px-1.5 py-0.5 text-[9px] font-bold" :class="step.agent_kind==='aobd'?'bg-rose-50 text-rose-600':step.agent_kind==='router'?'bg-orange-50 text-orange-600':'bg-teal-50 text-teal-600'" x-text="step.agent_kind"></span><span class="text-[10px] text-surface-400" x-text="step.agent_model"></span><span class="text-[10px] font-mono" :class="step.status==='completed'?'text-emerald-600':'text-rose-600'" x-text="step.status==='completed'?step.duration_ms?.toFixed(0)+'ms':step.status"></span></div></div></div>
+                                <div class="pb-3 flex-1 min-w-0"><div class="text-[12px] font-semibold text-brand-900" x-text="step.agent_name"></div><div class="flex items-center gap-2 mt-0.5"><span class="rounded-full px-1.5 py-0.5 text-[9px] font-bold" :class="step.agent_kind==='aobd'?'bg-rose-50 text-rose-600':step.agent_kind==='router'?'bg-orange-50 text-orange-600':'bg-teal-50 text-teal-600'" x-text="step.agent_kind"></span><span class="text-[10px] text-surface-400" x-text="step.agent_model"></span><span class="text-[10px] font-mono" :class="step.status==='completed'?'text-emerald-600':'text-rose-600'" :title="step.trace?.diagnostics?.[0]?.text||''" x-text="step.status==='completed'?step.duration_ms?.toFixed(0)+'ms':step.status"></span></div><div x-show="step.status!=='completed' && step.trace?.diagnostics?.[0]?.text" class="text-[10px] text-rose-500/90 mt-0.5 leading-snug" x-text="step.trace?.diagnostics?.[0]?.text"></div></div></div>
                             </template>
                         </div>
                     </div>
@@ -2394,7 +2394,7 @@ function workspacePage() {
             } else if (name === 'agent_skipped') {
                 const i = event.step_index;
                 if (this.progressSteps[i]) this.progressSteps[i].status = 'error';
-                this._addLog('agent', '⊘', `${event.agent_name}: ignorado (${event.reason || 'inativo'})`, '', 'warning');
+                this._addLog('agent', '⊘', `${event.agent_name}: ignorado`, event.reason_text || event.reason || '', 'warning');
             } else if (name === 'attachments_rejected') {
                 // Anexo podado na porta (nenhum agente da cadeia aceita o tipo).
                 // Mostra no liveLog pra matar o dead-end silencioso "0 Anexos".
