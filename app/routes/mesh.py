@@ -6,6 +6,23 @@ from app.core.database import mesh_repo, agents_repo, car_repo
 
 router = APIRouter(prefix="/api/v1/mesh", tags=["mesh"])
 
+def _fanout_roots(edges: list[dict]) -> list[str]:
+    """IDs de origens com ≥2 arestas ``conditional`` de saída (fan-out 1-de-N).
+
+    Sinaliza onde o operador pode ter cabeado destinos em PARALELO (irmãos do
+    roteador) quando a intenção era uma CADEIA — um destino consome o resultado
+    de outro (ex.: Tavily busca a partir do endereço que o Busca endereço
+    resolveu). Genérico e SEM falso-positivo: só conta o padrão, não tenta
+    adivinhar a dependência semântica. Consumido por `get_topology` → a UI
+    (`mesh.html`) mostra um aviso fan-out × cadeia no cabeçalho do pipeline.
+    """
+    counts: dict[str, int] = {}
+    for e in edges:
+        if e.get("type") == "conditional":
+            counts[e.get("source")] = counts.get(e.get("source"), 0) + 1
+    return [src for src, n in counts.items() if n >= 2]
+
+
 @router.get("/topology")
 async def get_topology():
     agents = await agents_repo.find_all(limit=200)
@@ -32,7 +49,7 @@ async def get_topology():
                 await mesh_repo.delete(c["id"])
             except Exception:
                 pass
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "fanout_roots": _fanout_roots(edges)}
 
 @router.post("/connections", status_code=201)
 async def create_connection(data: MeshConnectionCreate):
