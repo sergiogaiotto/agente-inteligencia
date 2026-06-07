@@ -376,18 +376,54 @@
                     <div>
                         <label class="block text-[11px] font-semibold text-surface-500 mb-2">Tipo de Conexão</label>
                         <div class="grid grid-cols-3 gap-3">
-                            <button @click="connForm.connection_type = 'sequential'" type="button" class="rounded-xl border-2 p-3 text-center transition-all" :class="connForm.connection_type==='sequential' ? 'border-brand-400 bg-brand-50 ring-2 ring-brand-100' : 'border-surface-200 hover:border-surface-300'">
-                                <svg class="w-6 h-6 mx-auto mb-1.5" :class="connForm.connection_type==='sequential'?'text-brand-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
-                                <div class="text-[12px] font-semibold" :class="connForm.connection_type==='sequential'?'text-brand-900':'text-surface-500'">Sequencial</div>
-                            </button>
-                            <button @click="connForm.connection_type = 'parallel'" type="button" class="rounded-xl border-2 p-3 text-center transition-all" :class="connForm.connection_type==='parallel' ? 'border-red-400 bg-red-50 ring-2 ring-red-100' : 'border-surface-200 hover:border-surface-300'">
-                                <svg class="w-6 h-6 mx-auto mb-1.5" :class="connForm.connection_type==='parallel'?'text-red-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
-                                <div class="text-[12px] font-semibold" :class="connForm.connection_type==='parallel'?'text-red-900':'text-surface-500'">Paralelo</div>
-                            </button>
-                            <button @click="connForm.connection_type = 'conditional'" type="button" class="rounded-xl border-2 p-3 text-center transition-all" :class="connForm.connection_type==='conditional' ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-100' : 'border-surface-200 hover:border-surface-300'">
-                                <svg class="w-6 h-6 mx-auto mb-1.5" :class="connForm.connection_type==='conditional'?'text-amber-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
-                                <div class="text-[12px] font-semibold" :class="connForm.connection_type==='conditional'?'text-amber-900':'text-surface-500'">Condicional</div>
-                            </button>
+                            <div class="relative">
+                                <button @click="connForm.connection_type = 'sequential'" type="button" class="w-full rounded-xl border-2 p-3 text-center transition-all" :class="connForm.connection_type==='sequential' ? 'border-brand-400 bg-brand-50 ring-2 ring-brand-100' : 'border-surface-200 hover:border-surface-300'">
+                                    <svg class="w-6 h-6 mx-auto mb-1.5" :class="connForm.connection_type==='sequential'?'text-brand-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
+                                    <div class="text-[12px] font-semibold" :class="connForm.connection_type==='sequential'?'text-brand-900':'text-surface-500'">Sequencial</div>
+                                </button>
+                                <span x-data="{o:false}" @click.outside="o=false" class="absolute top-1.5 right-1.5">
+                                    <button type="button" @click.stop="o=!o" title="O que é / quando usar" class="flex h-4 w-4 items-center justify-center rounded-full bg-surface-100 text-[10px] font-bold leading-none text-surface-500 hover:bg-surface-200 hover:text-surface-700">?</button>
+                                    <div x-show="o" x-transition @click.stop class="absolute right-0 z-30 mt-1 w-56 rounded-lg border border-surface-200 bg-white p-3 text-left shadow-lg">
+                                        <div class="text-[11px] font-bold text-brand-900" x-text="connTypeHelp['sequential']?.label || 'Sequencial'"></div>
+                                        <div class="mt-1.5 text-[9px] font-bold uppercase tracking-wide text-surface-400">O que é</div>
+                                        <div class="text-[11px] leading-snug text-surface-600" x-text="connTypeHelp['sequential']?.what || '—'"></div>
+                                        <div class="mt-1.5 text-[9px] font-bold uppercase tracking-wide text-surface-400">Quando usar</div>
+                                        <div class="text-[11px] leading-snug text-surface-600" x-text="connTypeHelp['sequential']?.when || '—'"></div>
+                                    </div>
+                                </span>
+                            </div>
+                            <div class="relative">
+                                <button @click="connForm.connection_type = 'parallel'" type="button" class="w-full rounded-xl border-2 p-3 text-center transition-all" :class="connForm.connection_type==='parallel' ? 'border-red-400 bg-red-50 ring-2 ring-red-100' : 'border-surface-200 hover:border-surface-300'">
+                                    <svg class="w-6 h-6 mx-auto mb-1.5" :class="connForm.connection_type==='parallel'?'text-red-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
+                                    <div class="text-[12px] font-semibold" :class="connForm.connection_type==='parallel'?'text-red-900':'text-surface-500'">Paralelo</div>
+                                </button>
+                                <span x-data="{o:false}" @click.outside="o=false" class="absolute top-1.5 right-1.5">
+                                    <button type="button" @click.stop="o=!o" title="O que é / quando usar" class="flex h-4 w-4 items-center justify-center rounded-full bg-surface-100 text-[10px] font-bold leading-none text-surface-500 hover:bg-surface-200 hover:text-surface-700">?</button>
+                                    <div x-show="o" x-transition @click.stop class="absolute right-0 z-30 mt-1 w-56 rounded-lg border border-surface-200 bg-white p-3 text-left shadow-lg">
+                                        <div class="text-[11px] font-bold text-brand-900" x-text="connTypeHelp['parallel']?.label || 'Paralelo'"></div>
+                                        <div class="mt-1.5 text-[9px] font-bold uppercase tracking-wide text-surface-400">O que é</div>
+                                        <div class="text-[11px] leading-snug text-surface-600" x-text="connTypeHelp['parallel']?.what || '—'"></div>
+                                        <div class="mt-1.5 text-[9px] font-bold uppercase tracking-wide text-surface-400">Quando usar</div>
+                                        <div class="text-[11px] leading-snug text-surface-600" x-text="connTypeHelp['parallel']?.when || '—'"></div>
+                                    </div>
+                                </span>
+                            </div>
+                            <div class="relative">
+                                <button @click="connForm.connection_type = 'conditional'" type="button" class="w-full rounded-xl border-2 p-3 text-center transition-all" :class="connForm.connection_type==='conditional' ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-100' : 'border-surface-200 hover:border-surface-300'">
+                                    <svg class="w-6 h-6 mx-auto mb-1.5" :class="connForm.connection_type==='conditional'?'text-amber-600':'text-surface-400'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
+                                    <div class="text-[12px] font-semibold" :class="connForm.connection_type==='conditional'?'text-amber-900':'text-surface-500'">Condicional</div>
+                                </button>
+                                <span x-data="{o:false}" @click.outside="o=false" class="absolute top-1.5 right-1.5">
+                                    <button type="button" @click.stop="o=!o" title="O que é / quando usar" class="flex h-4 w-4 items-center justify-center rounded-full bg-surface-100 text-[10px] font-bold leading-none text-surface-500 hover:bg-surface-200 hover:text-surface-700">?</button>
+                                    <div x-show="o" x-transition @click.stop class="absolute right-0 z-30 mt-1 w-56 rounded-lg border border-surface-200 bg-white p-3 text-left shadow-lg">
+                                        <div class="text-[11px] font-bold text-brand-900" x-text="connTypeHelp['conditional']?.label || 'Condicional'"></div>
+                                        <div class="mt-1.5 text-[9px] font-bold uppercase tracking-wide text-surface-400">O que é</div>
+                                        <div class="text-[11px] leading-snug text-surface-600" x-text="connTypeHelp['conditional']?.what || '—'"></div>
+                                        <div class="mt-1.5 text-[9px] font-bold uppercase tracking-wide text-surface-400">Quando usar</div>
+                                        <div class="text-[11px] leading-snug text-surface-600" x-text="connTypeHelp['conditional']?.when || '—'"></div>
+                                    </div>
+                                </span>
+                            </div>
                         </div>
                     </div>
 
@@ -722,6 +758,7 @@ function meshPage() {
         scopeForm: { mode: 'inherit', template: '', max_chars: null },
         scopeVars: [],                      // populado de GET /context-scope-vars
         scopeModes: [],                     // [{id,label,desc}] do mesmo endpoint
+        connTypeHelp: {},                   // {id:{label,what,when}} de GET /connection-types (popover ?)
         scopeSim: {
             output: '', final_state: '',
             loading: false, error: '',
@@ -1103,6 +1140,14 @@ function meshPage() {
                 console.error('[mesh] loadScopeVars falhou', e);
                 this.scopeVars = [];
                 this.scopeModes = [];
+            }
+            // Help dos tipos de conexão (popover ?) — fonte única no backend.
+            try {
+                const ct = await api.get('/api/v1/mesh/connection-types');
+                this.connTypeHelp = Object.fromEntries((ct.types || []).map(t => [t.id, t]));
+            } catch (e) {
+                console.error('[mesh] loadConnectionTypes falhou', e);
+                this.connTypeHelp = {};
             }
         },
         applyScopePattern(name) {
