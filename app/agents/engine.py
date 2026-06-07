@@ -3739,6 +3739,55 @@ def _output_names_target(output: str | None, target_name: str | None) -> bool:
     return _re.search(pattern, _no_accents(out)) is not None
 
 
+# Cues de ROTEAMENTO (lowercase, sem acento): sinais de que o upstream está
+# DIRECIONANDO a um agente nomeado, não só citando a palavra em prosa. Verbo-cues
+# casam por prefixo + \w* ("encaminh" → encaminhar/encaminhe); noun-cues
+# ("agente/subagente/especialista") cobrem "ao agente X"; setas cobrem "→ X".
+# Tudo ancorado em \b para NÃO casar dentro de outra palavra (ex.: "acion" não
+# dispara em "nacional"). Consumido por _output_routes_to_target.
+_ROUTING_CUE_PATTERN = (
+    r"(?:"
+    r"\b(?:encaminh|reencaminh|rotea|redirecion|direcion|deleg|acion|invoc"
+    r"|chama|despach|repass)\w*"
+    r"|\bagente\b|\bsubagente\b|\bespecialista\b"
+    r"|->|→|»"
+    r")"
+)
+
+
+def _output_routes_to_target(output: str | None, target_name: str | None) -> bool:
+    r"""True se o upstream NOMEIA o alvo EM CONTEXTO DE ROTEAMENTO.
+
+    Camada mais estrita que `_output_names_target` (2026-06-06 — bug "Doc Analise
+    → Imagem"): exige, ALÉM da menção do nome (mesma fronteira de palavra/acento),
+    que um CUE de roteamento apareça imediatamente ANTES do nome (janela ~40
+    chars, mesma linha) — verbo ("encaminhar/rotear/delegar/direcionar/acionar…"),
+    substantivo de destino ("agente/subagente/especialista") ou seta ("->"/"→").
+
+    Por quê: o override "o roteador mandou" (`_should_skip_conditional`) passou a
+    disparar em FALSO quando o agente tem nome de palavra comum ("Imagem",
+    "Documentos") e o roteador produz uma RESPOSTA (não um token de roteamento).
+    No bug "Doc Analise", o roteador RESUMIA um .pptx cujo texto contém a palavra
+    "imagem" (descrevendo figuras: '(imagem "Dinheiro…")') — `_output_names_target`
+    casava e rodava o SA "Imagem" sobre um documento. Restringir ao contexto de
+    roteamento mata o falso-positivo e preserva o caso legítimo ("ao agente X").
+    """
+    if not _output_names_target(output, target_name):
+        return False
+    import re as _re
+    import unicodedata as _ud
+
+    def _no_accents(s: str) -> str:
+        return "".join(
+            ch for ch in _ud.normalize("NFKD", s) if not _ud.combining(ch)
+        )
+
+    name = _no_accents((target_name or "").strip().lower())
+    out = _no_accents((output or "").lower())
+    pattern = _ROUTING_CUE_PATTERN + r"[^\n]{0,40}?\b" + _re.escape(name) + r"\b"
+    return _re.search(pattern, out) is not None
+
+
 async def _should_skip_conditional(
     *,
     source_id: str,
@@ -3755,11 +3804,14 @@ async def _should_skip_conditional(
     """True se a conexão source→target é `connection_type=conditional` e
     a expressão configurada em `config.expr` avaliou para `False`.
 
-    Override "o roteador mandou" (2026-06-06): se o agente upstream NOMEIA
-    explicitamente este alvo no output (`target_name` aparece em `last_output`),
-    a decisão do roteador vence o heurístico de keywords e NÃO skipamos — ver
-    `_output_names_target`. Isto corrige o caso em que o AR/AOBD roteia certo
-    pela semântica mas o vocabulário da pergunta não bate a expr.
+    Override "o roteador mandou" (2026-06-06; restrito + vetado 2026-06-06): se
+    o upstream NOMEIA este alvo EM CONTEXTO DE ROTEAMENTO (ver
+    `_output_routes_to_target` — verbo/"agente"/seta antes do nome, não só prosa)
+    E o alvo NÃO está vetado por capacidade (anexo de tipo que ele não trata),
+    a decisão do roteador vence o heurístico de keywords e NÃO skipamos. Corrige
+    o caso em que o AR/AOBD roteia certo mas o vocabulário não bate a expr — sem
+    o falso-positivo do bug "Doc Analise → Imagem" (nome de palavra comum, como
+    "Imagem", citado na prosa do roteador ao resumir um documento).
 
     Override "o anexo manda" (2026-06-06 — router como dispatcher): se o alvo
     DECLARA `accepts_documents`/`accepts_images` e chega um anexo do tipo
@@ -3780,24 +3832,46 @@ async def _should_skip_conditional(
     if not conn or conn.get("connection_type") != "conditional":
         return False
 
-    # ── Override "o roteador mandou" (2026-06-06) ──────────────────────
-    # Se o agente upstream NOMEIA explicitamente este alvo (ex.: o AR responde
-    # "Encaminhar ao agente Rentab"), a decisão do roteador vence o heurístico
-    # de keywords: NÃO skipa. Sem isto, perguntas cujo vocabulário não bate a
-    # expr (mas que o LLM roteou certo) eram puladas — o SA nomeado nunca
-    # respondia. Ver _output_names_target.
-    if _output_names_target(last_output, target_name):
-        logger.info(
-            "mesh.conditional.router_named_target",
-            extra={
-                "event": "mesh.conditional",
-                "source_id": source_id,
-                "target_id": target_id,
-                "target_name": target_name,
-                "decision": "run_not_skip",
-            },
-        )
-        return False
+    # ── Override "o roteador mandou" (2026-06-06; restrito + vetado 2026-06-06) ──
+    # Honra a decisão EXPLÍCITA do roteador (ex.: o AR responde "Encaminhar ao
+    # agente Rentab") quando o vocabulário da pergunta não bate a expr. DUAS
+    # salvaguardas contra o falso-positivo do bug "Doc Analise → Imagem":
+    #   1) CONTEXTO DE ROTEAMENTO (_output_routes_to_target): o nome só conta se
+    #      vier após um cue de roteamento (verbo/"agente"/seta), não em prosa —
+    #      o roteador resumindo um doc que contém a palavra "imagem" não roteia.
+    #   2) VETO DE CAPACIDADE: se há anexo e o alvo NÃO trata aquele tipo
+    #      (ex.: SA de imagem + documento), o naming NÃO vence — cai na expr
+    #      (provável skip). Capacidade é autoridade: não rodar handler errado.
+    if _output_routes_to_target(last_output, target_name):
+        if attachments and not _target_handles_attachment(
+            accepts_documents=target_accepts_documents,
+            accepts_images=target_accepts_images,
+            attachments=attachments,
+        ):
+            logger.info(
+                "mesh.conditional.router_named_target_vetoed",
+                extra={
+                    "event": "mesh.conditional",
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "target_name": target_name,
+                    "decision": "vetoed_capability_mismatch",
+                    "reason": "capability_mismatch",
+                },
+            )
+            # cai para a avaliação da expr abaixo — não honra o naming.
+        else:
+            logger.info(
+                "mesh.conditional.router_named_target",
+                extra={
+                    "event": "mesh.conditional",
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "target_name": target_name,
+                    "decision": "run_not_skip",
+                },
+            )
+            return False
 
     # ── Override "o anexo manda" (2026-06-06 — router como dispatcher) ──
     # Se este alvo DECLARA capacidade para o tipo de anexo presente
