@@ -1418,6 +1418,97 @@ def _is_passthrough(agent: dict) -> bool:
 # Executor Unificado — integra AOBD → AR → SA com FSM
 # ═══════════════════════════════════════════════════
 
+async def _run_declarative_as_interaction(
+    *, agent: dict, parsed_skill, user_input: str, session_id: str | None
+) -> dict:
+    """Roda uma SKILL declarativa (## API Bindings / ## Data Tables) pelo engine
+    declarativo e adapta o retorno para o shape de `execute_interaction`.
+
+    Fase A (2026-06-07): permite que uma SA declarativa rode seus bindings quando
+    alcançada por um SR/AOBD via `execute_pipeline` — antes só funcionava no invoke
+    direto / rota `/chat` (modo Agente). O caller (execute_pipeline/rota) é dono da
+    sessão → `register_interaction=False` evita a interaction órfã "(declarativo)".
+
+    NOTA Fase B (pendente): os inputs vêm do texto (JSON literal; senão
+    {"question": <texto>}). A extração de parâmetros do NL (ex.: `cep`) para o
+    binding é a Fase B — aqui o binding JÁ dispara; com inputs estruturados, roda.
+    """
+    import ast as _ast
+    from app.agents.declarative_engine import execute_declarative
+
+    msg = (user_input or "").strip()
+    inputs: dict = {}
+    if msg.startswith("{") and msg.endswith("}"):
+        try:
+            d = json.loads(msg)
+            if isinstance(d, dict):
+                inputs = d
+        except Exception:
+            try:
+                d = _ast.literal_eval(msg)
+                if isinstance(d, dict):
+                    inputs = d
+            except Exception:
+                pass
+    if not inputs and msg:
+        inputs = {"question": msg}
+
+    decl = await execute_declarative(
+        agent=agent, skill_parsed=parsed_skill, inputs=inputs,
+        context=None, session_id=session_id, dry_run=False,
+        register_interaction=False,
+    )
+
+    ctx_dict = decl.get("context") or {}
+    has_overflow = any("excede max_bytes" in str(e or "") for e in (decl.get("errors") or []))
+    if has_overflow and decl.get("api_response") is not None:
+        ar = decl.get("api_response")
+        output_text = ar if isinstance(ar, str) else json.dumps(ar, ensure_ascii=False, indent=2)
+    elif "resposta" in ctx_dict:
+        r = ctx_dict["resposta"]
+        output_text = r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, indent=2)
+    elif decl.get("api_response") is not None:
+        ar = decl.get("api_response")
+        output_text = ar if isinstance(ar, str) else json.dumps(ar, ensure_ascii=False, indent=2)
+    else:
+        output_text = decl.get("output", "") or ""
+
+    executed = decl.get("bindings_executed") or []
+    errors = decl.get("errors") or []
+    any_success = any(200 <= b.get("status", 0) < 300 for b in executed)
+    diag_level = "success" if (any_success and not errors) else ("warning" if any_success else "danger")
+    diag_text = (
+        f"Modo declarativo (via cadeia): {len(executed)} binding(s) executado(s)"
+        + (f" · {len(errors)} aviso(s)/erro(s)" if errors else "")
+    )
+
+    return {
+        "interaction_id": decl.get("interaction_id") or session_id,
+        "agent_id": agent.get("id", ""),
+        "output": output_text,
+        "final_state": decl.get("final_state", "completed"),
+        "evidence_score": 0.0,
+        "transitions": [],
+        "duration_ms": decl.get("duration_ms"),
+        "status": "completed",
+        "mode": "declarative",
+        "errors": errors,
+        "trace": {
+            "total_steps": len(executed),
+            "evidence_count": 0,
+            "evidence_sources": [],
+            "diagnostics": [{"level": diag_level, "text": diag_text}],
+            "agent_name": agent.get("name", ""),
+            "agent_kind": agent.get("kind", ""),
+            "agent_model": "(declarativo)",
+            "agent_provider": "declarative",
+            "agent_version": agent.get("version", "1.0.0"),
+            "agent_domain": agent.get("domain", ""),
+            "bindings_executed": executed,
+        },
+    }
+
+
 async def execute_interaction(
     agent_id: str,
     user_input: str,
@@ -1541,6 +1632,29 @@ async def execute_interaction(
 
     # ── Execution Profile: determina modo de execução ──
     exec_profile = skill_data.get("_execution_mode", "standard")
+
+    # ── Modo declarativo (Fase A 2026-06-07): SA com execution_mode=declarative
+    # roda o engine de API Bindings (sem LLM) — INCLUSIVE quando alcançada por
+    # um SR/AOBD via execute_pipeline (antes só funcionava no invoke direto/rota).
+    # `parsed` é o skill já parseado (com api_bindings_parsed), carregado acima.
+    # Fail-open: qualquer erro no dispatch cai no caminho LLM (não derruba a cadeia).
+    if exec_profile == "declarative":
+        try:
+            return await _run_declarative_as_interaction(
+                agent=agent, parsed_skill=parsed, user_input=user_input,
+                session_id=session_id,
+            )
+        except Exception as _decl_e:
+            logger.warning(
+                "declarative.dispatch_failed_fallback_llm",
+                extra={
+                    "event": "declarative.dispatch",
+                    "agent_id": agent_id,
+                    "error_type": type(_decl_e).__name__,
+                    "error_msg": str(_decl_e)[:200],
+                },
+                exc_info=True,
+            )
 
     attachment_context = ""
     attachment_meta = []
