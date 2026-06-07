@@ -80,6 +80,10 @@ app.add_middleware(RateLimitMiddleware)
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.state.templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+# Versão do produto (PR-driven) disponível em todos os templates como
+# {{ app_version }} (rodapé da UI). Fonte única: app/core/version.py.
+from app.core.version import APP_VERSION
+app.state.templates.env.globals["app_version"] = APP_VERSION
 
 # API routes
 app.include_router(agents.router)
