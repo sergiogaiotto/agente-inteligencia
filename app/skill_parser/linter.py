@@ -106,12 +106,26 @@ def lint_skill(parsed: Any) -> list[dict]:
 
         # output_mapping
         om = b.get("output_mapping") or []
-        is_compensation_target = False  # checado adiante
         if not om:
-            issues.append(LintIssue(
-                "warning", bid, "empty_output_mapping",
-                "output_mapping vazio — binding não contribui ao context",
-            ))
+            if exec_mode == "declarative":
+                # O runtime declarativo EXIGE output_mapping (declarative_engine:
+                # "output_mapping é obrigatório"). Sem ele a chamada dá 2xx, mas o
+                # engine marca erro → final_state=partial → a UI mostra "resultado
+                # parcial" e nada chega ao context. Bloqueia no /lint (UI marca
+                # vermelho) ANTES do save, em vez de falhar opaco em runtime —
+                # causa-raiz do bug "Consulta de CEP" (2026-06-07). Skills NÃO
+                # declarativas seguem com warning (bindings só rodam em declarative).
+                issues.append(LintIssue(
+                    "error", bid, "missing_output_mapping_declarative",
+                    "output_mapping obrigatório em binding declarativo — sem ele o "
+                    "engine devolve 'resultado parcial'. Mapeie a resposta da API "
+                    "(ex.: '- from: $.campo' + 'to: chave_no_context').",
+                ))
+            else:
+                issues.append(LintIssue(
+                    "warning", bid, "empty_output_mapping",
+                    "output_mapping vazio — binding não contribui ao context",
+                ))
         else:
             for m in om:
                 if not isinstance(m, dict):
