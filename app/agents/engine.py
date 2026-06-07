@@ -1418,6 +1418,35 @@ def _is_passthrough(agent: dict) -> bool:
 # Executor Unificado — integra AOBD → AR → SA com FSM
 # ═══════════════════════════════════════════════════
 
+def _extract_inputs_from_text(text: str | None) -> dict:
+    """Extrai um dict de `inputs` embutido no TEXTO (ex.: saída do roteador) para
+    alimentar o binding declarativo (Fase B — Slice 1, 2026-06-07).
+
+    Procura, nesta ordem: (1) bloco cercado ```json {...}```; (2) primeiro objeto
+    {...} que parseie como dict. Se o objeto tiver a chave "inputs" (dict), usa-a
+    (formato {"target": ..., "inputs": {...}} que o roteador emite). Retorna {}
+    se nada parsear — tolerante por design (a prosa do roteador não atrapalha).
+    """
+    import re as _re
+
+    t = text or ""
+    candidates: list[str] = []
+    fenced = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", t, _re.DOTALL)
+    if fenced:
+        candidates.append(fenced.group(1))
+    inline = _re.search(r"(\{.*\})", t, _re.DOTALL)
+    if inline:
+        candidates.append(inline.group(1))
+    for c in candidates:
+        try:
+            d = json.loads(c)
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            return d["inputs"] if isinstance(d.get("inputs"), dict) else d
+    return {}
+
+
 async def _run_declarative_as_interaction(
     *, agent: dict, parsed_skill, user_input: str, session_id: str | None
 ) -> dict:
@@ -1438,18 +1467,21 @@ async def _run_declarative_as_interaction(
 
     msg = (user_input or "").strip()
     inputs: dict = {}
+    # 1) JSON/dict puro (invoke estruturado, ou roteador que emite só o objeto)
     if msg.startswith("{") and msg.endswith("}"):
-        try:
-            d = json.loads(msg)
-            if isinstance(d, dict):
-                inputs = d
-        except Exception:
+        for _loader in (json.loads, _ast.literal_eval):
             try:
-                d = _ast.literal_eval(msg)
-                if isinstance(d, dict):
-                    inputs = d
+                d = _loader(msg)
             except Exception:
-                pass
+                continue
+            if isinstance(d, dict):
+                inputs = d["inputs"] if isinstance(d.get("inputs"), dict) else d
+                break
+    # 2) bloco estruturado embutido na prosa do roteador (Fase B — Slice 1):
+    #    ```json {"target": ..., "inputs": {...}}``` → extrai os inputs.
+    if not inputs:
+        inputs = _extract_inputs_from_text(msg)
+    # 3) fallback legado: texto puro vira {"question": <texto>}
     if not inputs and msg:
         inputs = {"question": msg}
 
