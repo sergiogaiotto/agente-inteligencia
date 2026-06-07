@@ -1777,6 +1777,17 @@ function agentForm(editId) {
                 // agente fora das Categorias (causa do bug "encaminhar pro FAQ Claro").
                 out.push('');
                 out.push('Importante: só encaminhe para os destinos listados em Categorias; NUNCA invente nem cite agentes que não estejam nessa lista.');
+                // Fase B — Slice 2 (2026-06-07): instrui o roteador a EXTRAIR e
+                // EMITIR os parâmetros que o destino precisa (ex.: SA declarativa
+                // que chama API por CEP). O bloco é consumido pelo engine
+                // (_extract_inputs_from_text) e vira os inputs do binding da SA.
+                out.push('');
+                out.push('## Parâmetros (destinos com ferramenta/API)');
+                out.push('Se o destino encaminhado exigir parâmetros (ex.: um agente que consulta uma API), EXTRAIA os valores da mensagem do usuário e inclua ao FINAL da resposta um bloco JSON cercado:');
+                out.push('```json');
+                out.push('{"target": "<nome do destino>", "inputs": {"<parametro>": "<valor extraído>"}}');
+                out.push('```');
+                out.push('Inclua o bloco SOMENTE quando houver parâmetros a passar — caso contrário, encaminhe normalmente.');
             } else {
                 out.push('## Missão');
                 out.push(stmt || '<descreva em 1 frase o que este orquestrador coordena>');
