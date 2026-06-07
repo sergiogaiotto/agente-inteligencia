@@ -1556,9 +1556,12 @@ async def execute_interaction(
             _extracted_chars = len(_content)
             if _type.startswith("image/"):
                 _category = "image"
-                # Imagens são roteadas para o modelo multimodal (vision)
-                # via detect_image_in_attachments → multimodal_fallback.
-                # Conteúdo textual fica vazio porque a imagem vai raw na API.
+                # Imagem vai ao LLM como CONTEÚDO MULTIMODAL (image_url base64)
+                # quando o modelo resolvido é multimodal — ver
+                # _build_user_message_content. Em modelo text-only é descartada
+                # (log mesh.vision.image_dropped_text_only_model). Por isso o
+                # texto do markitdown ("ImageSize: LxA") NÃO entra como conteúdo
+                # (puro ruído) — ver guarda em attachment_context abaixo.
                 _routed_to = "vision"
                 _purpose = "Análise visual (vision)"
             elif _extracted_chars > 0:
@@ -1589,7 +1592,10 @@ async def execute_interaction(
                 "routed_to": _routed_to,
                 "extracted_chars": _extracted_chars,
             })
-            if _content:
+            # Imagem NÃO entra como texto (markitdown só dá "ImageSize: LxA",
+            # ruído) — vai como image_url multimodal (ver
+            # _build_user_message_content). Documentos seguem como texto extraído.
+            if _content and _category != "image":
                 attachment_context += f"\n\n## Arquivo Anexo: {att.get('name','arquivo')}\n```\n{_content[:5000]}\n```"
 
     ctx = InteractionContext(agent_id=agent_id, journey=journey, channel=channel)
@@ -1901,7 +1907,11 @@ async def execute_interaction(
                 # Memória de conversa: histórico recente (já escopado por camada)
                 # ANTES do turno atual. Lista vazia quando context_mode='none',
                 # sem session_id ou camada off → seed byte-idêntico ao legado.
-                "messages": [*history_messages, HumanMessage(content=enriched_input)],
+                "messages": [
+                    *history_messages,
+                    HumanMessage(content=_build_user_message_content(
+                        enriched_input, attachments, _cand_p, _cand_m)),
+                ],
                 "current_agent": agent_id,
                 "agent_kind": agent.get("kind", "subagent"),
                 "iteration": 0,
@@ -3482,6 +3492,98 @@ def _classify_attachment_kind(att: dict | None) -> str:
     if ext in _DOC_EXTS or any(t.startswith(m) for m in doc_mime_prefixes):
         return "document"
     return "other"
+
+
+def _attachment_image_data_url(att: dict | None) -> str | None:
+    """Data URL (``data:<mime>;base64,…``) de um anexo de IMAGEM, ou ``None``.
+
+    Lê os bytes de ``att['abs_path']`` (caminho absoluto já saneado/validado pela
+    rota dona do diretório de uploads) OU de um base64 já presente
+    (``image_b64``/``content_base64``). Só dispara para anexos classificados como
+    imagem (ver ``_classify_attachment_kind``). Erro de leitura → log + ``None``
+    (fail-soft: a interação segue sem a imagem, melhor que derrubar o turno).
+    """
+    if _classify_attachment_kind(att) != "image":
+        return None
+    mime = str((att or {}).get("type", "")).strip() or "image/png"
+    b64 = (att or {}).get("image_b64") or (att or {}).get("content_base64")
+    if not b64:
+        p = (att or {}).get("abs_path") or ""
+        if not p:
+            return None
+        try:
+            import base64 as _b64
+            from pathlib import Path as _P
+            b64 = _b64.b64encode(_P(p).read_bytes()).decode()
+        except Exception as e:  # pragma: no cover - I/O defensivo
+            logger.warning(
+                "mesh.vision.image_read_failed",
+                extra={
+                    "event": "mesh.vision",
+                    "attachment_name": (att or {}).get("name", ""),
+                    "error_type": type(e).__name__,
+                    "error_msg": str(e)[:200],
+                },
+            )
+            return None
+    return f"data:{mime};base64,{b64}"
+
+
+def _build_user_message_content(
+    text: str, attachments: list | None, provider: str, model: str
+):
+    """Conteúdo da ``HumanMessage`` do turno atual.
+
+    Retorna ``text`` (str — caminho legado) OU uma lista multimodal
+    ``[{type:text}, {type:image_url}, …]`` quando há anexo de IMAGEM **e** o
+    modelo candidato é multimodal (``is_multimodal``). Para modelo text-only a
+    imagem é DESCARTADA (registrado em ``mesh.vision.image_dropped_text_only_model``)
+    — gpt-oss & cia. quebram (400) se receberem ``image_url``.
+
+    Construído POR CANDIDATO (recebe provider/model da tentativa atual) para que a
+    cadeia de resiliência possa cair de um modelo de visão para um text-only sem
+    mandar imagem a quem não aceita. Corrige o bug "SA Imagem devolve objects
+    vazio": antes a imagem virava só o texto "ImageSize: LxA" e nunca chegava ao
+    LLM como pixels.
+    """
+    if not attachments:
+        return text
+    imgs = [a for a in attachments if _classify_attachment_kind(a) == "image"]
+    if not imgs:
+        return text
+    from app.llm_routing import is_multimodal
+    if not is_multimodal(provider, model):
+        logger.info(
+            "mesh.vision.image_dropped_text_only_model",
+            extra={
+                "event": "mesh.vision",
+                "provider": provider,
+                "model": model,
+                "image_count": len(imgs),
+                "decision": "dropped_text_only",
+            },
+        )
+        return text
+    parts: list = [{"type": "text", "text": text}]
+    attached = 0
+    for a in imgs:
+        durl = _attachment_image_data_url(a)
+        if durl:
+            parts.append({"type": "image_url", "image_url": {"url": durl}})
+            attached += 1
+    if attached == 0:
+        return text
+    logger.info(
+        "mesh.vision.images_attached",
+        extra={
+            "event": "mesh.vision",
+            "provider": provider,
+            "model": model,
+            "image_count": attached,
+            "decision": "attached",
+        },
+    )
+    return parts
 
 
 def _filter_attachments_by_agent(
