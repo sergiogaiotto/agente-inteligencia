@@ -2069,7 +2069,16 @@ async def execute_interaction(
     # o mesmo caminho do escape hatch (allow_general_knowledge).
     _router_grounding_exempt = (str(agent.get("kind") or "").lower() == "router")
     _grounding_exempt = _gk_allowed or _router_grounding_exempt
-    _has_attach_grounding = bool(attachment_context)
+    # Anexo de IMAGEM conta como grounding quando vai a um modelo MULTIMODAL
+    # (a imagem É a evidência do SA de visão). Desde o #310 a imagem não entra
+    # mais em attachment_context (texto) — vai como image_url —, então sem isto o
+    # grounded-by-default (#301) recusaria TODO SA de imagem por "falta de
+    # evidência". Só conta quando o modelo resolvido é multimodal: se cair em
+    # text-only a imagem é descartada → segue recusando (correto).
+    _has_image_grounding = _image_is_grounding(
+        attachments, agent.get("llm_provider", ""), agent.get("model", "")
+    )
+    _has_attach_grounding = bool(attachment_context) or _has_image_grounding
     # Só consultamos tool grounding (query no DB) quando a guarda PODE disparar:
     # strict ligado, sem escape hatch/isenção e sem nenhuma outra fonte (RAG/
     # anexo/pipeline). Caso contrário a decisão já está selada e a query seria
@@ -2098,6 +2107,7 @@ async def execute_interaction(
         "refused": _refuse_ungrounded,
         "has_evidence": bool(evidences),
         "has_attachment": _has_attach_grounding,
+        "has_image_grounding": _has_image_grounding,
         "has_tool_output": _has_tool_grounding_flag,
         "has_pipeline_context": bool(pipeline_context),
     }
@@ -3584,6 +3594,24 @@ def _build_user_message_content(
         },
     )
     return parts
+
+
+def _image_is_grounding(attachments: list | None, provider: str, model: str) -> bool:
+    """True se há anexo de IMAGEM que será enviado a um modelo MULTIMODAL — ou
+    seja, a imagem É evidência/grounding (o SA de visão responde a partir dela).
+
+    Usado pelo grounded-by-default (`_grounding_guard`): sem isto, como a imagem
+    não entra mais em `attachment_context` (texto) desde o #310, o guard recusaria
+    todo SA de imagem por "falta de evidência". Conta SÓ p/ modelo multimodal — em
+    text-only a imagem é descartada (ver `_build_user_message_content`), então não
+    é grounding e a recusa permanece correta.
+    """
+    if not attachments:
+        return False
+    from app.llm_routing import is_multimodal
+    return any(
+        _classify_attachment_kind(a) == "image" for a in attachments
+    ) and is_multimodal(provider, model)
 
 
 def _filter_attachments_by_agent(
