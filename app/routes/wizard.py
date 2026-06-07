@@ -1584,7 +1584,65 @@ def _compose_catalog_names(items) -> list[str]:
     return out
 
 
-def _build_compose_catalog(skills, agents) -> str:
+def _schema_param_names(schema) -> list:
+    """Nomes dos parâmetros de um JSON-schema de ## Inputs (chaves de
+    'properties'; fallback p/ chaves de topo sem meta). Vazio se não for dict."""
+    if not isinstance(schema, dict):
+        return []
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        return [str(k) for k in props.keys()]
+    _meta = {"$schema", "type", "required", "properties", "title", "description"}
+    return [str(k) for k in schema.keys() if k not in _meta]
+
+
+async def _collect_destination_inputs(agents) -> dict:
+    """Mapa {nome_do_agente: [param,...]} com os parâmetros declarados no
+    ## Inputs da skill de cada agente-destino (Slice 2b, 2026-06-07).
+
+    Best-effort + fail-safe: qualquer erro (assinatura de repo, skill ausente,
+    parse) é ignorado por destino → o catálogo cai para só-nomes (comportamento
+    anterior). É o que permite a IA sugerir params POR destino no /compose.
+    """
+    names = _compose_catalog_names(agents)
+    if not names:
+        return {}
+    out: dict = {}
+    try:
+        from app.core.database import agents_repo, skills_repo
+        from app.skill_parser.parser import parse_skill_md
+        from app.routes.agents import _extract_inputs_schema
+
+        all_agents = await agents_repo.find_all(limit=500)
+        by_name = {}
+        for a in (all_agents or []):
+            nm = str(a.get("name") or "").strip().lower()
+            if nm and nm not in by_name:
+                by_name[nm] = a
+        for name in names:
+            a = by_name.get(name.strip().lower())
+            if not a or not a.get("skill_id"):
+                continue
+            try:
+                sk = await skills_repo.find_by_id(a["skill_id"])
+                if not (sk and sk.get("raw_content")):
+                    continue
+                parsed = parse_skill_md(sk["raw_content"])
+                params = _schema_param_names(_extract_inputs_schema(parsed.inputs or ""))
+                if params:
+                    out[name] = params
+            except Exception:
+                continue
+    except Exception as e:  # pragma: no cover - lookup best-effort
+        logger.warning(
+            "wizard.compose.collect_inputs_failed",
+            extra={"event": "wizard.compose", "error_type": type(e).__name__,
+                   "error_msg": str(e)[:200]},
+        )
+    return out
+
+
+def _build_compose_catalog(skills, agents, agent_inputs=None) -> str:
     """Bloco de contexto com o catálogo REAL de destinos disponíveis.
 
     Os DESTINOS de roteamento são AGENTES (nós da malha). Skills aparecem só
@@ -1593,7 +1651,12 @@ def _build_compose_catalog(skills, agents) -> str:
     a IA nos agentes que existem de verdade — principal mitigação contra
     alucinar destinos inexistentes. Listas vazias viram aviso explícito.
 
-    Função pura — recebe as listas e devolve string. Sem I/O.
+    `agent_inputs` (Slice 2b): {nome_do_agente: [param,...]} com os parâmetros
+    que cada destino declara (## Inputs). Quando presente, anexa um bloco
+    "[PARÂMETROS POR DESTINO]" para a IA sugerir, por destino, quais valores o
+    roteador deve EXTRAIR da mensagem (e o roteador os emite p/ o binding da SA).
+
+    Função pura — recebe as listas/mapa e devolve string. Sem I/O.
     """
     sk = _compose_catalog_names(skills)
     ag = _compose_catalog_names(agents)
@@ -1612,6 +1675,18 @@ def _build_compose_catalog(skills, agents) -> str:
         "não recebem roteamento. Se nenhum agente servir, proponha um novo "
         "agente com nome claro."
     )
+    ai = agent_inputs or {}
+    with_params = [(name, ai.get(name)) for name in ag if ai.get(name)]
+    if with_params:
+        lines.append("")
+        lines.append("[PARÂMETROS POR DESTINO]")
+        for name, params in with_params:
+            lines.append(f"- {name} requer: {', '.join(params)}.")
+        lines.append(
+            "Quando uma regra encaminhar para um destino acima, deixe claro que "
+            "esses parâmetros devem ser EXTRAÍDOS da mensagem do usuário — o "
+            "roteador os repassa ao destino (que chama a ferramenta/API)."
+        )
     return "\n".join(lines)
 
 
@@ -1733,10 +1808,13 @@ async def wizard_compose(data: WizardComposeRequest):
     try:
         provider, model, _ = await _resolve_wizard_llm(data, "compose")
 
+        # Slice 2b: olha os ## Inputs de cada destino p/ a IA sugerir params por
+        # destino no rascunho (best-effort; sem inputs → catálogo só-nomes).
+        agent_inputs = await _collect_destination_inputs(data.agents)
         system_content = (
             _compose_persona(kind)
             + "\n\n"
-            + _build_compose_catalog(data.skills, data.agents)
+            + _build_compose_catalog(data.skills, data.agents, agent_inputs)
         )
         messages = [
             {"role": "system", "content": system_content},
