@@ -488,6 +488,11 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
                 "type": att.get("content_type", ""),
                 "size": att.get("size", 0),
                 "content": att.get("text_content", ""),
+                # Caminho absoluto saneado (só basename dentro de UPLOAD_DIR — sem
+                # path traversal) p/ o engine ler os bytes e enviar a imagem como
+                # conteúdo multimodal (image_url) a modelos de visão.
+                "abs_path": str(UPLOAD_DIR / Path(att.get("path", "") or "").name)
+                if att.get("path") else "",
             })
     # include_chain=True: a porta decide pela UNIÃO das capacidades da cadeia
     # do mesh (entrada + downstream). Um roteador dispatcher (accepts_*=0) deixa
@@ -577,6 +582,10 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                     "type": att.get("content_type", ""),
                     "size": att.get("size", 0),
                     "content": att.get("text_content", ""),
+                    # Caminho absoluto saneado (basename dentro de UPLOAD_DIR) p/ o
+                    # engine ler os bytes e mandar a imagem como image_url multimodal.
+                    "abs_path": str(UPLOAD_DIR / Path(att.get("path", "") or "").name)
+                    if att.get("path") else "",
                 })
         # Filtra conforme flags do agente. Em pipeline, decide pela UNIÃO da
         # cadeia do mesh (dispatcher não poda anexo do especialista downstream);
