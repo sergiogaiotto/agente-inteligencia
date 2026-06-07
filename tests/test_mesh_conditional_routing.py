@@ -332,6 +332,198 @@ class TestRouterNamedTargetOverride:
         assert out is False
 
 
+class TestOutputRoutesToTarget:
+    """Camada restrita (2026-06-06 — bug 'Doc Analise → Imagem'): o upstream
+    NOMEIA o alvo EM CONTEXTO DE ROTEAMENTO? (verbo/'agente'/seta antes do nome,
+    não a palavra solta em prosa). Mata o falso-positivo de nome-palavra-comum."""
+
+    def test_routing_verb_before_name_is_true(self):
+        from app.agents.engine import _output_routes_to_target
+        assert _output_routes_to_target(
+            "Encaminhar a pergunta ao agente Imagem.", "Imagem"
+        ) is True
+
+    def test_arrow_routing_is_true(self):
+        from app.agents.engine import _output_routes_to_target
+        assert _output_routes_to_target("Decisao de roteamento: -> Imagem", "Imagem") is True
+
+    def test_agente_noun_cue_is_true(self):
+        from app.agents.engine import _output_routes_to_target
+        assert _output_routes_to_target("delego para o agente Documentos", "Documentos") is True
+
+    def test_markdown_bold_routing_is_true(self):
+        from app.agents.engine import _output_routes_to_target
+        assert _output_routes_to_target("Encaminhar ao agente **Rentab**.", "Rentab") is True
+
+    def test_prose_mention_without_cue_is_false(self):
+        """O caso REAL do bug: o roteador resume um .pptx e a prosa contém a
+        palavra 'imagem' descrevendo figuras — NÃO é roteamento ao SA Imagem."""
+        from app.agents.engine import _output_routes_to_target
+        prosa = '- **Foco em valor** (imagem "Dinheiro com preenchimento solido")'
+        assert _output_routes_to_target(prosa, "Imagem") is False
+
+    def test_bare_name_in_prose_is_false(self):
+        from app.agents.engine import _output_routes_to_target
+        assert _output_routes_to_target("o relatorio tem uma imagem na capa", "Imagem") is False
+
+    def test_word_boundary_inherited_from_names_target(self):
+        """Herda a fronteira de palavra: 'Rentab' não casa em 'rentabilidade'."""
+        from app.agents.engine import _output_routes_to_target
+        assert _output_routes_to_target("rotear sobre rentabilidade", "Rentab") is False
+
+    def test_empty_inputs_are_false(self):
+        from app.agents.engine import _output_routes_to_target
+        assert _output_routes_to_target("", "Imagem") is False
+        assert _output_routes_to_target("encaminhar ao agente X", "") is False
+        assert _output_routes_to_target(None, None) is False
+
+
+class TestRouterNamedTargetCapabilityVeto:
+    """Override 'o roteador mandou' é VETADO quando há anexo de tipo que o alvo
+    nomeado NÃO trata (SA de imagem + documento). Capacidade é autoridade."""
+
+    _DOC = {"name": "Apresentacao.pptx",
+            "type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
+    _IMG = {"name": "foto.png", "type": "image/png"}
+
+    def _patch_conn(self, monkeypatch, expr, target_id="imagem"):
+        async def fake_find_all(source_agent_id=None, **_):
+            return [{
+                "source_agent_id": "router", "target_agent_id": target_id,
+                "connection_type": "conditional",
+                "config": json.dumps({"expr": expr}),
+            }]
+        monkeypatch.setattr("app.core.database.mesh_repo.find_all", fake_find_all)
+
+    @pytest.mark.asyncio
+    async def test_image_sa_vetoed_with_document_attachment(self, monkeypatch):
+        """Roteador NOMEIA Imagem (contexto de roteamento) MAS chega documento e
+        Imagem só aceita imagem → veto → skip (não roda handler errado)."""
+        from app.agents import engine as eng
+        self._patch_conn(monkeypatch, "'imagem' in input_lower or 'foto' in input_lower")
+        out = await eng._should_skip_conditional(
+            source_id="router", target_id="imagem",
+            last_output="Encaminhar ao agente Imagem.",
+            last_final_state="LogAndClose",
+            user_input="lista o conteudo em bullets",
+            target_name="Imagem",
+            attachments=[self._DOC],
+            target_accepts_documents=False,
+            target_accepts_images=True,
+        )
+        assert out is True
+
+    @pytest.mark.asyncio
+    async def test_image_sa_runs_when_image_attached(self, monkeypatch):
+        """Mesma rota, anexo é imagem → Imagem TRATA → não veta → roda."""
+        from app.agents import engine as eng
+        self._patch_conn(monkeypatch, "'nada' in input_lower")
+        out = await eng._should_skip_conditional(
+            source_id="router", target_id="imagem",
+            last_output="Encaminhar ao agente Imagem.",
+            last_final_state="LogAndClose",
+            user_input="o que tem aqui",
+            target_name="Imagem",
+            attachments=[self._IMG],
+            target_accepts_documents=False,
+            target_accepts_images=True,
+        )
+        assert out is False
+
+    @pytest.mark.asyncio
+    async def test_named_target_no_attachment_still_runs(self, monkeypatch):
+        """Sem anexo o veto não se aplica — naming explícito ainda vence a expr."""
+        from app.agents import engine as eng
+        self._patch_conn(monkeypatch, "'nada' in input_lower")
+        out = await eng._should_skip_conditional(
+            source_id="router", target_id="imagem",
+            last_output="Encaminhar ao agente Imagem.",
+            last_final_state="", user_input="x",
+            target_name="Imagem",
+        )
+        assert out is False
+
+    @pytest.mark.asyncio
+    async def test_veto_logs_capability_mismatch(self, monkeypatch, caplog):
+        from app.agents import engine as eng
+        self._patch_conn(monkeypatch, "'nada' in input_lower")
+        with caplog.at_level(logging.INFO, logger="app.agents.engine"):
+            out = await eng._should_skip_conditional(
+                source_id="router", target_id="imagem",
+                last_output="Encaminhar ao agente Imagem.",
+                last_final_state="", user_input="x",
+                target_name="Imagem",
+                attachments=[self._DOC],
+                target_accepts_documents=False, target_accepts_images=True,
+            )
+        assert out is True
+        reasons = [getattr(r, "reason", None) for r in caplog.records]
+        assert "capability_mismatch" in reasons
+
+
+class TestDocAnaliseImagemProseLeakRegression:
+    """REGRESSÃO end-to-end do item reportado (2026-06-06): pptx + 'lista o
+    conteudo em bullets' NÃO deve acionar o SA Imagem. O roteador cita 'imagem'
+    em PROSA (resumindo figuras) — sem cue de roteamento → Imagem é PULADO.
+    Documentos continua rodando pela autoridade de CAPACIDADE."""
+
+    _PPTX = {"name": "Apresentacao_DIA.pptx",
+             "type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
+    _ROUTER_PROSE = (
+        "Apresentacao - Conteudo resumido em topicos\n"
+        "- **Foco em valor** (imagem \"Dinheiro com preenchimento solido\")\n"
+        "- **Transformacao de pessoas** (imagem \"Crescimento Comercial\")\n"
+        "- **Evolucao dos habilitadores** (imagem \"Banco de dados\")"
+    )
+    _IMG_EXPR = ("'imagem' in input_lower or 'envia' in input_lower or "
+                 "'foto' in input_lower or 'png' in input_lower or "
+                 "'jpeg' in input_lower or 'similar' in input_lower")
+    _DOC_EXPR = ("'document' in input_lower or 'documento' in input_lower or "
+                 "'pdf' in input_lower or 'arquivo' in input_lower or "
+                 "'similar' in input_lower")
+
+    def _patch_conn(self, monkeypatch, target_id, expr):
+        async def fake_find_all(source_agent_id=None, **_):
+            return [{
+                "source_agent_id": "router", "target_agent_id": target_id,
+                "connection_type": "conditional",
+                "config": json.dumps({"expr": expr}),
+            }]
+        monkeypatch.setattr("app.core.database.mesh_repo.find_all", fake_find_all)
+
+    @pytest.mark.asyncio
+    async def test_imagem_skipped_on_document_with_prose_mention(self, monkeypatch):
+        from app.agents import engine as eng
+        self._patch_conn(monkeypatch, "imagem", self._IMG_EXPR)
+        out = await eng._should_skip_conditional(
+            source_id="router", target_id="imagem",
+            last_output=self._ROUTER_PROSE,
+            last_final_state="LogAndClose",
+            user_input="lista o conteudo em bullets",
+            target_name="Imagem",
+            attachments=[self._PPTX],
+            target_accepts_documents=False,
+            target_accepts_images=True,
+        )
+        assert out is True  # PULADO (antes do fix: False → rodava)
+
+    @pytest.mark.asyncio
+    async def test_documentos_still_runs_via_capability(self, monkeypatch):
+        from app.agents import engine as eng
+        self._patch_conn(monkeypatch, "documentos", self._DOC_EXPR)
+        out = await eng._should_skip_conditional(
+            source_id="router", target_id="documentos",
+            last_output=self._ROUTER_PROSE,
+            last_final_state="LogAndClose",
+            user_input="lista o conteudo em bullets",
+            target_name="Documentos",
+            attachments=[self._PPTX],
+            target_accepts_documents=True,
+            target_accepts_images=False,
+        )
+        assert out is False  # roda (override de capacidade)
+
+
 # ─── Source smoke: UI tem o campo, backend topology expõe config ──
 
 
