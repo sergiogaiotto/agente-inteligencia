@@ -4064,6 +4064,48 @@ def _output_routes_to_target(output: str | None, target_name: str | None) -> boo
     return _re.search(pattern, out) is not None
 
 
+def _norm_routing_name(s: str | None) -> str:
+    """Normaliza um nome de agente p/ comparação de roteamento: trim, lowercase
+    e sem acentos (NFKD). Diferente de `_output_names_target` (fronteira de
+    palavra em prosa), aqui o uso é IGUALDADE EXATA do campo `target` estruturado.
+    """
+    import unicodedata as _ud
+
+    s = (s or "").strip().lower()
+    return "".join(ch for ch in _ud.normalize("NFKD", s) if not _ud.combining(ch))
+
+
+def _extract_routed_target(output: str | None) -> str | None:
+    """Extrai o `target` de um bloco estruturado ``{"target": X, "inputs": {...}}``
+    emitido pelo roteador (Fase B — #316). Retorna a string `target` (não-vazia)
+    ou None se não houver objeto parseável com `target` string.
+
+    Varre na MESMA ordem de `_extract_inputs_from_text` (bloco cercado
+    ```json {...}``` → primeiro objeto {...} inline), pra NÃO divergir do que o
+    SA consome do outro lado da cadeia. Tolerante: prosa sem bloco → None.
+    """
+    import re as _re
+
+    t = output or ""
+    candidates: list[str] = []
+    fenced = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", t, _re.DOTALL)
+    if fenced:
+        candidates.append(fenced.group(1))
+    inline = _re.search(r"(\{.*\})", t, _re.DOTALL)
+    if inline:
+        candidates.append(inline.group(1))
+    for c in candidates:
+        try:
+            d = json.loads(c)
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            tgt = d.get("target")
+            if isinstance(tgt, str) and tgt.strip():
+                return tgt.strip()
+    return None
+
+
 async def _should_skip_conditional(
     *,
     source_id: str,
@@ -4107,6 +4149,33 @@ async def _should_skip_conditional(
     conn = next((c for c in conns if c.get("target_agent_id") == target_id), None)
     if not conn or conn.get("connection_type") != "conditional":
         return False
+
+    # ── Override "target estruturado" (Fase B — 2026-06-07): AUTORITATIVO ──
+    # Se o upstream emitiu o bloco {"target": X, "inputs": {...}} (roteador da
+    # Fase B, #316 — o MESMO que o SA consome via _extract_inputs_from_text/#315),
+    # ESSA é a decisão de roteamento: DETERMINÍSTICA e EXCLUSIVA.
+    #   • X casa este alvo  → NÃO skipa (roda), ignorando a expr de keyword;
+    #   • X nomeia OUTRO    → SKIPA este (o roteador elegeu um só — 1-de-N real).
+    # Supera a heurística de NL-cue/keyword (que vira fallback p/ meshes SEM bloco
+    # estruturado). Precede tudo de propósito: é o sinal mais explícito que existe.
+    # Inerte quando não há bloco (`_extract_routed_target` → None) → preserva 100%
+    # do comportamento legado (nenhum teste antigo emite esse bloco). Casamento de
+    # nome é case/acento-insensível, igualdade EXATA do campo (`_norm_routing_name`).
+    routed = _extract_routed_target(last_output)
+    if routed is not None:
+        chosen = _norm_routing_name(routed) == _norm_routing_name(target_name)
+        logger.info(
+            "mesh.conditional.structured_target",
+            extra={
+                "event": "mesh.conditional",
+                "source_id": source_id,
+                "target_id": target_id,
+                "target_name": target_name,
+                "routed_target": routed,
+                "decision": "run_not_skip" if chosen else "skip_not_chosen",
+            },
+        )
+        return not chosen
 
     # ── Override "o roteador mandou" (2026-06-06; restrito + vetado 2026-06-06) ──
     # Honra a decisão EXPLÍCITA do roteador (ex.: o AR responde "Encaminhar ao
