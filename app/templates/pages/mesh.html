@@ -90,6 +90,12 @@
                             Adicionar
                         </button>
                     </div>
+                    <!-- Fan-out hint (3b): roteador escolhe UM destino; encadear se um precisa do resultado de outro -->
+                    <div x-show="item.type === 'header' && (topology.fanout_roots||[]).includes(item.rootId) && !collapsedChains[item.rootId]"
+                         class="flex items-start gap-2 px-5 py-2 bg-amber-50 border-b border-amber-100 text-[11px] leading-snug text-amber-800">
+                        <svg class="w-3.5 h-3.5 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                        <span><b>Fan-out:</b> o roteador escolhe <b>um</b> destino entre estes. Se um destino precisa do <b>resultado</b> de outro (ex.: buscar a partir do endereço resolvido), encadeie-os em <b>sequência</b> (A → B) — não como irmãos do roteador.</span>
+                    </div>
                     <!-- Edge row -->
                     <div x-show="item.edge && item.type === 'edge' && !collapsedChains[item.rootId]" x-transition.duration.150ms
                          :id="item.edge?.id ? ('conn-' + item.edge.id) : null"
