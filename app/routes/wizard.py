@@ -1788,6 +1788,20 @@ class WizardComposeRequest(BaseModel):
     model: Optional[str] = ""
 
 
+class WizardDestinationInputsRequest(BaseModel):
+    """Nomes dos agentes-destino — o Compor pede os ## Inputs de cada um p/
+    exibir 'requer: <param>' sob cada regra (Slice UI 2026-06-07)."""
+    agents: list = Field(default_factory=list)
+
+
+@router.post("/destination-inputs")
+async def wizard_destination_inputs(data: WizardDestinationInputsRequest):
+    """{nome_do_agente: [param,...]} com os ## Inputs declarados de cada destino.
+    Reusa _collect_destination_inputs (best-effort + fail-safe). Usado pelo
+    Composer p/ anotar os params por regra."""
+    return {"inputs": await _collect_destination_inputs(data.agents)}
+
+
 @router.post("/compose")
 async def wizard_compose(data: WizardComposeRequest):
     """Wizard IA: "me ajude!" do Composer — gera rascunho de missão/triagem.

@@ -949,18 +949,26 @@
                     </div>
                     <div class="space-y-2">
                         <template x-for="(rule, i) in mission.rules" :key="i">
-                            <div class="flex items-center gap-2">
-                                <!-- "quando" é textarea de 3 linhas: as descrições de
-                                     condição costumam ser longas e não cabiam numa linha
-                                     (ficavam cortadas). resize-y deixa expandir mais. -->
-                                <textarea x-model="rule.when" rows="3" :placeholder="composerRuleWhenPlaceholder()"
-                                          class="flex-1 resize-y rounded-lg border border-surface-200 px-2.5 py-1.5 text-[12px] leading-snug outline-none focus:border-brand-400"></textarea>
-                                <span class="text-surface-400 shrink-0">→</span>
-                                <input x-model="rule.target" type="text" list="composer-targets" :placeholder="composerRuleTargetPlaceholder()"
-                                       class="flex-1 rounded-lg border border-surface-200 px-2.5 py-1.5 text-[12px] outline-none focus:border-brand-400">
-                                <button @click="removeMissionRule(i)" type="button" class="text-surface-300 hover:text-rose-500 shrink-0" title="Remover regra">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-                                </button>
+                            <div>
+                                <div class="flex items-center gap-2">
+                                    <!-- "quando" é textarea de 3 linhas: as descrições de
+                                         condição costumam ser longas e não cabiam numa linha
+                                         (ficavam cortadas). resize-y deixa expandir mais. -->
+                                    <textarea x-model="rule.when" rows="3" :placeholder="composerRuleWhenPlaceholder()"
+                                              class="flex-1 resize-y rounded-lg border border-surface-200 px-2.5 py-1.5 text-[12px] leading-snug outline-none focus:border-brand-400"></textarea>
+                                    <span class="text-surface-400 shrink-0">→</span>
+                                    <input x-model="rule.target" type="text" list="composer-targets" :placeholder="composerRuleTargetPlaceholder()"
+                                           class="flex-1 rounded-lg border border-surface-200 px-2.5 py-1.5 text-[12px] outline-none focus:border-brand-400">
+                                    <button @click="removeMissionRule(i)" type="button" class="text-surface-300 hover:text-rose-500 shrink-0" title="Remover regra">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                                    </button>
+                                </div>
+                                <!-- Slice 2b/UI: params que o destino declara (## Inputs) —
+                                     o roteador deve extrair esses valores da mensagem. -->
+                                <div x-show="paramsForTarget(rule.target).length" class="mt-1 ml-1 flex items-center gap-1 text-[10px] text-amber-600">
+                                    <span>🔧</span>
+                                    <span><b x-text="(rule.target||'').trim()"></b> requer: <b x-text="paramsForTarget(rule.target).join(', ')"></b> — o roteador extrai da mensagem.</span>
+                                </div>
                             </div>
                         </template>
                     </div>
@@ -1184,6 +1192,9 @@ function agentForm(editId) {
         // "inativo" quando o alvo resolvido está desativado — honestidade).
         composerIncludeInactive: false,
         composerDomainFilter: [],
+        // Slice UI (2026-06-07): {nome_agente: [param,...]} dos ## Inputs de cada
+        // destino, p/ mostrar "requer: cep" sob a regra no Composer.
+        destParams: {},
         // Camada do alvo: por default o datalist sugere só SUBAGENTES (folhas que
         // executam). Orquestrador/roteador re-delegam (camada de decisão extra) →
         // só entram nas sugestões com este checkbox. A Verificação SEMPRE mostra
@@ -1533,7 +1544,26 @@ function agentForm(editId) {
             try {
                 const d = await api.get('/api/v1/agents?limit=200');
                 this.availableAgents = (d.agents || []).filter(a => a.id !== editId);
+                this.loadDestParams();  // params por destino (## Inputs) p/ os hints do Composer
             } catch { this.availableAgents = []; }
+        },
+        // Slice UI: busca os ## Inputs de cada destino p/ exibir "requer: <param>"
+        // sob cada regra. Best-effort (swallow) — sem isso o Composer segue igual.
+        async loadDestParams() {
+            try {
+                const names = (this.availableAgents || []).map(a => a.name).filter(Boolean);
+                if (!names.length) { this.destParams = {}; return; }
+                const d = await api.post('/api/v1/wizard/destination-inputs', { agents: names });
+                this.destParams = (d && d.inputs) || {};
+            } catch { this.destParams = {}; }
+        },
+        paramsForTarget(t) {
+            const key = (t || '').trim().toLowerCase();
+            if (!key) return [];
+            for (const k of Object.keys(this.destParams || {})) {
+                if (k.trim().toLowerCase() === key) return this.destParams[k] || [];
+            }
+            return [];
         },
         async loadSavedPrompts() {
             try { const d = await api.get('/api/v1/system-prompts'); this.savedPrompts = d.prompts || []; } catch { this.savedPrompts = []; }
