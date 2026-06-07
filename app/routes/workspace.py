@@ -401,6 +401,26 @@ async def _chain_capabilities(entry_agent_id: str, entry: dict | None = None) ->
     return accepts_img, accepts_doc
 
 
+_REJECTED_KIND_PT = {"image": "imagens", "document": "documentos", "other": "este tipo de arquivo"}
+
+
+def _rejected_attachments_message(rejected: list) -> str:
+    """Mensagem clara/acionável quando TODOS os anexos foram podados na porta
+    (nenhum agente da cadeia aceita o tipo). Substitui a resposta CEGA do agente
+    ("sem evidências…") — o opt-in (accepts_images/documents) é mantido, só o
+    feedback ao usuário muda. Pedido do usuário (2026-06-07)."""
+    names = ", ".join(f'“{r.get("name", "arquivo")}”' for r in rejected) or "o anexo"
+    kinds = sorted({(r.get("kind") or "other") for r in rejected})
+    kinds_txt = " e ".join(_REJECTED_KIND_PT.get(k, k) for k in kinds)
+    return (
+        f"⚠️ Anexo não processado: {names}.\n\n"
+        f"Nenhum agente deste fluxo aceita {kinds_txt}. Para usar este anexo, "
+        f"habilite a aceitação de {kinds_txt} em **Editar Agente** (no agente de "
+        f"entrada ou em um subagente da cadeia), ou escolha um agente/pipeline com "
+        f"essa capacidade — e reenvie."
+    )
+
+
 async def _filter_attachments_by_agent(
     attachments: list, agent_id: str, *, include_chain: bool = False
 ) -> tuple[list, list]:
@@ -500,6 +520,9 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
     attachments, _rejected = await _filter_attachments_by_agent(
         attachments, data.agent_id, include_chain=True
     )
+    # Curto-circuito: usuário anexou arquivo(s) e TODOS foram podados na porta →
+    # não roda o pipeline CEGO (que devolve "sem evidências"); manda mensagem clara.
+    _all_rejected = bool(data.attachments) and not attachments and bool(_rejected)
 
     queue: asyncio.Queue = asyncio.Queue()
     _DONE = object()  # sentinela pra encerrar o consumidor
@@ -529,7 +552,8 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
         finally:
             await queue.put(_DONE)
 
-    asyncio.create_task(_run_pipeline())
+    if not _all_rejected:
+        asyncio.create_task(_run_pipeline())
 
     async def _event_gen():
         # Heartbeat inicial pra que proxies (Caddy) flushem headers e o browser
@@ -545,6 +569,18 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
                 ensure_ascii=False, default=str,
             )
             yield f"event: attachments_rejected\ndata: {_rej_payload}\n\n"
+        if _all_rejected:
+            # Não há pipeline rodando: devolve a resposta clara como pipeline_done
+            # (o frontend renderiza o balão a partir de result.output) e encerra.
+            _done = json.dumps({"type": "pipeline_done", "result": {
+                "output": _rejected_attachments_message(_rejected),
+                "final_state": "Refuse", "mode": "pipeline",
+                "rejected_attachments": _rejected, "transitions": [],
+                "duration_ms": 0, "trace": {}, "pipeline_steps": [],
+            }}, ensure_ascii=False, default=str)
+            yield f"event: pipeline_done\ndata: {_done}\n\n"
+            yield "event: end\ndata: {}\n\n"
+            return
         while True:
             item = await queue.get()
             if item is _DONE:
@@ -593,6 +629,24 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
         attachments, rejected_attachments = await _filter_attachments_by_agent(
             attachments, data.agent_id, include_chain=(data.mode == "pipeline")
         )
+        # Anexo(s) rejeitado(s) na porta (nenhum agente aceita o tipo): em vez de
+        # rodar o agente/pipeline CEGO, devolve mensagem clara e acionável. Opt-in
+        # mantido; só o feedback muda. Vale p/ modo agente e pipeline.
+        if data.attachments and not attachments and rejected_attachments:
+            return {
+                "agent_id": data.agent_id,
+                "output": _rejected_attachments_message(rejected_attachments),
+                "final_state": "Refuse",
+                "status": "rejected_attachments",
+                "duration_ms": 0,
+                "evidence_score": 0,
+                "transitions": [],
+                "trace": {},
+                "verification": {},
+                "interaction_id": None,
+                "rejected_attachments": rejected_attachments,
+                "mode": data.mode,
+            }
 
         if data.mode == "pipeline":
             from app.agents.engine import execute_pipeline
