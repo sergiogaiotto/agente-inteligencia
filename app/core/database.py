@@ -760,6 +760,10 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE tools ADD COLUMN IF NOT EXISTS mcp_server_type TEXT DEFAULT 'http'",
     "ALTER TABLE tools ADD COLUMN IF NOT EXISTS auth_token TEXT",
     "ALTER TABLE tools ADD COLUMN IF NOT EXISTS auth_config TEXT DEFAULT '{}'",
+    # Per-tool D (F1, 2026-06-08): JSON com o schema REAL de cada tool MCP
+    # descoberto via tools/list — [{name, description, inputSchema}]. Persistido
+    # pelo "Conectar e Descobrir"; consumido pela geração per-tool (F2+). Aditivo.
+    "ALTER TABLE tools ADD COLUMN IF NOT EXISTS discovered_tools TEXT",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS require_evidence INTEGER DEFAULT 1",
     # Escape hatch grounded-by-default (2026-06-06): 0 = só evidências (global);
     # 1 = agente autorizado a usar conhecimento geral do modelo.

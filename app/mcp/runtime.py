@@ -730,6 +730,33 @@ async def _discover_server_tools(client: "httpx.AsyncClient", endpoint: str, hea
         return []
 
 
+def serialize_discovered_tools(discovered: "list[dict] | None") -> str:
+    """Normaliza o resultado de `tools/list` para o JSON persistido em
+    `tools.discovered_tools` (Per-tool D — F1).
+
+    Mantém só `{name, description, inputSchema}`; descarta entradas sem `name`;
+    coage `inputSchema` para dict. Nunca levanta — `"[]"` em vazio/None.
+    Fundação do modelo per-tool: a descoberta salva o schema REAL de cada tool
+    e a geração lê isso depois (sem rede na hora de gerar).
+    """
+    out: list[dict] = []
+    for t in (discovered or []):
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get("name") or "").strip()
+        if not name:
+            continue
+        schema = t.get("inputSchema")
+        if not isinstance(schema, dict):
+            schema = {}
+        out.append({
+            "name": name,
+            "description": str(t.get("description") or ""),
+            "inputSchema": schema,
+        })
+    return json.dumps(out, ensure_ascii=False)
+
+
 async def pre_discover_input_schemas(
     mcp_tools: list[dict],
     timeout: float = 5.0,
