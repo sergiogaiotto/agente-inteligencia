@@ -1867,6 +1867,22 @@ async def _test_mcp_connection_impl(data: MCPTestRequest) -> dict:
                 if discovered_tools:
                     recommendations.append(f"{len(discovered_tools)} ferramenta(s) descoberta(s)")
 
+                # Per-tool D (F1): persiste o schema descoberto em tools.discovered_tools
+                # pra a geração ler depois (sem rede na geração). Best-effort — falha
+                # NÃO quebra a descoberta (que continua devolvendo discovered_tools).
+                _tid = getattr(data, "tool_id", None)
+                if _tid and discovered_tools:
+                    try:
+                        from app.core.database import tools_repo
+                        from app.mcp.runtime import serialize_discovered_tools
+                        await tools_repo.update(_tid, {"discovered_tools": serialize_discovered_tools(discovered_tools)})
+                    except Exception as _persist_err:
+                        logger.warning(
+                            "mcp.discovery.persist_failed",
+                            extra={"event": "mcp.discovery", "tool_id": _tid,
+                                   "error_type": type(_persist_err).__name__},
+                        )
+
                 return {"success": True, "details": "MCP Server conectado (JSON-RPC)", "latency": latency,
                         "server_name": server_name, "discovered_tools": discovered_tools, "recommendations": recommendations}
 
