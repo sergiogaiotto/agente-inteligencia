@@ -30,6 +30,42 @@ class LintIssue:
         }
 
 
+def _has_mcp_binding(parsed: Any) -> bool:
+    """True se a SKILL declara ≥1 tool MCP no ## Tool Bindings.
+
+    Usa `parse_tool_bindings` (fonte canônica) via import preguiçoso — não acopla
+    o linter ao módulo MCP no import e evita ciclo. Fail-safe: erro → False.
+    """
+    tb = (getattr(parsed, "tool_bindings", "") or "").strip()
+    if not tb:
+        return False
+    try:
+        from app.mcp.runtime import parse_tool_bindings
+        return len(parse_tool_bindings(tb)) > 0
+    except Exception:
+        return False
+
+
+def _mcp_inputs_missing_operation(parsed: Any) -> bool:
+    """True se a SKILL vincula tool MCP E o ## Inputs tem schema com `properties`
+    MAS sem `operation`. Sem ## Inputs (ou sem properties), o runtime cai no
+    fallback legacy `{operation, query}` e funciona — então NÃO é violação.
+    """
+    if not _has_mcp_binding(parsed):
+        return False
+    try:
+        from app.skill_parser.inputs_schema import extract_inputs_schema
+        schema = extract_inputs_schema("## Inputs\n" + (getattr(parsed, "inputs", "") or ""))
+    except Exception:
+        return False
+    if not isinstance(schema, dict):
+        return False
+    props = schema.get("properties") or {}
+    if not props:
+        return False
+    return "operation" not in props
+
+
 def lint_skill(parsed: Any) -> list[dict]:
     """Retorna lista de issues (dicts) encontradas no SKILL.md.
 
@@ -49,6 +85,21 @@ def lint_skill(parsed: Any) -> list[dict]:
             "error", "*", "declarative_without_bindings",
             "execution_mode=declarative exige ## API Bindings OU ## Data Tables "
             "com pelo menos 1 entrada válida",
+        ))
+
+    # ── MCP: ## Inputs deve declarar `operation` (contrato {operation, query}) ──
+    # Sem `operation`, o runtime usa o NOME DO SERVIDOR como tool → "Unknown tool"
+    # → resposta vazia (bug "tavily a", 2026-06-08). O wizard já força na GERAÇÃO
+    # (#324); esta regra cobre edição manual / import / criação 'manual'. Só
+    # dispara quando há schema de domínio SEM operation — sem ## Inputs, o runtime
+    # cai no fallback legacy {operation, query} e funciona.
+    if _mcp_inputs_missing_operation(parsed):
+        issues.append(LintIssue(
+            "error", "*", "mcp_inputs_missing_operation",
+            "Skill vincula tool MCP mas o ## Inputs não declara `operation`. O "
+            "runtime espera `{operation, query}` — sem `operation`, a chamada vira "
+            "o nome do servidor e o servidor MCP responde 'Unknown tool' (resposta "
+            "vazia). Declare `operation` (e `query`) no ## Inputs.",
         ))
 
     # Duplicatas de binding_id

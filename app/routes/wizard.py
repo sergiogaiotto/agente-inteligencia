@@ -620,6 +620,79 @@ def _mcp_block(mcp_tools: list[dict]) -> str:
     )
 
 
+def _canonical_mcp_inputs_block() -> str:
+    """Bloco ## Inputs canônico para tool MCP: contrato `{operation, query}` que
+    o runtime entende (`build_openai_tools`). O ENUM das ops é injetado em runtime
+    a partir do Registry (`_make_parameters_from_inputs_schema`), então aqui basta
+    `operation` como string — não precisa plumbar as ops na geração.
+    """
+    import json as _json
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "Entrada da ferramenta MCP",
+        "type": "object",
+        "properties": {
+            "operation": {
+                "type": "string",
+                "description": (
+                    "Operação MCP a executar (ex.: search, extract). O servidor "
+                    "declara as válidas — o runtime injeta o enum."
+                ),
+            },
+            "query": {
+                "type": "string",
+                "description": (
+                    "Parâmetro da operação: consulta em linguagem natural para "
+                    "busca; URL para extract/crawl/map."
+                ),
+            },
+        },
+        "required": ["operation", "query"],
+    }
+    return "## Inputs\n```json\n" + _json.dumps(schema, ensure_ascii=False, indent=2) + "\n```"
+
+
+def _inputs_has_operation(skill_md: str) -> bool:
+    """True se a seção ## Inputs declara a propriedade `operation` (o contrato
+    MCP). Tolerante: parse falho → fallback substring."""
+    import re as _re, json as _json
+
+    m = _re.search(r"(?ms)^##\s+Inputs\b(.*?)(?=^##\s|\Z)", skill_md or "")
+    if not m:
+        return False
+    section = m.group(1)
+    fence = _re.search(r"```(?:json)?\s*(.*?)```", section, _re.DOTALL)
+    body = fence.group(1) if fence else section
+    try:
+        d = _json.loads(body)
+    except Exception:
+        return '"operation"' in section
+    props = d.get("properties", {}) if isinstance(d, dict) else {}
+    return "operation" in props
+
+
+def _ensure_mcp_inputs_contract(skill_md: str, mcp_tools: list[dict]) -> str:
+    """Determinístico: se a SKILL vincula tool MCP mas o ## Inputs NÃO declara
+    `operation`, substitui o ## Inputs pelo contrato canônico `{operation, query}`.
+
+    Corrige a causa-raiz do bug "tavily a" (2026-06-08): o LLM gerador modelava
+    inputs de DOMÍNIO (address/radius_meters) pela finalidade da skill; sem
+    `operation`, o runtime usava o nome do servidor como tool → "Unknown tool" →
+    bolha vazia. Só toca quando está ERRADO (MCP + sem operation) → baixa
+    regressão. Idempotente: roda sem efeito se já estiver no contrato.
+    """
+    if not mcp_tools or _inputs_has_operation(skill_md):
+        return skill_md
+    import re as _re
+
+    pat = _re.compile(r"(?ms)^##\s+Inputs\b.*?(?=^##\s|\Z)")
+    if not pat.search(skill_md or ""):
+        # Sem seção ## Inputs → conteúdo não é uma SKILL plausível (lixo/parse
+        # error). NÃO anexa — deixa o parser/validador lidar. Replace-only.
+        return skill_md
+    return pat.sub(_canonical_mcp_inputs_block() + "\n\n", skill_md, count=1)
+
+
 def _rag_block(rag_sources: list[dict]) -> str:
     """Sub-bloco específico de RAG. Engine roda retrieval automático em
     RetrieveEvidence, mas Workflow precisa documentar pra coerência semântica
@@ -1094,6 +1167,10 @@ async def wizard_skill(data: WizardSkillRequest):
             {"role": "user", "content": user_prompt},
         ])
         skill_md = response["content"]
+        # Contrato MCP (fix bug "tavily a", 2026-06-08): força o ## Inputs ao
+        # `{operation, query}` quando há tool MCP e o LLM inventou inputs de
+        # domínio. Antes de validar, pra o validador ver a versão corrigida.
+        skill_md = _ensure_mcp_inputs_contract(skill_md, bindings.get("mcp_tools") or [])
 
         # ── Validação pós-geração + retry com instrução corretiva ──
         from app.skill_parser.parser import parse_skill_md
@@ -1131,6 +1208,7 @@ async def wizard_skill(data: WizardSkillRequest):
                     {"role": "user", "content": user_prompt},
                 ])
                 retry_skill_md = retry_response["content"]
+                retry_skill_md = _ensure_mcp_inputs_contract(retry_skill_md, bindings.get("mcp_tools") or [])
                 # Re-valida o retry — se também violar, mantém o RETRY (geralmente
                 # melhor que o original) mas devolve warnings pro operador
                 try:
