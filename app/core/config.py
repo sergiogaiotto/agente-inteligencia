@@ -374,6 +374,10 @@ _UI_TO_ENV_MAP = {
     # própria função com o inputSchema real (vs o legado {operation, query}).
     # Default OFF; lido a cada chamada por runtime.per_tool_enabled().
     "mcp_per_tool_enabled": "MCP_PER_TOOL_ENABLED",
+    # Tier 2 — text-to-SQL governado (RAG-Tabela): 'true'/'false'. Liga a bancada
+    # "Perguntar à Tabela" (IA compila pergunta→consulta estruturada, humano cura).
+    # Default OFF; lido a cada chamada por data_tables.runtime.text_to_sql_enabled().
+    "text_to_sql_enabled": "TEXT_TO_SQL_ENABLED",
     # Embedding (Qwen3 reusa URL/key do OSS source)
     "embedding_provider": "EMBEDDING_PROVIDER",
     "qwen3_source":       "QWEN3_SOURCE",
@@ -404,6 +408,7 @@ _NON_MODEL_UI_KEYS = {
     "grounding_strict",          # flag de comportamento anti-alucinação
     "default_response_language", # idioma de resposta global (BCP-47)
     "mcp_per_tool_enabled",      # flag do modo per-tool MCP (default OFF)
+    "text_to_sql_enabled",       # flag do Tier 2 text-to-SQL governado (default OFF)
 }
 
 # Cobre: Azure, OpenAI público, Maritaca, Ollama, GPT-OSS 120b/20b, embedding
