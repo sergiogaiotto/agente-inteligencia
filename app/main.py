@@ -84,6 +84,11 @@ app.state.templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # {{ app_version }} (rodapé da UI). Fonte única: app/core/version.py.
 from app.core.version import APP_VERSION
 app.state.templates.env.globals["app_version"] = APP_VERSION
+# Tier 2 (text-to-SQL governado): flag exposta como CALLABLE aos templates —
+# `{% if text_to_sql_enabled() %}` reflete o toggle em runtime (lê o env a cada
+# render), sem restart. Default OFF → a aba "Perguntar" não renderiza.
+from app.data_tables.runtime import text_to_sql_enabled as _text_to_sql_enabled
+app.state.templates.env.globals["text_to_sql_enabled"] = _text_to_sql_enabled
 
 # API routes
 app.include_router(agents.router)

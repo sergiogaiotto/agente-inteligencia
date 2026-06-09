@@ -618,8 +618,8 @@
 
                 <!-- Tabs (PR #227: nova aba Documentos antes de Chunks) -->
                 <div class="flex border-b border-surface-100 px-6 shrink-0 overflow-x-auto">
-                    <template x-for="t in [{k:'overview',label:'Visão Geral'},{k:'documents',label:'Documentos'},{k:'chunks',label:'Chunks'},{k:'tables',label:'Tabelas'},{k:'query',label:'Test Query'}]" :key="t.k">
-                        <button @click="inspectTab = t.k; if (t.k === 'tables') loadTablesForSource(inspectSource?.id); if (t.k === 'documents') loadDocumentsForSource(inspectSource?.id)"
+                    <template x-for="t in [{k:'overview',label:'Visão Geral'},{k:'documents',label:'Documentos'},{k:'chunks',label:'Chunks'},{k:'tables',label:'Tabelas'}{% if text_to_sql_enabled() %},{k:'ask',label:'Perguntar'}{% endif %},{k:'query',label:'Test Query'}]" :key="t.k">
+                        <button @click="inspectTab = t.k; if (t.k === 'tables') loadTablesForSource(inspectSource?.id); if (t.k === 'documents') loadDocumentsForSource(inspectSource?.id); if (t.k === 'ask') initAsk(inspectSource?.id)"
                                 :class="inspectTab === t.k ? 'border-brand-500 text-brand-700' : 'border-transparent text-surface-500 hover:text-brand-600'"
                                 class="px-4 py-3 border-b-2 text-[12px] font-semibold transition-colors whitespace-nowrap">
                             <span x-text="t.label"></span>
@@ -918,6 +918,77 @@
                             </template>
                         </div>
                     </div>
+{% if text_to_sql_enabled() %}
+                    <!-- TAB: Perguntar (Tier 2 — text-to-SQL governado) -->
+                    <div x-show="inspectTab === 'ask'" class="space-y-3">
+                        <div class="rounded-lg border border-red-200 bg-red-50/40 px-3 py-2 text-[10px] text-red-700">
+                            Experimental. A IA <strong>compila</strong> sua pergunta numa consulta estruturada governada pelo Catálogo —
+                            colunas marcadas como PII (ou não catalogadas) ficam <strong>fora</strong> por padrão. Revise e salve para reutilizar.
+                        </div>
+                        <select x-model="askTableId" @change="askResult=null; loadAskSaved()"
+                                class="w-full rounded-lg border border-surface-200 bg-white px-2 py-2 text-[12px]">
+                            <template x-for="t in inspectTables" :key="t.id">
+                                <option :value="t.id" x-text="t.name + ' (' + (t.row_count||0) + ' linhas)'"></option>
+                            </template>
+                        </select>
+                        <div class="flex gap-2">
+                            <input type="text" x-model="askQuestion" placeholder="Pergunte em português — ex: 'clientes do RS ordenados por renda'"
+                                   @keydown.enter="compileAsk()"
+                                   class="flex-1 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none focus:border-brand-400">
+                            <button @click="compileAsk()" :disabled="askCompiling || !askQuestion.trim() || !askTableId"
+                                    class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+                                <span x-text="askCompiling ? 'Compilando...' : 'Compilar'"></span>
+                            </button>
+                        </div>
+                        <div x-show="askError" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700" x-text="askError"></div>
+
+                        <template x-if="askResult">
+                            <div class="space-y-2">
+                                <div x-show="askResult.note" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800" x-text="askResult.note"></div>
+                                <div x-show="!askResult.note">
+                                    <div class="rounded-lg border border-surface-200 bg-white p-3 space-y-2">
+                                        <div class="text-[10px] font-semibold text-surface-500 uppercase">Consulta compilada (pré-visualização — não executada)</div>
+                                        <pre class="text-[11px] font-mono text-brand-800 bg-surface-50 rounded px-2 py-1.5 overflow-x-auto whitespace-pre-wrap" x-text="askResult.sql_preview"></pre>
+                                        <div class="text-[10px] text-surface-500">
+                                            Colunas: <span class="font-mono" x-text="(askResult.compiled.select||[]).join(', ') || '(todas liberadas)'"></span>
+                                            · filtros: <span x-text="(askResult.compiled.filters||[]).length"></span>
+                                            · limit: <span x-text="askResult.compiled.limit"></span>
+                                        </div>
+                                        <div x-show="(askResult.blocked||[]).length" class="text-[10px] text-amber-700">
+                                            <div class="font-semibold">Bloqueado pela governança:</div>
+                                            <ul class="list-disc ml-4">
+                                                <template x-for="b in askResult.blocked" :key="b"><li x-text="b"></li></template>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                    <div class="flex gap-2 mt-2" x-show="(askResult.compiled.select||[]).length || (askResult.compiled.filters||[]).length">
+                                        <input type="text" x-model="askName" placeholder="Nome da consulta (opcional)"
+                                               class="flex-1 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none focus:border-brand-400">
+                                        <button @click="saveAsk()" :disabled="askSaving"
+                                                class="rounded-lg bg-emerald-600 px-4 py-2 text-[12px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+                                            <span x-text="askSaving ? 'Salvando...' : 'Salvar e aprovar'"></span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <div x-show="askSavedQueries.length" class="pt-2 border-t border-surface-100">
+                            <div class="text-[10px] font-semibold text-surface-500 uppercase mb-2">Consultas curadas</div>
+                            <div class="space-y-1.5">
+                                <template x-for="sq in askSavedQueries" :key="sq.id">
+                                    <div class="rounded-lg border border-surface-200 bg-white px-3 py-2 flex items-start justify-between gap-2">
+                                        <div class="min-w-0">
+                                            <div class="text-[12px] font-semibold text-brand-800 truncate" x-text="sq.name"></div>
+                                            <pre class="text-[10px] font-mono text-surface-500 truncate" x-text="sq.sql_preview"></pre>
+                                        </div>
+                                        <button @click="deleteAskSaved(sq.id)" class="text-[11px] text-rose-600 hover:text-rose-800 shrink-0">remover</button>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+{% endif %}
 
                 </div>
             </aside>
@@ -961,6 +1032,10 @@ function evidencePage() {
         inspectTab: 'overview',       // 'overview' | 'documents' | 'chunks' | 'tables' | 'query'
         // Catálogo de Dados: categorias de PII (espelha o enum PiiCategory do backend)
         piiCategories: ['none','cpf','cnpj','email','phone','name','address','financial','health','biometric','other'],
+        // ─── Tier 2: bancada "Perguntar à Tabela" (text-to-SQL governado) ───
+        askTableId: '', askQuestion: '', askCompiling: false,
+        askResult: null,        // {compiled, blocked, sql_preview, allowed_columns, note}
+        askError: '', askName: '', askSaving: false, askSavedQueries: [],
         inspectChunks: [],            // chunks já carregados
         inspectChunkLimit: 50,        // página a cada loadInspectChunks
         inspectChunksLoading: false,
@@ -1494,6 +1569,86 @@ function evidencePage() {
                 showToast('Erro ao sugerir: ' + (e.message || ''), 'error');
             } finally {
                 t._catSuggesting = false;
+            }
+        },
+
+        // ─── Tier 2: bancada "Perguntar à Tabela" ──────────────────
+        async initAsk(sid) {
+            if (sid && (!this.inspectTables || this.inspectTables.length === 0)) {
+                await this.loadTablesForSource(sid);
+            }
+            if (!this.askTableId && this.inspectTables.length) this.askTableId = this.inspectTables[0].id;
+            await this.loadAskSaved();
+        },
+        async compileAsk() {
+            if (!this.askTableId || !this.askQuestion.trim()) return;
+            this.askCompiling = true; this.askError = ''; this.askResult = null;
+            try {
+                const resp = await fetch('/api/v1/data-tables/' + encodeURIComponent(this.askTableId) + '/compile-query', {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question: this.askQuestion, sample_size: 10 }),
+                });
+                if (!resp.ok) {
+                    let msg = 'HTTP ' + resp.status;
+                    try { const b = await resp.json(); if (b.detail) msg = b.detail; } catch {}
+                    throw new Error(msg);
+                }
+                this.askResult = await resp.json();
+            } catch(e) {
+                this.askError = e.message || 'Falha ao compilar';
+            } finally {
+                this.askCompiling = false;
+            }
+        },
+        async saveAsk() {
+            if (!this.askResult || !this.askTableId) return;
+            const c = this.askResult.compiled || {};
+            if ((!c.select || !c.select.length) && (!c.filters || !c.filters.length)) {
+                showToast('Nada para salvar — a consulta ficou vazia.', 'error'); return;
+            }
+            this.askSaving = true;
+            try {
+                const resp = await fetch('/api/v1/data-tables/' + encodeURIComponent(this.askTableId) + '/saved-queries', {
+                    method: 'PUT', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: this.askName || this.askQuestion.slice(0, 80),
+                        question: this.askQuestion, compiled: c, pii_columns_allowed: [],
+                    }),
+                });
+                if (!resp.ok) {
+                    let msg = 'HTTP ' + resp.status;
+                    try { const b = await resp.json(); if (b.detail) msg = b.detail; } catch {}
+                    throw new Error(msg);
+                }
+                showToast('Consulta salva e aprovada');
+                this.askName = '';
+                await this.loadAskSaved();
+            } catch(e) {
+                showToast('Erro ao salvar: ' + (e.message || ''), 'error');
+            } finally {
+                this.askSaving = false;
+            }
+        },
+        async loadAskSaved() {
+            if (!this.askTableId) { this.askSavedQueries = []; return; }
+            try {
+                const resp = await fetch('/api/v1/data-tables/' + encodeURIComponent(this.askTableId) + '/saved-queries', { credentials: 'include' });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                this.askSavedQueries = (await resp.json()).saved_queries || [];
+            } catch(e) {
+                this.askSavedQueries = [];
+            }
+        },
+        async deleteAskSaved(id) {
+            try {
+                const resp = await fetch('/api/v1/data-tables/' + encodeURIComponent(this.askTableId) + '/saved-queries/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'include' });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                showToast('Consulta removida');
+                await this.loadAskSaved();
+            } catch(e) {
+                showToast('Erro ao remover: ' + (e.message || ''), 'error');
             }
         },
 

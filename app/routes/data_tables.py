@@ -133,6 +133,20 @@ class CompileQueryRequest(BaseModel):
     sample_size: int = 10
 
 
+class SavedQueryPutRequest(BaseModel):
+    """Tier 2 — curadoria humana: salva (aprova) uma consulta compilada.
+
+    `compiled` é o struct {select,filters,order_by,limit} revisado pelo humano;
+    o backend REVALIDA contra o Catálogo (não confia no cliente). `id` ausente =
+    cria; presente = atualiza. `pii_columns_allowed` = colunas PII que o curador
+    liberou explicitamente (ainda mascaradas na saída)."""
+    id: Optional[str] = None
+    name: str = ""
+    question: str = ""
+    compiled: dict = Field(default_factory=dict)
+    pii_columns_allowed: list[str] = Field(default_factory=list)
+
+
 # ─── Endpoints ───────────────────────────────────────────────────
 
 
@@ -464,6 +478,80 @@ async def compile_query_endpoint(
         },
     )
     return {"ok": True, **result}
+
+
+async def _resolve_table_for_tier2(table_id: str, user: dict) -> dict:
+    """Gate comum dos endpoints Tier 2: flag ON + tabela existe + visibility.
+
+    Levanta 404 (flag off / tabela inexistente) ou 403 (sem permissão). Retorna o
+    row enriquecido (com `catalog` reconciliado) quando autorizado.
+    """
+    if not text_to_sql_enabled():
+        raise HTTPException(404, "Recurso indisponível (Tier 2 desativado).")
+    row = await find_by_id_with_ks(table_id)
+    if not row:
+        raise HTTPException(404, f"data_table '{table_id}' não encontrada.")
+    if not can_user_see(user, row):
+        raise HTTPException(403, "Sem permissão para esta tabela.")
+    return row
+
+
+@router.get("/data-tables/{table_id}/saved-queries")
+async def list_saved_queries_endpoint(
+    table_id: str,
+    user: dict = Depends(require_user),
+):
+    """Lista as consultas NL curadas (saved_queries) de uma tabela. Gated."""
+    await _resolve_table_for_tier2(table_id, user)
+    from app.data_tables.saved_queries import list_saved_queries
+
+    return {"ok": True, "saved_queries": await list_saved_queries(table_id)}
+
+
+@router.put("/data-tables/{table_id}/saved-queries")
+async def put_saved_query_endpoint(
+    table_id: str,
+    body: SavedQueryPutRequest,
+    user: dict = Depends(require_user),
+):
+    """Curadoria humana: salva (aprova) uma consulta compilada. O backend
+    REVALIDA o struct contra o Catálogo (não confia no cliente). Gated."""
+    row = await _resolve_table_for_tier2(table_id, user)
+    from app.data_tables.saved_queries import apply_saved_query
+
+    try:
+        saved = await apply_saved_query(
+            row, body.name, body.question, body.compiled,
+            body.pii_columns_allowed, user, saved_query_id=body.id,
+        )
+    except TabularError as e:
+        raise _raise_tabular(e)
+
+    await _audit(
+        "data_table.saved_query.upsert",
+        table_id,
+        user.get("id", ""),
+        {"id": saved.get("id"), "select": len((saved.get("query_json") or {}).get("select", []))},
+    )
+    return {"ok": True, "saved_query": saved}
+
+
+@router.delete("/data-tables/{table_id}/saved-queries/{sq_id}")
+async def delete_saved_query_endpoint(
+    table_id: str,
+    sq_id: str,
+    user: dict = Depends(require_user),
+):
+    """Remove uma saved_query (escopada à tabela). Gated."""
+    await _resolve_table_for_tier2(table_id, user)
+    from app.data_tables.saved_queries import delete_saved_query, get_saved_query
+
+    sq = await get_saved_query(sq_id)
+    if not sq or sq.get("data_table_id") != table_id:
+        raise HTTPException(404, "Consulta não encontrada.")
+    await delete_saved_query(sq_id)
+    await _audit("data_table.saved_query.delete", table_id, user.get("id", ""), {"id": sq_id})
+    return {"ok": True, "deleted": True, "id": sq_id}
 
 
 @router.delete("/data-tables/{table_id}")
