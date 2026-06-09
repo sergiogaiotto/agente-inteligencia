@@ -855,8 +855,14 @@
                                             </table>
                                         </div>
 
-                                        <div class="flex justify-end">
-                                            <button @click="saveCatalog(t)" :disabled="t._catSaving"
+                                        <div class="flex items-center justify-end gap-2">
+                                            <span x-show="t._catSuggested" class="mr-auto text-[10px] text-amber-600">Sugestão da IA preenchida — revise e <strong>salve</strong> para aplicar.</span>
+                                            <button @click="generateCatalogAI(t)" :disabled="t._catSuggesting || t._catSaving"
+                                                    class="inline-flex items-center gap-1.5 rounded-lg border border-brand-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-brand-600 hover:bg-brand-50 disabled:opacity-40">
+                                                <span>✨</span>
+                                                <span x-text="t._catSuggesting ? 'Sugerindo…' : 'Sugerir com IA'"></span>
+                                            </button>
+                                            <button @click="saveCatalog(t)" :disabled="t._catSaving || t._catSuggesting"
                                                     class="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-brand-600 disabled:opacity-40">
                                                 <span x-text="t._catSaving ? 'Salvando…' : 'Salvar catálogo'"></span>
                                             </button>
@@ -1417,7 +1423,7 @@ function evidencePage() {
                 });
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const body = await resp.json();
-                this.inspectTables = (body.data_tables || []).map(t => ({ ...t, _expanded: false, _catSaving: false }));
+                this.inspectTables = (body.data_tables || []).map(t => ({ ...t, _expanded: false, _catSaving: false, _catSuggesting: false, _catSuggested: false }));
             } catch(e) {
                 this.inspectTables = [];
                 showToast('Erro ao carregar tabelas: ' + (e.message || ''), 'error');
@@ -1455,6 +1461,39 @@ function evidencePage() {
                 showToast('Erro ao salvar catálogo: ' + (e.message || ''), 'error');
             } finally {
                 t._catSaving = false;
+            }
+        },
+
+        // ─── Catálogo de Dados: sugestão por IA (PR3) — NÃO salva ───
+        async generateCatalogAI(t) {
+            t._catSuggesting = true;
+            try {
+                const resp = await fetch('/api/v1/data-tables/' + encodeURIComponent(t.id) + '/catalog/suggest', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sample_size: 10 }),
+                });
+                if (!resp.ok) {
+                    let msg = 'HTTP ' + resp.status;
+                    try { const b = await resp.json(); if (b.detail) msg = b.detail; } catch {}
+                    throw new Error(msg);
+                }
+                const sug = (await resp.json()).suggestion || {};
+                // preenche os campos editáveis SEM salvar (sugestão volátil; humano cura)
+                if (sug.table_description) t.description = sug.table_description;
+                const byName = {};
+                (sug.columns || []).forEach(c => { byName[c.name] = c; });
+                (t.catalog?.columns || []).forEach(c => {
+                    const s = byName[c.name];
+                    if (s) { c.description = s.description || ''; c.pii_category = s.pii_category || 'none'; }
+                });
+                t._catSuggested = true;
+                showToast('Sugestão da IA preenchida — revise e salve');
+            } catch(e) {
+                showToast('Erro ao sugerir: ' + (e.message || ''), 'error');
+            } finally {
+                t._catSuggesting = false;
             }
         },
 

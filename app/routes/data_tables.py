@@ -120,6 +120,11 @@ class CatalogPutRequest(BaseModel):
     columns: list[CatalogColumnSpec] = Field(default_factory=list)
 
 
+class CatalogSuggestRequest(BaseModel):
+    """Parâmetros da sugestão por IA (não persiste)."""
+    sample_size: int = 10
+
+
 # ─── Endpoints ───────────────────────────────────────────────────
 
 
@@ -296,6 +301,64 @@ async def put_data_table_catalog_endpoint(
         {"columns": len(body.columns)},
     )
     return {"ok": True, "table": updated}
+
+
+@router.post("/data-tables/{table_id}/catalog/suggest")
+async def suggest_data_table_catalog_endpoint(
+    table_id: str,
+    body: CatalogSuggestRequest = CatalogSuggestRequest(),
+    user: dict = Depends(require_user),
+):
+    """Sugestão do catálogo via IA — NÃO persiste (volátil; só o PUT grava).
+
+    DNA anti-alucinação: lê schema + amostra read-only (OMITIDA p/ bases
+    restricted/confidential — PII não vai ao provedor) e o LLM NUNCA define a
+    lista de colunas (reconciliação por nome contra o schema vivo).
+    """
+    row = await find_by_id_with_ks(table_id)
+    if not row:
+        raise HTTPException(404, f"data_table '{table_id}' não encontrada.")
+    if not can_user_see(user, row):
+        raise HTTPException(403, "Sem permissão para esta tabela.")
+
+    # Amostra read-only só p/ public/internal (PII fora do prompt em sensíveis).
+    sample_rows: list = []
+    label = str(row.get("ks_confidentiality_label") or "internal").lower()
+    if label in ("public", "internal"):
+        try:
+            n = max(1, min(int(body.sample_size or 10), 20))
+            res = await execute_query(table_id, limit=n, executed_by=user.get("id"))
+            sample_rows = res.get("rows", []) or []
+        except Exception:
+            sample_rows = []  # amostra é best-effort; segue só com o schema
+
+    from app.llm_routing import resolve_llm_for_task
+    from app.routes.wizard import _wizard_llm_complete
+    from app.data_tables.catalog import generate_catalog_suggestion
+
+    provider, model = await resolve_llm_for_task("instruct")
+
+    async def _complete(messages: list) -> str:
+        content, _, _ = await _wizard_llm_complete(
+            messages, provider, model, route="catalog_suggest"
+        )
+        return content
+
+    try:
+        suggestion = await generate_catalog_suggestion(row, sample_rows, _complete)
+    except HTTPException:
+        raise  # 503 acionável do _wizard_llm_complete (LLM inacessível)
+    except Exception as e:
+        logger.error("catalog suggest falhou", exc_info=True)
+        raise HTTPException(500, f"Erro ao gerar sugestão: {e}")
+
+    await _audit(
+        "data_table.catalog.suggest",
+        table_id,
+        user.get("id", ""),
+        {"columns": len(suggestion.get("columns", [])), "sampled": len(sample_rows)},
+    )
+    return {"ok": True, "suggestion": suggestion}
 
 
 @router.delete("/data-tables/{table_id}")
