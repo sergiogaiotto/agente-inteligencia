@@ -935,6 +935,92 @@ async def pre_discover_input_schemas(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _discover_connector_tools(t: dict, timeout: float = 8.0) -> list[dict]:
+    """F5 — I/O p/ 1 conector: abre cliente HTTP, inicializa e roda tools/list.
+    Retorna a lista de tools do servidor (``[]`` se vazio/sem suporte). Isolado
+    do orquestrador de backfill p/ permitir testá-lo sem rede (mock deste
+    helper)."""
+    from app.core.secrets import read_secret
+    endpoint = (t.get("mcp_server") or "").strip()
+    headers = {**MCP_HEADERS}
+    token = (read_secret(t.get("auth_token", "")) or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            await client.post(endpoint, json={
+                "jsonrpc": "2.0", "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                           "clientInfo": {"name": "AgenteInteligencia", "version": "1.0.0"}},
+                "id": 0,
+            }, headers=headers)
+            await client.post(endpoint, json={
+                "jsonrpc": "2.0", "method": "notifications/initialized", "params": {},
+            }, headers=headers)
+        except Exception:
+            pass  # initialize é best-effort
+        return await _discover_server_tools(client, endpoint, headers)
+
+
+async def backfill_discovered_tools(tools_repo, timeout: float = 8.0, force: bool = False) -> dict:
+    """F5 — backfill: descobre (``tools/list``) e persiste ``discovered_tools``
+    para conectores MCP HTTP que ainda não têm (predam a F1).
+
+    - **Idempotente**: pula quem já tem (salvo ``force=True``).
+    - **Best-effort por conector**: ``asyncio.gather`` + ``return_exceptions`` —
+      falha de 1 não derruba os outros.
+    - **Pula** stdio (sem ``tools/list`` HTTP) e auth complexa (oauth2/mTLS).
+    - **NÃO ativa nada**: só popula a coluna que o builder per-tool consome
+      quando ``MCP_PER_TOOL_ENABLED`` está ON. Flag OFF → coluna fica dormente.
+
+    Retorna ``{backfilled, skipped, failed, total}``.
+    """
+    summary = {"backfilled": 0, "skipped": 0, "failed": 0, "total": 0}
+    try:
+        registered = await tools_repo.find_all(limit=500)
+    except Exception as e:
+        logger.warning(f"backfill_discovered_tools: find_all falhou: {e}")
+        return summary
+
+    candidates: list[dict] = []
+    for t in registered or []:
+        endpoint = (t.get("mcp_server") or "").strip()
+        if not endpoint.startswith("http"):
+            summary["skipped"] += 1            # stdio / não-MCP
+            continue
+        if (t.get("auth_requirements") or "").lower() in ("oauth2", "mtls"):
+            summary["skipped"] += 1            # auth complexa fora do escopo
+            continue
+        if not force and _parse_discovered_tools(t.get("discovered_tools")):
+            summary["skipped"] += 1            # já backfilled (idempotente)
+            continue
+        candidates.append(t)
+
+    summary["total"] = len(candidates)
+    if not candidates:
+        return summary
+
+    async def _one(t: dict):
+        server_tools = await _discover_connector_tools(t, timeout)
+        if not server_tools:
+            return ("empty", t.get("id"))
+        await tools_repo.update(t.get("id"), {"discovered_tools": serialize_discovered_tools(server_tools)})
+        return ("ok", t.get("id"))
+
+    results = await asyncio.gather(*[_one(t) for t in candidates], return_exceptions=True)
+    for r in results:
+        if isinstance(r, BaseException):
+            summary["failed"] += 1
+            logger.warning(f"backfill_discovered_tools: conector falhou: {r}")
+        elif isinstance(r, tuple) and r and r[0] == "ok":
+            summary["backfilled"] += 1
+        elif isinstance(r, tuple) and r and r[0] == "empty":
+            summary["skipped"] += 1            # descobriu vazio → nada a persistir
+        else:
+            summary["failed"] += 1
+    return summary
+
+
 def _resolve_tool_name(declared: str, server_tools: list[dict]) -> str:
     """Mapeia nome declarado (ex: 'search') para nome real exposto
     pelo servidor (ex: 'tavily_search').
