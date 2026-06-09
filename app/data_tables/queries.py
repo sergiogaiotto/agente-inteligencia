@@ -18,6 +18,8 @@ import re
 import unicodedata
 from typing import Any, Optional
 
+from app.data_tables.types import normalize_pii_category
+
 from app.core.database import _get_pool
 
 logger = logging.getLogger(__name__)
@@ -101,23 +103,86 @@ def can_user_see(user: dict, table_with_ks: dict) -> bool:
 # ─── Conversão de row → dict serializável ─────────────────────────
 
 
-_JSON_FIELDS = ("schema_json",)
+# Campos JSONB decodificados defensivamente (string legacy/mock/None → estrutura).
+# Lista e objeto têm fallback de erro DIFERENTE — não confundir [] com {}.
+_JSON_LIST_FIELDS = ("schema_json",)
+_JSON_OBJECT_FIELDS = ("catalog_json",)
+
+
+def _decode_json_field(out: dict, key: str, empty) -> None:
+    """Decode defensivo de 1 campo JSONB; string inválida ou None → `empty`."""
+    v = out.get(key)
+    if isinstance(v, str):
+        try:
+            out[key] = json.loads(v)
+        except (json.JSONDecodeError, TypeError):
+            out[key] = empty
+    elif v is None:
+        out[key] = empty
+
+
+def reconcile_catalog(schema: Any, catalog: Any, table_description: str = "") -> dict:
+    """Reconcilia o catálogo curado (catalog_json) com o schema VIVO (schema_json).
+
+    "left join" por NOME de coluna sobre o schema ATUAL:
+      - coluna do schema SEM entry no catálogo → metadata neutra (não catalogada);
+      - entry do catálogo SEM coluna no schema (removida num re-promote) → IGNORADO
+        na saída (mas continua preservado no catalog_json do DB, p/ voltar se a
+        coluna reaparecer).
+    Coração determinístico do anti-alucinação: o catálogo NUNCA expõe coluna que
+    não existe no schema vivo, e toda pii_category passa por normalize (enum fechado).
+    """
+    catalog = catalog if isinstance(catalog, dict) else {}
+    cat_cols = catalog.get("columns")
+    cat_cols = cat_cols if isinstance(cat_cols, dict) else {}
+    cat_table = catalog.get("table")
+    cat_table = cat_table if isinstance(cat_table, dict) else {}
+    columns = []
+    for col in (schema if isinstance(schema, list) else []):
+        if not isinstance(col, dict):
+            continue
+        name = col.get("name")
+        entry = cat_cols.get(name)
+        entry = entry if isinstance(entry, dict) else {}
+        columns.append({
+            "name": name,
+            "type": col.get("type"),
+            "nullable": col.get("nullable"),
+            "description": str(entry.get("description") or ""),
+            "pii_category": normalize_pii_category(entry.get("pii_category")),
+            "source": entry.get("source"),  # 'ai' | 'human' | None (não catalogado)
+        })
+    return {
+        "table": {
+            "description": table_description or "",
+            "source": cat_table.get("description_source"),
+            "curated_by": cat_table.get("curated_by"),
+            "curated_at": cat_table.get("curated_at"),
+        },
+        "columns": columns,
+    }
 
 
 def db_row_to_table_dict(row: Any) -> dict:
     """Converte asyncpg.Record (ou dict) em dict serializável.
 
-    JSONB do Postgres já vem como dict/list via asyncpg, mas defendemos
-    contra o caso de schema vir como string (legacy ou migration manual).
+    JSONB do Postgres já vem como dict/list via asyncpg; defendemos contra o caso
+    de vir string (legacy/migration manual/mock). Além disso expõe `catalog`: o
+    Catálogo de Dados RECONCILIADO com o schema vivo (ver reconcile_catalog).
     """
     out = dict(row) if not isinstance(row, dict) else dict(row)
-    for key in _JSON_FIELDS:
-        v = out.get(key)
-        if isinstance(v, str):
-            try:
-                out[key] = json.loads(v)
-            except (json.JSONDecodeError, TypeError):
-                out[key] = []
+    for key in _JSON_LIST_FIELDS:
+        _decode_json_field(out, key, [])
+    for key in _JSON_OBJECT_FIELDS:
+        _decode_json_field(out, key, {})
+    # Reconciliação só quando o row traz schema_json (toda data_table traz).
+    # catalog_json ausente (DB não migrado / row parcial) → catálogo neutro.
+    if "schema_json" in out:
+        out["catalog"] = reconcile_catalog(
+            out.get("schema_json"),
+            out.get("catalog_json"),
+            out.get("description") or "",
+        )
     return out
 
 
