@@ -549,6 +549,61 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
     return enriched
 
 
+def _per_tool_enabled() -> bool:
+    """Flag do modelo per-tool (F2+). Default OFF → caminho legado idêntico.
+    Lê o env a cada chamada (testável via monkeypatch; sem cache de processo)."""
+    import os
+    return os.getenv("MCP_PER_TOOL_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_discovered_tools(raw) -> list[dict]:
+    """Parseia `tools.discovered_tools` (JSON persistido na F1) → lista de dicts
+    com `name`. Fail-safe: `[]` em vazio/JSON inválido."""
+    if not raw:
+        return []
+    data = raw if isinstance(raw, list) else None
+    if data is None:
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return []
+    if not isinstance(data, list):
+        return []
+    return [d for d in data if isinstance(d, dict) and str(d.get("name") or "").strip()]
+
+
+def build_per_tool_openai_functions(server_tool: dict, discovered: list[dict]) -> list[dict]:
+    """Modelo per-tool: 1 função OpenAI por tool MCP descoberta, com seu
+    `inputSchema` REAL. `function.name` = nome real da tool (sanitizado) — o LLM
+    invoca direto; o forward (F3) usa `_mcp_real_name` no `tools/call` (sem o
+    indireto operation/query). Resolve a limitação do `{operation, query}` para
+    tools de args estruturados (GitHub `create_issue`, filesystem `write_file`…).
+    """
+    out: list[dict] = []
+    for d in (discovered or []):
+        if not isinstance(d, dict):
+            continue
+        raw_name = str(d.get("name") or "").strip()
+        if not raw_name:
+            continue
+        fname = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_name).strip('_')[:64]
+        schema = d.get("inputSchema")
+        if isinstance(schema, dict) and isinstance(schema.get("properties"), dict):
+            parameters = _make_parameters_from_inputs_schema(schema, [])
+        else:
+            parameters = {"type": "object", "properties": {}, "required": []}
+        desc = (str(d.get("description") or "").strip()
+                or f"Ferramenta MCP '{raw_name}' do servidor '{server_tool.get('name', '')}'.")
+        out.append({
+            "type": "function",
+            "function": {"name": fname, "description": desc, "parameters": parameters},
+            "_mcp_server_tool": server_tool.get("name", ""),
+            "_mcp_real_name": raw_name,
+            "_schema_origin": "discovered_per_tool",
+        })
+    return out
+
+
 def build_openai_tools(
     mcp_tools: list[dict],
     skill_md: Optional[str] = None,
@@ -588,6 +643,14 @@ def build_openai_tools(
 
     openai_tools = []
     for tool in mcp_tools:
+        # F2 (per-tool, gated): expande em N funções (1/tool) quando o flag está
+        # ON E há `discovered_tools` persistido (F1). Flag OFF → pula → caminho
+        # legado byte-idêntico. É a prova de "nada quebra".
+        if _per_tool_enabled():
+            _disc = _parse_discovered_tools(tool.get("discovered_tools"))
+            if _disc:
+                openai_tools.extend(build_per_tool_openai_functions(tool, _disc))
+                continue
         raw_name = tool.get('name', 'tool') or 'tool'
         name = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_name).strip('_')[:64]
         ops = tool.get('operations', []) or []
@@ -988,19 +1051,63 @@ def _build_call_arguments(
     return args
 
 
-async def execute_tool_call(tool_name: str, arguments: dict, mcp_tools: list[dict], timeout: int = 60) -> str:
+def resolve_per_tool_call(tool_name: str, openai_tools: list[dict] | None) -> dict | None:
+    """F3 — resolve uma chamada de função para o encaminhamento per-tool.
+
+    Quando a função chamada foi construída no modo per-tool (origin
+    ``discovered_per_tool`` — ver ``build_per_tool_openai_functions``), ela
+    carrega no spec o nome do SERVIDOR (``_mcp_server_tool``) e o nome REAL do
+    tool exposto pelo servidor (``_mcp_real_name``). Este helper recupera esses
+    metadados a partir do nome de função emitido pelo LLM.
+
+    Retorna ``{"server_tool": <nome do servidor>, "real_name": <nome real>}``
+    quando ``tool_name`` casa com uma função per-tool; ``None`` caso contrário
+    (→ caminho legado operation/query). Fail-safe: entradas inválidas → None.
+    """
+    if not tool_name or not openai_tools:
+        return None
+    for f in openai_tools:
+        if not isinstance(f, dict) or f.get("_schema_origin") != "discovered_per_tool":
+            continue
+        fname = (f.get("function") or {}).get("name") or ""
+        if fname == tool_name:
+            return {
+                "server_tool": f.get("_mcp_server_tool", "") or "",
+                "real_name": f.get("_mcp_real_name", "") or fname,
+            }
+    return None
+
+
+async def execute_tool_call(tool_name: str, arguments: dict, mcp_tools: list[dict], timeout: int = 60, openai_tools: list[dict] | None = None) -> str:
     """Executa chamada ao MCP Server — HTTP ou stdio automaticamente.
 
     CORREÇÃO 2026-04-21: Header Accept adicionado para MCP Streamable HTTP.
     Respostas SSE são parseadas automaticamente.
+
+    F3 (per-tool, 2026-06-08): quando ``openai_tools`` contém a função chamada
+    com origem ``discovered_per_tool``, encaminha DIRETO ao nome real do tool
+    (``_mcp_real_name``) com os ``arguments`` CRUS — sem a indireção
+    operation/query nem o re-mapeamento de ``_build_call_arguments`` (o schema
+    já foi validado no build per-tool) e sem o round-trip extra de
+    ``_discover_server_tools``. Gating implícito: tais funções só existem quando
+    ``MCP_PER_TOOL_ENABLED`` estava ON no build; sem match, o caminho legado é
+    byte-idêntico ao de hoje.
     """
+    # F3 — detecta encaminhamento per-tool (nome real + args crus).
+    per_tool = resolve_per_tool_call(tool_name, openai_tools)
+
     tool_config = None
-    clean_name = tool_name.lower().replace('_', ' ')
-    for t in mcp_tools:
-        t_clean = t.get('name', '').lower().replace('_', ' ')
-        if clean_name == t_clean or tool_name == re.sub(r'[^a-zA-Z0-9_-]', '_', t.get('name', '')).strip('_'):
-            tool_config = t
-            break
+    if per_tool and per_tool.get("server_tool"):
+        # Per-tool: a função é nomeada pelo TOOL real (ex: 'github_create_issue'),
+        # não pelo servidor. Localiza o servidor pelo nome registrado no spec.
+        tool_config = next((t for t in mcp_tools if t.get("name") == per_tool["server_tool"]), None)
+    if tool_config is None:
+        clean_name = tool_name.lower().replace('_', ' ')
+        for t in mcp_tools:
+            t_clean = t.get('name', '').lower().replace('_', ' ')
+            if clean_name == t_clean or tool_name == re.sub(r'[^a-zA-Z0-9_-]', '_', t.get('name', '')).strip('_'):
+                tool_config = t
+                break
     if not tool_config:
         return json.dumps({"error": f"Ferramenta '{tool_name}' não encontrada"})
 
@@ -1056,10 +1163,17 @@ async def execute_tool_call(tool_name: str, arguments: dict, mcp_tools: list[dic
     # ── Stdio endpoints ──
     if not endpoint.startswith('http'):
         try:
+            if per_tool:
+                # F3 — nome real + args crus (sem operation/query).
+                _stdio_name = per_tool["real_name"]
+                _stdio_args = dict(arguments or {})
+            else:
+                _stdio_name = operation or tool_name
+                _stdio_args = {"query": query, **{k: v for k, v in arguments.items() if k not in ('operation', 'query')}}
             result = await run_stdio_session(
                 command=endpoint, action="call",
-                tool_name=operation or tool_name,
-                arguments={"query": query, **{k: v for k, v in arguments.items() if k not in ('operation', 'query')}},
+                tool_name=_stdio_name,
+                arguments=_stdio_args,
                 timeout=timeout,
             )
             if result.get("success"):
@@ -1085,16 +1199,24 @@ async def execute_tool_call(tool_name: str, arguments: dict, mcp_tools: list[dic
             # nome real exposto (ex: "tavily_search"). Essencial porque o
             # SKILL.md frequentemente usa nomes curtos/genéricos e o servidor
             # MCP prefixa com o próprio nome (tavily_*, context7_*).
-            declared_name = operation or tool_name
-            server_tools = await _discover_server_tools(client, endpoint, headers)
-            actual_name = _resolve_tool_name(declared_name, server_tools)
-            if actual_name != declared_name:
-                logger.info(f"MCP name map: '{declared_name}' → '{actual_name}' @ {endpoint}")
+            if per_tool:
+                # F3 — encaminhamento direto: nome real + args crus. Não
+                # re-descobre tools/list nem re-mapeia (schema já validado no
+                # build per-tool). Economiza um round-trip.
+                actual_name = per_tool["real_name"]
+                call_args = dict(arguments or {})
+                logger.info(f"MCP per-tool forward: '{tool_name}' → '{actual_name}' @ {endpoint}")
+            else:
+                declared_name = operation or tool_name
+                server_tools = await _discover_server_tools(client, endpoint, headers)
+                actual_name = _resolve_tool_name(declared_name, server_tools)
+                if actual_name != declared_name:
+                    logger.info(f"MCP name map: '{declared_name}' → '{actual_name}' @ {endpoint}")
 
-            # Constrói arguments respeitando o inputSchema do tool (quando
-            # conhecido). Fallback para {"query": ...} se o schema não
-            # estiver disponível.
-            call_args = _build_call_arguments(actual_name, query, arguments, server_tools)
+                # Constrói arguments respeitando o inputSchema do tool (quando
+                # conhecido). Fallback para {"query": ...} se o schema não
+                # estiver disponível.
+                call_args = _build_call_arguments(actual_name, query, arguments, server_tools)
 
             payload = {
                 "jsonrpc": "2.0", "method": "tools/call",
