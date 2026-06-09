@@ -1075,7 +1075,7 @@ class DeepAgentHarness:
 
         if self.openai_tools and hasattr(response, 'tool_calls') and response.tool_calls:
             from langchain_core.messages import ToolMessage
-            from app.mcp.runtime import execute_tool_call
+            from app.mcp.runtime import execute_tool_call, resolve_per_tool_call
 
             current_messages = messages + [response]
             max_tool_rounds = 5
@@ -1099,7 +1099,8 @@ class DeepAgentHarness:
                     _tc_status = "completed"
                     try:
                         result_text = await execute_tool_call(
-                            tool_name, tool_args, self.mcp_tools, timeout=30
+                            tool_name, tool_args, self.mcp_tools, timeout=30,
+                            openai_tools=self.openai_tools,
                         )
                     except Exception as _tc_err:
                         _tc_status = "failed"
@@ -1115,6 +1116,12 @@ class DeepAgentHarness:
                     try:
                         from app.core.database import tool_calls_repo
                         _matched = next((t for t in self.mcp_tools if t.get("name") == tool_name), None)
+                        if _matched is None:
+                            # F3 per-tool: a função tem o nome do TOOL real; acha
+                            # o servidor via metadata p/ não perder o link de telemetria.
+                            _pt = resolve_per_tool_call(tool_name, self.openai_tools)
+                            if _pt and _pt.get("server_tool"):
+                                _matched = next((t for t in self.mcp_tools if t.get("name") == _pt["server_tool"]), None)
                         await tool_calls_repo.create({
                             "id": str(uuid.uuid4()),
                             "tool_name": tool_name,
@@ -1166,7 +1173,7 @@ class DeepAgentHarness:
             strip_tool_calls,
             format_tool_result_message,
         )
-        from app.mcp.runtime import execute_tool_call
+        from app.mcp.runtime import execute_tool_call, resolve_per_tool_call
         from langchain_core.messages import HumanMessage
 
         # Audit visível: estratégia degradada do nativo
@@ -1211,6 +1218,7 @@ class DeepAgentHarness:
                 try:
                     result_text = await execute_tool_call(
                         tool_name, tool_args, self.mcp_tools, timeout=30,
+                        openai_tools=self.openai_tools,
                     )
                 except Exception as _tc_err:
                     _tc_status = "failed"
@@ -1225,6 +1233,11 @@ class DeepAgentHarness:
                     _matched = next(
                         (t for t in self.mcp_tools if t.get("name") == tool_name), None,
                     )
+                    if _matched is None:
+                        # F3 per-tool: resolve o servidor via metadata da função.
+                        _pt = resolve_per_tool_call(tool_name, self.openai_tools)
+                        if _pt and _pt.get("server_tool"):
+                            _matched = next((t for t in self.mcp_tools if t.get("name") == _pt["server_tool"]), None)
                     await tool_calls_repo.create({
                         "id": str(uuid.uuid4()),
                         "tool_name": tool_name,
