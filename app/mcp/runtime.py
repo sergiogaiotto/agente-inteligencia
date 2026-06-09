@@ -549,6 +549,61 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
     return enriched
 
 
+def _per_tool_enabled() -> bool:
+    """Flag do modelo per-tool (F2+). Default OFF → caminho legado idêntico.
+    Lê o env a cada chamada (testável via monkeypatch; sem cache de processo)."""
+    import os
+    return os.getenv("MCP_PER_TOOL_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_discovered_tools(raw) -> list[dict]:
+    """Parseia `tools.discovered_tools` (JSON persistido na F1) → lista de dicts
+    com `name`. Fail-safe: `[]` em vazio/JSON inválido."""
+    if not raw:
+        return []
+    data = raw if isinstance(raw, list) else None
+    if data is None:
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return []
+    if not isinstance(data, list):
+        return []
+    return [d for d in data if isinstance(d, dict) and str(d.get("name") or "").strip()]
+
+
+def build_per_tool_openai_functions(server_tool: dict, discovered: list[dict]) -> list[dict]:
+    """Modelo per-tool: 1 função OpenAI por tool MCP descoberta, com seu
+    `inputSchema` REAL. `function.name` = nome real da tool (sanitizado) — o LLM
+    invoca direto; o forward (F3) usa `_mcp_real_name` no `tools/call` (sem o
+    indireto operation/query). Resolve a limitação do `{operation, query}` para
+    tools de args estruturados (GitHub `create_issue`, filesystem `write_file`…).
+    """
+    out: list[dict] = []
+    for d in (discovered or []):
+        if not isinstance(d, dict):
+            continue
+        raw_name = str(d.get("name") or "").strip()
+        if not raw_name:
+            continue
+        fname = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_name).strip('_')[:64]
+        schema = d.get("inputSchema")
+        if isinstance(schema, dict) and isinstance(schema.get("properties"), dict):
+            parameters = _make_parameters_from_inputs_schema(schema, [])
+        else:
+            parameters = {"type": "object", "properties": {}, "required": []}
+        desc = (str(d.get("description") or "").strip()
+                or f"Ferramenta MCP '{raw_name}' do servidor '{server_tool.get('name', '')}'.")
+        out.append({
+            "type": "function",
+            "function": {"name": fname, "description": desc, "parameters": parameters},
+            "_mcp_server_tool": server_tool.get("name", ""),
+            "_mcp_real_name": raw_name,
+            "_schema_origin": "discovered_per_tool",
+        })
+    return out
+
+
 def build_openai_tools(
     mcp_tools: list[dict],
     skill_md: Optional[str] = None,
@@ -588,6 +643,14 @@ def build_openai_tools(
 
     openai_tools = []
     for tool in mcp_tools:
+        # F2 (per-tool, gated): expande em N funções (1/tool) quando o flag está
+        # ON E há `discovered_tools` persistido (F1). Flag OFF → pula → caminho
+        # legado byte-idêntico. É a prova de "nada quebra".
+        if _per_tool_enabled():
+            _disc = _parse_discovered_tools(tool.get("discovered_tools"))
+            if _disc:
+                openai_tools.extend(build_per_tool_openai_functions(tool, _disc))
+                continue
         raw_name = tool.get('name', 'tool') or 'tool'
         name = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_name).strip('_')[:64]
         ops = tool.get('operations', []) or []
