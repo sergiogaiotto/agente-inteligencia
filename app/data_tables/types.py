@@ -92,3 +92,40 @@ def render_where_clause(column: str, op: SqlOperator, value):
         return f"{column} {op.value} ({placeholders})", list(value)
     # Operadores unários (=, !=, >, >=, <, <=, LIKE, ILIKE)
     return f"{column} {op.value} ?", [value]
+
+
+# ─── Catálogo de Dados (Onda Catálogo) ────────────────────────────
+
+class PiiCategory(str, Enum):
+    """Categorias de PII por coluna no Catálogo de Dados.
+
+    Enum FECHADO (paridade com SqlOperator): validado server-side tanto na
+    reconciliação da sugestão da IA quanto na curadoria humana (PUT). Valor fora
+    do enum é coagido para NONE (sugestão) ou rejeitado (curadoria). No MVP é puro
+    METADATA — NÃO mascara nem bloqueia nada; é a fundação determinística que gates
+    futuros (masking/allow-list/HITL do Tier 2 text-to-SQL) vão consumir.
+    """
+
+    NONE = "none"
+    CPF = "cpf"
+    CNPJ = "cnpj"
+    EMAIL = "email"
+    PHONE = "phone"
+    NAME = "name"
+    ADDRESS = "address"
+    FINANCIAL = "financial"
+    HEALTH = "health"
+    BIOMETRIC = "biometric"
+    OTHER = "other"
+
+
+def normalize_pii_category(value) -> str:
+    """Coage qualquer valor para uma PiiCategory válida (string).
+
+    Fora do enum / None / tipo inesperado → 'none' (fail-safe neutro). É o ponto
+    onde o output do LLM é domado: o modelo NUNCA injeta categoria fora do enum.
+    """
+    try:
+        return PiiCategory(str(value).strip().lower()).value
+    except (ValueError, AttributeError):
+        return PiiCategory.NONE.value

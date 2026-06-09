@@ -716,6 +716,11 @@ CREATE TABLE IF NOT EXISTS data_tables (
     quality_score REAL DEFAULT 0,
     -- PK inferida (única + não nula). NULL se não detectada.
     suggested_pk TEXT,
+    -- Catálogo de Dados curado (Onda Catálogo): metadata semântica + PII por coluna.
+    -- Indexado por NOME de coluna (sobrevive a re-promote/append, que REGENERAM
+    -- schema_json). Shape: {version, table:{description_source,curated_by,curated_at},
+    -- columns:{<name>:{description,pii_category,source,curated_by,curated_at}}}.
+    catalog_json JSONB NOT NULL DEFAULT '{}',
     created_by TEXT,
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now()
@@ -851,6 +856,11 @@ _IDEMPOTENT_MIGRATIONS = [
     # idempotente, então safe em qualquer ambiente. TEXT default '' (vazio)
     # = compat com skills antigas que não tinham ## Data Tables.
     "ALTER TABLE skills ADD COLUMN IF NOT EXISTS data_tables TEXT DEFAULT ''",
+    # ─── Catálogo de Dados (Onda Catálogo) ──────────────────────
+    # Metadata semântica + PII por coluna, indexada por NOME (vive FORA do
+    # schema_json, que é regenerado por re-promote/append). DEFAULT '{}' =
+    # compat com tabelas antigas; reconciliada com o schema vivo na leitura.
+    "ALTER TABLE data_tables ADD COLUMN IF NOT EXISTS catalog_json JSONB DEFAULT '{}'",
     # ─── PR D pgvector foundation ───────────────────────────────
     # Extensão `vector` (pgvector). Idempotente; só funciona em imagens com
     # a extensão disponível (pgvector/pgvector:pg16 e similares). Postgres
