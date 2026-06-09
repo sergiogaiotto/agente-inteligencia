@@ -2207,6 +2207,10 @@ class SettingsSave(BaseModel):
     # própria função com o inputSchema real (vs legado {operation, query}).
     # Requer discovered_tools populado nos conectores (descoberta/backfill).
     mcp_per_tool_enabled: Optional[bool] = False
+    # Tier 2 — text-to-SQL governado (RAG-Tabela) — default OFF. Quando ligado,
+    # habilita a bancada "Perguntar à Tabela": a IA compila a pergunta em PT-BR
+    # numa consulta estruturada, o humano cura, e o runtime só executa o curado.
+    text_to_sql_enabled: Optional[bool] = False
     # GPT-OSS (open-weight) — Onda 4 plataforma
     oss120b_url: Optional[str] = ""
     oss120b_model: Optional[str] = "openai/gpt-oss-120b"
