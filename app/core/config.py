@@ -370,6 +370,10 @@ _UI_TO_ENV_MAP = {
     # Grounded-by-default: 'true'/'false'. Desliga a recusa global de respostas
     # sem evidência (não recomendado — fura o princípio anti-alucinação).
     "grounding_strict": "GROUNDING_STRICT",
+    # MCP per-tool (D): 'true'/'false'. Liga o modo em que cada tool MCP vira sua
+    # própria função com o inputSchema real (vs o legado {operation, query}).
+    # Default OFF; lido a cada chamada por runtime.per_tool_enabled().
+    "mcp_per_tool_enabled": "MCP_PER_TOOL_ENABLED",
     # Embedding (Qwen3 reusa URL/key do OSS source)
     "embedding_provider": "EMBEDDING_PROVIDER",
     "qwen3_source":       "QWEN3_SOURCE",
@@ -399,6 +403,7 @@ _UI_TO_ENV_MAP = {
 _NON_MODEL_UI_KEYS = {
     "grounding_strict",          # flag de comportamento anti-alucinação
     "default_response_language", # idioma de resposta global (BCP-47)
+    "mcp_per_tool_enabled",      # flag do modo per-tool MCP (default OFF)
 }
 
 # Cobre: Azure, OpenAI público, Maritaca, Ollama, GPT-OSS 120b/20b, embedding

@@ -323,7 +323,8 @@ class TestTemplateSmoke:
         assert "Grounded by Default" in content
         # estado inicial + coerção de bool no load (string "false" → False)
         assert "grounding_strict: true" in content
-        assert "_bools=['grounding_strict']" in content
+        # tolerante a chaves bool adicionais no array de coerção (ex.: mcp_per_tool_enabled)
+        assert "_bools=['grounding_strict'" in content
 
     def test_agent_form_tem_checkbox_allow_general_knowledge(self):
         content = Path("app/templates/pages/agent_form.html").read_text(encoding="utf-8")

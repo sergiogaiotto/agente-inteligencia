@@ -204,6 +204,32 @@
             </p>
         </div>
 
+        <!-- MCP per-tool (D) — flag avançada. Cada tool MCP vira sua própria
+             função com o inputSchema real, em vez do legado {operation, query}. -->
+        <div class="rounded-xl border-2 border-amber-300 bg-gradient-to-br from-amber-50 to-white p-5 mb-5">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="text-lg">🧩</span>
+                <div>
+                    <div class="text-[13px] font-semibold text-brand-900">MCP por ferramenta (per-tool) — avançado</div>
+                    <div class="text-[11px] text-surface-500">Quando <strong>ligado</strong>, cada ferramenta de um servidor MCP é exposta ao modelo como <strong>sua própria função</strong>, com o <strong>schema real</strong> (todos os parâmetros). Sem isso, o servidor inteiro vira uma única função genérica <code class="text-[10px]">{operation, query}</code> — o que limita ferramentas de argumentos estruturados (ex.: <code class="text-[10px]">create_issue</code>, <code class="text-[10px]">tavily_search</code>).</div>
+                </div>
+            </div>
+            <label class="flex items-start gap-2 cursor-pointer">
+                <input type="checkbox" x-model="config.mcp_per_tool_enabled"
+                       class="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-400">
+                <span class="flex-1 min-w-0">
+                    <span class="block text-[12px] font-bold text-amber-900">Expor cada ferramenta MCP como função própria (schema real)</span>
+                    <span class="block text-[10px] text-amber-700 leading-relaxed mt-0.5">
+                        Default <strong>desligado</strong>. Requer que os conectores tenham as ferramentas <strong>descobertas</strong>
+                        (Conexões → "Conectar e Descobrir", ou o backfill de manutenção). Conectores sem descoberta seguem no modo legado.
+                    </span>
+                </span>
+            </label>
+            <p class="text-[10px] text-amber-700 mt-2 flex items-center gap-1">
+                <span>ⓘ</span> Mudança vale em runtime (sem restart). Conectores em <a href="/tools" class="underline hover:text-amber-900">Conexões</a>.
+            </p>
+        </div>
+
         <!-- Modelo Primário (fallback global) — destaque no topo -->
         <div class="rounded-xl border-2 border-brand-300 bg-gradient-to-br from-brand-50 to-white p-5 mb-5">
             <div class="flex items-center justify-between mb-3">
@@ -1016,6 +1042,8 @@ function settingsPage() {
             default_response_language: 'pt-BR',
             // Grounded-by-default (2026-06-06): true = agentes respondem só com evidências
             grounding_strict: true,
+            // MCP per-tool (D) — default OFF (flag avançada)
+            mcp_per_tool_enabled: false,
             // GPT-OSS (Onda 4 plataforma)
             oss120b_url:'', oss120b_model:'openai/gpt-oss-120b', oss120b_api_key:'not-needed',
             oss20b_url:'',  oss20b_model:'openai/gpt-oss-20b',   oss20b_api_key:'not-needed',
@@ -1129,7 +1157,7 @@ function settingsPage() {
             const urlTab = new URLSearchParams(window.location.search).get('tab');
             if (urlTab && ['platform','prompts','users','routing','apikeys'].includes(urlTab)) this.tab = urlTab;
             try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship',multimodal:true}],maritaca:[{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship',multimodal:false}],ollama:[{id:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4Bi',context:'128K',tier:'efficient',multimodal:false}],'gpt-oss-120b':[{id:'openai/gpt-oss-120b',name:'GPT-OSS-120B (open-weight)',context:'128K',tier:'open-weight',multimodal:false}],'gpt-oss-20b':[{id:'openai/gpt-oss-20b',name:'GPT-OSS-20B (open-weight)',context:'128K',tier:'open-weight',multimodal:false}]};}
-            try{const d=await api.get('/api/v1/settings');const s=d.settings||{};const _ints=['max_iterations','timeout','qwen3_dimensions'];const _bools=['grounding_strict'];for(const[k,v]of Object.entries(s)){if(!(k in this.config))continue;if(_ints.includes(k))this.config[k]=parseInt(v)||this.config[k];else if(_bools.includes(k))this.config[k]=(v===true||v==='true'||v==='True'||v==='1');else this.config[k]=v;}}catch{}
+            try{const d=await api.get('/api/v1/settings');const s=d.settings||{};const _ints=['max_iterations','timeout','qwen3_dimensions'];const _bools=['grounding_strict','mcp_per_tool_enabled'];for(const[k,v]of Object.entries(s)){if(!(k in this.config))continue;if(_ints.includes(k))this.config[k]=parseInt(v)||this.config[k];else if(_bools.includes(k))this.config[k]=(v===true||v==='true'||v==='True'||v==='1');else this.config[k]=v;}}catch{}
             // Sincroniza o dropdown de densidade com o valor persistido: se bate
             // num preset conhecido, seleciona; senão cai em "Customizada".
             const _dimPresets = ['0','1536','1024','768','512','256','128'];

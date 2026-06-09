@@ -2203,6 +2203,10 @@ class SettingsSave(BaseModel):
     # evidências; respostas sem evidência são recusadas. False fura o princípio
     # anti-alucinação globalmente (preferir o escape hatch por agente).
     grounding_strict: Optional[bool] = True
+    # MCP per-tool (D) — default OFF. Quando ligado, cada tool MCP vira sua
+    # própria função com o inputSchema real (vs legado {operation, query}).
+    # Requer discovered_tools populado nos conectores (descoberta/backfill).
+    mcp_per_tool_enabled: Optional[bool] = False
     # GPT-OSS (open-weight) — Onda 4 plataforma
     oss120b_url: Optional[str] = ""
     oss120b_model: Optional[str] = "openai/gpt-oss-120b"
