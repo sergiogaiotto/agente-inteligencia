@@ -38,11 +38,13 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import require_user
 from app.core.database import audit_repo
+from app.data_tables.governance import allowed_cols_from_catalog
 from app.data_tables.queries import (
     can_user_see,
     find_by_id_with_ks,
     list_for_user,
 )
+from app.data_tables.runtime import text_to_sql_enabled
 from app.evidence.tabular import (
     TabularError,
     analyze_tabular,
@@ -122,6 +124,12 @@ class CatalogPutRequest(BaseModel):
 
 class CatalogSuggestRequest(BaseModel):
     """Parâmetros da sugestão por IA (não persiste)."""
+    sample_size: int = 10
+
+
+class CompileQueryRequest(BaseModel):
+    """Tier 2 — pergunta em PT-BR p/ a bancada compilar em consulta estruturada."""
+    question: str = ""
     sample_size: int = 10
 
 
@@ -359,6 +367,103 @@ async def suggest_data_table_catalog_endpoint(
         {"columns": len(suggestion.get("columns", [])), "sampled": len(sample_rows)},
     )
     return {"ok": True, "suggestion": suggestion}
+
+
+@router.post("/data-tables/{table_id}/compile-query")
+async def compile_query_endpoint(
+    table_id: str,
+    body: CompileQueryRequest,
+    user: dict = Depends(require_user),
+):
+    """Tier 2 — bancada "Perguntar à Tabela": compila uma pergunta em PT-BR numa
+    consulta ESTRUTURADA, governada pelo Catálogo de Dados.
+
+    DRY-RUN: NÃO executa e NÃO persiste — só devolve o struct + preview de SQL +
+    o que foi bloqueado, p/ o humano revisar/curar. Gated por TEXT_TO_SQL_ENABLED
+    (flag OFF → recurso não existe). Pipeline de gates:
+    visibility → anti-injeção (prompt_guard) → allow-list/masking do Catálogo
+    (o LLM só vê colunas liberadas) → parse defensivo → validação determinística.
+    """
+    if not text_to_sql_enabled():
+        # Mecanismo desligado → o recurso simplesmente não existe.
+        raise HTTPException(404, "Recurso indisponível (Tier 2 desativado).")
+
+    row = await find_by_id_with_ks(table_id)
+    if not row:
+        raise HTTPException(404, f"data_table '{table_id}' não encontrada.")
+    if not can_user_see(user, row):
+        raise HTTPException(403, "Sem permissão para esta tabela.")
+
+    question = (body.question or "").strip()
+    if not question:
+        raise HTTPException(422, "Pergunta vazia.")
+
+    # Gate anti-injeção de prompt (OWASP LLM01) ANTES de tocar o LLM.
+    from app.core.prompt_guard import detect as pg_detect
+
+    guard = pg_detect(question)
+    if guard.blocked:
+        logger.warning(
+            "text_to_sql.prompt_blocked",
+            extra={
+                "event": "text_to_sql.prompt_blocked",
+                "table_id": table_id,
+                "score": round(guard.score, 3),
+            },
+        )
+        raise HTTPException(422, "Pergunta bloqueada por suspeita de injeção de prompt.")
+
+    catalog = row.get("catalog") or {}
+    allowed = allowed_cols_from_catalog(catalog)
+
+    # Amostra read-only só p/ public/internal e SÓ colunas liberadas (sem PII no
+    # prompt). Best-effort: falha → segue só com o schema.
+    sample_rows: list = []
+    label = str(row.get("ks_confidentiality_label") or "internal").lower()
+    if allowed and label in ("public", "internal"):
+        try:
+            n = max(1, min(int(body.sample_size or 10), 20))
+            res = await execute_query(table_id, select=allowed, limit=n, executed_by=user.get("id"))
+            sample_rows = res.get("rows", []) or []
+        except Exception:
+            sample_rows = []
+
+    from app.llm_routing import resolve_llm_for_task
+    from app.routes.wizard import _wizard_llm_complete
+    from app.data_tables.text_to_sql import compile_question
+
+    provider, model = await resolve_llm_for_task("instruct")
+
+    async def _complete(messages: list) -> str:
+        # Determinismo: temperature=0 + JSON-mode (struct executável, não prosa).
+        content, _, _ = await _wizard_llm_complete(
+            messages, provider, model, route="text_to_sql_compile",
+            temperature=0.0, response_format={"type": "json_object"},
+        )
+        return content
+
+    try:
+        result = await compile_question(row, catalog, sample_rows, question, _complete)
+    except HTTPException:
+        raise  # 503 acionável do _wizard_llm_complete (LLM inacessível)
+    except Exception as e:
+        logger.error("text_to_sql compile falhou", exc_info=True)
+        raise HTTPException(500, f"Erro ao compilar pergunta: {e}")
+
+    # Audit best-effort: SÓ metadata — a pergunta crua pode conter PII, não loga.
+    await _audit(
+        "data_table.text_to_sql.compile",
+        table_id,
+        user.get("id", ""),
+        {
+            "allowed_cols": len(allowed),
+            "select": len(result["compiled"]["select"]),
+            "filters": len(result["compiled"]["filters"]),
+            "blocked": len(result.get("blocked") or []),
+            "sampled": len(sample_rows),
+        },
+    )
+    return {"ok": True, **result}
 
 
 @router.delete("/data-tables/{table_id}")

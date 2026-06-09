@@ -178,17 +178,29 @@ async def _wizard_hosted_fallback(
 
 
 async def _wizard_llm_complete(
-    messages: list[dict], provider: str, model: str, *, route: str
+    messages: list[dict], provider: str, model: str, *, route: str,
+    temperature: Optional[float] = None, response_format: Optional[dict] = None,
 ) -> tuple[str, str, str]:
     """Gera com o provider roteado; se INACESSÍVEL, tenta o fallback hospedado.
 
     Returns (content, used_provider, used_model). Levanta HTTPException(503)
     com mensagem acionável quando nem o primário nem o fallback respondem.
     Exceções que NÃO são de alcance propagam (caller mapeia para 500).
+
+    `temperature`/`response_format` (opcionais): quando informados, propagam ao
+    provider (construtor) e ao generate respectivamente. None → comportamento
+    legado intacto (o /catalog/suggest não os passa). Usado pelo Tier 2 para
+    gerar struct DETERMINÍSTICO (temperature=0 + JSON-mode).
     """
+    prov_kwargs: dict = {"model": (model or None)}
+    if temperature is not None:
+        prov_kwargs["temperature"] = temperature
+    gen_kwargs: dict = {}
+    if response_format is not None:
+        gen_kwargs["response_format"] = response_format
     try:
-        llm = get_provider(provider, model=(model or None))
-        resp = await llm.generate(messages)
+        llm = get_provider(provider, **prov_kwargs)
+        resp = await llm.generate(messages, **gen_kwargs)
         return resp["content"], provider, model
     except Exception as exc:
         if not _is_llm_unreachable(exc):
@@ -207,8 +219,9 @@ async def _wizard_llm_complete(
                 },
             )
             try:
-                fb_llm = get_provider(fb_provider, model=(fb_model or None))
-                resp = await fb_llm.generate(messages)
+                fb_kwargs = {**prov_kwargs, "model": (fb_model or None)}
+                fb_llm = get_provider(fb_provider, **fb_kwargs)
+                resp = await fb_llm.generate(messages, **gen_kwargs)
                 return resp["content"], fb_provider, fb_model
             except Exception as exc2:
                 if not _is_llm_unreachable(exc2):
