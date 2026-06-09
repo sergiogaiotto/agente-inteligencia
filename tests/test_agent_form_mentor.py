@@ -154,7 +154,7 @@ class TestJargonTranslator:
         assert "Tradutor de jargão" in html
 
     def test_translates_key_terms(self, html):
-        for term in ("RAG / Exigir Evidência", "Pass-through", "task_type", "AI Mesh"):
+        for term in ("Consultar bases (RAG/Tabelas)", "Pass-through", "task_type", "AI Mesh"):
             assert term in html, f"jargão sem termo {term!r}"
 
 

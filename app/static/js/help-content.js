@@ -534,7 +534,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   evidence: {
     title: 'Bases de Conhecimento (RAG + Tabelas)',
-    summary: 'Onde você cadastra o que o agent precisa SABER para responder. Duas técnicas complementares: RAG (busca em textos) e Tabelas (consulta SQL em dados estruturados).',
+    summary: 'Onde você cadastra o que o agent precisa SABER (a FONTE). Duas técnicas complementares: RAG (busca em textos) e Tabelas (consulta SQL). Fluxo: Fonte (RAG/Tabela/anexo/ferramenta) → regra "Exigir evidências" (Configurações) → resposta ou recusa honesta. Aqui é a FONTE; a REGRA fica em Configurações.',
     sections: [
       {
         kind: 'concept',
