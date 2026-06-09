@@ -224,3 +224,65 @@ async def test_apply_catalog_rejects_invalid_pii(monkeypatch):
             _ROW, "", [{"name": "cd_cliente", "pii_category": "ultra_secreto"}], {"id": "u1"}
         )
     assert ei.value.status_code == 400
+
+
+# ── Sugestão por IA (PR3 — IA sugere, NÃO persiste) ───────────────
+
+def test_build_suggestion_messages_lists_columns_and_omits_empty_sample():
+    msgs = catalog_service.build_suggestion_messages("TB", _SCHEMA, [])
+    assert msgs[0]["role"] == "system" and msgs[1]["role"] == "user"
+    user = msgs[1]["content"]
+    assert "cd_cliente" in user and "vr_limite_cheque_especial" in user
+    assert "AMOSTRA" not in user                      # sem amostra → sem bloco
+    msgs2 = catalog_service.build_suggestion_messages("TB", _SCHEMA, [{"cd_cliente": 1}])
+    assert "AMOSTRA" in msgs2[1]["content"]           # com amostra → inclui
+
+
+def test_parse_suggestion_reconciles_against_schema():
+    content = _json.dumps({
+        "table_description": "Crédito",
+        "columns": [
+            {"name": "cd_cliente", "description": "ID", "pii_category": "name"},
+            {"name": "coluna_inventada", "description": "x", "pii_category": "cpf"},  # descartada
+            {"name": "nr_idade", "description": "idade", "pii_category": "ULTRA"},     # pii coagida
+        ],
+    })
+    out = catalog_service.parse_suggestion(content, _SCHEMA)
+    assert out["table_description"] == "Crédito"
+    names = [c["name"] for c in out["columns"]]
+    assert names == [c["name"] for c in _SCHEMA]       # só schema vivo, na ordem
+    cols = {c["name"]: c for c in out["columns"]}
+    assert cols["cd_cliente"]["pii_category"] == "name"
+    assert cols["nr_idade"]["pii_category"] == "none"  # ULTRA coagido p/ none
+    assert cols["vr_limite_cheque_especial"]["description"] == ""   # faltou → neutro
+    assert "coluna_inventada" not in names             # inventada descartada
+
+
+def test_parse_suggestion_handles_fenced_and_invalid_json():
+    fenced = "```json\n" + _json.dumps({"table_description": "T", "columns": []}) + "\n```"
+    assert catalog_service.parse_suggestion(fenced, _SCHEMA)["table_description"] == "T"
+    # JSON inválido → neutro, NÃO levanta
+    out = catalog_service.parse_suggestion("isso não é json", _SCHEMA)
+    assert out["table_description"] == ""
+    assert all(c["pii_category"] == "none" for c in out["columns"])
+
+
+@pytest.mark.asyncio
+async def test_generate_suggestion_uses_injected_llm_and_does_not_persist(monkeypatch):
+    # se a sugestão persistisse, precisaria de repo — garantimos que NÃO toca o repo
+    repo = _CaptureRepo()
+    monkeypatch.setattr(catalog_service, "data_tables_repo", repo)
+
+    captured = {}
+    async def fake_complete(messages):
+        captured["messages"] = messages
+        return _json.dumps({"table_description": "Auto", "columns": [
+            {"name": "cd_cliente", "description": "ID", "pii_category": "name"}]})
+
+    row = {"id": "t1", "name": "TB", "schema_json": _SCHEMA}
+    out = await catalog_service.generate_catalog_suggestion(row, [], fake_complete)
+    assert out["table_description"] == "Auto"
+    assert [c["name"] for c in out["columns"]] == [c["name"] for c in _SCHEMA]
+    assert next(c for c in out["columns"] if c["name"] == "cd_cliente")["pii_category"] == "name"
+    assert captured["messages"][0]["role"] == "system"   # build foi usado
+    assert repo.updated is None                          # NÃO persistiu
