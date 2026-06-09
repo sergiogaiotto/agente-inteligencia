@@ -156,12 +156,14 @@
                     </div>
                 </template>
             </div>
-            <!-- Exigir Evidência -->
+            <!-- ── Conhecimento do agente: consultar bases (require_evidence) + escape hatch (allow_general_knowledge) ── -->
+            <div class="text-[11px] font-bold text-surface-500 uppercase tracking-wider mt-4 mb-1">Conhecimento do agente</div>
+            <!-- Consultar bases de conhecimento (require_evidence) — controla o RETRIEVAL, não a recusa -->{# rótulo "Exigir Evidência" era ambíguo: o efeito é consultar o RAG #}
             <div class="rounded-lg border border-surface-200 bg-surface-50 px-4 py-3">
                 <label class="flex items-center justify-between cursor-pointer">
                     <div>
-                        <span class="text-[12px] font-semibold text-brand-900">Exigir Evidência (RAG)</span>
-                        <p class="text-[10px] text-surface-400 mt-0.5">Quando ativo, a FSM consulta bases de conhecimento e recusa se não encontrar evidências. Desative para agentes criativos ou que usam conhecimento do próprio LLM.</p>
+                        <span class="text-[12px] font-semibold text-brand-900">Consultar bases de conhecimento (RAG / Tabelas)</span>
+                        <p class="text-[10px] text-surface-400 mt-0.5">Quando ligado, o agente <strong>busca</strong> nas bases vinculadas (RAG/Tabelas) antes de responder. Desligue para agentes sem base própria — classificadores ou criativos. <em>Não</em> é a regra de recusa: essa é a "Exigir evidências" global (Configurações).</p>
                     </div>
                     <div class="relative ml-4 shrink-0">
                         <input type="checkbox" x-model="form.require_evidence" class="sr-only peer">
@@ -184,6 +186,10 @@
                     </div>
                 </label>
             </div>
+            <p class="text-[10px] text-surface-400 mt-1 mb-1 flex items-start gap-1">
+                <span>ⓘ</span>
+                <span>A <strong>recusa</strong> por falta de evidência é a política global <a href="/settings" class="underline hover:text-brand-700">"Exigir evidências"</a> (Configurações); aqui você ajusta só este agente. Evidência = RAG/Tabelas + anexos + ferramentas.</span>
+            </p>
             <!-- Capacidades de entrada (multimodal) -->
             <div class="rounded-lg border border-surface-200 bg-surface-50 px-4 py-3 space-y-3">
                 <div class="text-[12px] font-semibold text-brand-900">Tipos de arquivo aceitos</div>
@@ -715,8 +721,8 @@
                           x-text="form.response_language || 'Herda global (pt-BR padrão)'"></span>
                 </div>
                 <div class="flex justify-between">
-                    <span class="text-[12px] text-surface-400">Exigir Evidência (RAG)</span>
-                    <span class="text-[13px] font-medium" :class="form.require_evidence ? 'text-emerald-600' : 'text-amber-600'" x-text="form.require_evidence ? 'Sim — consulta bases' : 'Não — usa conhecimento do LLM'"></span>
+                    <span class="text-[12px] text-surface-400">Consultar bases (RAG/Tabelas)</span>
+                    <span class="text-[13px] font-medium" :class="form.require_evidence ? 'text-emerald-600' : 'text-amber-600'" x-text="form.require_evidence ? 'Sim — busca nas bases' : 'Não — não consulta'"></span>
                 </div>
                 <div class="flex justify-between">
                     <span class="text-[12px] text-surface-400">Conhecimento geral do LLM</span>
@@ -822,7 +828,7 @@
                            <span class="text-surface-300 group-open:rotate-180 transition-transform">⌄</span>
                        </summary>
                        <dl class="px-3 pb-3 space-y-2 text-[10px] leading-relaxed">
-                           <div><dt class="font-semibold text-brand-700">RAG / Exigir Evidência</dt><dd class="text-surface-500">O agente só responde com base em documentos que encontrar — e recusa se não achar nada. É o "modo pesquisa".</dd></div>
+                           <div><dt class="font-semibold text-brand-700">Consultar bases (RAG/Tabelas)</dt><dd class="text-surface-500">Liga a busca nas bases vinculadas antes de responder ("modo pesquisa"). A <em>recusa</em> quando não há evidência é outra coisa — a regra global "Exigir evidências" (Configurações).</dd></div>
                            <div><dt class="font-semibold text-brand-700">Pass-through</dt><dd class="text-surface-500">Agente "vazio": sem instruções próprias, ele só repassa seu pedido pro modelo cru. Escreva um prompt de verdade pra sair desse modo.</dd></div>
                            <div><dt class="font-semibold text-brand-700">task_type</dt><dd class="text-surface-500">Que tipo de raciocínio o modelo usa: chamar ferramentas, raciocinar passo a passo, classificar…</dd></div>
                            <div><dt class="font-semibold text-brand-700">AI Mesh</dt><dd class="text-surface-500">A rede que liga seus agentes — define quem chama quem. Um Maestro conecta-se aos especialistas que rege.</dd></div>
