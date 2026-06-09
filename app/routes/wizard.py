@@ -683,6 +683,15 @@ def _ensure_mcp_inputs_contract(skill_md: str, mcp_tools: list[dict]) -> str:
     """
     if not mcp_tools or _inputs_has_operation(skill_md):
         return skill_md
+    # F4 — modo per-tool (flag ON): cada tool MCP é sua própria função com o
+    # schema real; o runtime ignora o contrato genérico {operation, query}
+    # (build_openai_tools expande per-tool). Não reescreve o ## Inputs.
+    try:
+        from app.mcp.runtime import per_tool_enabled
+        if per_tool_enabled():
+            return skill_md
+    except Exception:
+        pass
     import re as _re
 
     pat = _re.compile(r"(?ms)^##\s+Inputs\b.*?(?=^##\s|\Z)")
