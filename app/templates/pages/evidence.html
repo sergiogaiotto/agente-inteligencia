@@ -808,21 +808,58 @@
                                             <div><span class="text-surface-400">Tamanho:</span> <span class="font-mono" x-text="((t.size_bytes||0)/1024).toFixed(1) + ' KB'"></span></div>
                                             <div><span class="text-surface-400">Criada:</span> <span x-text="ago(t.created_at)"></span></div>
                                         </div>
-                                        <div class="rounded border border-surface-200 bg-surface-50/30 p-2 max-h-48 overflow-auto">
+                                        <!-- Catálogo de Dados: descrição da TABELA (curável; IA sugere no PR3) -->
+                                        <div>
+                                            <div class="flex items-center justify-between mb-1">
+                                                <span class="text-[10px] font-bold text-surface-500 uppercase tracking-wider">Descrição da tabela</span>
+                                                <span class="text-[9px] px-1.5 py-0.5 rounded"
+                                                      :class="t.catalog?.table?.source === 'human' ? 'bg-emerald-100 text-emerald-700' : (t.catalog?.table?.source === 'ai' ? 'bg-amber-100 text-amber-700' : 'bg-surface-100 text-surface-400')"
+                                                      x-text="t.catalog?.table?.source === 'human' ? 'curada' : (t.catalog?.table?.source === 'ai' ? 'sugerida (IA)' : 'não catalogada')"></span>
+                                            </div>
+                                            <textarea x-model="t.description" rows="2" placeholder="Descreva o que esta tabela contém…"
+                                                      class="w-full text-[11px] rounded border border-surface-200 px-2 py-1 focus:border-brand-300 focus:outline-none"></textarea>
+                                        </div>
+
+                                        <!-- Schema + catálogo por COLUNA (descrição + PII curáveis) -->
+                                        <div class="rounded border border-surface-200 bg-surface-50/30 p-2 max-h-64 overflow-auto">
                                             <table class="text-[10px] w-full">
                                                 <thead class="text-surface-500 sticky top-0 bg-surface-50">
-                                                    <tr><th class="text-left py-1 px-1">coluna</th><th class="text-left py-1 px-1">tipo</th><th class="text-left py-1 px-1">nulos?</th></tr>
+                                                    <tr>
+                                                        <th class="text-left py-1 px-1">coluna</th>
+                                                        <th class="text-left py-1 px-1">tipo</th>
+                                                        <th class="text-left py-1 px-1">descrição</th>
+                                                        <th class="text-left py-1 px-1">PII</th>
+                                                    </tr>
                                                 </thead>
                                                 <tbody class="font-mono">
-                                                    <template x-for="c in (t.schema_json || [])" :key="c.name">
+                                                    <template x-for="c in (t.catalog?.columns || [])" :key="c.name">
                                                         <tr class="border-t border-surface-100">
                                                             <td class="py-0.5 px-1 text-brand-900" x-text="c.name"></td>
                                                             <td class="py-0.5 px-1 text-amber-700" x-text="c.type"></td>
-                                                            <td class="py-0.5 px-1 text-surface-500" x-text="c.nullable ? 'sim' : 'não'"></td>
+                                                            <td class="py-0.5 px-1">
+                                                                <input type="text" x-model="c.description" placeholder="—"
+                                                                       class="w-full text-[10px] font-sans rounded border border-transparent hover:border-surface-200 focus:border-brand-300 focus:outline-none px-1 py-0.5">
+                                                            </td>
+                                                            <td class="py-0.5 px-1">
+                                                                <select x-model="c.pii_category"
+                                                                        class="text-[10px] font-sans rounded border border-surface-200 px-1 py-0.5 focus:border-brand-300 focus:outline-none"
+                                                                        :class="(c.pii_category && c.pii_category !== 'none') ? 'bg-rose-50 text-rose-700' : ''">
+                                                                    <template x-for="opt in piiCategories" :key="opt">
+                                                                        <option :value="opt" x-text="opt"></option>
+                                                                    </template>
+                                                                </select>
+                                                            </td>
                                                         </tr>
                                                     </template>
                                                 </tbody>
                                             </table>
+                                        </div>
+
+                                        <div class="flex justify-end">
+                                            <button @click="saveCatalog(t)" :disabled="t._catSaving"
+                                                    class="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-brand-600 disabled:opacity-40">
+                                                <span x-text="t._catSaving ? 'Salvando…' : 'Salvar catálogo'"></span>
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
@@ -916,6 +953,8 @@ function evidencePage() {
         inspectOpen: false,
         inspectSource: null,         // KB completa (id, name, source_type, etc.)
         inspectTab: 'overview',       // 'overview' | 'documents' | 'chunks' | 'tables' | 'query'
+        // Catálogo de Dados: categorias de PII (espelha o enum PiiCategory do backend)
+        piiCategories: ['none','cpf','cnpj','email','phone','name','address','financial','health','biometric','other'],
         inspectChunks: [],            // chunks já carregados
         inspectChunkLimit: 50,        // página a cada loadInspectChunks
         inspectChunksLoading: false,
@@ -1378,12 +1417,44 @@ function evidencePage() {
                 });
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const body = await resp.json();
-                this.inspectTables = (body.data_tables || []).map(t => ({ ...t, _expanded: false }));
+                this.inspectTables = (body.data_tables || []).map(t => ({ ...t, _expanded: false, _catSaving: false }));
             } catch(e) {
                 this.inspectTables = [];
                 showToast('Erro ao carregar tabelas: ' + (e.message || ''), 'error');
             } finally {
                 this.inspectTablesLoading = false;
+            }
+        },
+
+        // ─── Catálogo de Dados: salvar curadoria humana (PR2) ───────
+        async saveCatalog(t) {
+            t._catSaving = true;
+            try {
+                const payload = {
+                    description: t.description || '',
+                    columns: (t.catalog?.columns || []).map(c => ({
+                        name: c.name,
+                        description: c.description || '',
+                        pii_category: c.pii_category || 'none',
+                    })),
+                };
+                const resp = await fetch('/api/v1/data-tables/' + encodeURIComponent(t.id) + '/catalog', {
+                    method: 'PUT',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!resp.ok) {
+                    let msg = 'HTTP ' + resp.status;
+                    try { const b = await resp.json(); if (b.detail) msg = b.detail; } catch {}
+                    throw new Error(msg);
+                }
+                showToast('Catálogo salvo');
+                await this.loadTablesForSource(this.inspectSource?.id);
+            } catch(e) {
+                showToast('Erro ao salvar catálogo: ' + (e.message || ''), 'error');
+            } finally {
+                t._catSaving = false;
             }
         },
 

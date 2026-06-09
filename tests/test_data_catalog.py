@@ -10,12 +10,18 @@ A ESCRITA (apply_catalog) e a UI vêm nos PRs 2/3; aqui só a fundação de dado
 """
 from __future__ import annotations
 
+import json as _json
+
+import pytest
+
+from app.data_tables import catalog as catalog_service
 from app.data_tables.queries import (
     _decode_json_field,
     db_row_to_table_dict,
     reconcile_catalog,
 )
 from app.data_tables.types import PiiCategory, normalize_pii_category
+from app.evidence.tabular import TabularError
 
 
 _SCHEMA = [
@@ -149,3 +155,72 @@ def test_db_row_without_catalog_json_is_neutral():
     row = {"id": "t1", "description": "", "schema_json": _SCHEMA}
     out = db_row_to_table_dict(row)
     assert all(c["pii_category"] == "none" for c in out["catalog"]["columns"])
+
+
+# ── apply_catalog (curadoria humana — PR2) ────────────────────────
+
+_ROW = {"id": "t1", "schema_json": _SCHEMA, "description": ""}
+
+
+class _CaptureRepo:
+    """Captura o patch passado ao update (sem DB)."""
+    def __init__(self):
+        self.updated = None
+
+    async def update(self, table_id, patch):
+        self.updated = (table_id, patch)
+        return True
+
+
+@pytest.mark.asyncio
+async def test_apply_catalog_builds_human_provenance_and_dumps_jsonb(monkeypatch):
+    repo = _CaptureRepo()
+    monkeypatch.setattr(catalog_service, "data_tables_repo", repo)
+
+    async def fake_find(tid):
+        return {"id": tid, "catalog": "reconciled"}
+    monkeypatch.setattr(catalog_service, "find_by_id_with_ks", fake_find)
+
+    cols = [
+        {"name": "cd_cliente", "description": "ID do cliente", "pii_category": "name"},
+        {"name": "vr_limite_cheque_especial", "description": "Limite BRL", "pii_category": "financial"},
+    ]
+    out = await catalog_service.apply_catalog(_ROW, "Crédito do cliente", cols, {"id": "u1"})
+
+    # retorna o row reconciliado (via find_by_id_with_ks)
+    assert out == {"id": "t1", "catalog": "reconciled"}
+
+    tid, patch = repo.updated
+    assert tid == "t1"
+    # ARMADILHA JSONB: catalog_json gravado como STRING (json.dumps), não dict
+    assert isinstance(patch["catalog_json"], str)
+    cat = _json.loads(patch["catalog_json"])
+    assert cat["table"]["description_source"] == "human"
+    assert cat["table"]["curated_by"] == "u1"
+    assert cat["columns"]["cd_cliente"]["pii_category"] == "name"
+    assert cat["columns"]["cd_cliente"]["source"] == "human"
+    assert cat["columns"]["vr_limite_cheque_especial"]["pii_category"] == "financial"
+    # coluna do schema NÃO citada no payload não entra no catálogo
+    assert "nr_idade" not in cat["columns"]
+    assert patch["description"] == "Crédito do cliente"
+
+
+@pytest.mark.asyncio
+async def test_apply_catalog_rejects_unknown_column(monkeypatch):
+    monkeypatch.setattr(catalog_service, "data_tables_repo", _CaptureRepo())
+    with pytest.raises(TabularError) as ei:
+        await catalog_service.apply_catalog(
+            _ROW, "", [{"name": "coluna_fantasma", "pii_category": "none"}], {"id": "u1"}
+        )
+    assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_catalog_rejects_invalid_pii(monkeypatch):
+    # diferente da sugestão da IA (que coage), a curadoria humana REJEITA pii inválida
+    monkeypatch.setattr(catalog_service, "data_tables_repo", _CaptureRepo())
+    with pytest.raises(TabularError) as ei:
+        await catalog_service.apply_catalog(
+            _ROW, "", [{"name": "cd_cliente", "pii_category": "ultra_secreto"}], {"id": "u1"}
+        )
+    assert ei.value.status_code == 400
