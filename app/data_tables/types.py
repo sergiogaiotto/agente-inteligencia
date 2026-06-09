@@ -101,9 +101,11 @@ class PiiCategory(str, Enum):
 
     Enum FECHADO (paridade com SqlOperator): validado server-side tanto na
     reconciliação da sugestão da IA quanto na curadoria humana (PUT). Valor fora
-    do enum é coagido para NONE (sugestão) ou rejeitado (curadoria). No MVP é puro
-    METADATA — NÃO mascara nem bloqueia nada; é a fundação determinística que gates
-    futuros (masking/allow-list/HITL do Tier 2 text-to-SQL) vão consumir.
+    do enum é coagido para NONE (sugestão) ou rejeitado (curadoria). A partir do
+    Tier 2 (text-to-SQL governado) DEIXA de ser puro metadata: a camada
+    determinística ``app/data_tables/governance.py`` o consome como allow-list de
+    coluna, mascaramento célula-inteira por categoria e bloqueio de predicado
+    (liberação fina via curadoria humana de saved_queries — HITL).
     """
 
     NONE = "none"
@@ -129,3 +131,34 @@ def normalize_pii_category(value) -> str:
         return PiiCategory(str(value).strip().lower()).value
     except (ValueError, AttributeError):
         return PiiCategory.NONE.value
+
+
+# ─── Tier 2 — text-to-SQL governado: constantes dos gates ─────────
+# Consumidas por app/data_tables/governance.py para materializar o pii_category
+# (antes puro metadata) como allow-list + mascaramento REAIS.
+
+# Nº máximo de filtros (WHERE) numa consulta Tier 2. Hardcoded como os demais
+# limites operacionais (MAX_ROWS_RETURNED etc.) — vira platform_settings só com
+# demanda de edição via UI. Defesa contra payload gigante de predicados.
+TIER2_MAX_FILTERS = 20
+
+# Mapa FECHADO categoria de PII → placeholder de mascaramento (substitui a CÉLULA
+# INTEIRA). Cobre TODAS as categorias de PiiCategory EXCETO NONE (não-PII não é
+# mascarada). Determinístico e INDEPENDENTE de dlp.redact (que só casa formatos
+# pontuados em texto e é no-op em int/None/valor cru — vazaria metade do enum).
+PII_PLACEHOLDERS = {
+    PiiCategory.CPF.value: "[CPF]",
+    PiiCategory.CNPJ.value: "[CNPJ]",
+    PiiCategory.EMAIL.value: "[EMAIL]",
+    PiiCategory.PHONE.value: "[TELEFONE]",
+    PiiCategory.NAME.value: "[NOME]",
+    PiiCategory.ADDRESS.value: "[ENDEREÇO]",
+    PiiCategory.FINANCIAL.value: "[FINANCEIRO]",
+    PiiCategory.HEALTH.value: "[SAÚDE]",
+    PiiCategory.BIOMETRIC.value: "[BIOMÉTRICO]",
+    PiiCategory.OTHER.value: "[PII]",
+}
+
+# Placeholder para coluna sensível por ser DESCONHECIDA (não catalogada por humano
+# como não-PII). Distinto das categorias: sinaliza "catalogue para liberar/ver".
+UNCATALOGED_PLACEHOLDER = "[NÃO CATALOGADO]"
