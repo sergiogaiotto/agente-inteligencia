@@ -533,6 +533,13 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
             pt['mcp_server'] = matched.get('mcp_server') or pt.get('mcp_server', '')
             pt['description'] = matched.get('description') or ''
             pt['db_id'] = matched.get('id', '')
+            # Per-tool (D, F2): propaga `discovered_tools` (F1) pro dict que
+            # build_openai_tools consome. SEM isto, o gate per-tool em
+            # build_openai_tools nunca enxerga discovered_tools e cai no caminho
+            # legado {operation, query} — mesmo com MCP_PER_TOOL_ENABLED ON e o
+            # conector já descoberto. (Era o elo faltante entre F1/F2 e o fluxo
+            # real engine→match_with_registry→build_openai_tools.)
+            pt['discovered_tools'] = matched.get('discovered_tools')
             pt['auth_requirements'] = matched.get('auth_requirements', '')
             # Credenciais precisam ser propagadas para execute_tool_call
             # poder montar o header Authorization. Antes só auth_requirements
