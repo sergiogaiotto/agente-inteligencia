@@ -53,6 +53,14 @@ def _mcp_inputs_missing_operation(parsed: Any) -> bool:
     """
     if not _has_mcp_binding(parsed):
         return False
+    # F4 — modo per-tool (flag ON): o contrato {operation, query} é dispensado
+    # (cada tool MCP é sua própria função com schema real). Não é violação.
+    try:
+        from app.mcp.runtime import per_tool_enabled
+        if per_tool_enabled():
+            return False
+    except Exception:
+        pass
     try:
         from app.skill_parser.inputs_schema import extract_inputs_schema
         schema = extract_inputs_schema("## Inputs\n" + (getattr(parsed, "inputs", "") or ""))

@@ -549,11 +549,18 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
     return enriched
 
 
-def _per_tool_enabled() -> bool:
+def per_tool_enabled() -> bool:
     """Flag do modelo per-tool (F2+). Default OFF → caminho legado idêntico.
-    Lê o env a cada chamada (testável via monkeypatch; sem cache de processo)."""
+    Lê o env a cada chamada (testável via monkeypatch; sem cache de processo).
+
+    Fonte ÚNICA p/ runtime, wizard e linter checarem o modo per-tool (F4) —
+    evita drift na lógica de parsing do env entre módulos."""
     import os
     return os.getenv("MCP_PER_TOOL_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# Alias retrocompatível (uso interno anterior a F4).
+_per_tool_enabled = per_tool_enabled
 
 
 def _parse_discovered_tools(raw) -> list[dict]:
