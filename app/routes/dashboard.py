@@ -1949,6 +1949,27 @@ async def test_mcp_connection(data: MCPTestRequest):
     return result
 
 
+class MCPBackfillRequest(BaseModel):
+    # force=True re-descobre mesmo conectores que já têm discovered_tools.
+    force: Optional[bool] = False
+
+
+@router.post("/tools/backfill-discovered")
+async def backfill_mcp_discovered(data: MCPBackfillRequest = MCPBackfillRequest()):
+    """F5 (per-tool D) — backfill: descobre+persiste `discovered_tools` para os
+    conectores MCP HTTP que ainda não têm (predam a F1).
+
+    Manutenção/operação: NÃO ativa o modo per-tool — só popula a coluna dormante
+    que o builder consome quando `MCP_PER_TOOL_ENABLED` está ON. Idempotente
+    (pula quem já tem, salvo `force`). Best-effort por conector.
+    """
+    from app.mcp.runtime import backfill_discovered_tools, per_tool_enabled
+    summary = await backfill_discovered_tools(tools_repo, force=bool(data.force))
+    summary["per_tool_enabled"] = per_tool_enabled()  # transparência: ativo ou dormente
+    logger.info("mcp.backfill.completed", extra={"event": "mcp.backfill.completed", **summary})
+    return summary
+
+
 class MCPExecuteRequest(BaseModel):
     endpoint: str
     tool_name: str
