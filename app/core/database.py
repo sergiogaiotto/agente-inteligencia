@@ -751,6 +751,37 @@ CREATE TABLE IF NOT EXISTS data_table_query_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_data_table_query_logs_table ON data_table_query_logs(data_table_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_data_table_query_logs_interaction ON data_table_query_logs(interaction_id);
+
+-- ═══════════════════════════════════════════════════════════════
+-- Tier 2 — text-to-SQL governado: consultas em linguagem natural CURADAS.
+-- A IA compila a pergunta num struct {select,filters,order_by,limit}; o HUMANO
+-- cura e aprova (apply_saved_query é o ÚNICO writer, source='human'). Em runtime
+-- SÓ executa status='approved'. query_json é JSONB (json.dumps ANTES do asyncpg).
+-- question_nl é REDATADA (pode conter PII). Visibility herda da KS via
+-- data_table_id → data_tables → knowledge_sources.
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS saved_queries (
+    id TEXT PRIMARY KEY,
+    data_table_id TEXT NOT NULL REFERENCES data_tables(id) ON DELETE CASCADE,
+    name TEXT NOT NULL DEFAULT '',
+    -- Pergunta original em PT-BR — REDATADA (dlp.redact) antes de persistir.
+    question_nl TEXT DEFAULT '',
+    -- Struct curado: {select:[...], filters:[{col,op,value}], order_by:[...], limit}
+    query_json JSONB NOT NULL DEFAULT '{}',
+    -- Preview de SQL com '?' (sem bind values) — só exibição.
+    sql_preview TEXT DEFAULT '',
+    -- draft (compilada, não curada) | approved (humano curou). Runtime só roda approved.
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','approved')),
+    -- ai (compilada pela IA) | human (curada). apply_saved_query grava 'human'.
+    source TEXT NOT NULL DEFAULT 'ai',
+    -- Colunas PII liberadas EXPLICITAMENTE pelo curador (ainda mascaradas na saída).
+    pii_columns_allowed JSONB NOT NULL DEFAULT '[]',
+    curated_by TEXT,
+    curated_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_saved_queries_table ON saved_queries(data_table_id, status);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -861,6 +892,14 @@ _IDEMPOTENT_MIGRATIONS = [
     # schema_json, que é regenerado por re-promote/append). DEFAULT '{}' =
     # compat com tabelas antigas; reconciliada com o schema vivo na leitura.
     "ALTER TABLE data_tables ADD COLUMN IF NOT EXISTS catalog_json JSONB DEFAULT '{}'",
+    # ─── Tier 2 (text-to-SQL governado) ─────────────────────────
+    # Auditoria da consulta em linguagem natural na execução (## Ask Tables, PR5):
+    # nl_question/nl_generated_struct REDATADAS antes de gravar (auditoria não vira
+    # vetor de PII); masked_columns = colunas mascaradas na saída. Aditivas/idempotentes
+    # (a tabela saved_queries nasce do SCHEMA base, idempotente em existentes).
+    "ALTER TABLE data_table_query_logs ADD COLUMN IF NOT EXISTS nl_question TEXT",
+    "ALTER TABLE data_table_query_logs ADD COLUMN IF NOT EXISTS nl_generated_struct JSONB DEFAULT '{}'",
+    "ALTER TABLE data_table_query_logs ADD COLUMN IF NOT EXISTS masked_columns JSONB DEFAULT '[]'",
     # ─── PR D pgvector foundation ───────────────────────────────
     # Extensão `vector` (pgvector). Idempotente; só funciona em imagens com
     # a extensão disponível (pgvector/pgvector:pg16 e similares). Postgres
@@ -1216,6 +1255,7 @@ evidences_repo = Repository("evidences")
 evidence_chunks_repo = Repository("evidence_chunks")  # Onda 3 — chunks de docs ingeridos
 data_tables_repo = Repository("data_tables")  # Onda Tabular — metadata de tabelas DuckDB
 data_table_query_logs_repo = Repository("data_table_query_logs")  # Onda Tabular — auditoria de queries
+saved_queries_repo = Repository("saved_queries")  # Tier 2 — consultas NL curadas (text-to-SQL governado)
 verifications_repo = Repository("verifications")  # §14.2 — resultado do Verifier multi-dim
 tools_repo = Repository("tools")
 tool_calls_repo = Repository("tool_calls")

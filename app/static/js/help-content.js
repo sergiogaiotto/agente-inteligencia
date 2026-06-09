@@ -546,7 +546,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
 
           <p><strong>1. RAG (Retrieval-Augmented Generation)</strong> — para <em>textos não-estruturados</em>: manuais, políticas, contratos, FAQs, atas de reunião. Funciona como uma "busca inteligente": a plataforma divide o documento em pedaços (chunks), indexa por significado e palavras-chave, e quando o agent precisa, devolve os trechos mais relevantes para o LLM ler. O LLM compõe a resposta citando esses trechos.</p>
 
-          <p><strong>2. Tabelas (text-to-SQL via DuckDB)</strong> — para <em>dados estruturados</em>: planilhas CSV/XLSX com colunas e linhas (vendas, clientes, métricas, inventário). Cada planilha vira uma tabela consultável. A Skill executa uma consulta <em>exata</em> (tipo "todos os clientes com renda > 5000") — sem chutar, sem alucinar números, sem perder linhas.</p>
+          <p><strong>2. Tabelas (SQL parametrizado via DuckDB)</strong> — para <em>dados estruturados</em>: planilhas CSV/XLSX com colunas e linhas (vendas, clientes, métricas, inventário). Cada planilha vira uma tabela consultável. A Skill executa uma consulta <em>exata</em> (tipo "todos os clientes com renda > 5000") — sem chutar, sem alucinar números, sem perder linhas. O LLM <strong>não</strong> escreve SQL: o autor define os filtros (Tier 1). A bancada experimental "Perguntar à Tabela" (Tier 2, governada pelo Catálogo) deixa a IA <em>compilar</em> a pergunta numa consulta estruturada para o humano curar.</p>
 
           <p><strong>Por que dois jeitos?</strong> Porque texto e tabela têm naturezas diferentes:</p>
           <ul>
