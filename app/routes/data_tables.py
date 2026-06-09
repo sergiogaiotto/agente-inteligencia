@@ -107,6 +107,19 @@ class QueryRequest(BaseModel):
     limit: int = 100
 
 
+class CatalogColumnSpec(BaseModel):
+    """Entrada curada de UMA coluna no Catálogo de Dados."""
+    name: str
+    description: str = ""
+    pii_category: str = "none"
+
+
+class CatalogPutRequest(BaseModel):
+    """Curadoria humana do catálogo: descrição da tabela + colunas."""
+    description: str = ""
+    columns: list[CatalogColumnSpec] = Field(default_factory=list)
+
+
 # ─── Endpoints ───────────────────────────────────────────────────
 
 
@@ -250,6 +263,39 @@ async def get_data_table_endpoint(
     if not can_user_see(user, row):
         raise HTTPException(403, "Sem permissão para acessar esta tabela.")
     return row
+
+
+@router.put("/data-tables/{table_id}/catalog")
+async def put_data_table_catalog_endpoint(
+    table_id: str,
+    body: CatalogPutRequest,
+    user: dict = Depends(require_user),
+):
+    """Curadoria HUMANA do Catálogo de Dados (única escrita do catálogo).
+
+    DNA anti-alucinação: a IA só SUGERE (PR3, sem persistir); este PUT é o único
+    caminho que grava. 404 se não existe; 403 se visibility bloqueia; 400 se uma
+    coluna não existe no schema ou pii_category está fora do enum.
+    """
+    row = await find_by_id_with_ks(table_id)
+    if not row:
+        raise HTTPException(404, f"data_table '{table_id}' não encontrada.")
+    if not can_user_see(user, row):
+        raise HTTPException(403, "Sem permissão para editar esta tabela.")
+    from app.data_tables.catalog import apply_catalog
+    try:
+        updated = await apply_catalog(
+            row, body.description, [c.model_dump() for c in body.columns], user
+        )
+    except TabularError as e:
+        raise _raise_tabular(e)
+    await _audit(
+        "data_table.catalog.update",
+        table_id,
+        user.get("id", ""),
+        {"columns": len(body.columns)},
+    )
+    return {"ok": True, "table": updated}
 
 
 @router.delete("/data-tables/{table_id}")
