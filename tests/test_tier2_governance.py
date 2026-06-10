@@ -218,6 +218,32 @@ def test_mask_tolerates_non_dict_rows():
     assert out == [{"c": "[CPF]"}, "linha-ruim", None]
 
 
+# ─── mask_rows_pii_only (higiene de exibição Tier 1) ─────────────
+
+
+def test_mask_pii_only_masks_explicit_pii_passes_rest():
+    from app.data_tables.governance import mask_rows_pii_only
+    cat = _reconciled([("cpf", "cpf", "human"), ("ghost", "none", None), ("id", "none", "human")])
+    rows = [{"cpf": "111.222.333-44", "ghost": "passa", "id": 7}]
+    out = mask_rows_pii_only(rows, cat)
+    # PII explícita mascarada; NÃO-catalogada e humano-none passam (≠ Tier 2)
+    assert out == [{"cpf": "[CPF]", "ghost": "passa", "id": 7}]
+    assert rows == [{"cpf": "111.222.333-44", "ghost": "passa", "id": 7}]  # não muta
+
+
+def test_mask_pii_only_empty_catalog_unchanged():
+    from app.data_tables.governance import mask_rows_pii_only
+    assert mask_rows_pii_only([{"x": 1}], {}) == [{"x": 1}]
+    assert mask_rows_pii_only([{"x": 1}], None) == [{"x": 1}]
+
+
+def test_mask_pii_only_all_categories():
+    from app.data_tables.governance import mask_rows_pii_only
+    for cat_val, placeholder in PII_PLACEHOLDERS.items():
+        cat = _reconciled([("c", cat_val, "human")])
+        assert mask_rows_pii_only([{"c": "v"}], cat) == [{"c": placeholder}], cat_val
+
+
 # ─── integração com reconcile_catalog real ───────────────────────
 
 

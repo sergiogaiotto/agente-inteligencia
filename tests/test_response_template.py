@@ -164,19 +164,27 @@ def test_engine_renders_template_and_mirrors_output(fake_repos, fake_tabular):
     assert result["output"] == "O limite do cliente 2 é R$ 1000."   # espelhado
 
 
-def test_engine_no_template_returns_structured_json(fake_repos, fake_tabular):
+def test_engine_no_template_renders_default_table(fake_repos, fake_tabular):
+    """Sem ## Response Template, o render DEFAULT mostra os DADOS (markdown)."""
     _setup_table(fake_tabular, [{"cd_cliente": 2, "vr_limite": 1000}])
     result = _run(_skill(), {})   # sem response_template
-    assert result["answer"] is None
-    assert result["output"].lstrip().startswith("{")   # JSON estruturado legado
+    assert result["answer"] is not None
+    assert "| cd_cliente | vr_limite |" in result["answer"]
+    assert "| 2 | 1000 |" in result["answer"]
+    assert "1 registro(s)" in result["answer"]
+    assert result["output"] == result["answer"]        # espelhado
+    # _table_meta é interno — não vaza p/ bindings_executed
+    for b in result["bindings_executed"]:
+        assert "_table_meta" not in b
 
 
-def test_engine_bad_jinja_falls_back(fake_repos, fake_tabular):
+def test_engine_bad_jinja_falls_back_to_default_table(fake_repos, fake_tabular):
+    """Template com SyntaxError → cadeia de fallback cai no render default."""
     _setup_table(fake_tabular, [{"cd_cliente": 2, "vr_limite": 1000}])
     skill = _skill(response_template="{% if %} quebrado", output_mapping={"res": "$.rows"})
     result = _run(skill, {})
-    assert result["answer"] is None             # erro de sintaxe → fallback, sem crash
-    assert result["output"].lstrip().startswith("{")
+    assert result["answer"] is not None         # sem crash
+    assert "| 2 | 1000 |" in result["answer"]   # default mostra os dados
 
 
 def test_engine_dry_run_skips_render(fake_repos, fake_tabular):
@@ -204,10 +212,52 @@ def test_engine_fence_in_template_is_stripped(fake_repos, fake_tabular):
     assert result["answer"] == "Limite 1000"    # fence removido antes de renderizar
 
 
-# ─── wizard default ──────────────────────────────────────────────
+# ─── render default (unit) ───────────────────────────────────────
 
 
-def test_wizard_emits_response_template_for_tables():
+def test_default_table_answer_unit():
+    from app.agents.declarative_engine import _default_table_answer
+
+    # sem tabelas (ou só falhas) → None (caller cai no JSON legado)
+    assert _default_table_answer([]) is None
+    assert _default_table_answer([{"kind": "table", "status": 500}]) is None
+    assert _default_table_answer([{"kind": "api", "status": 200}]) is None
+
+    # 0 linhas → frase de nenhum registro (com nome da tabela)
+    rec = {"kind": "table", "status": 200,
+           "response_data": {"rows": [], "columns": ["a"]},
+           "_table_meta": {"name": "TB_X", "catalog": {}}}
+    out = _default_table_answer([rec])
+    assert "Nenhum registro encontrado em TB_X" in out
+
+    # cap de linhas com nota de truncamento
+    rows = [{"a": i} for i in range(25)]
+    rec2 = {"kind": "table", "status": 200,
+            "response_data": {"rows": rows, "columns": ["a"]}, "_table_meta": {}}
+    out2 = _default_table_answer([rec2])
+    assert "25 registro(s)" in out2
+    assert "mais 5 linha(s)" in out2
+
+    # PII catalogada mascarada; não-catalogada PASSA (higiene Tier 1)
+    cat = {"columns": [{"name": "cpf", "pii_category": "cpf", "source": "human"}]}
+    rec3 = {"kind": "table", "status": 200,
+            "response_data": {"rows": [{"cpf": "111", "x": "ok"}], "columns": ["cpf", "x"]},
+            "_table_meta": {"name": "", "catalog": cat}}
+    out3 = _default_table_answer([rec3])
+    assert "[CPF]" in out3 and "111" not in out3 and "ok" in out3
+
+    # célula com pipe/None tratadas (não quebra a tabela markdown)
+    rec4 = {"kind": "table", "status": 200,
+            "response_data": {"rows": [{"a": "x|y", "b": None}], "columns": ["a", "b"]},
+            "_table_meta": {}}
+    out4 = _default_table_answer([rec4])
+    assert "x\\|y" in out4
+
+
+# ─── wizard: sem template default (engine default cobre) ────────
+
+
+def test_wizard_emits_default_render_guidance_not_template():
     from app.routes.wizard import WizardSkillRequest, _build_wizard_prompt
     bindings = {"mcp_tools": [], "rag_sources": [], "api_endpoints": [],
                 "data_tables": [{"id": "t1", "name": "TB_CRED", "urn": "urn:table:a:b:1",
@@ -215,9 +265,10 @@ def test_wizard_emits_response_template_for_tables():
                                  "columns": ["cd_cliente", "vr_limite"], "suggested_pk": "cd_cliente"}]}
     system, user = _build_wizard_prompt(WizardSkillRequest(description="x"), bindings, "standard")
     combined = system + "\n" + user
-    assert "## Response Template" in combined
-    assert "context.tb_cred_resultado" in combined           # chave do output_mapping
-    assert "{{ inputs.cd_cliente }}" in combined             # pk no template
-    # o template default parseia de volta como response_template não-vazio
+    # NÃO emite mais o template default só-contagem ("Encontrei N registro(s)")
+    assert "Encontrei {{ rows | length }}" not in combined
+    # orienta o LLM a NÃO gerar a seção (o render default do engine cobre)
+    assert "NÃO gere a seção `## Response Template`" in combined
+    # a secção continua registrada no parser p/ templates curados à mão
     from app.skill_parser.parser import _section_to_attr
     assert _section_to_attr("Response Template") == "response_template"
