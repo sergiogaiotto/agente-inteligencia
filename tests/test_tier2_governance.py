@@ -264,6 +264,33 @@ def test_display_default_masks_all_categories():
         assert apply_display_treatment([{"c": "v"}], cat) == [{"c": placeholder}], cat_val
 
 
+def test_partial_value_by_category():
+    from app.data_tables.governance import partial_value
+    # email → inicial + domínio
+    assert partial_value("email", "joao@gmail.com") == "j•••@gmail.com"
+    assert partial_value("email", "sem-arroba") == "••••roba"      # sem @ → tail
+    # financial → faixa de magnitude (nunca o valor exato)
+    assert partial_value("financial", 3600) == "R$ 1 – 10 mil"
+    assert partial_value("financial", 50) == "< R$ 100"
+    assert partial_value("financial", 250000) == "R$ 100 mil – 1 mi"
+    assert partial_value("financial", 5_000_000) == "> R$ 1 mi"
+    assert partial_value("financial", "n/d") == "[FINANCEIRO]"     # não-numérico → mascara
+    # name → 1º nome + iniciais; 1 palavra cai no tail (>4 chars → mascara)
+    assert partial_value("name", "João Silva Souza") == "João S. S."
+    assert partial_value("name", "Madonna") == "••••onna"          # 1 palavra → tail
+    assert partial_value("name", "Ana") == "Ana"                   # curto (≤4) passa
+    # identificadores → últimos 4 chars
+    assert partial_value("cpf", "111.222.333-44") == "••••3-44"
+    assert partial_value("phone", "11999998888") == "••••8888"
+    assert partial_value("none", None) is None
+
+
+def test_display_partial_financial_band():
+    from app.data_tables.governance import apply_display_treatment
+    cat = _reconciled([("vr", "financial", "human", "partial")])
+    assert apply_display_treatment([{"vr": 3600}], cat) == [{"vr": "R$ 1 – 10 mil"}]
+
+
 def test_treatment_helpers():
     from app.data_tables.types import (
         OutputTreatment, default_treatment_for, effective_treatment, normalize_output_treatment,
