@@ -979,16 +979,25 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
             pk = t.get("suggested_pk")
             if pk:
                 pk_inputs.append(pk)
-                filters_yaml = (
-                    "      filters:\n"
-                    f"        - col: {pk}\n"
-                    "          op: \"=\"\n"
-                    f"          value: \"{{{{ inputs.{pk} }}}}\"\n"
-                )
+            # WHERE multi-campo: filtro `if_present` p/ CADA coluna do select —
+            # só os campos efetivamente informados em inputs filtram (o engine
+            # descarta filtros de input ausente ANTES do Jinja; o serviço repete
+            # a checagem). A MESMA skill atende qualquer combinação de campos:
+            # {cd_cliente: 2}, {uf: "RS", nr_idade: 30}, ou nenhum (lista tudo
+            # até o limit).
+            filter_cols = cols[:12]
+            if filter_cols:
+                _flines = ["      filters:"]
+                for c in filter_cols:
+                    _flines.append(f"        - col: {c}")
+                    _flines.append("          op: \"=\"")
+                    _flines.append(f"          value: \"{{{{ inputs.{c} }}}}\"")
+                    _flines.append(f"          if_present: {c}")
+                filters_yaml = "\n".join(_flines) + "\n"
             else:
                 filters_yaml = (
                     "      filters: []   # adicione: {col: <coluna>, op: \"=\", "
-                    "value: \"{{ inputs.<campo> }}\"}\n"
+                    "value: \"{{ inputs.<campo> }}\", if_present: <campo>}\n"
                 )
             table_blocks.append(
                 f"  - id: {slug}\n"
@@ -1005,12 +1014,21 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
             f"- `{t['urn']}` ({t['name']}, ~{t.get('row_count', '?')} linhas): {t.get('schema_summary', '')}"
             for t in bindings["data_tables"]
         )
-        pk_note = ""
         if pk_inputs:
             uniq = ", ".join(f"`{p}`" for p in sorted(set(pk_inputs)))
             pk_note = (
-                f"\n\nIMPORTANTE: o `inputs_schema` (## Inputs) DEVE conter o(s) campo(s) "
-                f"{uniq} usado(s) no(s) filtro(s) da tabela — senão a consulta falha em runtime."
+                "\n\nIMPORTANTE: o `inputs_schema` (## Inputs) DEVE declarar TODAS as "
+                "colunas dos filtros como propriedades — " + uniq + " como OBRIGATÓRIA "
+                "(required) e as DEMAIS como OPCIONAIS, com tipos JSON coerentes com o "
+                "schema da tabela (BIGINT→integer, DOUBLE→number, VARCHAR→string). "
+                "Qualquer combinação de campos informados filtra a consulta (if_present)."
+            )
+        else:
+            pk_note = (
+                "\n\nIMPORTANTE: o `inputs_schema` (## Inputs) DEVE declarar as colunas "
+                "dos filtros como propriedades OPCIONAIS (sem required), com tipos JSON "
+                "coerentes com o schema da tabela. Qualquer combinação de campos "
+                "informados filtra a consulta (if_present); sem campos, lista até o limit."
             )
         obligatory_sections.append(
             "INCLUA no frontmatter YAML: `execution_mode: declarative`\n\n"

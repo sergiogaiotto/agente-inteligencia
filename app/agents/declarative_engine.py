@@ -332,6 +332,21 @@ async def _execute_data_tables_phase(
         # Render Jinja2 dos filters (value pode ter "{{ inputs.X }}")
         try:
             filters_raw = query_spec.get("filters") or []
+            # if_present: pula o filtro ANTES do Jinja quando o input não veio.
+            # O render é ESTRITO — "{{ inputs.X }}" com X ausente estouraria
+            # StrictUndefined e derrubaria a fase inteira. Espelha a semântica
+            # do serviço tabular (execute_query também pula por if_present).
+            # É o que viabiliza o WHERE multi-campo opcional: a skill declara
+            # filtros p/ N colunas e só os campos informados filtram.
+            _inputs_now = scope.get("inputs") or {}
+            filters_raw = [
+                f for f in filters_raw
+                if not (
+                    isinstance(f, dict)
+                    and f.get("if_present")
+                    and _inputs_now.get(f["if_present"]) in (None, "")
+                )
+            ]
             rendered_filters = _render_deep(filters_raw, scope, lenient=False)
             select = query_spec.get("select") or []
             order_by = query_spec.get("order_by") or []
