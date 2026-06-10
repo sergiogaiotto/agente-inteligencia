@@ -456,27 +456,22 @@ async def _resolve_bindings_for_prompt(data: WizardSkillRequest) -> dict:
             pool = _get_pool()
             async with pool.acquire() as con:
                 rows = await con.fetch(
-                    "SELECT id, name, urn, schema_json, row_count FROM data_tables "
+                    "SELECT id, name, urn, schema_json, row_count, suggested_pk FROM data_tables "
                     "WHERE id = ANY($1::text[])",
                     data.table_ids,
                 )
                 for r in rows:
-                    # Resumo do schema pra caber no prompt sem inflar tokens.
-                    schema = r.get("schema_json") or "{}"
-                    try:
-                        parsed = json.loads(schema) if isinstance(schema, str) else schema
-                        cols = parsed.get("columns") if isinstance(parsed, dict) else None
-                        schema_summary = ", ".join(
-                            f"{c.get('name')}:{c.get('type')}" for c in (cols or [])[:6]
-                        ) or "(sem schema)"
-                    except Exception:
-                        schema_summary = "(schema não-parseável)"
+                    # schema_json é uma LISTA [{name,type,nullable}] — extrai resumo
+                    # + nomes reais de coluna (usados no skeleton executável abaixo).
+                    schema_summary, col_names = _summarize_table_schema(r.get("schema_json"))
                     result["data_tables"].append({
                         "id": r["id"],
                         "name": r["name"],
                         "urn": r.get("urn"),
                         "row_count": r.get("row_count"),
                         "schema_summary": schema_summary,
+                        "columns": col_names,
+                        "suggested_pk": r.get("suggested_pk"),
                     })
         except Exception as e:
             logger.warning(
@@ -761,26 +756,60 @@ def _api_block(endpoints: list[dict]) -> str:
     )
 
 
+def _slug_id(name: str) -> str:
+    """Slug curto e seguro p/ id de binding de tabela (alnum + underscore)."""
+    import re
+    s = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+    return s[:40] or "tabela"
+
+
+def _summarize_table_schema(schema_json) -> tuple[str, list[str]]:
+    """Extrai (resumo p/ prompt, lista de NOMES de coluna) de schema_json.
+
+    `schema_json` de data_tables é uma LISTA `[{name,type,nullable}]` — NÃO um
+    dict `{columns:[...]}`. O código antigo tratava como dict → `parsed.get(
+    'columns')` em lista falhava → schema_summary virava sempre '(sem schema)',
+    e o LLM nunca via os nomes de coluna reais. Tolera string JSON, lista ou o
+    formato dict legado.
+    """
+    try:
+        parsed = json.loads(schema_json) if isinstance(schema_json, str) else schema_json
+    except (json.JSONDecodeError, TypeError):
+        return "(schema não-parseável)", []
+    if isinstance(parsed, dict):
+        cols = parsed.get("columns") or []
+    elif isinstance(parsed, list):
+        cols = parsed
+    else:
+        cols = []
+    names = [c.get("name") for c in cols if isinstance(c, dict) and c.get("name")]
+    summary = ", ".join(
+        f"{c.get('name')}:{c.get('type')}" for c in cols[:12] if isinstance(c, dict)
+    ) or "(sem schema)"
+    return summary, names
+
+
 def _tables_block(data_tables: list[dict]) -> str:
-    """Sub-bloco específico de Data Tables. LLM gera SQL, engine executa
-    via DuckDB. Sem verbo imperativo, LLM responde de cabeça (tabela nunca
-    é consultada)."""
+    """Sub-bloco de Data Tables (RAG-Tabela Tier 1). A consulta é PARAMETRIZADA
+    no bloco `## Data Tables` (select/filters/op com bind vars); o engine executa
+    via DuckDB. O LLM **NÃO** escreve SQL e **NÃO** consulta a tabela 'de cabeça'
+    — só referencia o RESULTADO (via as chaves do `output_mapping`)."""
     table_refs = ", ".join(f"`{t['urn']}`" for t in data_tables)
     first = data_tables[0]
-    first_urn = first["urn"]
-    first_name = first["name"]
+    slug = _slug_id(first.get("name") or "tabela")
     return (
         "[TABLES] **Tabelas registradas:** " + table_refs + ". "
-        "LLM gera SQL, engine executa via DuckDB.\n"
-        f"  - Verbo recomendado: **Consulte** / **Query** / **Execute SELECT em**.\n"
-        f"  - Exemplo no Workflow: \"Consulte a tabela `{first_urn}` "
-        f"({first_name}) via SQL com query como `SELECT ... FROM <tabela> WHERE "
-        "...` ANTES de gerar a resposta. Use os nomes de colunas EXATOS do "
-        "schema declarado.\"\n"
-        f"  - Exemplo no Examples: `**SQL gerado:** `SELECT ... FROM "
-        f"<tabela>...``  →  `**Resultado da query:** <linhas/contagem>`\n"
-        "  - NÃO invente nomes de coluna — só os do schema_summary do bloco "
-        "obrigatório."
+        "A consulta é PARAMETRIZADA no bloco `## Data Tables` (select/filters/op); "
+        "o engine executa via DuckDB com bind vars. O LLM **NÃO escreve SQL**.\n"
+        "  - O frontmatter DEVE ter `execution_mode: declarative` (senão a tabela "
+        "NUNCA é lida — o agente vira LLM puro e recusa por falta de evidência).\n"
+        "  - O `inputs_schema` (## Inputs) DEVE conter os campos usados nos "
+        "`filters` da tabela (a chave do filtro) — senão a consulta falha em runtime.\n"
+        "  - No Workflow, NÃO escreva 'SQL' nem 'SELECT'. Descreva: \"O engine "
+        f"consulta a tabela e disponibiliza o resultado em `context.{slug}_resultado`; "
+        "componha a resposta a partir desse resultado.\"\n"
+        "  - No Output Contract / Examples, reflita os campos do RESULTADO da "
+        "tabela — não invente colunas fora do schema declarado."
     )
 
 
@@ -933,16 +962,57 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         )
 
     if bindings["data_tables"]:
-        # Tabelas viram exemplos no SKILL.md — LLM deve referenciar via URN.
-        tables_md = "\n".join(
+        # RAG-Tabela Tier 1: bloco EXECUTÁVEL (id, table_ref, query{select,filters},
+        # output_mapping) — NÃO o formato binding-only (urn/name) que o engine NÃO
+        # executa. Quando a tabela tem suggested_pk, gera um filtro de lookup por PK
+        # mapeado de um input; senão, select+limit sem filtro (ainda executável).
+        # Exige execution_mode: declarative (senão a tabela nunca é lida).
+        table_blocks = []
+        pk_inputs: list[str] = []
+        for t in bindings["data_tables"]:
+            cols = t.get("columns") or []
+            select_yaml = "[" + ", ".join(cols[:12]) + "]" if cols else "[]"
+            slug = _slug_id(t.get("name") or "tabela")
+            pk = t.get("suggested_pk")
+            if pk:
+                pk_inputs.append(pk)
+                filters_yaml = (
+                    "      filters:\n"
+                    f"        - col: {pk}\n"
+                    "          op: \"=\"\n"
+                    f"          value: \"{{{{ inputs.{pk} }}}}\"\n"
+                )
+            else:
+                filters_yaml = (
+                    "      filters: []   # adicione: {col: <coluna>, op: \"=\", "
+                    "value: \"{{ inputs.<campo> }}\"}\n"
+                )
+            table_blocks.append(
+                f"  - id: {slug}\n"
+                f"    table_ref: {t['urn']}\n"
+                "    query:\n"
+                f"      select: {select_yaml}\n"
+                f"{filters_yaml}"
+                "      limit: 100\n"
+                "    output_mapping:\n"
+                f"      {slug}_resultado: \"$.rows\"\n"
+                "    on_error: fail"
+            )
+        refs_md = "\n".join(
             f"- `{t['urn']}` ({t['name']}, ~{t.get('row_count', '?')} linhas): {t.get('schema_summary', '')}"
             for t in bindings["data_tables"]
         )
+        pk_note = ""
+        if pk_inputs:
+            uniq = ", ".join(f"`{p}`" for p in sorted(set(pk_inputs)))
+            pk_note = (
+                f"\n\nIMPORTANTE: o `inputs_schema` (## Inputs) DEVE conter o(s) campo(s) "
+                f"{uniq} usado(s) no(s) filtro(s) da tabela — senão a consulta falha em runtime."
+            )
         obligatory_sections.append(
-            "## Data Tables\n```yaml\ntables:\n" + "\n".join(
-                f"  - urn: {t['urn']}\n    name: {t['name']}"
-                for t in bindings["data_tables"]
-            ) + "\n```\n\nReferências disponíveis:\n" + tables_md
+            "INCLUA no frontmatter YAML: `execution_mode: declarative`\n\n"
+            "## Data Tables\n```yaml\ntables:\n" + "\n".join(table_blocks) + "\n```"
+            "\n\nReferências disponíveis:\n" + refs_md + pk_note
         )
 
     if bindings["api_endpoints"]:
@@ -1050,9 +1120,9 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
     # - API declarativa: engine executa endpoints sem LLM no caminho, mas o
     #   LLM recebe os resultados como contexto — Workflow precisa documentar
     #   a chamada pra LLM saber referenciar.
-    # - Data Tables: LLM gera SQL que o engine executa via DuckDB. Sem
-    #   Workflow com verbo imperativo, LLM responde de cabeça (a base nem é
-    #   consultada).
+    # - Data Tables: query PARAMETRIZADA no bloco ## Data Tables (engine executa
+    #   via DuckDB com bind vars; o LLM NÃO escreve SQL). Exige execution_mode:
+    #   declarative — sem ele a tabela nunca é lida (agente vira LLM puro).
     #
     # Padrão: cada tipo de binding ativa um sub-bloco específico (verbo
     # imperativo próprio + formato de exemplo). Regras COMUNS valem pra
