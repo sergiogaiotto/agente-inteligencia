@@ -86,6 +86,107 @@ def _extract_json_from_sse(sse_text: str) -> dict | None:
     return None
 
 
+# ═══════════════════════════════════════════════════════════════
+# MCP Streamable HTTP — handshake de sessão (fonte ÚNICA de verdade)
+# ═══════════════════════════════════════════════════════════════
+# O transporte MCP Streamable HTTP (spec 2025-03-26) é stateful: o servidor
+# PODE devolver um `Mcp-Session-Id` no header da resposta ao `initialize`, e o
+# cliente DEVE ecoá-lo em TODAS as chamadas seguintes (`notifications/
+# initialized`, `tools/list`, `tools/call`). Sem isso, servidores como o
+# Context7 respondem com erro "No valid session ID provided".
+#
+# Antes desta correção, os 5 caminhos HTTP (3 aqui no runtime + 2 no cadastro/
+# diagnóstico em routes/dashboard.py) faziam `initialize` mas DESCARTAVAM a
+# resposta — a sessão era perdida e a tool falhava com "falta identificador de
+# sessão válido". Estas funções centralizam a captura para que QUALQUER MCP
+# funcione de primeira; servidor stateless (sem o header) → headers idênticos
+# aos de antes (sem regressão).
+
+# Versão do protocolo MCP anunciada no handshake. Mantida em 2024-11-05
+# (amplamente aceita). A captura de sessão abaixo independe da versão.
+MCP_PROTOCOL_VERSION = "2024-11-05"
+
+
+def extract_session_id(resp) -> str:
+    """Lê o header `Mcp-Session-Id` da resposta do `initialize`.
+
+    Case-insensitive (httpx.Headers já é; dict simples nos testes pode não ser
+    → tenta as duas grafias). Vazio quando ausente (servidor stateless).
+    """
+    try:
+        headers = resp.headers
+        sid = headers.get("mcp-session-id") or headers.get("Mcp-Session-Id") or ""
+    except AttributeError:
+        return ""
+    return str(sid).strip()
+
+
+def extract_negotiated_protocol(resp) -> str:
+    """Extrai o `protocolVersion` negociado do corpo do `initialize` (JSON ou
+    SSE). Vazio se não parseável — o caller mantém só o que tiver."""
+    try:
+        ct = resp.headers.get("content-type", "")
+    except AttributeError:
+        ct = ""
+    data = None
+    if "text/event-stream" in ct:
+        data = _extract_json_from_sse(getattr(resp, "text", "") or "")
+    else:
+        try:
+            data = resp.json()
+        except Exception:
+            data = None
+    if isinstance(data, dict):
+        result = data.get("result")
+        if isinstance(result, dict) and result.get("protocolVersion"):
+            return str(result["protocolVersion"]).strip()
+    return ""
+
+
+async def mcp_http_handshake(client, endpoint: str, base_headers: dict) -> dict:
+    """Handshake MCP Streamable HTTP — `initialize` + `notifications/initialized`.
+
+    Captura `Mcp-Session-Id` (transporte stateful, ex: Context7) e o
+    `protocolVersion` negociado, e envia o `notifications/initialized` JÁ com os
+    headers aumentados. Retorna os headers a usar em `tools/list`/`tools/call`.
+
+    Best-effort: falha no `initialize` é logada e NÃO levanta (igual ao
+    `except: pass` histórico) — o caller segue com os headers que houver.
+    Servidor stateless → retorno == `base_headers` (byte-idêntico ao anterior).
+    """
+    headers = dict(base_headers or {})
+    try:
+        resp = await client.post(endpoint, json={
+            "jsonrpc": "2.0", "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "AgenteInteligencia", "version": "1.0.0"},
+            },
+            "id": 0,
+        }, headers=headers)
+        sid = extract_session_id(resp)
+        if sid:
+            headers["Mcp-Session-Id"] = sid
+        pv = extract_negotiated_protocol(resp)
+        if pv:
+            headers["MCP-Protocol-Version"] = pv
+    except Exception as e:
+        logger.warning(
+            "mcp.handshake.initialize_failed",
+            extra={"event": "mcp.handshake", "endpoint": endpoint,
+                   "error_type": type(e).__name__},
+        )
+    # notifications/initialized COM os headers aumentados (inclui Mcp-Session-Id)
+    try:
+        await client.post(endpoint, json={
+            "jsonrpc": "2.0", "method": "notifications/initialized", "params": {},
+        }, headers=headers)
+    except Exception:
+        pass
+    return headers
+
+
 # ═══════════════════════════════════════════════════
 # Stdio MCP Client — subprocess communication
 # ═══════════════════════════════════════════════════
@@ -895,23 +996,9 @@ async def pre_discover_input_schemas(
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                # Initialize (alguns servers exigem antes de tools/list)
-                try:
-                    await client.post(endpoint, json={
-                        "jsonrpc": "2.0", "method": "initialize",
-                        "params": {
-                            "protocolVersion": "2024-11-05",
-                            "capabilities": {},
-                            "clientInfo": {"name": "AgenteInteligencia", "version": "1.0.0"},
-                        },
-                        "id": 0,
-                    }, headers=headers)
-                    await client.post(endpoint, json={
-                        "jsonrpc": "2.0", "method": "notifications/initialized",
-                        "params": {},
-                    }, headers=headers)
-                except Exception:
-                    pass  # initialize é best-effort
+                # Handshake — captura Mcp-Session-Id (servers stateful) e o
+                # propaga ao tools/list. Stateless = headers idênticos ao base.
+                headers = await mcp_http_handshake(client, endpoint, headers)
                 server_tools = await _discover_server_tools(client, endpoint, headers)
         except Exception as e:
             logger.info(f"pre_discover: {endpoint} falhou ({type(e).__name__}) — fallback legacy")
@@ -954,18 +1041,8 @@ async def _discover_connector_tools(t: dict, timeout: float = 8.0) -> list[dict]
     if token:
         headers["Authorization"] = f"Bearer {token}"
     async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            await client.post(endpoint, json={
-                "jsonrpc": "2.0", "method": "initialize",
-                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                           "clientInfo": {"name": "AgenteInteligencia", "version": "1.0.0"}},
-                "id": 0,
-            }, headers=headers)
-            await client.post(endpoint, json={
-                "jsonrpc": "2.0", "method": "notifications/initialized", "params": {},
-            }, headers=headers)
-        except Exception:
-            pass  # initialize é best-effort
+        # Handshake — captura Mcp-Session-Id (servers stateful) p/ o tools/list.
+        headers = await mcp_http_handshake(client, endpoint, headers)
         return await _discover_server_tools(client, endpoint, headers)
 
 
@@ -1285,14 +1362,10 @@ async def execute_tool_call(tool_name: str, arguments: dict, mcp_tools: list[dic
     # ── HTTP endpoints ──
     try:
         async with httpx.AsyncClient(timeout=timeout, **client_kwargs) as client:
-            try:
-                await client.post(endpoint, json={
-                    "jsonrpc": "2.0", "method": "initialize",
-                    "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "AgenteInteligencia", "version": "1.0.0"}},
-                    "id": 0,
-                }, headers=headers)
-                await client.post(endpoint, json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, headers=headers)
-            except: pass
+            # Handshake — captura Mcp-Session-Id e propaga a TODAS as chamadas
+            # seguintes (tools/list, tools/call). Stateful servers (Context7)
+            # rejeitam tools/call sem a sessão; stateless = idêntico ao antes.
+            headers = await mcp_http_handshake(client, endpoint, headers)
 
             # Descobre nomes reais dos tools do servidor (MCP tools/list) e
             # mapeia a operação declarada no SKILL (ex: "search") para o
