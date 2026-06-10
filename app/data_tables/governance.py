@@ -29,10 +29,13 @@ from __future__ import annotations
 from typing import Any, Iterable, Optional
 
 from app.data_tables.types import (
+    MASK_PLACEHOLDER,
     PII_PLACEHOLDERS,
+    OutputTreatment,
     PiiCategory,
     SqlOperator,
     UNCATALOGED_PLACEHOLDER,
+    effective_treatment,
     normalize_pii_category,
 )
 
@@ -137,37 +140,74 @@ def _mask_token(col: Any) -> Optional[str]:
     return UNCATALOGED_PLACEHOLDER  # sensível por não-catalogada
 
 
-def mask_rows_pii_only(rows: list[dict], catalog: Any) -> list[dict]:
-    """Higiene de EXIBIÇÃO do Tier 1: mascara SÓ colunas explicitamente
-    catalogadas como PII (``pii_category != none``) — célula inteira vira o
-    placeholder da categoria.
+def _mask_token_for_category(pii_category: str) -> str:
+    """Placeholder de uma coluna MASCARADA: por categoria de PII, ou genérico
+    ([PROTEGIDO]) quando a categoria é 'none' (curador mascarou uma não-PII)."""
+    if pii_category != _NONE:
+        return PII_PLACEHOLDERS.get(pii_category, PII_PLACEHOLDERS[PiiCategory.OTHER.value])
+    return MASK_PLACEHOLDER
 
-    Diferente de ``mask_rows_by_catalog`` (gate do Tier 2, fail-safe: coluna
-    não-catalogada = sensível), aqui coluna não-catalogada PASSA: no Tier 1 o
-    AUTOR da skill escolheu as colunas do select explicitamente (caminho
-    confiado) e a maioria das tabelas não tem catálogo curado — mascarar tudo
-    inutilizaria o render default. PII catalogada, porém, nunca vaza num render
-    default (um ## Response Template custom pode citá-la — escolha consciente
-    do autor). NÃO muta ``rows``.
+
+def apply_display_treatment(rows: list[dict], catalog: Any) -> list[dict]:
+    """Higiene de EXIBIÇÃO (render default Tier 1 / resultado NL) dirigida pelo
+    TRATAMENTO DE SAÍDA por coluna do Catálogo — separado da classificação PII.
+
+    Por coluna, o tratamento EFETIVO (override do curador, senão default derivado
+    da categoria: não-PII=Exibir, PII=Mascarar) decide:
+      - SHOW     → valor cru;
+      - MASK     → célula inteira vira placeholder ([CATEGORIA] / [PROTEGIDO]);
+      - SUPPRESS → a coluna é REMOVIDA da saída.
+    Coluna NÃO catalogada PASSA (Exibir) — no Tier 1 o autor escolheu o select
+    (caminho confiado) e a maioria das tabelas não tem catálogo curado; mascarar
+    tudo inutilizaria o render. NÃO muta ``rows``.
+
+    Substitui o antigo ``mask_rows_pii_only`` (que acoplava exibição à
+    classificação): financial+Exibir agora MOSTRA o valor sem mentir na categoria.
     """
-    cols = _columns(catalog)
-    tokens: dict[str, str] = {}
-    for c in cols:
+    actions: dict[str, tuple[str, str]] = {}   # name -> (treatment, mask_token)
+    for c in _columns(catalog):
         name = c.get("name")
         if not name:
             continue
         pii = normalize_pii_category(c.get("pii_category"))
-        if pii != _NONE:
-            tokens[name] = PII_PLACEHOLDERS.get(pii, PII_PLACEHOLDERS[PiiCategory.OTHER.value])
-    if not tokens:
+        treat = effective_treatment(pii, c.get("output_treatment"))
+        if treat == OutputTreatment.SHOW.value:
+            continue  # nada a fazer — exibe
+        actions[name] = (treat, _mask_token_for_category(pii))
+    if not actions:
         return list(rows or [])
     out: list[dict] = []
     for row in rows or []:
         if not isinstance(row, dict):
             out.append(row)
             continue
-        out.append({k: (tokens[k] if k in tokens else v) for k, v in row.items()})
+        new_row: dict = {}
+        for k, v in row.items():
+            act = actions.get(k)
+            if act is None:
+                new_row[k] = v
+            elif act[0] == OutputTreatment.SUPPRESS.value:
+                continue          # remove a coluna da saída
+            else:                 # MASK
+                new_row[k] = act[1]
+        out.append(new_row)
     return out
+
+
+def display_columns(catalog: Any, columns: Iterable[str]) -> list[str]:
+    """Filtra a lista de colunas removendo as SUPRIMIDAS pelo tratamento — p/ o
+    cabeçalho do render default acompanhar as células (que apply_display_treatment
+    removeu). Colunas fora do catálogo PASSAM (exibidas)."""
+    suppressed = set()
+    for c in _columns(catalog):
+        name = c.get("name")
+        if not name:
+            continue
+        treat = effective_treatment(normalize_pii_category(c.get("pii_category")),
+                                    c.get("output_treatment"))
+        if treat == OutputTreatment.SUPPRESS.value:
+            suppressed.add(name)
+    return [c for c in (columns or []) if c not in suppressed]
 
 
 def mask_rows_by_catalog(

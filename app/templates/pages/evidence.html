@@ -829,6 +829,7 @@
                                                         <th class="text-left py-1 px-1">tipo</th>
                                                         <th class="text-left py-1 px-1">descrição</th>
                                                         <th class="text-left py-1 px-1">PII</th>
+                                                        <th class="text-left py-1 px-1" title="Como exibir o valor na saída (separado da classificação PII)">Tratamento</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody class="font-mono">
@@ -846,6 +847,15 @@
                                                                         :class="(c.pii_category && c.pii_category !== 'none') ? 'bg-rose-50 text-rose-700' : ''">
                                                                     <template x-for="opt in piiCategories" :key="opt">
                                                                         <option :value="opt" x-text="opt"></option>
+                                                                    </template>
+                                                                </select>
+                                                            </td>
+                                                            <td class="py-0.5 px-1">
+                                                                <select x-model="c.output_treatment"
+                                                                        class="text-[10px] font-sans rounded border border-surface-200 px-1 py-0.5 focus:border-brand-300 focus:outline-none"
+                                                                        :class="c.output_treatment === 'show' ? 'bg-emerald-50 text-emerald-700' : (c.output_treatment === 'suppress' ? 'bg-surface-200 text-surface-600' : 'bg-amber-50 text-amber-700')">
+                                                                    <template x-for="opt in outputTreatments" :key="opt.v">
+                                                                        <option :value="opt.v" x-text="opt.l"></option>
                                                                     </template>
                                                                 </select>
                                                             </td>
@@ -1032,6 +1042,8 @@ function evidencePage() {
         inspectTab: 'overview',       // 'overview' | 'documents' | 'chunks' | 'tables' | 'query'
         // Catálogo de Dados: categorias de PII (espelha o enum PiiCategory do backend)
         piiCategories: ['none','cpf','cnpj','email','phone','name','address','financial','health','biometric','other'],
+        // Tratamento de saída por coluna (separado da classificação PII): Exibir | Mascarar | Suprimir.
+        outputTreatments: [{v:'show',l:'Exibir'},{v:'mask',l:'Mascarar'},{v:'suppress',l:'Suprimir'}],
         // ─── Tier 2: bancada "Perguntar à Tabela" (text-to-SQL governado) ───
         askTableId: '', askQuestion: '', askCompiling: false,
         askResult: null,        // {compiled, blocked, sql_preview, allowed_columns, note}
@@ -1517,6 +1529,7 @@ function evidencePage() {
                         name: c.name,
                         description: c.description || '',
                         pii_category: c.pii_category || 'none',
+                        output_treatment: c.output_treatment || null,
                     })),
                 };
                 const resp = await fetch('/api/v1/data-tables/' + encodeURIComponent(t.id) + '/catalog', {

@@ -155,11 +155,15 @@ def _default_table_answer(executed: list[dict]) -> str | None:
             )
             continue
 
-        # Higiene de exibição: PII catalogada nunca vaza em render default.
-        # Lazy import (paridade com o resto do engine p/ deploys sem a feature).
+        # Higiene de exibição dirigida pelo TRATAMENTO DE SAÍDA do Catálogo
+        # (Exibir/Mascarar/Suprimir — separado da classificação PII). Suprimir
+        # remove a coluna das células E do cabeçalho. Lazy import (paridade com o
+        # resto do engine p/ deploys sem a feature).
+        catalog = meta.get("catalog")
         try:
-            from app.data_tables.governance import mask_rows_pii_only
-            rows = mask_rows_pii_only(rows, meta.get("catalog"))
+            from app.data_tables.governance import apply_display_treatment, display_columns
+            rows = apply_display_treatment(rows, catalog)
+            cols = display_columns(catalog, cols)
         except ImportError:
             pass
 

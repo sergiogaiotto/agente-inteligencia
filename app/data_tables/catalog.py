@@ -18,7 +18,11 @@ from typing import Any, Awaitable, Callable
 
 from app.core.database import data_tables_repo
 from app.data_tables.queries import find_by_id_with_ks
-from app.data_tables.types import PiiCategory, normalize_pii_category
+from app.data_tables.types import (
+    PiiCategory,
+    normalize_output_treatment,
+    normalize_pii_category,
+)
 from app.evidence.tabular import TabularError
 
 
@@ -58,13 +62,19 @@ async def apply_catalog(
                 f"{[p.value for p in PiiCategory]}.",
                 status_code=400,
             )
-        cat_columns[name] = {
+        entry = {
             "description": str(c.get("description") or "").strip(),
             "pii_category": pii,
             "source": "human",
             "curated_by": uid,
             "curated_at": now_iso,
         }
+        # Tratamento de saída (Exibir/Mascarar/Suprimir) — só persiste quando
+        # explicitamente setado e válido; ausente → herda o default da categoria.
+        treat = normalize_output_treatment(c.get("output_treatment"))
+        if treat is not None:
+            entry["output_treatment"] = treat
+        cat_columns[name] = entry
 
     catalog_json = {
         "version": 1,

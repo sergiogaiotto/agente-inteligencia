@@ -18,7 +18,7 @@ import re
 import unicodedata
 from typing import Any, Optional
 
-from app.data_tables.types import normalize_pii_category
+from app.data_tables.types import effective_treatment, normalize_pii_category
 
 from app.core.database import _get_pool
 
@@ -144,13 +144,18 @@ def reconcile_catalog(schema: Any, catalog: Any, table_description: str = "") ->
         name = col.get("name")
         entry = cat_cols.get(name)
         entry = entry if isinstance(entry, dict) else {}
+        pii = normalize_pii_category(entry.get("pii_category"))
         columns.append({
             "name": name,
             "type": col.get("type"),
             "nullable": col.get("nullable"),
             "description": str(entry.get("description") or ""),
-            "pii_category": normalize_pii_category(entry.get("pii_category")),
+            "pii_category": pii,
             "source": entry.get("source"),  # 'ai' | 'human' | None (não catalogado)
+            # Tratamento de saída EFETIVO (override do curador, senão default da
+            # categoria). Fonte única do default em Python — UI e governança leem
+            # o mesmo valor resolvido (show/mask/suppress).
+            "output_treatment": effective_treatment(pii, entry.get("output_treatment")),
         })
     return {
         "table": {
