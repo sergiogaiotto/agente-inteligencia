@@ -114,6 +114,9 @@ class CatalogColumnSpec(BaseModel):
     name: str
     description: str = ""
     pii_category: str = "none"
+    # Tratamento de saída (Exibir/Mascarar/Suprimir) — separado da classificação.
+    # None = herda o default da categoria (não-PII=show, PII=mask). show|mask|suppress.
+    output_treatment: Optional[str] = None
 
 
 class CatalogPutRequest(BaseModel):

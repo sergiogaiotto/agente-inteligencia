@@ -25,22 +25,20 @@ from app.data_tables.types import (
 def _reconciled(cols: list[tuple]) -> dict:
     """Monta um catálogo no formato de reconcile_catalog.
 
-    `cols`: lista de (name, pii_category, source). source=None = não catalogada.
+    `cols`: lista de (name, pii_category, source) ou (name, pii, source,
+    output_treatment). source=None = não catalogada. treatment ausente = None
+    (governança resolve o default da categoria).
     """
-    return {
-        "table": {},
-        "columns": [
-            {
-                "name": n,
-                "type": "VARCHAR",
-                "nullable": True,
-                "description": "",
-                "pii_category": p,
-                "source": s,
-            }
-            for (n, p, s) in cols
-        ],
-    }
+    columns = []
+    for t in cols:
+        entry = {
+            "name": t[0], "type": "VARCHAR", "nullable": True,
+            "description": "", "pii_category": t[1], "source": t[2],
+        }
+        if len(t) > 3:
+            entry["output_treatment"] = t[3]
+        columns.append(entry)
+    return {"table": {}, "columns": columns}
 
 
 # ─── PII_PLACEHOLDERS: completude do mapa fechado ────────────────
@@ -218,30 +216,67 @@ def test_mask_tolerates_non_dict_rows():
     assert out == [{"c": "[CPF]"}, "linha-ruim", None]
 
 
-# ─── mask_rows_pii_only (higiene de exibição Tier 1) ─────────────
+# ─── apply_display_treatment (exibição: Exibir/Mascarar/Suprimir) ─
 
 
-def test_mask_pii_only_masks_explicit_pii_passes_rest():
-    from app.data_tables.governance import mask_rows_pii_only
+def test_display_default_preserves_old_behavior():
+    # SEM override: não-PII exibe, PII mascara (= comportamento de fábrica)
+    from app.data_tables.governance import apply_display_treatment
     cat = _reconciled([("cpf", "cpf", "human"), ("ghost", "none", None), ("id", "none", "human")])
     rows = [{"cpf": "111.222.333-44", "ghost": "passa", "id": 7}]
-    out = mask_rows_pii_only(rows, cat)
-    # PII explícita mascarada; NÃO-catalogada e humano-none passam (≠ Tier 2)
+    out = apply_display_treatment(rows, cat)
     assert out == [{"cpf": "[CPF]", "ghost": "passa", "id": 7}]
     assert rows == [{"cpf": "111.222.333-44", "ghost": "passa", "id": 7}]  # não muta
 
 
-def test_mask_pii_only_empty_catalog_unchanged():
-    from app.data_tables.governance import mask_rows_pii_only
-    assert mask_rows_pii_only([{"x": 1}], {}) == [{"x": 1}]
-    assert mask_rows_pii_only([{"x": 1}], None) == [{"x": 1}]
+def test_display_show_override_reveals_pii_value():
+    # O CASO DO USUÁRIO: financial + Exibir → MOSTRA o valor (sem mentir na categoria)
+    from app.data_tables.governance import apply_display_treatment
+    cat = _reconciled([("vr_limite", "financial", "human", "show")])
+    assert apply_display_treatment([{"vr_limite": 3600}], cat) == [{"vr_limite": 3600}]
 
 
-def test_mask_pii_only_all_categories():
-    from app.data_tables.governance import mask_rows_pii_only
+def test_display_mask_override_on_non_pii():
+    # none + Mascarar → placeholder genérico [PROTEGIDO]
+    from app.data_tables.governance import apply_display_treatment
+    cat = _reconciled([("obs", "none", "human", "mask")])
+    assert apply_display_treatment([{"obs": "texto"}], cat) == [{"obs": "[PROTEGIDO]"}]
+
+
+def test_display_suppress_removes_column():
+    from app.data_tables.governance import apply_display_treatment, display_columns
+    cat = _reconciled([("id", "none", "human"), ("segredo", "financial", "human", "suppress")])
+    out = apply_display_treatment([{"id": 1, "segredo": 999}], cat)
+    assert out == [{"id": 1}]                                  # coluna removida da linha
+    assert display_columns(cat, ["id", "segredo"]) == ["id"]   # e do cabeçalho
+
+
+def test_display_empty_catalog_unchanged():
+    from app.data_tables.governance import apply_display_treatment
+    assert apply_display_treatment([{"x": 1}], {}) == [{"x": 1}]
+    assert apply_display_treatment([{"x": 1}], None) == [{"x": 1}]
+
+
+def test_display_default_masks_all_categories():
+    from app.data_tables.governance import apply_display_treatment
     for cat_val, placeholder in PII_PLACEHOLDERS.items():
-        cat = _reconciled([("c", cat_val, "human")])
-        assert mask_rows_pii_only([{"c": "v"}], cat) == [{"c": placeholder}], cat_val
+        cat = _reconciled([("c", cat_val, "human")])      # sem override → default mask
+        assert apply_display_treatment([{"c": "v"}], cat) == [{"c": placeholder}], cat_val
+
+
+def test_treatment_helpers():
+    from app.data_tables.types import (
+        OutputTreatment, default_treatment_for, effective_treatment, normalize_output_treatment,
+    )
+    assert default_treatment_for("none") == "show"
+    assert default_treatment_for("financial") == "mask"
+    assert normalize_output_treatment("show") == "show"
+    assert normalize_output_treatment("EXIBIR") is None       # fora do enum → None
+    assert normalize_output_treatment(None) is None
+    # override vence; ausente herda o default da categoria
+    assert effective_treatment("financial", "show") == OutputTreatment.SHOW.value
+    assert effective_treatment("financial", None) == OutputTreatment.MASK.value
+    assert effective_treatment("none", None) == OutputTreatment.SHOW.value
 
 
 # ─── integração com reconcile_catalog real ───────────────────────

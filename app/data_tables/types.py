@@ -162,3 +162,57 @@ PII_PLACEHOLDERS = {
 # Placeholder para coluna sensível por ser DESCONHECIDA (não catalogada por humano
 # como não-PII). Distinto das categorias: sinaliza "catalogue para liberar/ver".
 UNCATALOGED_PLACEHOLDER = "[NÃO CATALOGADO]"
+
+# Placeholder genérico p/ coluna MASCARADA cuja categoria é 'none' (o curador
+# escolheu mascarar uma coluna não-PII via tratamento de saída).
+MASK_PLACEHOLDER = "[PROTEGIDO]"
+
+
+# ─── Catálogo: TRATAMENTO DE SAÍDA por coluna (separa do pii_category) ─────
+# DECISÃO (2026-06-10, com o usuário): a CLASSIFICAÇÃO (pii_category — o que o
+# dado É) e o TRATAMENTO DE EXIBIÇÃO (como mostrar na saída) são ortogonais. Antes
+# o pii_category fazia os dois (qualquer PII → mascarava), forçando o curador a
+# MENTIR na classificação (marcar financial→none) só p/ exibir o valor. Agora o
+# tratamento é um campo PRÓPRIO, com DEFAULT derivado da categoria (não-PII=show,
+# PII=mask) — comportamento de fábrica idêntico ao anterior, mas sobrescrevível.
+# Dirige SÓ a EXIBIÇÃO (render default/NL). A allow-list/predicado do Tier 2
+# (texto livre) segue dirigida pela CLASSIFICAÇÃO (exibir ≠ consultável).
+
+class OutputTreatment(str, Enum):
+    """Tratamento de saída por coluna no Catálogo. Enum FECHADO."""
+
+    SHOW = "show"          # Exibir — valor cru
+    MASK = "mask"          # Mascarar — placeholder total ([CATEGORIA]/[PROTEGIDO])
+    SUPPRESS = "suppress"  # Suprimir — remove a coluna da saída
+    # PARTIAL = "partial"  # (PR2) revela parte — lógica por categoria
+
+
+def default_treatment_for(pii_category) -> str:
+    """Default do tratamento derivado da CLASSIFICAÇÃO: não-PII exibe; PII mascara.
+
+    Preserva o comportamento de fábrica (PII mascarada) quando o curador não
+    sobrescreve explicitamente o tratamento.
+    """
+    if normalize_pii_category(pii_category) == PiiCategory.NONE.value:
+        return OutputTreatment.SHOW.value
+    return OutputTreatment.MASK.value
+
+
+def normalize_output_treatment(value) -> "str | None":
+    """Coage p/ OutputTreatment válido. None / fora do enum → None (= usar default
+    derivado da categoria). Diferente de normalize_pii_category: aqui None é
+    SIGNIFICATIVO (ausência = 'herda o default'), então NÃO coage p/ um valor.
+    """
+    if value is None:
+        return None
+    try:
+        return OutputTreatment(str(value).strip().lower()).value
+    except (ValueError, AttributeError):
+        return None
+
+
+def effective_treatment(pii_category, output_treatment) -> str:
+    """Tratamento EFETIVO de uma coluna: o override do curador, senão o default
+    derivado da categoria. É o que o masking de exibição consome."""
+    t = normalize_output_treatment(output_treatment)
+    return t if t is not None else default_treatment_for(pii_category)

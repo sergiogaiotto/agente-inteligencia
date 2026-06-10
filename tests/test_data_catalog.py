@@ -60,6 +60,7 @@ def test_reconcile_left_join_marks_uncataloged_columns():
     assert cols["vr_limite_cheque_especial"] == {
         "name": "vr_limite_cheque_especial", "type": "BIGINT", "nullable": True,
         "description": "", "pii_category": "none", "source": None,
+        "output_treatment": "show",   # default da categoria none
     }
     # ordem e cardinalidade seguem o schema vivo (3 colunas)
     assert [c["name"] for c in out["columns"]] == [c["name"] for c in _SCHEMA]
@@ -104,7 +105,8 @@ def test_reconcile_defends_against_garbage_types():
     assert reconcile_catalog(None, None)["columns"] == []
     assert reconcile_catalog("nope", {"columns": "nope"})["columns"] == []
     assert reconcile_catalog([{"name": "x", "type": "T", "nullable": True}, "lixo"], {})["columns"] == [
-        {"name": "x", "type": "T", "nullable": True, "description": "", "pii_category": "none", "source": None},
+        {"name": "x", "type": "T", "nullable": True, "description": "", "pii_category": "none",
+         "source": None, "output_treatment": "show"},
     ]
 
 
