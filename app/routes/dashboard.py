@@ -1842,6 +1842,19 @@ async def _test_mcp_connection_impl(data: MCPTestRequest) -> dict:
                 server_info = data_resp["result"].get("serverInfo", {})
                 server_name = f"{server_info.get('name', '?')} v{server_info.get('version', '?')}"
 
+                # Captura a sessão MCP Streamable HTTP (Mcp-Session-Id) e a versão
+                # negociada, e ecoa em notifications/initialized + tools/list. Sem
+                # isto, server stateful (Context7) descobre 0 tools no cadastro —
+                # ou seja, NÃO funcionaria de primeira ao registrar um MCP novo.
+                from app.mcp.runtime import extract_session_id
+                headers = {**headers}
+                _sid = extract_session_id(resp)
+                if _sid:
+                    headers["Mcp-Session-Id"] = _sid
+                _pv = data_resp["result"].get("protocolVersion")
+                if _pv:
+                    headers["MCP-Protocol-Version"] = str(_pv).strip()
+
                 try:
                     await client.post(endpoint, json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
                                       headers=headers)
@@ -2022,16 +2035,10 @@ async def _execute_mcp_tool_impl(data: MCPExecuteRequest) -> dict:
     start = time.time()
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True, **client_kwargs) as client:
-            await client.post(endpoint, json={
-                "jsonrpc": "2.0", "method": "initialize",
-                "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "AgenteInteligencia", "version": "1.0.0"}},
-                "id": 1,
-            }, headers=headers)
-
-            try:
-                await client.post(endpoint, json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
-                                  headers=headers)
-            except: pass
+            # Handshake centralizado — captura Mcp-Session-Id (servers stateful
+            # como Context7) e ecoa no tools/call. Stateless = sem mudança.
+            from app.mcp.runtime import mcp_http_handshake
+            headers = await mcp_http_handshake(client, endpoint, headers)
 
             resp = await client.post(endpoint, json={
                 "jsonrpc": "2.0", "method": "tools/call",
