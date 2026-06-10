@@ -106,16 +106,25 @@ def test_prompt_emits_declarative_and_executable_block():
     assert "LLM gera SQL" not in combined
     # nota sobre o input do filtro
     assert "`cd_cliente`" in combined
+    # WHERE multi-campo: TODAS as colunas viram filtro if_present (qualquer
+    # combinação informada filtra); PK obrigatória, demais opcionais
+    assert "if_present: cd_cliente" in combined
+    assert "if_present: vr_limite_cheque_especial" in combined
+    assert 'value: "{{ inputs.vr_limite_cheque_especial }}"' in combined
+    assert "OBRIGATÓRIA" in combined and "OPCIONAIS" in combined
 
 
-def test_prompt_no_pk_emits_filterless_executable_block():
+def test_prompt_no_pk_emits_ifpresent_filters_all_optional():
     data = WizardSkillRequest(description="dump")
     system, user = _build_wizard_prompt(data, _bindings([_table(pk=None)]), "standard")
     combined = system + "\n" + user
     assert "execution_mode: declarative" in combined
     assert "table_ref: urn:table:88356215" in combined
     assert "select: [cd_cliente, vr_limite_cheque_especial]" in combined
-    assert "filters: []" in combined          # sem PK → sem filtro, mas executável
+    # sem PK: ainda gera filtros if_present p/ todas as colunas (opcionais)
+    assert "if_present: cd_cliente" in combined
+    assert "if_present: vr_limite_cheque_especial" in combined
+    assert "OPCIONAIS (sem required)" in combined
     assert "on_error: fail" in combined
 
 

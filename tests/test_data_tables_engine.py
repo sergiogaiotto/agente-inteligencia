@@ -482,3 +482,79 @@ class TestExecuteDeclarativeWithDataTables:
         # data_tables_parsed só permite items com id+table_ref no parser,
         # mas aqui injetei diretamente — engine deve detectar.
         assert any("data_table inválido" in e for e in result["errors"])
+
+
+class TestIfPresentFilters:
+    """WHERE multi-campo (2026-06-10): filtros `if_present` de input AUSENTE são
+    descartados ANTES do Jinja estrito — sem isso, "{{ inputs.X }}" com X ausente
+    estourava StrictUndefined e derrubava a fase inteira."""
+
+    def _table(self, fake_tabular):
+        fake_tabular["tables_by_ref"]["urn:table:abc:t:1"] = {
+            "id": "t-1", "urn": "urn:table:abc:t:1",
+        }
+
+    def _skill_multi(self):
+        return _make_skill_with_tables([{
+            "id": "q", "table_ref": "urn:table:abc:t:1",
+            "query": {"filters": [
+                {"col": "a", "op": "=", "value": "{{ inputs.a }}", "if_present": "a"},
+                {"col": "b", "op": "=", "value": "{{ inputs.b }}", "if_present": "b"},
+            ], "limit": 10},
+        }])
+
+    def test_absent_input_filter_dropped_before_render(self, fake_repos, fake_tabular):
+        self._table(fake_tabular)
+        result = _run(de.execute_declarative(
+            agent=_make_agent(), skill_parsed=self._skill_multi(), inputs={"a": 1},
+        ))
+        assert result["final_state"] == "completed"   # sem StrictUndefined p/ b
+        call = fake_tabular["query_calls"][0]
+        assert [f["col"] for f in call["filters"]] == ["a"]   # filtro de b descartado
+        assert call["filters"][0]["value"] == 1
+
+    def test_both_inputs_both_filters_applied(self, fake_repos, fake_tabular):
+        self._table(fake_tabular)
+        _run(de.execute_declarative(
+            agent=_make_agent(), skill_parsed=self._skill_multi(),
+            inputs={"a": 1, "b": "RS"},
+        ))
+        call = fake_tabular["query_calls"][0]
+        assert [f["col"] for f in call["filters"]] == ["a", "b"]
+
+    def test_no_inputs_all_dropped_lists_all(self, fake_repos, fake_tabular):
+        self._table(fake_tabular)
+        result = _run(de.execute_declarative(
+            agent=_make_agent(), skill_parsed=self._skill_multi(), inputs={},
+        ))
+        assert result["final_state"] == "completed"
+        assert fake_tabular["query_calls"][0]["filters"] == []   # sem WHERE → lista até o limit
+
+    def test_empty_string_input_treated_as_absent(self, fake_repos, fake_tabular):
+        self._table(fake_tabular)
+        _run(de.execute_declarative(
+            agent=_make_agent(), skill_parsed=self._skill_multi(),
+            inputs={"a": "", "b": "x"},
+        ))
+        assert [f["col"] for f in fake_tabular["query_calls"][0]["filters"]] == ["b"]
+
+    def test_filter_without_if_present_applies_with_none(self, fake_repos, fake_tabular):
+        """Sem if_present, input ausente NÃO derruba: expressão Jinja PURA
+        ("{{ inputs.a }}") usa compile_expression (undefined→None) → o filtro
+        vai ao serviço com value=None (`a = NULL` → 0 linhas). Comportamento
+        legado SEGURO (não vaza dados) — era a causa das '0 linhas silenciosas'
+        no chat; filtros opcionais devem usar if_present."""
+        self._table(fake_tabular)
+        skill = _make_skill_with_tables([{
+            "id": "q", "table_ref": "urn:table:abc:t:1",
+            "query": {"filters": [
+                {"col": "a", "op": "=", "value": "{{ inputs.a }}"},
+            ], "limit": 10},
+        }])
+        result = _run(de.execute_declarative(
+            agent=_make_agent(), skill_parsed=skill, inputs={},
+        ))
+        assert result["final_state"] == "completed"
+        call = fake_tabular["query_calls"][0]
+        assert [f["col"] for f in call["filters"]] == ["a"]   # filtro mantido
+        assert call["filters"][0]["value"] is None            # value=None → 0 linhas
