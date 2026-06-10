@@ -1401,15 +1401,18 @@ class TestAPISubBlock:
 
 
 class TestTablesSubBlock:
-    """Sub-bloco [TABLES]: LLM gera SQL, engine executa via DuckDB. Sem
-    Workflow imperativo, LLM responde de cabeça (base nunca é consultada)."""
+    """Sub-bloco [TABLES]: query PARAMETRIZADA no bloco ## Data Tables (engine
+    executa via DuckDB com bind vars; o LLM NÃO escreve SQL). Exige
+    execution_mode: declarative — sem ele a tabela nunca é lida (correção 2026-06-09:
+    o modelo antigo 'LLM gera SQL' gerava skill que não consultava a tabela)."""
 
     def _tables_bindings(self):
         return {
             "mcp_tools": [], "rag_sources": [], "api_endpoints": [],
             "data_tables": [{
                 "urn": "urn:table:vendas-2026", "name": "Vendas 2026",
-                "row_count": 50000, "schema_summary": "data, cliente, valor, regiao",
+                "row_count": 50000, "schema_summary": "data:DATE, cliente:VARCHAR, valor:DOUBLE",
+                "columns": ["data", "cliente", "valor", "regiao"], "suggested_pk": "cliente",
             }],
         }
 
@@ -1423,25 +1426,28 @@ class TestTablesSubBlock:
         system, _ = _build_wizard_prompt(req, self._tables_bindings(), "standard")
         assert "urn:table:vendas-2026" in system
 
-    def test_tables_block_uses_query_verbs(self):
-        """Tabelas: Consulte/Query/SELECT — não Chame (vocab MCP)."""
+    def test_tables_block_describes_parametrized_query(self):
+        """Tabela = query PARAMETRIZADA (não LLM escrevendo SQL)."""
         req = WizardSkillRequest(description="x", table_ids=["urn:table:vendas-2026"])
         system, _ = _build_wizard_prompt(req, self._tables_bindings(), "standard")
-        assert "Consulte" in system or "Query" in system or "SELECT" in system
+        assert "parametrizada" in system.lower()
 
-    def test_tables_block_mentions_sql_generation(self):
-        """LLM precisa saber que ele GERA SQL e engine executa via DuckDB."""
+    def test_tables_block_states_llm_does_not_write_sql(self):
+        """O LLM NÃO gera SQL — a query é parametrizada e o engine executa via DuckDB."""
         req = WizardSkillRequest(description="x", table_ids=["urn:table:vendas-2026"])
-        system, _ = _build_wizard_prompt(req, self._tables_bindings(), "standard")
-        assert "SQL" in system
+        system, full_user = _build_wizard_prompt(req, self._tables_bindings(), "standard")
+        combined = system + "\n" + full_user
         assert "DuckDB" in system
+        assert "não escreve sql" in combined.lower()
+        assert "LLM gera SQL" not in combined  # modelo errado banido
+        # frontmatter declarativo é exigido (senão a tabela nunca é lida)
+        assert "execution_mode: declarative" in combined
 
     def test_tables_block_forbids_invented_columns(self):
-        """LLM tende a inventar colunas — sub-bloco protege citando
-        schema_summary como única fonte de nomes válidos."""
+        """LLM tende a inventar colunas — o sub-bloco proíbe colunas fora do schema."""
         req = WizardSkillRequest(description="x", table_ids=["urn:table:vendas-2026"])
         system, _ = _build_wizard_prompt(req, self._tables_bindings(), "standard")
-        assert "NÃO invente nomes de coluna" in system or "schema_summary" in system
+        assert "não invente colunas" in system.lower() or "schema declarado" in system
 
     def test_tables_block_absent_when_no_tables(self):
         req = WizardSkillRequest(description="x", mcp_tool_ids=["t1"])
