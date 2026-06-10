@@ -113,6 +113,22 @@ def _coerce_inputs_by_schema(inputs: dict, schema: dict | None) -> dict:
     return out
 
 
+def _single_required_input(schema: dict | None) -> str | None:
+    """Nome do ÚNICO campo de input quando o mapeamento texto-livre→input é
+    inequívoco: 1 campo em `required`, ou (sem required) 1 `property`. Caso
+    contrário None — uma única mensagem de texto não tem como preencher múltiplos
+    campos (multi-input exige inputs estruturados via JSON na mensagem)."""
+    if not isinstance(schema, dict):
+        return None
+    required = schema.get("required")
+    if isinstance(required, list) and len(required) == 1 and isinstance(required[0], str):
+        return required[0]
+    props = schema.get("properties")
+    if isinstance(props, dict) and len(props) == 1:
+        return next(iter(props))
+    return None
+
+
 @router.get("/sessions")
 async def list_sessions(agent_id: str = None, limit: int = 30, offset: int = 0):
     f = {}
@@ -694,10 +710,15 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                                 inputs = parsed_msg
                         except (ValueError, SyntaxError):
                             pass
-                if not inputs and msg:
-                    inputs = {"question": msg}
-
                 schema = _extract_inputs_schema(parsed_skill.inputs)
+                if not inputs and msg:
+                    # Texto livre → mapeia pro input NOMEADO da skill quando há um
+                    # alvo único e claro (caso típico: lookup por código/id). Sem
+                    # isso o texto ia pra {"question": msg} e o filtro da tabela
+                    # (ex.: {{ inputs.cd_cliente }}) ficava vazio → 0 linhas
+                    # silenciosas (bug 2026-06-10). Multi-input cai no genérico.
+                    target = _single_required_input(schema)
+                    inputs = {target: msg} if target else {"question": msg}
                 inputs = _coerce_inputs_by_schema(inputs, schema)
 
                 decl = await execute_declarative(
