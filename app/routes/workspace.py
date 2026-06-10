@@ -129,6 +129,42 @@ def _single_required_input(schema: dict | None) -> str | None:
     return None
 
 
+# Token `campo=valor`: valor entre aspas (com espaços) OU run sem espaço.
+_KV_RE = re.compile(r"""([A-Za-z_]\w*)\s*=\s*("[^"]*"|'[^']*'|\S+)""")
+
+
+def _parse_kv_message(msg: str, schema: dict | None) -> dict | None:
+    """Parseia `campo=valor campo2=valor2` → dict — só quando a mensagem é
+    PURAMENTE pares chave=valor E todas as chaves são propriedades do
+    inputs_schema. Senão None (cai no mapeamento de texto livre / compilador NL).
+
+    Permite WHERE multi-campo no chat sem digitar JSON:
+      `nr_idade=35 vr_renda=5000`  ou  `uf="Rio Grande" nr_idade=35`.
+    Valores ficam string — `_coerce_inputs_by_schema` converte o tipo depois.
+    Gate anti-falso-positivo: prosa com '=' no meio (ex.: "clientes com
+    renda=5000 acima") deixa resto não-vazio → None (vai pro caminho NL).
+    """
+    if not msg or "=" not in msg:
+        return None
+    props = (schema or {}).get("properties")
+    if not isinstance(props, dict) or not props:
+        return None
+    matches = list(_KV_RE.finditer(msg))
+    if not matches:
+        return None
+    if _KV_RE.sub("", msg).strip():       # sobrou texto fora dos pares → não é k=v puro
+        return None
+    out: dict = {}
+    for m in matches:
+        key, val = m.group(1), m.group(2)
+        if key not in props:              # chave fora do schema → não estruturado
+            return None
+        if len(val) >= 2 and val[0] in "\"'" and val[-1] == val[0]:
+            val = val[1:-1]               # tira aspas
+        out[key] = val
+    return out or None
+
+
 @router.get("/sessions")
 async def list_sessions(agent_id: str = None, limit: int = 30, offset: int = 0):
     f = {}
@@ -712,13 +748,18 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                             pass
                 schema = _extract_inputs_schema(parsed_skill.inputs)
                 if not inputs and msg:
-                    # Texto livre → mapeia pro input NOMEADO da skill quando há um
-                    # alvo único e claro (caso típico: lookup por código/id). Sem
+                    # Precedência: (1) JSON já tratado acima; (2) `campo=valor`
+                    # estruturado (WHERE multi-campo no chat sem JSON); (3) texto
+                    # único → input NOMEADO da skill (lookup por código/id — sem
                     # isso o texto ia pra {"question": msg} e o filtro da tabela
-                    # (ex.: {{ inputs.cd_cliente }}) ficava vazio → 0 linhas
-                    # silenciosas (bug 2026-06-10). Multi-input cai no genérico.
-                    target = _single_required_input(schema)
-                    inputs = {target: msg} if target else {"question": msg}
+                    # ficava vazio → 0 linhas silenciosas, bug 2026-06-10);
+                    # (4) genérico {"question": msg} (multi-input / texto livre).
+                    kv = _parse_kv_message(msg, schema)
+                    if kv:
+                        inputs = kv
+                    else:
+                        target = _single_required_input(schema)
+                        inputs = {target: msg} if target else {"question": msg}
                 inputs = _coerce_inputs_by_schema(inputs, schema)
 
                 decl = await execute_declarative(
