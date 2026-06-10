@@ -137,6 +137,39 @@ def _mask_token(col: Any) -> Optional[str]:
     return UNCATALOGED_PLACEHOLDER  # sensível por não-catalogada
 
 
+def mask_rows_pii_only(rows: list[dict], catalog: Any) -> list[dict]:
+    """Higiene de EXIBIÇÃO do Tier 1: mascara SÓ colunas explicitamente
+    catalogadas como PII (``pii_category != none``) — célula inteira vira o
+    placeholder da categoria.
+
+    Diferente de ``mask_rows_by_catalog`` (gate do Tier 2, fail-safe: coluna
+    não-catalogada = sensível), aqui coluna não-catalogada PASSA: no Tier 1 o
+    AUTOR da skill escolheu as colunas do select explicitamente (caminho
+    confiado) e a maioria das tabelas não tem catálogo curado — mascarar tudo
+    inutilizaria o render default. PII catalogada, porém, nunca vaza num render
+    default (um ## Response Template custom pode citá-la — escolha consciente
+    do autor). NÃO muta ``rows``.
+    """
+    cols = _columns(catalog)
+    tokens: dict[str, str] = {}
+    for c in cols:
+        name = c.get("name")
+        if not name:
+            continue
+        pii = normalize_pii_category(c.get("pii_category"))
+        if pii != _NONE:
+            tokens[name] = PII_PLACEHOLDERS.get(pii, PII_PLACEHOLDERS[PiiCategory.OTHER.value])
+    if not tokens:
+        return list(rows or [])
+    out: list[dict] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            out.append(row)
+            continue
+        out.append({k: (tokens[k] if k in tokens else v) for k, v in row.items()})
+    return out
+
+
 def mask_rows_by_catalog(
     rows: list[dict],
     columns: Optional[Iterable[str]],

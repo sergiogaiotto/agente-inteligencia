@@ -117,6 +117,75 @@ def _render_deep(value: Any, scope: dict, lenient: bool = False) -> Any:
 
 _FENCE_RE = re.compile(r"^```[a-zA-Z0-9_-]*\n(.*)\n```$", re.DOTALL)
 
+# Linhas exibidas no render default de tabela. Acima disso, trunca com nota —
+# o markdown da bolha não é lugar p/ dump de centenas de linhas (limit da query
+# já capa em MAX_ROWS_RETURNED; isto é só apresentação).
+_DEFAULT_ANSWER_MAX_ROWS = 20
+
+
+def _default_table_answer(executed: list[dict]) -> str | None:
+    """Resposta humana DEFAULT p/ skill de tabela SEM ## Response Template.
+
+    Renderiza as linhas retornadas (todas as colunas do select) como tabela
+    markdown — a UI da bolha tem suporte completo a tabelas. Colunas
+    explicitamente catalogadas como PII saem mascaradas (higiene de exibição;
+    ver governance.mask_rows_pii_only). 0 linhas → frase de "nenhum registro".
+    None quando não há resultado de tabela 2xx (caller cai no JSON legado).
+    Evita ':' no texto gerado (dispararia a rich-view "Estruturado" da UI).
+    """
+    tables = [
+        e for e in executed
+        if e.get("kind") == "table" and 200 <= e.get("status", 0) < 300
+    ]
+    if not tables:
+        return None
+
+    parts: list[str] = []
+    for t in tables:
+        meta = t.get("_table_meta") or {}
+        data = t.get("response_data") or {}
+        rows = data.get("rows") or []
+        cols = list(data.get("columns") or [])
+        name = meta.get("name") or ""
+
+        if not rows:
+            parts.append(
+                f"Nenhum registro encontrado{(' em ' + name) if name else ''} "
+                "para os critérios informados."
+            )
+            continue
+
+        # Higiene de exibição: PII catalogada nunca vaza em render default.
+        # Lazy import (paridade com o resto do engine p/ deploys sem a feature).
+        try:
+            from app.data_tables.governance import mask_rows_pii_only
+            rows = mask_rows_pii_only(rows, meta.get("catalog"))
+        except ImportError:
+            pass
+
+        shown = rows[:_DEFAULT_ANSWER_MAX_ROWS]
+        if not cols and isinstance(shown[0], dict):
+            cols = list(shown[0].keys())
+
+        def _cell(v: Any) -> str:
+            if v is None:
+                return ""
+            return str(v).replace("|", "\\|").replace("\n", " ")
+
+        header = "| " + " | ".join(str(c) for c in cols) + " |"
+        sep = "| " + " | ".join("---" for _ in cols) + " |"
+        body = "\n".join(
+            "| " + " | ".join(_cell(r.get(c)) for c in cols) + " |"
+            for r in shown if isinstance(r, dict)
+        )
+        title = f"**{name}** — {len(rows)} registro(s)" if name else f"{len(rows)} registro(s)"
+        block = f"{title}\n\n{header}\n{sep}\n{body}"
+        if len(rows) > _DEFAULT_ANSWER_MAX_ROWS:
+            block += f"\n\n_… mais {len(rows) - _DEFAULT_ANSWER_MAX_ROWS} linha(s) — refine o filtro._"
+        parts.append(block)
+
+    return "\n\n".join(parts) if parts else None
+
 
 def _strip_md_fence(text: str) -> str:
     """Remove um fence markdown (```jinja ... ```) que envolva o corpo, se houver.
@@ -330,6 +399,13 @@ async def _execute_data_tables_phase(
             "attempts": 1,
             "level": -1,  # pré-DAG
             "kind": "table",
+            # Interno (removido antes do retorno): nome + catálogo reconciliado
+            # da tabela, consumidos pelo render DEFAULT (_default_table_answer)
+            # p/ título e masking de colunas PII-catalogadas.
+            "_table_meta": {
+                "name": table_row.get("name") or "",
+                "catalog": table_row.get("catalog") or {},
+            },
         }
 
         if error_str:
@@ -1140,6 +1216,17 @@ async def execute_declarative(
                 },
             )
             answer = None
+
+    # Cadeia de fallback da resposta humana: template → render DEFAULT de tabela
+    # (markdown das linhas retornadas, PII-catalogada mascarada) → JSON legado.
+    # O default torna toda skill de tabela conversacional sem autoria de template.
+    if answer is None and not dry_run:
+        answer = _default_table_answer(executed)
+
+    # _table_meta é interno (catálogo p/ masking do default) — não vaza p/
+    # bindings_executed/UI/auditoria.
+    for e in executed:
+        e.pop("_table_meta", None)
 
     await _finalize_declarative_interaction(trace_id, final_state)
 
