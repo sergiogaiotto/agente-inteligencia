@@ -165,6 +165,131 @@ def _parse_kv_message(msg: str, schema: dict | None) -> dict | None:
     return out or None
 
 
+def _t2_log(event: str, **fields):
+    import logging as _logging
+    _logging.getLogger("app.routes.workspace").warning(event, extra={"event": event, **fields})
+
+
+async def _nl_table_answer(parsed_skill, msg: str, user: dict,
+                           session_id, agent_id) -> dict | None:
+    """Tier 2 text-to-SQL no CHAT: TEXTO LIVRE em PT-BR → struct governado → execução.
+
+    Reusa as peças Tier 2 já na main: compile_question (governado pelo Catálogo —
+    allow-list, anti-PII, caps; o LLM emite struct, nunca SQL), execute_query
+    (read_only, audited) e declarative_engine._default_table_answer (markdown +
+    mask PII-catalogada). Gated por TEXT_TO_SQL_ENABLED. TODOS os imports são LAZY
+    (não acopla a rota de chat à feature opcional/DuckDB).
+
+    Retorna {output_text, errors, duration_ms} quando RESPONDE (sucesso OU
+    degradação amigável), ou **None** p/ DEGRADAR ao fallback do chat (flag off,
+    skill sem tabela, catálogo não-curado, sem permissão, LLM indisponível) —
+    ZERO regressão no comportamento atual.
+    """
+    # (1) GATING — flag default OFF (lida a cada chamada; toggle runtime).
+    try:
+        from app.data_tables.runtime import text_to_sql_enabled
+    except ImportError:
+        return None
+    if not text_to_sql_enabled():
+        return None
+
+    # (2) Tabela: 1ª Data Table declarada na skill (resolve URN → row + catálogo).
+    dts = getattr(parsed_skill, "data_tables_parsed", []) or []
+    table_ref = str((dts[0] or {}).get("table_ref") or "") if dts else ""
+    if not table_ref:
+        return None
+    try:
+        from app.data_tables.queries import (
+            find_by_urn_with_ks, find_by_id_with_ks, can_user_see,
+        )
+        row = (await find_by_urn_with_ks(table_ref)) if table_ref.startswith("urn:table:") \
+            else (await find_by_id_with_ks(table_ref))
+    except Exception:
+        return None
+    if not row:
+        return None
+
+    # (3) Visibilidade — degrada p/ None (NÃO 403; não derruba a bolha).
+    if not can_user_see(user, row):
+        return None
+
+    # (4) Catálogo curado — sem coluna liberada, não tenta (fail-safe deny).
+    catalog = row.get("catalog") or {}
+    from app.data_tables.governance import allowed_cols_from_catalog
+    allowed = allowed_cols_from_catalog(catalog)
+    if not allowed:
+        return None
+
+    # (5) Anti-injeção (OWASP LLM01) ANTES do LLM — bolha neutra, não ecoa a pergunta.
+    from app.core.prompt_guard import detect as _pg_detect
+    guard = _pg_detect(msg)
+    if guard.blocked:
+        _t2_log("text_to_sql.prompt_blocked", score=round(guard.score, 3))
+        return {"output_text": "Não consegui interpretar sua pergunta com segurança. "
+                "Reformule de forma direta — cite a coluna e o valor, ou use "
+                "campo=valor (ex.: cd_cliente=123).", "errors": [], "duration_ms": None}
+
+    # (6) Amostra read-only p/ o prompt: só public/internal e SÓ colunas liberadas
+    # (PII de base sensível nunca vai ao provedor LLM). Best-effort.
+    from app.evidence.tabular import execute_query
+    sample_rows: list = []
+    label = str(row.get("ks_confidentiality_label") or "internal").lower()
+    if label in ("public", "internal"):
+        try:
+            sres = await execute_query(row["id"], select=allowed, limit=10,
+                                       executed_by=user.get("id"))
+            sample_rows = sres.get("rows", []) or []
+        except Exception:
+            sample_rows = []
+
+    # (7) Compila NL → struct (LLM determinístico, temp 0 + JSON-mode). 503/erro → degrada.
+    try:
+        from app.llm_routing import resolve_llm_for_task
+        from app.routes.wizard import _wizard_llm_complete
+        from app.data_tables.text_to_sql import compile_question
+        provider, model = await resolve_llm_for_task("instruct")
+
+        async def _complete(messages):
+            content, _, _ = await _wizard_llm_complete(
+                messages, provider, model, route="text_to_sql_compile",
+                temperature=0.0, response_format={"type": "json_object"})
+            return content
+
+        comp = await compile_question(row, catalog, sample_rows, msg, _complete)
+    except Exception as e:
+        _t2_log("text_to_sql.chat_compile_failed", error=str(e)[:200])
+        return None  # degrada ao fallback (não derruba o /chat)
+
+    compiled = comp.get("compiled") or {}
+    if comp.get("note"):                         # tabela sem coluna liberada (acionável)
+        return {"output_text": comp["note"], "errors": [], "duration_ms": None}
+    select = compiled.get("select") or []
+    if not select:
+        # struct vazio: NÃO executar — select=[] vira '*' e VAZARIA colunas
+        # não-liberadas (anti-vazamento). Devolve dica + o que a governança barrou.
+        blocked = comp.get("blocked") or []
+        hint = (" Barrado pela governança: " + "; ".join(blocked[:3])) if blocked else ""
+        return {"output_text": "Não consegui mapear sua pergunta para as colunas disponíveis "
+                "desta tabela. Cite uma coluna ou use campo=valor." + hint,
+                "errors": [], "duration_ms": None}
+
+    # (8) Executa (read_only) + formata via _default_table_answer (markdown + mask PII).
+    try:
+        res = await execute_query(
+            table_id=row["id"], select=select, filters=compiled.get("filters") or [],
+            order_by=compiled.get("order_by") or [], limit=compiled.get("limit") or 100,
+            executed_by=user.get("id"), interaction_id=session_id or None, agent_id=agent_id)
+    except Exception as e:
+        _t2_log("text_to_sql.chat_execute_failed", error=str(e)[:200])
+        return None
+    from app.agents.declarative_engine import _default_table_answer
+    rec = {"kind": "table", "status": 200,
+           "response_data": {"rows": res.get("rows") or [], "columns": res.get("columns") or []},
+           "_table_meta": {"name": row.get("name") or "", "catalog": catalog}}
+    output_text = _default_table_answer([rec]) or "Nenhum registro encontrado para os critérios informados."
+    return {"output_text": output_text, "errors": [], "duration_ms": res.get("duration_ms")}
+
+
 @router.get("/sessions")
 async def list_sessions(agent_id: str = None, limit: int = 30, offset: int = 0):
     f = {}
@@ -747,75 +872,100 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                         except (ValueError, SyntaxError):
                             pass
                 schema = _extract_inputs_schema(parsed_skill.inputs)
+                nl_answer = None
                 if not inputs and msg:
                     # Precedência: (1) JSON já tratado acima; (2) `campo=valor`
-                    # estruturado (WHERE multi-campo no chat sem JSON); (3) texto
-                    # único → input NOMEADO da skill (lookup por código/id — sem
-                    # isso o texto ia pra {"question": msg} e o filtro da tabela
-                    # ficava vazio → 0 linhas silenciosas, bug 2026-06-10);
-                    # (4) genérico {"question": msg} (multi-input / texto livre).
+                    # estruturado (WHERE multi-campo); (3) TEXTO LIVRE → compilador
+                    # Tier 2 (gated, governado pelo Catálogo) quando NÃO há input
+                    # único nomeado; (4) texto-único → input NOMEADO (lookup por
+                    # PK — protege o fix das 0 linhas silenciosas, bug 2026-06-10);
+                    # (5) genérico {"question": msg}.
                     kv = _parse_kv_message(msg, schema)
                     if kv:
                         inputs = kv
                     else:
-                        target = _single_required_input(schema)
-                        inputs = {target: msg} if target else {"question": msg}
-                inputs = _coerce_inputs_by_schema(inputs, schema)
+                        # Ramo NL só p/ texto livre genuíno (sem input único). Degrada
+                        # p/ None em qualquer não-aplicação → fallback abaixo (zero regressão).
+                        if _single_required_input(schema) is None:
+                            nl_answer = await _nl_table_answer(
+                                parsed_skill=parsed_skill, msg=msg, user=user,
+                                session_id=data.session_id, agent_id=data.agent_id,
+                            )
+                        if nl_answer is None:
+                            target = _single_required_input(schema)
+                            inputs = {target: msg} if target else {"question": msg}
 
-                decl = await execute_declarative(
-                    agent=agent_obj,
-                    skill_parsed=parsed_skill,
-                    inputs=inputs,
-                    context=None,
-                    session_id=data.session_id,
-                    dry_run=False,
-                )
-
-                # Adapta saída para o formato esperado pelo workspace.
-                # Prioriza context.resposta (output_mapping comum) sobre o JSON
-                # cru de bindings_executed.
-                ctx_dict = decl.get("context") or {}
-                output_text = ""
-                has_mapping_overflow = any("excede max_bytes" in str(err or "") for err in (decl.get("errors") or []))
-                # Frase humana do ## Response Template tem PRECEDÊNCIA: quando a skill
-                # tem o template, o engine devolve `answer` (texto puro) → vira a
-                # bolha do assistente em vez do JSON estruturado de bindings.
-                if decl.get("answer"):
-                    output_text = decl["answer"]
-                elif has_mapping_overflow and decl.get("api_response") is not None:
-                    api_resp = decl.get("api_response")
-                    output_text = api_resp if isinstance(api_resp, str) else json.dumps(api_resp, ensure_ascii=False, indent=2)
-                elif "resposta" in ctx_dict:
-                    r = ctx_dict["resposta"]
-                    output_text = r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, indent=2)
-                elif decl.get("api_response") is not None:
-                    api_resp = decl.get("api_response")
-                    output_text = api_resp if isinstance(api_resp, str) else json.dumps(api_resp, ensure_ascii=False, indent=2)
+                if nl_answer is not None:
+                    # Tier 2 respondeu (sucesso ou degradação amigável): a query
+                    # compilada substitui o ## Data Tables da skill → NÃO roda o
+                    # engine declarativo. Monta as mesmas variáveis do caminho comum.
+                    output_text = nl_answer["output_text"]
+                    executed = []
+                    errors = nl_answer.get("errors") or []
+                    final_state = "completed"
+                    any_success = True
+                    diag_level = "success" if not errors else "warning"
+                    diag_text = "Consulta em linguagem natural (Tier 2 text-to-SQL)"
+                    exec_log = []
+                    decl = {"interaction_id": data.session_id,
+                            "duration_ms": nl_answer.get("duration_ms")}
                 else:
-                    output_text = decl.get("output", "")
+                    inputs = _coerce_inputs_by_schema(inputs, schema)
 
-                executed = decl.get("bindings_executed") or []
-                errors = decl.get("errors") or []
-                any_success = any(200 <= b.get("status", 0) < 300 for b in executed)
-                final_state = decl.get("final_state", "completed")
+                    decl = await execute_declarative(
+                        agent=agent_obj,
+                        skill_parsed=parsed_skill,
+                        inputs=inputs,
+                        context=None,
+                        session_id=data.session_id,
+                        dry_run=False,
+                    )
 
-                diag_level = "success" if (any_success and not errors) else ("warning" if any_success else "danger")
-                diag_text = (
-                    f"Modo declarativo: {len(executed)} binding(s) executado(s)" +
-                    (f" · {len(errors)} erro(s)" if errors else "")
-                )
+                    # Adapta saída para o formato esperado pelo workspace.
+                    # Prioriza context.resposta (output_mapping comum) sobre o JSON
+                    # cru de bindings_executed.
+                    ctx_dict = decl.get("context") or {}
+                    output_text = ""
+                    has_mapping_overflow = any("excede max_bytes" in str(err or "") for err in (decl.get("errors") or []))
+                    # Frase humana do ## Response Template tem PRECEDÊNCIA: quando a skill
+                    # tem o template, o engine devolve `answer` (texto puro) → vira a
+                    # bolha do assistente em vez do JSON estruturado de bindings.
+                    if decl.get("answer"):
+                        output_text = decl["answer"]
+                    elif has_mapping_overflow and decl.get("api_response") is not None:
+                        api_resp = decl.get("api_response")
+                        output_text = api_resp if isinstance(api_resp, str) else json.dumps(api_resp, ensure_ascii=False, indent=2)
+                    elif "resposta" in ctx_dict:
+                        r = ctx_dict["resposta"]
+                        output_text = r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, indent=2)
+                    elif decl.get("api_response") is not None:
+                        api_resp = decl.get("api_response")
+                        output_text = api_resp if isinstance(api_resp, str) else json.dumps(api_resp, ensure_ascii=False, indent=2)
+                    else:
+                        output_text = decl.get("output", "")
 
-                exec_log = []
-                for b in executed:
-                    st = b.get("status", 0)
-                    lvl = "success" if 200 <= st < 300 else "danger"
-                    exec_log.append({
-                        "cat": "api",
-                        "icon": "🌐",
-                        "title": f"{b.get('method','?')} {b.get('path','?')}",
-                        "detail": f"status={st} · {b.get('connector','')}",
-                        "level": lvl,
-                    })
+                    executed = decl.get("bindings_executed") or []
+                    errors = decl.get("errors") or []
+                    any_success = any(200 <= b.get("status", 0) < 300 for b in executed)
+                    final_state = decl.get("final_state", "completed")
+
+                    diag_level = "success" if (any_success and not errors) else ("warning" if any_success else "danger")
+                    diag_text = (
+                        f"Modo declarativo: {len(executed)} binding(s) executado(s)" +
+                        (f" · {len(errors)} erro(s)" if errors else "")
+                    )
+
+                    exec_log = []
+                    for b in executed:
+                        st = b.get("status", 0)
+                        lvl = "success" if 200 <= st < 300 else "danger"
+                        exec_log.append({
+                            "cat": "api",
+                            "icon": "🌐",
+                            "title": f"{b.get('method','?')} {b.get('path','?')}",
+                            "detail": f"status={st} · {b.get('connector','')}",
+                            "level": lvl,
+                        })
 
                 result = {
                     "interaction_id": decl.get("interaction_id"),
