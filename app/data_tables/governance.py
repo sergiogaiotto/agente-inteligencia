@@ -148,6 +148,73 @@ def _mask_token_for_category(pii_category: str) -> str:
     return MASK_PLACEHOLDER
 
 
+# ─── Revelação PARCIAL (ciente da categoria) ─────────────────────
+
+
+def _partial_tail(value: Any, keep: int = 4) -> str:
+    """Revela os últimos `keep` chars; mascara o resto (identificadores).
+    Prefixo fixo de 4 pontos → não revela o comprimento original."""
+    s = str(value)
+    return ("••••" + s[-keep:]) if len(s) > keep else s
+
+
+def _partial_email(value: Any) -> str:
+    s = str(value)
+    if "@" not in s:
+        return _partial_tail(s)
+    local, _, domain = s.partition("@")
+    return f"{local[:1]}•••@{domain}" if local else f"•••@{domain}"
+
+
+def _partial_name(value: Any) -> str:
+    parts = str(value).split()
+    if len(parts) <= 1:
+        return _partial_tail(value)
+    return parts[0] + " " + " ".join(f"{p[:1]}." for p in parts[1:] if p)
+
+
+# Faixas de magnitude p/ valores financeiros — k-anonymity leve: revela a ORDEM
+# de grandeza, NUNCA o valor exato. PT-BR.
+_FINANCIAL_BANDS = (
+    (100, "< R$ 100"),
+    (1_000, "R$ 100 – 1 mil"),
+    (10_000, "R$ 1 – 10 mil"),
+    (100_000, "R$ 10 – 100 mil"),
+    (1_000_000, "R$ 100 mil – 1 mi"),
+)
+
+
+def _partial_financial(value: Any) -> str:
+    try:
+        n = abs(float(value))
+    except (ValueError, TypeError):
+        return PII_PLACEHOLDERS[PiiCategory.FINANCIAL.value]  # não-numérico → mascara total
+    for hi, label in _FINANCIAL_BANDS:
+        if n < hi:
+            return label
+    return "> R$ 1 mi"
+
+
+def partial_value(pii_category: str, value: Any) -> Any:
+    """Revelação PARCIAL ciente da categoria. None → None (célula vazia).
+
+    - email      → inicial + domínio (``j•••@gmail.com``);
+    - financial  → faixa de magnitude (``R$ 1 – 10 mil``), nunca o valor exato;
+    - name       → primeiro nome + iniciais (``João S.``);
+    - demais (cpf/cnpj/phone/address/other/none) → últimos 4 chars (``••••3-44``).
+    """
+    if value is None:
+        return None
+    cat = normalize_pii_category(pii_category)
+    if cat == PiiCategory.EMAIL.value:
+        return _partial_email(value)
+    if cat == PiiCategory.FINANCIAL.value:
+        return _partial_financial(value)
+    if cat == PiiCategory.NAME.value:
+        return _partial_name(value)
+    return _partial_tail(value)
+
+
 def apply_display_treatment(rows: list[dict], catalog: Any) -> list[dict]:
     """Higiene de EXIBIÇÃO (render default Tier 1 / resultado NL) dirigida pelo
     TRATAMENTO DE SAÍDA por coluna do Catálogo — separado da classificação PII.
@@ -156,6 +223,7 @@ def apply_display_treatment(rows: list[dict], catalog: Any) -> list[dict]:
     da categoria: não-PII=Exibir, PII=Mascarar) decide:
       - SHOW     → valor cru;
       - MASK     → célula inteira vira placeholder ([CATEGORIA] / [PROTEGIDO]);
+      - PARTIAL  → revela PARTE, ciente da categoria (``partial_value``);
       - SUPPRESS → a coluna é REMOVIDA da saída.
     Coluna NÃO catalogada PASSA (Exibir) — no Tier 1 o autor escolheu o select
     (caminho confiado) e a maioria das tabelas não tem catálogo curado; mascarar
@@ -164,7 +232,7 @@ def apply_display_treatment(rows: list[dict], catalog: Any) -> list[dict]:
     Substitui o antigo ``mask_rows_pii_only`` (que acoplava exibição à
     classificação): financial+Exibir agora MOSTRA o valor sem mentir na categoria.
     """
-    actions: dict[str, tuple[str, str]] = {}   # name -> (treatment, mask_token)
+    actions: dict[str, tuple[str, str]] = {}   # name -> (treatment, pii_category)
     for c in _columns(catalog):
         name = c.get("name")
         if not name:
@@ -173,7 +241,7 @@ def apply_display_treatment(rows: list[dict], catalog: Any) -> list[dict]:
         treat = effective_treatment(pii, c.get("output_treatment"))
         if treat == OutputTreatment.SHOW.value:
             continue  # nada a fazer — exibe
-        actions[name] = (treat, _mask_token_for_category(pii))
+        actions[name] = (treat, pii)
     if not actions:
         return list(rows or [])
     out: list[dict] = []
@@ -188,8 +256,10 @@ def apply_display_treatment(rows: list[dict], catalog: Any) -> list[dict]:
                 new_row[k] = v
             elif act[0] == OutputTreatment.SUPPRESS.value:
                 continue          # remove a coluna da saída
+            elif act[0] == OutputTreatment.PARTIAL.value:
+                new_row[k] = partial_value(act[1], v)
             else:                 # MASK
-                new_row[k] = act[1]
+                new_row[k] = _mask_token_for_category(act[1])
         out.append(new_row)
     return out
 

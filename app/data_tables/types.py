@@ -183,8 +183,8 @@ class OutputTreatment(str, Enum):
 
     SHOW = "show"          # Exibir — valor cru
     MASK = "mask"          # Mascarar — placeholder total ([CATEGORIA]/[PROTEGIDO])
+    PARTIAL = "partial"    # Parcial — revela PARTE, ciente da categoria (email/financeiro/id)
     SUPPRESS = "suppress"  # Suprimir — remove a coluna da saída
-    # PARTIAL = "partial"  # (PR2) revela parte — lógica por categoria
 
 
 def default_treatment_for(pii_category) -> str:

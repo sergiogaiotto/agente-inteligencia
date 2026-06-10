@@ -853,7 +853,7 @@
                                                             <td class="py-0.5 px-1">
                                                                 <select x-model="c.output_treatment"
                                                                         class="text-[10px] font-sans rounded border border-surface-200 px-1 py-0.5 focus:border-brand-300 focus:outline-none"
-                                                                        :class="c.output_treatment === 'show' ? 'bg-emerald-50 text-emerald-700' : (c.output_treatment === 'suppress' ? 'bg-surface-200 text-surface-600' : 'bg-amber-50 text-amber-700')">
+                                                                        :class="c.output_treatment === 'show' ? 'bg-emerald-50 text-emerald-700' : (c.output_treatment === 'suppress' ? 'bg-surface-200 text-surface-600' : (c.output_treatment === 'partial' ? 'bg-sky-50 text-sky-700' : 'bg-amber-50 text-amber-700'))">
                                                                     <template x-for="opt in outputTreatments" :key="opt.v">
                                                                         <option :value="opt.v" x-text="opt.l"></option>
                                                                     </template>
@@ -1043,7 +1043,7 @@ function evidencePage() {
         // Catálogo de Dados: categorias de PII (espelha o enum PiiCategory do backend)
         piiCategories: ['none','cpf','cnpj','email','phone','name','address','financial','health','biometric','other'],
         // Tratamento de saída por coluna (separado da classificação PII): Exibir | Mascarar | Suprimir.
-        outputTreatments: [{v:'show',l:'Exibir'},{v:'mask',l:'Mascarar'},{v:'suppress',l:'Suprimir'}],
+        outputTreatments: [{v:'show',l:'Exibir'},{v:'mask',l:'Mascarar'},{v:'partial',l:'Parcial'},{v:'suppress',l:'Suprimir'}],
         // ─── Tier 2: bancada "Perguntar à Tabela" (text-to-SQL governado) ───
         askTableId: '', askQuestion: '', askCompiling: false,
         askResult: null,        // {compiled, blocked, sql_preview, allowed_columns, note}
