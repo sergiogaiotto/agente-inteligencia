@@ -1015,6 +1015,28 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
             "\n\nReferências disponíveis:\n" + refs_md + pk_note
         )
 
+        # ── ## Response Template default (frase humana, sem LLM) ──
+        # O engine renderiza isto DETERMINISTICAMENTE contra {inputs, context} ao
+        # final (não é o LLM em runtime). Default genérico (contagem) — o autor
+        # customiza p/ citar colunas. Jinja com braces LITERAIS (sem f-string, p/
+        # evitar dobra de chaves). Texto renderizado SEM ':' nem '{}' (senão a UI
+        # liga a rich-view 'Estruturado' em vez de mostrar a frase).
+        slug0 = _slug_id(bindings["data_tables"][0].get("name") or "tabela")
+        first_pk = sorted(set(pk_inputs))[0] if pk_inputs else None
+        pk_part = (" para o {{ inputs." + first_pk + " }}") if first_pk else ""
+        jinja_body = (
+            "{% set rows = context." + slug0 + "_resultado %}"
+            "{% if rows %}Encontrei {{ rows | length }} registro(s)" + pk_part + "."
+            "{% else %}Nenhum registro encontrado" + pk_part + ".{% endif %}"
+        )
+        obligatory_sections.append(
+            "## Response Template\n"
+            "(Frase determinística renderizada pelo engine contra inputs+context, "
+            "SEM LLM. CUSTOMIZE p/ citar as colunas do resultado — ex.: "
+            "`{{ rows[0].<coluna> }}`; evite ':' e chaves '{}' no texto final.)\n\n"
+            "```jinja\n" + jinja_body + "\n```"
+        )
+
     if bindings["api_endpoints"]:
         # Formato YAML (atualizado 2026-05-31):
         #   - lista PURA no topo do bloco (sem chave wrapper 'endpoints:').

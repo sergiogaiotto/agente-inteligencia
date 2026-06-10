@@ -736,7 +736,12 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                 ctx_dict = decl.get("context") or {}
                 output_text = ""
                 has_mapping_overflow = any("excede max_bytes" in str(err or "") for err in (decl.get("errors") or []))
-                if has_mapping_overflow and decl.get("api_response") is not None:
+                # Frase humana do ## Response Template tem PRECEDÊNCIA: quando a skill
+                # tem o template, o engine devolve `answer` (texto puro) → vira a
+                # bolha do assistente em vez do JSON estruturado de bindings.
+                if decl.get("answer"):
+                    output_text = decl["answer"]
+                elif has_mapping_overflow and decl.get("api_response") is not None:
                     api_resp = decl.get("api_response")
                     output_text = api_resp if isinstance(api_resp, str) else json.dumps(api_resp, ensure_ascii=False, indent=2)
                 elif "resposta" in ctx_dict:

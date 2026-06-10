@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 REQUIRED_SECTIONS = ["Purpose", "Activation Criteria", "Inputs", "Workflow", "Tool Bindings", "Output Contract", "Failure Modes"]
-OPTIONAL_SECTIONS = ["Delegations", "Compensation", "Guardrails", "Budget", "Examples", "Telemetry", "Data Dependencies", "Model Constraints", "Evidence Policy", "Gold Refs", "Execution Profile", "API Bindings", "Data Tables", "Output Shape"]
+OPTIONAL_SECTIONS = ["Delegations", "Compensation", "Guardrails", "Budget", "Examples", "Telemetry", "Data Dependencies", "Model Constraints", "Evidence Policy", "Gold Refs", "Execution Profile", "API Bindings", "Data Tables", "Output Shape", "Response Template"]
 VALID_KINDS = {"orchestrator", "router", "subagent"}
 VALID_STABILITY = {"alpha", "beta", "stable", "deprecated"}
 VALID_EXEC_MODES = {"fast", "standard", "rigorous", "declarative"}
@@ -81,6 +81,11 @@ class ParsedSkill:
     # ausente: 'digest' (1500 chars).
     output_shape: str = ""         # raw text
     output_shape_parsed: dict = field(default_factory=dict)  # {length_preset, max_chars}
+    # Frase humana DETERMINÍSTICA (sem LLM): corpo Jinja2 CRU do ## Response
+    # Template, renderizado pelo declarative_engine contra {inputs, context} ao
+    # final da execução. Vazio → engine devolve o retorno estruturado legado
+    # (compat). NÃO satisfaz o gate declarativo (não é fonte de dados).
+    response_template: str = ""    # raw text (corpo Jinja2, fence opcional)
     raw_content: str = ""
     content_hash: str = ""
     validation_errors: list = field(default_factory=list)

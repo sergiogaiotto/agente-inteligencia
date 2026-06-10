@@ -115,6 +115,21 @@ def _render_deep(value: Any, scope: dict, lenient: bool = False) -> Any:
     return value
 
 
+_FENCE_RE = re.compile(r"^```[a-zA-Z0-9_-]*\n(.*)\n```$", re.DOTALL)
+
+
+def _strip_md_fence(text: str) -> str:
+    """Remove um fence markdown (```jinja ... ```) que envolva o corpo, se houver.
+
+    O ## Response Template pode vir CRU (Jinja direto sob o header) ou dentro de
+    um fence (como o Wizard emite, p/ o LLM gerador preservar o bloco). O engine
+    renderiza o CONTEÚDO — então tira o fence externo. Sem fence: devolve trimmed.
+    """
+    t = (text or "").strip()
+    m = _FENCE_RE.match(t)
+    return m.group(1).strip() if m else t
+
+
 # ═══════════════════════════════════════════════════════
 # Context path helpers
 # ═══════════════════════════════════════════════════════
@@ -895,6 +910,7 @@ async def execute_declarative(
 
     bindings = list(getattr(skill_parsed, "api_bindings_parsed", []) or [])
     data_tables = list(getattr(skill_parsed, "data_tables_parsed", []) or [])
+    response_template = _strip_md_fence(getattr(skill_parsed, "response_template", "") or "")
 
     # Skill declarativa pode usar SÓ Data Tables, SÓ API Bindings, ou ambos.
     if not bindings and not data_tables:
@@ -1102,12 +1118,38 @@ async def execute_declarative(
     if dry_run:
         answer_payload["plans"] = dry_run_plans
 
+    # ── Frase humana DETERMINÍSTICA (## Response Template, sem LLM) ──
+    # Renderiza o template contra o scope final ({inputs, context}) já mesclado
+    # (Data Tables + todos os níveis de bindings + compensações — scope["context"]
+    # foi re-apontado por último na agregação). lenient: chave de context ausente
+    # vira vazio (não estoura StrictUndefined). try/except: SyntaxError de Jinja
+    # (que NÃO é Undefined) cai no fallback estruturado, sem derrubar a invocação.
+    # dry_run NÃO renderiza (context não é populado no planejamento).
+    answer = None
+    if response_template and not dry_run:
+        try:
+            answer = _render(response_template, scope, lenient=True)
+        except Exception as e:
+            logger.warning(
+                "declarative.response_template_failed",
+                extra={
+                    "event": "declarative.response_template_failed",
+                    "trace_id": trace_id,
+                    "error_type": type(e).__name__,
+                    "error": str(e)[:200],
+                },
+            )
+            answer = None
+
     await _finalize_declarative_interaction(trace_id, final_state)
 
     return {
         "interaction_id": trace_id,
         "agent_id": agent.get("id", ""),
-        "output": json.dumps(answer_payload, ensure_ascii=False, indent=2),
+        # Frase humana quando há ## Response Template renderizado; senão o JSON
+        # estruturado legado (compat — vários callers consomem `output`).
+        "output": answer if answer is not None else json.dumps(answer_payload, ensure_ascii=False, indent=2),
+        "answer": answer,
         "final_state": final_state,
         "context": context,
         "api_response": first_success_response_data,
@@ -1132,6 +1174,7 @@ def _build_empty_result(
         "interaction_id": trace_id,
         "agent_id": agent.get("id", ""),
         "output": "",
+        "answer": None,
         "final_state": "failed",
         "context": context,
         "bindings_executed": [],

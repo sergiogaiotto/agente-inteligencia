@@ -579,6 +579,8 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
             "bindings_executed": executed,
             "final_state": result.get("final_state", ""),
             "compensations_fired": result.get("compensations_fired", []),
+            # Frase humana do ## Response Template (None se a skill não tem o bloco).
+            "answer": result.get("answer"),
         }
         if dry_run:
             outputs_dict["plans"] = result.get("dry_run_plans") or []
