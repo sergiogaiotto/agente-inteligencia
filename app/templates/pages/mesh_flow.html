@@ -8,9 +8,22 @@
 
     <!-- ══ TOOLBAR ══ -->
     <div class="flex items-center justify-between gap-3 px-4 lg:px-6 py-3 border-b border-surface-200 bg-white/80 backdrop-blur-sm">
-        <p class="text-[12px] text-surface-400 truncate">
-            Fluxograma de agentes — a <span class="font-medium text-surface-500">mesma topologia</span>. Arraste para organizar; puxe da bolinha à direita para conectar; clique numa seta para editar.
-        </p>
+        <div class="flex items-center gap-2 min-w-0">
+            <button @click="pipePanel = !pipePanel" class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] flex-none transition-colors"
+                    :class="pipePanel ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-600 hover:bg-surface-50'"
+                    title="Mostrar/ocultar o painel de pipelines">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3.75 5.25h16.5v13.5H3.75zM9 5.25v13.5"/></svg>
+                Pipelines
+            </button>
+            <p class="text-[12px] text-surface-400 truncate">
+                <template x-if="!selectedPipeline">
+                    <span>Estúdio de pipelines — organize agentes em pipelines e gerencie o ciclo de vida. Arraste para posicionar; puxe da bolinha para conectar.</span>
+                </template>
+                <template x-if="selectedPipeline">
+                    <span>Lente: <span class="font-medium text-surface-600" x-text="selectedPipeline.name"></span> — só os agentes e conexões deste pipeline.</span>
+                </template>
+            </p>
+        </div>
         <div class="flex items-center gap-1.5 flex-none">
             <button @click="toggleReplay()" class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] transition-colors"
                     :class="replay ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-600 hover:bg-surface-50'"
@@ -39,6 +52,165 @@
             </button>
         </div>
     </div>
+
+    <!-- ══ CORPO: painel de pipelines + canvas ══ -->
+    <div class="flex flex-1 min-h-0">
+
+    <!-- ══ PAINEL DE PIPELINES ══ -->
+    <aside x-show="pipePanel" class="w-72 flex-none border-r border-surface-200 bg-white overflow-y-auto scrollbar-thin">
+        <div class="p-3 space-y-3">
+
+            <!-- header -->
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-1.5">
+                    <svg class="w-4 h-4 text-brand-500" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3.75 5.25h16.5v13.5H3.75zM9 5.25v13.5"/></svg>
+                    <span class="text-[13px] font-semibold text-surface-800">Pipelines</span>
+                </div>
+                <button @click="createPipeline()" class="inline-flex items-center gap-1 rounded-lg border border-surface-200 px-2 py-1 text-[11px] text-surface-600 hover:bg-surface-50" title="Novo pipeline">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                    Novo
+                </button>
+            </div>
+
+            <!-- Mesh completo -->
+            <button @click="selectMesh()" class="w-full flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-[12px] transition-colors"
+                    :class="!selectedPipeline ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-600 hover:bg-surface-50'">
+                <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6.5 6.5 11 17M17.5 6.5 13 17"/></svg>
+                <span class="font-medium">Mesh completo</span>
+                <span class="ml-auto text-[10px] text-surface-400" x-text="agentCount + ' agentes'"></span>
+            </button>
+
+            <!-- seções por status -->
+            <template x-for="sec in PIPE_SECTIONS" :key="sec.key">
+                <div x-show="pipelinesByStatus(sec.key).length || sec.key==='rascunho'">
+                    <button @click="toggleSection(sec.key)" class="w-full flex items-center gap-1.5 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-surface-400 hover:text-surface-600">
+                        <svg class="w-3 h-3 transition-transform flex-none" :class="sectionOpen[sec.key] ? 'rotate-90' : ''" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+                        <span x-text="sec.title"></span>
+                        <span class="text-surface-300" x-text="'(' + pipelinesByStatus(sec.key).length + ')'"></span>
+                    </button>
+                    <div x-show="sectionOpen[sec.key]" class="space-y-1 mt-0.5">
+                        <template x-for="p in pipelinesByStatus(sec.key)" :key="p.id">
+                            <div class="group rounded-lg border px-2 py-1.5 cursor-pointer transition-colors"
+                                 :class="selectedPipeline && selectedPipeline.id===p.id ? 'border-brand-300 bg-brand-50' : (p.status==='aposentado' ? 'border-surface-200 opacity-60 hover:opacity-100 hover:bg-surface-50' : 'border-surface-200 hover:bg-surface-50')"
+                                 @click="selectPipeline(p)">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-2.5 h-2.5 rounded-full flex-none" :class="p.status==='rascunho' ? 'ring-1 ring-offset-1 ring-surface-300' : ''" :style="`background:${groupColorHex(p.color)}`"></span>
+                                    <template x-if="renamingId===p.id">
+                                        <input :data-rename="p.id" x-model="renameText" @click.stop @keydown.enter.prevent="commitRename(p)" @keydown.escape="renamingId=null" @blur="commitRename(p)"
+                                               class="flex-1 min-w-0 rounded border border-brand-300 px-1 py-0.5 text-[12px] outline-none">
+                                    </template>
+                                    <template x-if="renamingId!==p.id">
+                                        <span class="flex-1 min-w-0 text-[12px] font-medium text-surface-800 truncate" x-text="p.name" @dblclick.stop="startRename(p)" title="Duplo-clique para renomear"></span>
+                                    </template>
+                                    <span class="text-[10px] text-surface-400 flex-none tabular-nums" x-text="p.agent_count" title="agentes no pipeline"></span>
+                                    <button @click.stop="startRename(p)" class="opacity-0 group-hover:opacity-100 text-surface-300 hover:text-surface-600 flex-none" title="Renomear">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M16.86 4.49l2.65 2.65M3 21l.7-3.3L14.5 6.9l2.6 2.6L6.3 20.3 3 21z"/></svg>
+                                    </button>
+                                    <button @click.stop="deletePipeline(p)" class="opacity-0 group-hover:opacity-100 text-surface-300 hover:text-rose-500 flex-none" title="Remover pipeline">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2m-7 0l.6 12a1 1 0 001 1h4.8a1 1 0 001-1L16 7"/></svg>
+                                    </button>
+                                </div>
+                                <div x-show="p.domain" class="mt-1 pl-4">
+                                    <span class="text-[9px] px-1.5 py-0.5 rounded bg-surface-100 text-surface-500" x-text="p.domain"></span>
+                                </div>
+                            </div>
+                        </template>
+                        <p x-show="!pipelinesByStatus(sec.key).length && sec.key==='rascunho'" class="text-[10.5px] text-surface-300 px-2 py-1">Nenhum rascunho. Clique em “Novo”.</p>
+                    </div>
+                </div>
+            </template>
+
+            <!-- criar a partir de um fluxo (só no Mesh completo) -->
+            <template x-if="!selectedPipeline && roots.length">
+                <div class="pt-2 border-t border-surface-100">
+                    <div class="text-[10.5px] font-semibold uppercase tracking-wide text-surface-400 mb-1">Criar a partir de um fluxo</div>
+                    <template x-for="rid in roots" :key="rid">
+                        <button @click="createFromRoot(rid)" class="w-full flex items-center gap-2 rounded-lg px-2 py-1 text-left text-[11px] text-surface-600 hover:bg-surface-50">
+                            <svg class="w-3 h-3 flex-none text-brand-400" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                            <span class="truncate" x-text="nodeName(rid)"></span>
+                            <span class="ml-auto text-[9px] text-surface-300 flex-none" x-text="chainFrom(rid).length + ' agentes'"></span>
+                        </button>
+                    </template>
+                </div>
+            </template>
+
+            <!-- ── detalhe do pipeline selecionado ── -->
+            <template x-if="selectedPipeline">
+                <div class="pt-2 border-t border-surface-100 space-y-3">
+                    <!-- status pill + transições -->
+                    <div>
+                        <div class="flex items-center gap-1.5 mb-1.5">
+                            <span class="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[10.5px] font-medium"
+                                  :class="PIPE_STATUS[selectedPipeline.status].cls">
+                                <span class="w-1.5 h-1.5 rounded-full" :style="`background:${PIPE_STATUS[selectedPipeline.status].dot}`"></span>
+                                <span x-text="PIPE_STATUS[selectedPipeline.status].label"></span>
+                            </span>
+                        </div>
+                        <div class="flex flex-wrap gap-1">
+                            <template x-for="to in selectedPipeline.next_states" :key="to">
+                                <button @click="changeStatus(selectedPipeline, to)" class="text-[10px] px-2 py-0.5 rounded-md border border-surface-200 text-surface-600 hover:bg-surface-50">
+                                    → <span x-text="PIPE_STATUS[to] ? PIPE_STATUS[to].label : to"></span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- membros -->
+                    <div>
+                        <div class="text-[10.5px] font-semibold uppercase tracking-wide text-surface-400 mb-1" x-text="'Agentes no pipeline (' + memberNodes.length + ')'"></div>
+                        <div class="space-y-1">
+                            <template x-for="n in memberNodes" :key="n.id">
+                                <div class="flex items-center gap-2 rounded-lg border border-surface-200 px-2 py-1">
+                                    <span class="w-2 h-2 rounded-full flex-none" :style="`background:${n.color}`"></span>
+                                    <span class="flex-1 min-w-0 text-[11.5px] text-surface-700 truncate" x-text="n.name"></span>
+                                    <span class="text-[9px] text-surface-400 flex-none" x-text="n.roleLabel"></span>
+                                    <button @click="excludeAgent(n.id)" class="text-surface-300 hover:text-rose-500 flex-none" title="Remover do pipeline">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                                    </button>
+                                </div>
+                            </template>
+                            <p x-show="!memberNodes.length" class="text-[10.5px] text-surface-300 px-1">Nenhum agente ainda. Use os filtros abaixo para incluir.</p>
+                        </div>
+                    </div>
+
+                    <!-- filtros + paleta de inclusão -->
+                    <div>
+                        <div class="text-[10.5px] font-semibold uppercase tracking-wide text-surface-400 mb-1.5">Incluir agentes</div>
+                        <input x-model="pipeFilter.q" placeholder="Buscar por nome…" class="w-full rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] outline-none focus:border-brand-400 mb-1.5">
+                        <div class="flex flex-wrap gap-1 mb-1.5">
+                            <template x-for="t in KIND_FILTERS" :key="t.k">
+                                <button @click="pipeFilter.kind = t.k" class="text-[10px] px-2 py-0.5 rounded-md border"
+                                        :class="pipeFilter.kind===t.k ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-500 hover:bg-surface-50'"
+                                        x-text="t.l"></button>
+                            </template>
+                        </div>
+                        <div x-show="domainOptions.length" class="flex flex-wrap gap-1 mb-2">
+                            <button @click="pipeFilter.domain=''" class="text-[10px] px-2 py-0.5 rounded-md border" :class="!pipeFilter.domain ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-500 hover:bg-surface-50'">Todos domínios</button>
+                            <template x-for="d in domainOptions" :key="d">
+                                <button @click="pipeFilter.domain = (pipeFilter.domain===d ? '' : d)" class="text-[10px] px-2 py-0.5 rounded-md border"
+                                        :class="pipeFilter.domain===d ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-500 hover:bg-surface-50'"
+                                        x-text="d"></button>
+                            </template>
+                        </div>
+                        <div class="space-y-1 max-h-64 overflow-y-auto scrollbar-thin">
+                            <template x-for="n in candidateAgents" :key="n.id">
+                                <button @click="includeAgent(n.id)" class="w-full flex items-center gap-2 rounded-lg border border-surface-200 px-2 py-1 text-left hover:bg-brand-50 hover:border-brand-200">
+                                    <span class="w-2 h-2 rounded-full flex-none" :style="`background:${n.color}`"></span>
+                                    <span class="flex-1 min-w-0 text-[11.5px] text-surface-700 truncate" x-text="n.name"></span>
+                                    <template x-if="membership[n.id]">
+                                        <span class="text-[8.5px] text-amber-500 flex-none" title="Está em outro pipeline — será movido">↪ mover</span>
+                                    </template>
+                                    <svg class="w-3.5 h-3.5 flex-none text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+                                </button>
+                            </template>
+                            <p x-show="!candidateAgents.length" class="text-[10.5px] text-surface-300 px-1">Nenhum agente disponível com esses filtros.</p>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+        </div>
+    </aside>
 
     <!-- ══ CANVAS ══ -->
     <div class="relative flex-1 overflow-hidden bg-surface-50"
@@ -76,8 +248,8 @@
                 <g @click="onEdgeClick($event)" x-html="edgesSvg"></g>
             </svg>
 
-            <!-- nodes -->
-            <template x-for="n in nodes" :key="n.id">
+            <!-- nodes (lente: viewNodes filtra por pipeline selecionado) -->
+            <template x-for="n in viewNodes" :key="n.id">
                 <div class="absolute transition-opacity" :data-nid="n.id" :style="`left:${n.x}px; top:${n.y}px; width:${n.w}px; cursor:${n.synthetic ? 'grab' : 'pointer'}; opacity:${nodeOpacity(n)}`"
                      @pointerdown.stop="onNodeDown($event, n)"
                      @pointerenter="hoverId = n.id" @pointerleave="onNodeLeave(n)"
@@ -118,11 +290,19 @@
             </template>
         </div>
 
-        <!-- empty state -->
+        <!-- empty state (mesh global vazio) -->
         <div x-show="loaded && agentCount===0" class="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div class="text-center">
                 <p class="text-[14px] text-surface-500 font-medium">Nenhum agente ativo no mesh</p>
                 <p class="text-[12px] text-surface-400 mt-1">Crie agentes e conexões na <a href="/mesh" class="text-brand-600 underline pointer-events-auto">Topologia de conexões</a>.</p>
+            </div>
+        </div>
+
+        <!-- empty state (lente: pipeline sem agentes) -->
+        <div x-show="loaded && agentCount>0 && selectedPipeline && memberNodes.length===0" class="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div class="text-center px-6">
+                <p class="text-[14px] text-surface-500 font-medium" x-text="'“' + (selectedPipeline ? selectedPipeline.name : '') + '” ainda não tem agentes'"></p>
+                <p class="text-[12px] text-surface-400 mt-1">Use os filtros no painel à esquerda para incluir agentes neste pipeline.</p>
             </div>
         </div>
 
@@ -335,6 +515,7 @@
             </template>
         </div>
     </div>
+    </div>
 </div>
 
 <script>
@@ -361,6 +542,21 @@ function meshFlowPage() {
             { id: 'default',    label: 'Default (else)', color: '#9AA0A6', desc: 'O else do fan-out: roda quando nenhum irmão condicional do mesmo source casou.' },
         ],
 
+        // ── Estúdio de Pipelines (PR1) ──
+        PIPE_STATUS: {
+            rascunho:   { label: 'Rascunho',   dot: '#94A3B8', cls: 'border-dashed border-surface-300 text-surface-500 bg-white' },
+            publicado:  { label: 'Publicado',  dot: '#1D9E75', cls: 'border-emerald-300 bg-emerald-50 text-emerald-700' },
+            aposentado: { label: 'Aposentado', dot: '#CBD5E1', cls: 'border-surface-200 bg-surface-50 text-surface-400' },
+        },
+        PIPE_SECTIONS: [
+            { key: 'rascunho',   title: 'Rascunhos' },
+            { key: 'publicado',  title: 'Publicados' },
+            { key: 'aposentado', title: 'Aposentados' },
+        ],
+        KIND_FILTERS: [
+            { k: '', l: 'Todos' }, { k: 'aobd', l: 'Maestro' }, { k: 'router', l: 'Triagem' }, { k: 'subagent', l: 'Especialista' },
+        ],
+
         topology: { nodes: [], edges: [] },
         positions: {},
         nodes: [], edges: [], roots: [],
@@ -369,6 +565,12 @@ function meshFlowPage() {
         selected: null, loaded: false,
         hoverId: null, linking: null, linkTargetId: null, editor: null, sim: null, scopeSim: null, saving: false, fsm: null, replay: null, snap: false, groups: [],
         _drag: null, _pan: null, _saveTimer: null, _suppressClick: false,
+
+        // Estúdio de Pipelines (PR1)
+        pipelines: [], selectedPipeline: null, membership: {}, pipePanel: true,
+        sectionOpen: { rascunho: true, publicado: true, aposentado: false },
+        renamingId: null, renameText: '',
+        pipeFilter: { domain: '', kind: '', q: '' },
 
         get agentCount() { return this.nodes.filter(n => !n.synthetic).length; },
 
@@ -379,6 +581,7 @@ function meshFlowPage() {
             catch (e) { console.error('[flow] layout falhou', e); }
             try { const g = await api.get('/api/v1/mesh/groups'); this.groups = g.groups || []; }
             catch (e) { console.error('[flow] groups falhou', e); }
+            await this.loadPipelines();
             this.build();
             this.loaded = true;
             this.$nextTick(() => this.fit());
@@ -483,12 +686,15 @@ function meshFlowPage() {
         get renderEdges() {
             const byId = this.nodeById();
             const out = [];
-            for (const e of this.edges) {
+            for (const e of this.viewEdges) {
                 const s = byId[e.source], t = byId[e.target];
                 if (!s || !t) continue;
                 const x1 = s.x + s.w, y1 = s.y + this.NODE_H / 2;
                 const x2 = t.x, y2 = t.y + this.NODE_H / 2;
                 const dx = Math.max(40, Math.abs(x2 - x1) / 2);
+                // hand-off: conexão entre dois pipelines diferentes (só no Mesh completo).
+                const handoff = !this.selectedPipeline && !!this.membership[e.source]
+                    && !!this.membership[e.target] && this.membership[e.source] !== this.membership[e.target];
                 // Replay: aresta disparou sse o NÓ-ALVO rodou (completed/passthrough);
                 // pulada se o alvo foi skipped; neutra se o alvo não entrou na execução.
                 let op = 1;
@@ -505,7 +711,7 @@ function meshFlowPage() {
                     dash: (e.type === 'default' || e.type === 'start') ? '5 4' : '',
                     label: this._edgeLabel(e),
                     editable: e.type !== 'start',
-                    op,
+                    op, handoff,
                     lx: (x1 + x2) / 2 - 60, ly: (y1 + y2) / 2 - 26,
                 });
             }
@@ -525,6 +731,8 @@ function meshFlowPage() {
             let s = '';
             for (const e of this.renderEdges) {
                 const dash = e.dash ? ` stroke-dasharray="${e.dash}"` : '';
+                // hand-off entre pipelines: glow âmbar por baixo (destaque no Mesh completo).
+                if (e.handoff) s += `<path d="${e.d}" fill="none" stroke="#F59E0B" stroke-width="6" opacity="0.20" stroke-linecap="round" style="pointer-events:none"></path>`;
                 s += `<path d="${e.d}" fill="none" stroke="${e.color}" stroke-width="1.6"${dash} opacity="${e.op}" marker-end="url(#mf-arrow)" stroke-linecap="round" style="pointer-events:none"></path>`;
                 if (e.editable) s += `<path d="${e.d}" data-eid="${e.id}" fill="none" stroke="transparent" stroke-width="14" style="pointer-events:stroke;cursor:pointer"></path>`;
                 if (e.label && e.op > 0.5) {
@@ -616,10 +824,149 @@ function meshFlowPage() {
         groupOf(id) { for (const g of this.groups) if (g.agent_ids && g.agent_ids.includes(id)) return g; return null; },
         groupColorHex(c) { return this.GROUP_COLORS[c] || '#64748B'; },
 
+        // ── Estúdio de Pipelines (PR1) ──
+        async loadPipelines() {
+            try { const p = await api.get('/api/v1/pipelines'); this.pipelines = p.pipelines || []; }
+            catch (e) { console.error('[flow] pipelines falhou', e); this.pipelines = []; }
+            this._rebuildMembership();
+            if (this.selectedPipeline) {
+                this.selectedPipeline = this.pipelines.find(p => p.id === this.selectedPipeline.id) || null;
+            }
+        },
+        _rebuildMembership() {
+            const m = {};
+            for (const p of this.pipelines) for (const aid of (p.agent_ids || [])) m[aid] = p.id;
+            this.membership = m;
+        },
+        pipelinesByStatus(status) { return this.pipelines.filter(p => p.status === status); },
+
+        // lente do canvas: filtra nós/arestas pelo pipeline selecionado
+        nodeInLens(n) {
+            if (!this.selectedPipeline) return true;          // Mesh completo
+            if (n.synthetic) return false;                     // esconde o "Início"
+            return (this.selectedPipeline.agent_ids || []).includes(n.id);
+        },
+        get viewNodes() { return this.nodes.filter(n => this.nodeInLens(n)); },
+        get viewEdges() {
+            if (!this.selectedPipeline) return this.edges;
+            const ids = new Set(this.selectedPipeline.agent_ids || []);
+            // conexões intra-pipeline: AMBAS as pontas membros (exclui synthetic 'start')
+            return this.edges.filter(e => ids.has(e.source) && ids.has(e.target));
+        },
+
+        selectMesh() { this.selectedPipeline = null; this.selected = null; this.$nextTick(() => this.fit()); },
+        selectPipeline(p) {
+            this.selectedPipeline = p; this.selected = null;
+            this.pipeFilter = { domain: '', kind: '', q: '' };
+            this.$nextTick(() => this.fit());
+        },
+        toggleSection(key) { this.sectionOpen[key] = !this.sectionOpen[key]; },
+
+        async createPipeline() {
+            const name = (prompt('Nome do novo pipeline:') || '').trim();
+            if (!name) return;
+            try {
+                const p = await api.post('/api/v1/pipelines', { name });
+                showToast('Pipeline criado');
+                await this.loadPipelines();
+                const fresh = this.pipelines.find(x => x.id === p.id);
+                if (fresh) this.selectPipeline(fresh);
+            } catch (e) { showToast('Falha ao criar pipeline: ' + e.message, 'error'); }
+        },
+        startRename(p) {
+            this.renamingId = p.id; this.renameText = p.name;
+            this.$nextTick(() => { const el = document.querySelector('[data-rename="' + p.id + '"]'); if (el) { el.focus(); el.select(); } });
+        },
+        async commitRename(p) {
+            const name = (this.renameText || '').trim();
+            const wasRenaming = this.renamingId === p.id;
+            this.renamingId = null;
+            if (!wasRenaming || !name || name === p.name) return;
+            try { await api.put('/api/v1/pipelines/' + p.id, { name }); await this.loadPipelines(); }
+            catch (e) { showToast('Falha ao renomear: ' + e.message, 'error'); }
+        },
+        async deletePipeline(p) {
+            if (!confirm('Remover o pipeline "' + p.name + '"? As conexões e os agentes continuam no mesh.')) return;
+            try {
+                await api.del('/api/v1/pipelines/' + p.id);
+                showToast('Pipeline removido');
+                if (this.selectedPipeline && this.selectedPipeline.id === p.id) this.selectMesh();
+                await this.loadPipelines();
+            } catch (e) { showToast('Falha ao remover: ' + e.message, 'error'); }
+        },
+        async changeStatus(p, to) {
+            try {
+                await api.post('/api/v1/pipelines/' + p.id + '/status', { status: to });
+                showToast('Status: ' + (this.PIPE_STATUS[to] ? this.PIPE_STATUS[to].label : to));
+                await this.loadPipelines();
+            } catch (e) { showToast('Transição inválida: ' + e.message, 'error'); }
+        },
+
+        // paleta de inclusão / membros (sobre this.nodes = grafo completo)
+        get domainOptions() {
+            const s = new Set();
+            for (const n of this.nodes) if (!n.synthetic && n.agent && n.agent.domain) s.add(n.agent.domain);
+            return [...s].sort();
+        },
+        get memberNodes() {
+            if (!this.selectedPipeline) return [];
+            const ids = new Set(this.selectedPipeline.agent_ids || []);
+            return this.nodes.filter(n => !n.synthetic && ids.has(n.id));
+        },
+        get candidateAgents() {
+            if (!this.selectedPipeline) return [];
+            const inThis = new Set(this.selectedPipeline.agent_ids || []);
+            const f = this.pipeFilter, q = (f.q || '').trim().toLowerCase();
+            return this.nodes
+                .filter(n => !n.synthetic && !inThis.has(n.id))
+                .filter(n => !f.domain || (n.agent && n.agent.domain) === f.domain)
+                .filter(n => !f.kind || n.kind === f.kind)
+                .filter(n => !q || (n.name || '').toLowerCase().includes(q));
+        },
+        async includeAgent(agentId) {
+            if (!this.selectedPipeline) return;
+            try { await api.post('/api/v1/pipelines/' + this.selectedPipeline.id + '/agents', { agent_id: agentId }); await this.loadPipelines(); }
+            catch (e) { showToast('Falha ao incluir: ' + e.message, 'error'); }
+        },
+        async excludeAgent(agentId) {
+            if (!this.selectedPipeline) return;
+            try { await api.del('/api/v1/pipelines/' + this.selectedPipeline.id + '/agents/' + agentId); await this.loadPipelines(); }
+            catch (e) { showToast('Falha ao remover: ' + e.message, 'error'); }
+        },
+
+        // criar a partir de um fluxo: escolhe uma raiz e auto-inclui a cadeia BFS
+        chainFrom(rootId) {
+            const out = new Set([rootId]);
+            let frontier = [rootId], guard = 0;
+            while (frontier.length && guard++ < this.nodes.length + 2) {
+                const next = [];
+                for (const s of frontier) for (const e of this.edges) {
+                    if (e.source === s && e.type !== 'start' && !out.has(e.target)) { out.add(e.target); next.push(e.target); }
+                }
+                frontier = next;
+            }
+            out.delete('__start__');
+            return [...out];
+        },
+        async createFromRoot(rootId) {
+            const root = this.nodeById()[rootId];
+            const name = (prompt('Nome do pipeline a partir de "' + (root ? root.name : rootId) + '":', root ? root.name : '') || '').trim();
+            if (!name) return;
+            try {
+                const p = await api.post('/api/v1/pipelines', { name });
+                const chain = this.chainFrom(rootId);
+                for (const aid of chain) { try { await api.post('/api/v1/pipelines/' + p.id + '/agents', { agent_id: aid }); } catch (_) {} }
+                showToast('Pipeline criado com ' + chain.length + ' agente(s)');
+                await this.loadPipelines();
+                const fresh = this.pipelines.find(x => x.id === p.id);
+                if (fresh) this.selectPipeline(fresh);
+            } catch (e) { showToast('Falha: ' + e.message, 'error'); }
+        },
+
         // ── minimapa ──
         _mmGeom() {
             let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-            for (const n of this.nodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + this.NODE_H); }
+            for (const n of this.viewNodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + this.NODE_H); }
             if (minX > maxX) return null;
             const s = Math.min((184 - 16) / ((maxX - minX) || 1), (120 - 16) / ((maxY - minY) || 1));
             return { minX, minY, s, offX: 8, offY: 8 };
@@ -627,7 +974,7 @@ function meshFlowPage() {
         _mmFill(n) { if (n.synthetic) return '#cbd5e1'; const gr = this.groupOf(n.id); return gr ? this.groupColorHex(gr.color) : n.color; },
         get minimapNodes() {
             const g = this._mmGeom(); if (!g) return [];
-            return this.nodes.map(n => ({
+            return this.viewNodes.map(n => ({
                 id: n.id, x: g.offX + (n.x - g.minX) * g.s, y: g.offY + (n.y - g.minY) * g.s,
                 w: Math.max(2, n.w * g.s), h: Math.max(2, this.NODE_H * g.s), fill: this._mmFill(n),
             }));
@@ -826,9 +1173,10 @@ function meshFlowPage() {
             this.panX = px - wx * ns; this.panY = py - wy * ns; this.scale = ns;
         },
         fit() {
-            if (!this.nodes.length || !this.$refs.vp) return;
+            const fitNodes = this.viewNodes;
+            if (!fitNodes.length || !this.$refs.vp) return;
             let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-            for (const n of this.nodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + this.NODE_H); }
+            for (const n of fitNodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + this.NODE_H); }
             const r = this.$refs.vp.getBoundingClientRect();
             const pad = 70, w = (maxX - minX) + pad * 2, h = (maxY - minY) + pad * 2;
             const s = Math.min(1.25, Math.max(0.3, Math.min(r.width / w, r.height / h)));

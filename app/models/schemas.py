@@ -152,6 +152,25 @@ class MeshConnectionCreate(BaseModel):
     source_agent_id: str; target_agent_id: str
     connection_type: str = "sequential"; config: Optional[str] = "{}"
 
+# ── Estúdio de Pipelines (PR1) ──
+class PipelineCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    domain: Optional[str] = None
+    color: Optional[str] = "teal"
+    description: Optional[str] = None
+
+class PipelineUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    domain: Optional[str] = None
+    color: Optional[str] = None
+    description: Optional[str] = None
+
+class PipelineStatusChange(BaseModel):
+    status: str
+
+class PipelineAddAgent(BaseModel):
+    agent_id: str
+
 class KnowledgeSourceCreate(BaseModel):
     name: str; description: Optional[str] = None
     source_type: Optional[str] = "manual"
