@@ -302,6 +302,36 @@ async def get_last_run():
     return {"found": False, "steps": []}
 
 
+@router.get("/groups")
+async def get_groups():
+    """Grupos do AI Mesh (chave `mesh_groups` em platform_settings — MESMA fonte
+    da Topologia). O Fluxograma usa para tingir/rotular nós por grupo. Parse
+    defensivo: descarta entradas sem id/name; `[]` em vazio/JSON inválido."""
+    from app.core.database import settings_store
+    raw = await settings_store.get("mesh_groups", "")
+    groups: list = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, list):
+            for g in parsed:
+                if not isinstance(g, dict):
+                    continue
+                gid, name = g.get("id"), g.get("name")
+                if not gid or not name:
+                    continue
+                aids = g.get("agent_ids")
+                groups.append({
+                    "id": str(gid),
+                    "name": str(name),
+                    "color": str(g.get("color") or "teal"),
+                    "agent_ids": [str(a) for a in aids if a] if isinstance(aids, list) else [],
+                })
+    return {"groups": groups}
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Conditional Routing Wizard (2026-06-01) — endpoint para o frontend
 # avaliar uma expressão Jinja contra um contexto simulado, sem precisar
