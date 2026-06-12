@@ -6,6 +6,13 @@ from app.core.database import mesh_repo, agents_repo, car_repo
 
 router = APIRouter(prefix="/api/v1/mesh", tags=["mesh"])
 
+# Tipos de conexão CANÔNICOS aceitos no mesh. Os 3 primeiros já apareciam na UI;
+# `default` (else do fan-out 1-de-N) existe e é honrado no engine
+# (engine.py::_is_default_branch) mas até então não era criável pela UI — o
+# Fluxograma de agentes passa a expô-lo. A coluna mesh_connections.connection_type
+# não tem CHECK no DB; esta validação de rota impede tipos inválidos por API.
+_VALID_CONNECTION_TYPES = {"sequential", "parallel", "conditional", "default"}
+
 def _fanout_roots(edges: list[dict]) -> list[str]:
     """IDs de origens com ≥2 arestas ``conditional`` de saída (fan-out 1-de-N).
 
@@ -53,6 +60,10 @@ async def get_topology():
 
 @router.post("/connections", status_code=201)
 async def create_connection(data: MeshConnectionCreate):
+    if data.connection_type not in _VALID_CONNECTION_TYPES:
+        raise HTTPException(422, f"connection_type inválido: {data.connection_type!r}. Use um de: {', '.join(sorted(_VALID_CONNECTION_TYPES))}.")
+    if data.source_agent_id == data.target_agent_id:
+        raise HTTPException(422, "Origem e destino não podem ser o mesmo agente.")
     if not await agents_repo.find_by_id(data.source_agent_id) or not await agents_repo.find_by_id(data.target_agent_id):
         raise HTTPException(404, "Agente não encontrado")
     cid = str(uuid.uuid4())
@@ -63,6 +74,8 @@ async def create_connection(data: MeshConnectionCreate):
 async def update_connection(conn_id: str, data: MeshConnectionCreate):
     existing = await mesh_repo.find_by_id(conn_id)
     if not existing: raise HTTPException(404)
+    if data.connection_type and data.connection_type not in _VALID_CONNECTION_TYPES:
+        raise HTTPException(422, f"connection_type inválido: {data.connection_type!r}. Use um de: {', '.join(sorted(_VALID_CONNECTION_TYPES))}.")
     upd = {k: v for k, v in data.model_dump().items() if v is not None}
     return await mesh_repo.update(conn_id, upd)
 
@@ -70,6 +83,62 @@ async def update_connection(conn_id: str, data: MeshConnectionCreate):
 async def delete_connection(conn_id: str):
     if not await mesh_repo.delete(conn_id): raise HTTPException(404)
     return {"message": "Conexão removida"}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Fluxograma de agentes (2026-06-12) — LAYOUT posicional (x,y) dos nós.
+#
+# UI-ONLY: vive em platform_settings sob a chave `mesh_node_positions`
+# (MESMO store de mesh_groups/mesh_chain_names), NUNCA em
+# mesh_connections.config — que é LIDO pelo engine em runtime
+# (_should_skip_conditional / _resolve_context_scope). Apagar o layout
+# NÃO altera a execução: as duas views (Topologia e Fluxograma) leem o
+# MESMO grafo de mesh_connections; o x,y é só onde o Fluxograma desenha.
+#
+# Por que um endpoint DEDICADO (e não PUT /api/v1/settings): o save_settings
+# re-serializa o modelo SettingsSave inteiro com defaults → salvar por ali a
+# cada drag sobrescreveria mcp_per_tool_enabled, grounding_strict, chaves de
+# LLM, etc. Aqui o set() faz upsert SÓ desta chave (ON CONFLICT por key).
+# ═══════════════════════════════════════════════════════════════════
+
+_MESH_POSITIONS_KEY = "mesh_node_positions"
+
+
+@router.get("/layout")
+async def get_layout():
+    """Posições x,y dos nós do Fluxograma. Vazio ({}) se nunca salvo."""
+    from app.core.database import settings_store
+    raw = await settings_store.get(_MESH_POSITIONS_KEY, "")
+    positions: dict = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                positions = parsed
+        except (ValueError, TypeError):
+            positions = {}
+    return {"positions": positions}
+
+
+@router.put("/layout")
+async def save_layout(payload: dict):
+    """Persiste SÓ a chave mesh_node_positions (upsert por-chave) — NÃO toca
+    nas demais settings. Sanitiza para {agent_id: {x: float, y: float}};
+    descarta entradas malformadas (e bool, que é subclasse de int)."""
+    from app.core.database import settings_store
+    positions = payload.get("positions")
+    if not isinstance(positions, dict):
+        raise HTTPException(422, "payload.positions deve ser um objeto {agent_id: {x, y}}")
+
+    def _num(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+    clean: dict = {}
+    for aid, pos in positions.items():
+        if isinstance(pos, dict) and _num(pos.get("x")) and _num(pos.get("y")):
+            clean[str(aid)] = {"x": round(float(pos["x"]), 1), "y": round(float(pos["y"]), 1)}
+    await settings_store.set(_MESH_POSITIONS_KEY, json.dumps(clean))
+    return {"message": "Layout salvo", "count": len(clean)}
 
 
 # ═══════════════════════════════════════════════════════════════════

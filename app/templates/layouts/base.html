@@ -221,12 +221,24 @@
                     </a>
                     <button @click="openHelp('workspace')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
                 </div>
-                <div class="relative" id="tour-nav-mesh">
-                    <a href="/mesh" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'mesh' %}active{% endif %}">
-                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l3 8m5-8l-3 8M7.5 5h9"/></svg>
-                        <span x-show="!sidebarCollapsed">AI Mesh</span>
-                    </a>
-                    <button @click="openHelp('mesh')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                <div id="tour-nav-mesh">
+                    <div class="relative">
+                        <a href="/mesh" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'mesh' %}active{% endif %}">
+                            <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l3 8m5-8l-3 8M7.5 5h9"/></svg>
+                            <span x-show="!sidebarCollapsed">AI Mesh</span>
+                        </a>
+                        <button @click="openHelp('mesh')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
+                    </div>
+                    <div x-show="!sidebarCollapsed" class="ml-4 border-l border-surface-200 pl-2 space-y-0.5 mt-0.5">
+                        <a href="/mesh" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if request.url.path == '/mesh' %}active{% endif %}">
+                            <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3.75 6h16.5M3.75 12h16.5M3.75 18h16.5"/></svg>
+                            <span>Topologia de conexões</span>
+                        </a>
+                        <a href="/mesh/flow" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if request.url.path == '/mesh/flow' %}active{% endif %}">
+                            <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="5.5" cy="6" r="2"/><circle cx="5.5" cy="18" r="2"/><circle cx="18.5" cy="12" r="2"/><path d="M7.5 6.8l9 4.2m-9 6.2l9-4.2"/></svg>
+                            <span>Fluxograma de agentes</span>
+                        </a>
+                    </div>
                 </div>
                 <div class="relative" id="tour-nav-tools">
                     <a href="/mcp" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'tools' %}active{% endif %}">
