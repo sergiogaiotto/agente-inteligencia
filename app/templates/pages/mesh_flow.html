@@ -644,8 +644,34 @@ function meshFlowPage() {
         // ── conectar (arrastar da porta) ──
         startLink(ev, n) {
             this._suppressClick = false; this.linkTargetId = null;
-            this.linking = { from: n, x: n.x + n.w, y: n.y + this.NODE_H / 2, pointerId: ev.pointerId };
-            try { this.$refs.vp.setPointerCapture(ev.pointerId); } catch (_) {}
+            // já nasce com um pequeno stub visível à direita da porta (feedback no clique)
+            this.linking = { from: n, x: n.x + n.w + 8, y: n.y + this.NODE_H / 2 };
+            // pointermove/up no WINDOW: o arraste nunca se perde, independente do
+            // que estiver sob o cursor (mais robusto que @pointermove no viewport).
+            this._linkMove = (e) => this._onLinkMove(e);
+            this._linkUp = (e) => this._onLinkUp(e);
+            window.addEventListener('pointermove', this._linkMove);
+            window.addEventListener('pointerup', this._linkUp, { once: true });
+        },
+        _onLinkMove(ev) {
+            if (!this.linking) return;
+            const r = this.$refs.vp.getBoundingClientRect();
+            // reatribui o objeto (não muta .x/.y) p/ garantir a reatividade do SVG
+            this.linking = { from: this.linking.from, x: (ev.clientX - r.left - this.panX) / this.scale, y: (ev.clientY - r.top - this.panY) / this.scale };
+            const tid = this._nodeIdAt(ev.clientX, ev.clientY);
+            this.linkTargetId = (tid && tid !== this.linking.from.id) ? tid : null;
+        },
+        _onLinkUp(ev) {
+            window.removeEventListener('pointermove', this._linkMove);
+            if (!this.linking) return;
+            const from = this.linking.from;
+            this.linking = null; this._suppressClick = true;
+            const tid = this._nodeIdAt(ev.clientX, ev.clientY) || this.linkTargetId;
+            this.linkTargetId = null;
+            if (tid && tid !== from.id) {
+                const tgt = this.nodeById()[tid];
+                if (tgt && !tgt.synthetic) this.openNewEditor(from.id, tid);
+            }
         },
         onNodeLeave(n) { if (this.hoverId === n.id) this.hoverId = null; },
         _nodeIdAt(cx, cy) {
@@ -736,14 +762,6 @@ function meshFlowPage() {
         onNodeDown(ev, n) { this._suppressClick = false; this._drag = { n, sx: ev.clientX, sy: ev.clientY, ox: n.x, oy: n.y, moved: false }; },
         onCanvasDown(ev) { if (this._drag || this.linking) return; this._pan = { sx: ev.clientX, sy: ev.clientY, ox: this.panX, oy: this.panY, moved: false }; },
         onMove(ev) {
-            if (this.linking) {
-                const r = this.$refs.vp.getBoundingClientRect();
-                this.linking.x = (ev.clientX - r.left - this.panX) / this.scale;
-                this.linking.y = (ev.clientY - r.top - this.panY) / this.scale;
-                const tid = this._nodeIdAt(ev.clientX, ev.clientY);
-                this.linkTargetId = (tid && tid !== this.linking.from.id) ? tid : null;
-                return;
-            }
             if (this._drag) {
                 const dx = (ev.clientX - this._drag.sx) / this.scale, dy = (ev.clientY - this._drag.sy) / this.scale;
                 if (Math.abs(dx) + Math.abs(dy) > 2) this._drag.moved = true;
@@ -758,19 +776,7 @@ function meshFlowPage() {
                 this.panX = this._pan.ox + dx; this.panY = this._pan.oy + dy;
             }
         },
-        onUp(ev) {
-            if (this.linking) {
-                const from = this.linking.from, pid = this.linking.pointerId;
-                try { this.$refs.vp.releasePointerCapture(pid); } catch (_) {}
-                this.linking = null; this._suppressClick = true;
-                const tid = (ev ? this._nodeIdAt(ev.clientX, ev.clientY) : null) || this.linkTargetId;
-                this.linkTargetId = null;
-                if (tid && tid !== from.id) {
-                    const tgt = this.nodeById()[tid];
-                    if (tgt && !tgt.synthetic) this.openNewEditor(from.id, tid);
-                }
-                return;
-            }
+        onUp() {
             if (this._drag) {
                 if (this._drag.moved) { this._suppressClick = true; this._recomputeCanvas(); this._syncPositions(); this.queueSave(); }
                 this._drag = null;
