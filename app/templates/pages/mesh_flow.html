@@ -1,6 +1,9 @@
 {% extends "layouts/base.html" %}
 
 {% block content %}
+<style>
+  .mf-noselect, .mf-noselect * { -webkit-user-select: none; -moz-user-select: none; user-select: none; }
+</style>
 <div x-data="meshFlowPage()" x-init="load()" class="flex flex-col -m-4 lg:-m-6 h-[calc(100vh-3.5rem)]">
 
     <!-- ══ TOOLBAR ══ -->
@@ -55,8 +58,10 @@
             </button>
         </div>
 
-        <!-- transformed world layer -->
-        <div class="absolute left-0 top-0 origin-top-left" :style="`transform: translate(${panX}px, ${panY}px) scale(${scale})`">
+        <!-- transformed world layer. mf-noselect: arrastar nós NÃO seleciona texto
+             (o azul de seleção). Os painéis laterais ficam FORA desta camada, então
+             seus inputs (expr, etc.) seguem selecionáveis. -->
+        <div class="absolute left-0 top-0 origin-top-left mf-noselect" :style="`transform: translate(${panX}px, ${panY}px) scale(${scale})`">
 
             <!-- edges -->
             <svg class="absolute left-0 top-0 pointer-events-none overflow-visible" :width="canvasW" :height="canvasH" aria-hidden="true">
