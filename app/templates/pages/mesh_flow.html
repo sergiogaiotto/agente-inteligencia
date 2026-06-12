@@ -70,26 +70,10 @@
                         <path d="M2 1.5 L8 5 L2 8.5" fill="none" stroke="context-stroke" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
                     </marker>
                 </defs>
-                <template x-for="e in renderEdges" :key="e.id">
-                    <g>
-                        <path :d="e.d" fill="none" :stroke="e.color" stroke-width="1.6" :stroke-dasharray="e.dash" :opacity="e.op" marker-end="url(#mf-arrow)" stroke-linecap="round"></path>
-                        <template x-if="e.editable">
-                            <path :d="e.d" fill="none" stroke="transparent" stroke-width="14" style="pointer-events:stroke; cursor:pointer"
-                                  @pointerdown.stop @click.stop="editEdge(e.id)"></path>
-                        </template>
-                        <template x-if="e.label && e.op > 0.5">
-                            <foreignObject :x="e.lx" :y="e.ly" width="150" height="22">
-                                <span xmlns="http://www.w3.org/1999/xhtml" class="inline-block rounded-md border border-surface-200 bg-white px-1.5 py-0.5 text-[10px] leading-none whitespace-nowrap" :style="`color:${e.color}`" x-text="e.label"></span>
-                            </foreignObject>
-                        </template>
-                    </g>
-                </template>
-                <template x-if="linking">
-                    <g>
-                        <path :d="linkPath" fill="none" stroke="#2E73E8" stroke-width="6" stroke-linecap="round" opacity="0.14"></path>
-                        <path :d="linkPath" fill="none" stroke="#2E73E8" stroke-width="2.4" stroke-dasharray="7 5" stroke-linecap="round" marker-end="url(#mf-arrow)"></path>
-                    </g>
-                </template>
+                <!-- arestas + linha de arraste via x-html: innerHTML num <g> SVG é
+                     parseado no namespace SVG (o <template> do Alpine cria no
+                     namespace HTML → <path> não renderiza dentro do <svg>). -->
+                <g @click="onEdgeClick($event)" x-html="edgesSvg"></g>
             </svg>
 
             <!-- nodes -->
@@ -161,10 +145,7 @@
         <!-- minimapa -->
         <div x-show="nodes.length && !selected && !editor" class="absolute bottom-3 right-3 rounded-lg border border-surface-200 bg-white/90 backdrop-blur-sm shadow-sm overflow-hidden" style="width:184px; height:120px">
             <svg width="184" height="120" @click="onMinimapClick($event)" style="cursor:pointer; display:block">
-                <template x-for="m in minimapNodes" :key="m.id">
-                    <rect :x="m.x" :y="m.y" :width="m.w" :height="m.h" rx="1.5" :fill="m.fill" opacity="0.85"></rect>
-                </template>
-                <rect :x="minimapRect.x" :y="minimapRect.y" :width="minimapRect.w" :height="minimapRect.h" fill="none" stroke="#2E73E8" stroke-width="1.5" rx="2"></rect>
+                <g x-html="minimapSvg"></g>
             </svg>
         </div>
 
@@ -538,6 +519,32 @@ function meshFlowPage() {
             return '';
         },
 
+        // SVG das arestas como STRING (renderizada via x-html → namespace SVG ok).
+        // Recompõe reativamente quando nós/arestas/linking mudam.
+        get edgesSvg() {
+            let s = '';
+            for (const e of this.renderEdges) {
+                const dash = e.dash ? ` stroke-dasharray="${e.dash}"` : '';
+                s += `<path d="${e.d}" fill="none" stroke="${e.color}" stroke-width="1.6"${dash} opacity="${e.op}" marker-end="url(#mf-arrow)" stroke-linecap="round" style="pointer-events:none"></path>`;
+                if (e.editable) s += `<path d="${e.d}" data-eid="${e.id}" fill="none" stroke="transparent" stroke-width="14" style="pointer-events:stroke;cursor:pointer"></path>`;
+                if (e.label && e.op > 0.5) {
+                    const safe = String(e.label).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    s += `<foreignObject x="${e.lx}" y="${e.ly}" width="150" height="22"><span xmlns="http://www.w3.org/1999/xhtml" style="display:inline-block;border:0.5px solid #e2e8f0;background:#fff;border-radius:6px;padding:2px 6px;font-size:10px;line-height:1;white-space:nowrap;color:${e.color}">${safe}</span></foreignObject>`;
+                }
+            }
+            if (this.linking) {
+                const lp = this.linkPath;
+                s += `<path d="${lp}" fill="none" stroke="#2E73E8" stroke-width="6" stroke-linecap="round" opacity="0.14" style="pointer-events:none"></path>`;
+                s += `<path d="${lp}" fill="none" stroke="#2E73E8" stroke-width="2.4" stroke-dasharray="7 5" stroke-linecap="round" marker-end="url(#mf-arrow)" style="pointer-events:none"></path>`;
+            }
+            return s;
+        },
+        onEdgeClick(ev) {
+            const t = ev.target;
+            const eid = t && t.getAttribute && t.getAttribute('data-eid');
+            if (eid) this.editEdge(eid);
+        },
+
         edgeCountFor(id) { return this.edges.filter(e => (e.source === id || e.target === id) && e.type !== 'start').length; },
 
         selectNode(n) {
@@ -631,6 +638,16 @@ function meshFlowPage() {
             const vx = -this.panX / this.scale, vy = -this.panY / this.scale;
             return { x: g.offX + (vx - g.minX) * g.s, y: g.offY + (vy - g.minY) * g.s, w: (r.width / this.scale) * g.s, h: (r.height / this.scale) * g.s };
         },
+        // SVG do minimapa como STRING (x-html → namespace SVG correto).
+        get minimapSvg() {
+            let s = '';
+            for (const m of this.minimapNodes) {
+                s += `<rect x="${m.x}" y="${m.y}" width="${m.w}" height="${m.h}" rx="1.5" fill="${m.fill}" opacity="0.85"></rect>`;
+            }
+            const r = this.minimapRect;
+            s += `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="2" fill="none" stroke="#2E73E8" stroke-width="1.5"></rect>`;
+            return s;
+        },
         onMinimapClick(ev) {
             const g = this._mmGeom(); if (!g || !this.$refs.vp) return;
             const rect = ev.currentTarget.getBoundingClientRect();
@@ -644,8 +661,34 @@ function meshFlowPage() {
         // ── conectar (arrastar da porta) ──
         startLink(ev, n) {
             this._suppressClick = false; this.linkTargetId = null;
-            this.linking = { from: n, x: n.x + n.w, y: n.y + this.NODE_H / 2, pointerId: ev.pointerId };
-            try { this.$refs.vp.setPointerCapture(ev.pointerId); } catch (_) {}
+            // já nasce com um pequeno stub visível à direita da porta (feedback no clique)
+            this.linking = { from: n, x: n.x + n.w + 8, y: n.y + this.NODE_H / 2 };
+            // pointermove/up no WINDOW: o arraste nunca se perde, independente do
+            // que estiver sob o cursor (mais robusto que @pointermove no viewport).
+            this._linkMove = (e) => this._onLinkMove(e);
+            this._linkUp = (e) => this._onLinkUp(e);
+            window.addEventListener('pointermove', this._linkMove);
+            window.addEventListener('pointerup', this._linkUp, { once: true });
+        },
+        _onLinkMove(ev) {
+            if (!this.linking) return;
+            const r = this.$refs.vp.getBoundingClientRect();
+            // reatribui o objeto (não muta .x/.y) p/ garantir a reatividade do SVG
+            this.linking = { from: this.linking.from, x: (ev.clientX - r.left - this.panX) / this.scale, y: (ev.clientY - r.top - this.panY) / this.scale };
+            const tid = this._nodeIdAt(ev.clientX, ev.clientY);
+            this.linkTargetId = (tid && tid !== this.linking.from.id) ? tid : null;
+        },
+        _onLinkUp(ev) {
+            window.removeEventListener('pointermove', this._linkMove);
+            if (!this.linking) return;
+            const from = this.linking.from;
+            this.linking = null; this._suppressClick = true;
+            const tid = this._nodeIdAt(ev.clientX, ev.clientY) || this.linkTargetId;
+            this.linkTargetId = null;
+            if (tid && tid !== from.id) {
+                const tgt = this.nodeById()[tid];
+                if (tgt && !tgt.synthetic) this.openNewEditor(from.id, tid);
+            }
         },
         onNodeLeave(n) { if (this.hoverId === n.id) this.hoverId = null; },
         _nodeIdAt(cx, cy) {
@@ -736,14 +779,6 @@ function meshFlowPage() {
         onNodeDown(ev, n) { this._suppressClick = false; this._drag = { n, sx: ev.clientX, sy: ev.clientY, ox: n.x, oy: n.y, moved: false }; },
         onCanvasDown(ev) { if (this._drag || this.linking) return; this._pan = { sx: ev.clientX, sy: ev.clientY, ox: this.panX, oy: this.panY, moved: false }; },
         onMove(ev) {
-            if (this.linking) {
-                const r = this.$refs.vp.getBoundingClientRect();
-                this.linking.x = (ev.clientX - r.left - this.panX) / this.scale;
-                this.linking.y = (ev.clientY - r.top - this.panY) / this.scale;
-                const tid = this._nodeIdAt(ev.clientX, ev.clientY);
-                this.linkTargetId = (tid && tid !== this.linking.from.id) ? tid : null;
-                return;
-            }
             if (this._drag) {
                 const dx = (ev.clientX - this._drag.sx) / this.scale, dy = (ev.clientY - this._drag.sy) / this.scale;
                 if (Math.abs(dx) + Math.abs(dy) > 2) this._drag.moved = true;
@@ -758,19 +793,7 @@ function meshFlowPage() {
                 this.panX = this._pan.ox + dx; this.panY = this._pan.oy + dy;
             }
         },
-        onUp(ev) {
-            if (this.linking) {
-                const from = this.linking.from, pid = this.linking.pointerId;
-                try { this.$refs.vp.releasePointerCapture(pid); } catch (_) {}
-                this.linking = null; this._suppressClick = true;
-                const tid = (ev ? this._nodeIdAt(ev.clientX, ev.clientY) : null) || this.linkTargetId;
-                this.linkTargetId = null;
-                if (tid && tid !== from.id) {
-                    const tgt = this.nodeById()[tid];
-                    if (tgt && !tgt.synthetic) this.openNewEditor(from.id, tid);
-                }
-                return;
-            }
+        onUp() {
             if (this._drag) {
                 if (this._drag.moved) { this._suppressClick = true; this._recomputeCanvas(); this._syncPositions(); this.queueSave(); }
                 this._drag = null;
