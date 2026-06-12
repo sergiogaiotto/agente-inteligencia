@@ -73,6 +73,62 @@ async def delete_connection(conn_id: str):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Fluxograma de agentes (2026-06-12) — LAYOUT posicional (x,y) dos nós.
+#
+# UI-ONLY: vive em platform_settings sob a chave `mesh_node_positions`
+# (MESMO store de mesh_groups/mesh_chain_names), NUNCA em
+# mesh_connections.config — que é LIDO pelo engine em runtime
+# (_should_skip_conditional / _resolve_context_scope). Apagar o layout
+# NÃO altera a execução: as duas views (Topologia e Fluxograma) leem o
+# MESMO grafo de mesh_connections; o x,y é só onde o Fluxograma desenha.
+#
+# Por que um endpoint DEDICADO (e não PUT /api/v1/settings): o save_settings
+# re-serializa o modelo SettingsSave inteiro com defaults → salvar por ali a
+# cada drag sobrescreveria mcp_per_tool_enabled, grounding_strict, chaves de
+# LLM, etc. Aqui o set() faz upsert SÓ desta chave (ON CONFLICT por key).
+# ═══════════════════════════════════════════════════════════════════
+
+_MESH_POSITIONS_KEY = "mesh_node_positions"
+
+
+@router.get("/layout")
+async def get_layout():
+    """Posições x,y dos nós do Fluxograma. Vazio ({}) se nunca salvo."""
+    from app.core.database import settings_store
+    raw = await settings_store.get(_MESH_POSITIONS_KEY, "")
+    positions: dict = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                positions = parsed
+        except (ValueError, TypeError):
+            positions = {}
+    return {"positions": positions}
+
+
+@router.put("/layout")
+async def save_layout(payload: dict):
+    """Persiste SÓ a chave mesh_node_positions (upsert por-chave) — NÃO toca
+    nas demais settings. Sanitiza para {agent_id: {x: float, y: float}};
+    descarta entradas malformadas (e bool, que é subclasse de int)."""
+    from app.core.database import settings_store
+    positions = payload.get("positions")
+    if not isinstance(positions, dict):
+        raise HTTPException(422, "payload.positions deve ser um objeto {agent_id: {x, y}}")
+
+    def _num(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+    clean: dict = {}
+    for aid, pos in positions.items():
+        if isinstance(pos, dict) and _num(pos.get("x")) and _num(pos.get("y")):
+            clean[str(aid)] = {"x": round(float(pos["x"]), 1), "y": round(float(pos["y"]), 1)}
+    await settings_store.set(_MESH_POSITIONS_KEY, json.dumps(clean))
+    return {"message": "Layout salvo", "count": len(clean)}
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Conditional Routing Wizard (2026-06-01) — endpoint para o frontend
 # avaliar uma expressão Jinja contra um contexto simulado, sem precisar
 # salvar a conexão nem disparar um pipeline.
