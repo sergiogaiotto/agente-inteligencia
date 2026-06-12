@@ -142,6 +142,104 @@ async def save_layout(payload: dict):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# FSM canônica resolvida por agente (PR3 — Fluxograma "abrir nó → FSM").
+#
+# A regra exec_mode→fases está hardcoded no engine (state_machine.py + os
+# perfis em engine.py); este endpoint é a fonte ÚNICA consultável dela, para
+# o Fluxograma RENDERIZAR sem duplicar a regra no JS (evita drift client×engine).
+# Fases canônicas e ramos vêm de state_machine.py::State/TRANSITIONS; os perfis
+# (fast/standard/rigorous/declarative) e o efeito de require_evidence=0 vêm da
+# orquestração do engine.
+# ═══════════════════════════════════════════════════════════════════
+
+_FSM_PROFILE_NOTE = {
+    "declarative": "HTTP via API Bindings / Data Tables — não percorre a FSM de LLM.",
+    "fast": "1 chamada LLM · sem reflexão · verificação heurística (max_iter=1).",
+    "standard": "reflexão adaptativa · verificação heurística (max_iter=2).",
+    "rigorous": "reflexão + verificação por LLM (judge) (max_iter=3).",
+}
+
+_FSM_LEAVES = [
+    {"label": "Recommend", "cond": "evidence_ok"},
+    {"label": "Refuse", "cond": "evidence_insufficient"},
+    {"label": "Escalate", "cond": "risk_or_fraud"},
+]
+
+
+def _build_fsm_profile(execution_mode, require_evidence) -> dict:
+    """PURA: mapeia execution_mode (+ require_evidence) para a trilha canônica
+    da FSM. Caminho feliz de fases; ramo policy_denied em PolicyCheck; folhas
+    terminais Recommend/Refuse/Escalate (1-de-3, decididas em VerifyEvidence)
+    convergindo em LogAndClose. Sem skill resolvido → perfil 'unresolved'."""
+    mode = execution_mode if execution_mode in ("declarative", "fast", "standard", "rigorous") else None
+    if mode is None:
+        return {"execution_mode": None, "profile_label": "—",
+                "note": "Sem skill — perfil de execução não resolvido.", "phases": [], "leaves": []}
+
+    if mode == "declarative":
+        return {
+            "execution_mode": "declarative", "profile_label": "Declarativo",
+            "note": _FSM_PROFILE_NOTE["declarative"],
+            "phases": [
+                {"id": "Intake", "label": "Intake", "desc": "recebe e normaliza", "state": "always"},
+                {"id": "PolicyCheck", "label": "PolicyCheck", "desc": "permissões (OPA)", "state": "always", "branch": "policy_denied → Refuse"},
+                {"id": "Declarative", "label": "Execução declarativa", "desc": "API Bindings / Data Tables — sem LLM", "state": "normal"},
+                {"id": "LogAndClose", "label": "LogAndClose", "desc": "registra e fecha", "state": "always", "terminal": True},
+            ],
+            "leaves": [],
+        }
+
+    skip_ev = (require_evidence == 0)
+    reflect = mode in ("standard", "rigorous")
+    verify_llm = (mode == "rigorous")
+    phases = [
+        {"id": "Intake", "label": "Intake", "desc": "recebe e normaliza", "state": "always"},
+        {"id": "PolicyCheck", "label": "PolicyCheck", "desc": "permissões (OPA)", "state": "always", "branch": "policy_denied → Refuse"},
+        {"id": "RetrieveEvidence", "label": "RetrieveEvidence", "desc": "busca evidências (RAG)",
+         "state": "skipped" if skip_ev else "normal", "note": "pulada · require_evidence=0" if skip_ev else ""},
+        {"id": "DraftAnswer", "label": "DraftAnswer", "desc": "gera rascunho (LLM)", "state": "normal",
+         "note": "+ reflexão" if reflect else ""},
+        {"id": "VerifyEvidence", "label": "VerifyEvidence", "desc": "verifica consistência e cobertura",
+         "state": "skipped" if skip_ev else "normal",
+         "note": ("pulada · require_evidence=0" if skip_ev else ("por LLM (judge)" if verify_llm else "heurística"))},
+        {"id": "LogAndClose", "label": "LogAndClose", "desc": "registra e fecha", "state": "always", "terminal": True},
+    ]
+    return {
+        "execution_mode": mode, "profile_label": mode.capitalize(),
+        "note": _FSM_PROFILE_NOTE[mode], "phases": phases, "leaves": list(_FSM_LEAVES),
+    }
+
+
+@router.get("/fsm/{agent_id}")
+async def get_agent_fsm(agent_id: str):
+    """FSM canônica resolvida do agente (Fluxograma 'abrir nó'). Resolve
+    execution_mode pelo skill (mesma lógica de /agents/{id}/inputs-schema) e
+    require_evidence pela linha do agente. Fonte ÚNICA — o JS apenas renderiza."""
+    from app.skill_parser.parser import parse_skill_md
+    from app.core.database import skills_repo
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
+    execution_mode = None
+    if agent.get("skill_id"):
+        skill_row = await skills_repo.find_by_id(agent["skill_id"])
+        if skill_row and skill_row.get("raw_content"):
+            try:
+                execution_mode = parse_skill_md(skill_row["raw_content"]).execution_mode
+            except Exception:
+                execution_mode = None
+    req_ev = agent.get("require_evidence")
+    try:
+        req_ev = int(req_ev) if req_ev is not None else None
+    except (ValueError, TypeError):
+        req_ev = None
+    prof = _build_fsm_profile(execution_mode, req_ev)
+    prof["agent_id"] = agent_id
+    prof["require_evidence"] = req_ev
+    return prof
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Conditional Routing Wizard (2026-06-01) — endpoint para o frontend
 # avaliar uma expressão Jinja contra um contexto simulado, sem precisar
 # salvar a conexão nem disparar um pipeline.
