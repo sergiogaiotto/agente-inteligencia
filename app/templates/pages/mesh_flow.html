@@ -1,6 +1,9 @@
 {% extends "layouts/base.html" %}
 
 {% block content %}
+<style>
+  .mf-noselect, .mf-noselect * { -webkit-user-select: none; -moz-user-select: none; user-select: none; }
+</style>
 <div x-data="meshFlowPage()" x-init="load()" class="flex flex-col -m-4 lg:-m-6 h-[calc(100vh-3.5rem)]">
 
     <!-- ══ TOOLBAR ══ -->
@@ -55,8 +58,10 @@
             </button>
         </div>
 
-        <!-- transformed world layer -->
-        <div class="absolute left-0 top-0 origin-top-left" :style="`transform: translate(${panX}px, ${panY}px) scale(${scale})`">
+        <!-- transformed world layer. mf-noselect: arrastar nós NÃO seleciona texto
+             (o azul de seleção). Os painéis laterais ficam FORA desta camada, então
+             seus inputs (expr, etc.) seguem selecionáveis. -->
+        <div class="absolute left-0 top-0 origin-top-left mf-noselect" :style="`transform: translate(${panX}px, ${panY}px) scale(${scale})`">
 
             <!-- edges -->
             <svg class="absolute left-0 top-0 pointer-events-none overflow-visible" :width="canvasW" :height="canvasH" aria-hidden="true">
@@ -80,18 +85,21 @@
                     </g>
                 </template>
                 <template x-if="linking">
-                    <path :d="linkPath" fill="none" stroke="#64748B" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#mf-arrow)"></path>
+                    <g>
+                        <path :d="linkPath" fill="none" stroke="#2E73E8" stroke-width="6" stroke-linecap="round" opacity="0.14"></path>
+                        <path :d="linkPath" fill="none" stroke="#2E73E8" stroke-width="2.4" stroke-dasharray="7 5" stroke-linecap="round" marker-end="url(#mf-arrow)"></path>
+                    </g>
                 </template>
             </svg>
 
             <!-- nodes -->
             <template x-for="n in nodes" :key="n.id">
-                <div class="absolute transition-opacity" :style="`left:${n.x}px; top:${n.y}px; width:${n.w}px; cursor:${n.synthetic ? 'grab' : 'pointer'}; opacity:${nodeOpacity(n)}`"
+                <div class="absolute transition-opacity" :data-nid="n.id" :style="`left:${n.x}px; top:${n.y}px; width:${n.w}px; cursor:${n.synthetic ? 'grab' : 'pointer'}; opacity:${nodeOpacity(n)}`"
                      @pointerdown.stop="onNodeDown($event, n)"
                      @pointerenter="hoverId = n.id" @pointerleave="onNodeLeave(n)"
                      @click="selectNode(n)">
                     <div class="relative rounded-xl bg-white border transition-shadow"
-                         :class="(selected && selected.id===n.id) ? 'border-brand-400 shadow-md ring-2 ring-brand-100' : ((linking && hoverId===n.id && !n.synthetic && linking.from.id!==n.id) ? 'border-emerald-400 ring-2 ring-emerald-100' : 'border-surface-200 shadow-sm hover:shadow')">
+                         :class="(linking && linkTargetId===n.id && !n.synthetic && linking.from.id!==n.id) ? 'border-emerald-400 ring-2 ring-emerald-200' : ((selected && selected.id===n.id) ? 'border-brand-400 shadow-md ring-2 ring-brand-100' : 'border-surface-200 shadow-sm hover:shadow')">
                         <div class="flex items-center gap-2.5 px-2.5 py-2">
                             <div class="flex-none w-8 h-8 rounded-lg flex items-center justify-center"
                                  :style="n.synthetic ? 'background:#fff; border:1px solid #cbd5e1; color:#0f172a' : `background:${n.color}; color:#fff`"
@@ -249,10 +257,12 @@
             </template>
         </div>
 
-        <!-- editor de conexão -->
+        <!-- editor de conexão (popup) -->
         <div x-show="editor" x-transition.opacity
-             class="absolute top-0 right-0 h-full w-80 bg-white border-l border-surface-200 shadow-xl overflow-y-auto scrollbar-thin">
+             class="absolute inset-0 z-30 flex items-center justify-center px-4" style="background:rgba(15,23,42,0.18)"
+             @pointerdown.self.stop="editor = null">
             <template x-if="editor">
+                <div class="w-80 max-h-[86%] overflow-y-auto scrollbar-thin bg-white rounded-xl border border-surface-200 shadow-2xl" @pointerdown.stop>
                 <div class="p-4">
                     <div class="flex items-center justify-between mb-3">
                         <div class="text-[14px] font-semibold text-surface-800" x-text="editor.mode==='edit' ? 'Editar conexão' : 'Nova conexão'"></div>
@@ -340,6 +350,7 @@
                     </div>
                     <p class="mt-3 text-[10px] text-surface-400 leading-relaxed">Salvo em <span class="font-mono">mesh_connections</span> — reflete na Topologia de conexões.</p>
                 </div>
+                </div>
             </template>
         </div>
     </div>
@@ -375,7 +386,7 @@ function meshFlowPage() {
         scale: 1, panX: 40, panY: 30,
         canvasW: 2000, canvasH: 1200,
         selected: null, loaded: false,
-        hoverId: null, linking: null, editor: null, sim: null, scopeSim: null, saving: false, fsm: null, replay: null, snap: false, groups: [],
+        hoverId: null, linking: null, linkTargetId: null, editor: null, sim: null, scopeSim: null, saving: false, fsm: null, replay: null, snap: false, groups: [],
         _drag: null, _pan: null, _saveTimer: null, _suppressClick: false,
 
         get agentCount() { return this.nodes.filter(n => !n.synthetic).length; },
@@ -631,8 +642,18 @@ function meshFlowPage() {
         },
 
         // ── conectar (arrastar da porta) ──
-        startLink(ev, n) { this._suppressClick = false; this.linking = { from: n, x: n.x + n.w, y: n.y + this.NODE_H / 2 }; },
+        startLink(ev, n) {
+            this._suppressClick = false; this.linkTargetId = null;
+            this.linking = { from: n, x: n.x + n.w, y: n.y + this.NODE_H / 2, pointerId: ev.pointerId };
+            try { this.$refs.vp.setPointerCapture(ev.pointerId); } catch (_) {}
+        },
         onNodeLeave(n) { if (this.hoverId === n.id) this.hoverId = null; },
+        _nodeIdAt(cx, cy) {
+            const el = document.elementFromPoint(cx, cy);
+            if (!el || !el.closest) return null;
+            const nd = el.closest('[data-nid]');
+            return nd ? nd.getAttribute('data-nid') : null;
+        },
         get linkPath() {
             if (!this.linking) return '';
             const f = this.linking.from;
@@ -719,6 +740,8 @@ function meshFlowPage() {
                 const r = this.$refs.vp.getBoundingClientRect();
                 this.linking.x = (ev.clientX - r.left - this.panX) / this.scale;
                 this.linking.y = (ev.clientY - r.top - this.panY) / this.scale;
+                const tid = this._nodeIdAt(ev.clientX, ev.clientY);
+                this.linkTargetId = (tid && tid !== this.linking.from.id) ? tid : null;
                 return;
             }
             if (this._drag) {
@@ -735,12 +758,16 @@ function meshFlowPage() {
                 this.panX = this._pan.ox + dx; this.panY = this._pan.oy + dy;
             }
         },
-        onUp() {
+        onUp(ev) {
             if (this.linking) {
-                const from = this.linking.from; this.linking = null; this._suppressClick = true;
-                if (this.hoverId && this.hoverId !== from.id) {
-                    const tgt = this.nodeById()[this.hoverId];
-                    if (tgt && !tgt.synthetic) this.openNewEditor(from.id, this.hoverId);
+                const from = this.linking.from, pid = this.linking.pointerId;
+                try { this.$refs.vp.releasePointerCapture(pid); } catch (_) {}
+                this.linking = null; this._suppressClick = true;
+                const tid = (ev ? this._nodeIdAt(ev.clientX, ev.clientY) : null) || this.linkTargetId;
+                this.linkTargetId = null;
+                if (tid && tid !== from.id) {
+                    const tgt = this.nodeById()[tid];
+                    if (tgt && !tgt.synthetic) this.openNewEditor(from.id, tid);
                 }
                 return;
             }
