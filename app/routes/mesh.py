@@ -240,6 +240,69 @@ async def get_agent_fsm(agent_id: str):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Replay "Última execução" (PR4 — Fluxograma).
+#
+# O trace de um pipeline é PERSISTIDO em interactions.trace_data (JSON), gravado
+# por execute_pipeline. Aqui devolvemos um shape ENXUTO e canvas-ready da execução
+# de pipeline MAIS RECENTE: cada step keyed por agent_id (= id do nó), com status
+# (ran/skipped), skip_reason + diagnóstico humano, e final_state (a folha da FSM).
+# O canvas pinta nós (ran/skipped/erro) e arestas (disparou sse o ALVO rodou).
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _extract_step_diag(step: dict) -> str:
+    tr = step.get("trace")
+    if isinstance(tr, dict):
+        ds = tr.get("diagnostics")
+        if isinstance(ds, list) and ds and isinstance(ds[0], dict):
+            return str(ds[0].get("text") or "")
+    return ""
+
+
+@router.get("/last-run")
+async def get_last_run():
+    """Trace canvas-ready da execução de PIPELINE mais recente. Varre as
+    interactions (DESC por created_at) e devolve a primeira com pipeline_steps
+    não-vazio. `found=False` se nenhuma execução replayável existir."""
+    from app.core.database import interactions_repo
+    rows = await interactions_repo.find_all(limit=40)
+    for itx in (rows or []):
+        raw = itx.get("trace_data") or ""
+        try:
+            td = json.loads(raw) if raw else {}
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(td, dict):
+            continue
+        steps = td.get("pipeline_steps")
+        if not isinstance(steps, list) or not steps:
+            continue
+        out_steps = []
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            out_steps.append({
+                "agent_id": s.get("agent_id"),
+                "agent_name": s.get("agent_name"),
+                "status": s.get("status"),
+                "skip_reason": s.get("skip_reason"),
+                "final_state": s.get("final_state"),
+                "duration_ms": s.get("duration_ms"),
+                "diagnostic": _extract_step_diag(s),
+            })
+        return {
+            "found": True,
+            "session_id": itx.get("id"),
+            "title": itx.get("title"),
+            "created_at": str(itx.get("created_at")) if itx.get("created_at") is not None else None,
+            "final_state": td.get("final_state"),
+            "entry_agent_id": td.get("agent_id"),
+            "steps": out_steps,
+        }
+    return {"found": False, "steps": []}
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Conditional Routing Wizard (2026-06-01) — endpoint para o frontend
 # avaliar uma expressão Jinja contra um contexto simulado, sem precisar
 # salvar a conexão nem disparar um pipeline.

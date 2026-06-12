@@ -9,6 +9,12 @@
             Fluxograma de agentes — a <span class="font-medium text-surface-500">mesma topologia</span>. Arraste para organizar; puxe da bolinha à direita para conectar; clique numa seta para editar.
         </p>
         <div class="flex items-center gap-1.5 flex-none">
+            <button @click="toggleReplay()" class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] transition-colors"
+                    :class="replay ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-600 hover:bg-surface-50'"
+                    title="Destacar o caminho da última execução de pipeline">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+                <span x-text="replay ? 'Sair do replay' : 'Última execução'"></span>
+            </button>
             <button @click="autoLayout()" class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 px-2.5 py-1.5 text-[12px] text-surface-600 hover:bg-surface-50" title="Reorganizar automaticamente">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
                 Auto-organizar
@@ -31,6 +37,18 @@
          style="background-image: radial-gradient(rgba(15,23,42,0.07) 0.7px, transparent 0.7px); background-size: 19px 19px; cursor: grab; touch-action: none"
          @pointerdown="onCanvasDown($event)" @pointermove="onMove($event)" @pointerup="onUp($event)" @pointerleave="onUp($event)" @wheel.prevent="onWheel($event)">
 
+        <!-- banner de replay -->
+        <div x-show="replay && replay.loading" class="absolute top-3 left-1/2 -translate-x-1/2 z-20 text-[11px] text-surface-400 bg-white/90 rounded-lg px-3 py-1.5 border border-surface-200">Carregando execução…</div>
+        <div x-show="replayOn" class="absolute top-3 left-1/2 -translate-x-1/2 z-20 rounded-lg border border-brand-200 bg-white/95 backdrop-blur-sm shadow-sm px-3 py-1.5 text-[11px] flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-brand-500"></span>
+            <span class="text-surface-500">Replay:</span>
+            <span class="font-medium text-surface-800 truncate max-w-[200px]" x-text="replay && replay.label"></span>
+            <template x-if="replay && replay.finalState"><span class="text-surface-400" x-text="'· ' + replay.finalState"></span></template>
+            <button @click="toggleReplay()" class="ml-1 text-surface-400 hover:text-surface-600" aria-label="Sair do replay">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+
         <!-- transformed world layer -->
         <div class="absolute left-0 top-0 origin-top-left" :style="`transform: translate(${panX}px, ${panY}px) scale(${scale})`">
 
@@ -43,12 +61,12 @@
                 </defs>
                 <template x-for="e in renderEdges" :key="e.id">
                     <g>
-                        <path :d="e.d" fill="none" :stroke="e.color" stroke-width="1.6" :stroke-dasharray="e.dash" marker-end="url(#mf-arrow)" stroke-linecap="round"></path>
+                        <path :d="e.d" fill="none" :stroke="e.color" stroke-width="1.6" :stroke-dasharray="e.dash" :opacity="e.op" marker-end="url(#mf-arrow)" stroke-linecap="round"></path>
                         <template x-if="e.editable">
                             <path :d="e.d" fill="none" stroke="transparent" stroke-width="14" style="pointer-events:stroke; cursor:pointer"
                                   @pointerdown.stop @click.stop="editEdge(e.id)"></path>
                         </template>
-                        <template x-if="e.label">
+                        <template x-if="e.label && e.op > 0.5">
                             <foreignObject :x="e.lx" :y="e.ly" width="150" height="22">
                                 <span xmlns="http://www.w3.org/1999/xhtml" class="inline-block rounded-md border border-surface-200 bg-white px-1.5 py-0.5 text-[10px] leading-none whitespace-nowrap" :style="`color:${e.color}`" x-text="e.label"></span>
                             </foreignObject>
@@ -62,7 +80,7 @@
 
             <!-- nodes -->
             <template x-for="n in nodes" :key="n.id">
-                <div class="absolute" :style="`left:${n.x}px; top:${n.y}px; width:${n.w}px; cursor:${n.synthetic ? 'grab' : 'pointer'}`"
+                <div class="absolute transition-opacity" :style="`left:${n.x}px; top:${n.y}px; width:${n.w}px; cursor:${n.synthetic ? 'grab' : 'pointer'}; opacity:${nodeOpacity(n)}`"
                      @pointerdown.stop="onNodeDown($event, n)"
                      @pointerenter="hoverId = n.id" @pointerleave="onNodeLeave(n)"
                      @click="selectNode(n)">
@@ -81,6 +99,9 @@
                               :style="`background:${n.badgeBg}; color:${n.badgeFg}`"
                               :title="n.code ? ('kind: '+n.code) : ''"
                               x-text="n.roleLabel"></span>
+                        <template x-if="replayOn && !n.synthetic && replayState(n)">
+                            <span class="absolute -top-2.5 left-2.5 text-[9px] font-medium px-1.5 py-0.5 rounded-md" :style="replayBadgeStyle(n)" :title="replayBadgeTitle(n)" x-text="replayBadgeText(n)"></span>
+                        </template>
                     </div>
                     <!-- porta de saída (arraste para conectar) -->
                     <template x-if="!n.synthetic">
@@ -168,6 +189,9 @@
                         <template x-if="fsm && fsm.phases && fsm.phases.length">
                             <div>
                                 <p class="text-[10px] text-surface-400 mb-2 leading-relaxed" x-text="fsm.note"></p>
+                                <template x-if="selectedTakenLeaf">
+                                    <div class="text-[10px] text-emerald-700 mb-2 flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> caminho real desta execução: <span class="font-medium" x-text="selectedTakenLeaf"></span></div>
+                                </template>
                                 <ol class="space-y-1.5">
                                     <template x-for="(s,i) in fsm.phases" :key="i">
                                         <li class="flex items-start gap-2">
@@ -189,7 +213,9 @@
                                         <div class="text-[9.5px] text-surface-400 mb-1">VerifyEvidence decide (1 de 3) → LogAndClose</div>
                                         <div class="flex flex-wrap gap-1">
                                             <template x-for="lf in fsm.leaves" :key="lf.label">
-                                                <span class="text-[9.5px] px-1.5 py-0.5 rounded-md border" :style="`color:${leafColor(lf.label)}; border-color:${leafColor(lf.label)}55`" :title="lf.cond" x-text="lf.label"></span>
+                                                <span class="text-[9.5px] px-1.5 py-0.5 rounded-md border"
+                                                      :style="lf.label===selectedTakenLeaf ? `background:${leafColor(lf.label)}; color:#fff; border-color:${leafColor(lf.label)}` : `color:${leafColor(lf.label)}; border-color:${leafColor(lf.label)}55`"
+                                                      :title="lf.cond + (lf.label===selectedTakenLeaf ? ' · caminho real' : '')" x-text="lf.label"></span>
                                             </template>
                                         </div>
                                     </div>
@@ -326,7 +352,7 @@ function meshFlowPage() {
         scale: 1, panX: 40, panY: 30,
         canvasW: 2000, canvasH: 1200,
         selected: null, loaded: false,
-        hoverId: null, linking: null, editor: null, sim: null, scopeSim: null, saving: false, fsm: null,
+        hoverId: null, linking: null, editor: null, sim: null, scopeSim: null, saving: false, fsm: null, replay: null,
         _drag: null, _pan: null, _saveTimer: null, _suppressClick: false,
 
         get agentCount() { return this.nodes.filter(n => !n.synthetic).length; },
@@ -446,6 +472,15 @@ function meshFlowPage() {
                 const x1 = s.x + s.w, y1 = s.y + this.NODE_H / 2;
                 const x2 = t.x, y2 = t.y + this.NODE_H / 2;
                 const dx = Math.max(40, Math.abs(x2 - x1) / 2);
+                // Replay: aresta disparou sse o NÓ-ALVO rodou (completed/passthrough);
+                // pulada se o alvo foi skipped; neutra se o alvo não entrou na execução.
+                let op = 1;
+                if (this.replayOn) {
+                    const ts = this.replay.steps[e.target];
+                    const fired = ts && (ts.status === 'completed' || ts.status === 'passthrough');
+                    const skipped = ts && String(ts.status || '').startsWith('skipped');
+                    op = fired ? 1 : (skipped ? 0.22 : 0.1);
+                }
                 out.push({
                     id: e.id,
                     d: `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`,
@@ -453,6 +488,7 @@ function meshFlowPage() {
                     dash: (e.type === 'default' || e.type === 'start') ? '5 4' : '',
                     label: this._edgeLabel(e),
                     editable: e.type !== 'start',
+                    op,
                     lx: (x1 + x2) / 2 - 60, ly: (y1 + y2) / 2 - 26,
                 });
             }
@@ -482,6 +518,56 @@ function meshFlowPage() {
                 .catch(e => { if (this.selected && this.selected.id === agentId) this.fsm = { error: true }; });
         },
         leafColor(l) { return l === 'Recommend' ? '#1D9E75' : (l === 'Escalate' ? '#D14343' : '#C2620E'); },
+
+        // ── replay "Última execução" ──
+        get replayOn() { return !!this.replay && !this.replay.loading && !this.replay.error; },
+        get selectedTakenLeaf() {
+            if (!this.replayOn || !this.selected) return null;
+            const s = this.replay.steps[this.selected.id];
+            return (s && ['Recommend', 'Refuse', 'Escalate'].includes(s.final_state)) ? s.final_state : null;
+        },
+        toggleReplay() { if (this.replay) { this.replay = null; } else { this.loadReplay(); } },
+        async loadReplay() {
+            this.replay = { loading: true };
+            try {
+                const d = await api.get('/api/v1/mesh/last-run');
+                if (!d.found) { showToast('Nenhuma execução de pipeline encontrada para replay', 'info'); this.replay = null; return; }
+                const steps = {};
+                for (const s of (d.steps || [])) if (s.agent_id) steps[s.agent_id] = s;
+                this.replay = { label: d.title || 'Execução', when: d.created_at, finalState: d.final_state, entry: d.entry_agent_id, sessionId: d.session_id, steps };
+            } catch (e) { showToast('Falha ao carregar replay: ' + e.message, 'error'); this.replay = null; }
+        },
+        nodeStep(n) { return (this.replay && this.replay.steps && this.replay.steps[n.id]) || null; },
+        replayState(n) {
+            if (!this.replayOn || n.synthetic) return '';
+            const s = this.nodeStep(n);
+            if (!s) return 'neutral';
+            const st = String(s.status || '');
+            if (st === 'completed') return 'ok';
+            if (st === 'passthrough') return 'pass';
+            if (st === 'error') return 'error';
+            if (st.startsWith('skipped')) return 'skipped';
+            return 'neutral';
+        },
+        nodeOpacity(n) {
+            if (!this.replayOn || n.synthetic) return 1;
+            const st = this.replayState(n);
+            return st === 'neutral' ? 0.38 : (st === 'skipped' ? 0.6 : 1);
+        },
+        replayBadgeText(n) {
+            const st = this.replayState(n);
+            if (st === 'ok') { const fs = this.nodeStep(n).final_state; return ['Recommend', 'Refuse', 'Escalate'].includes(fs) ? ('✓ ' + fs) : '✓'; }
+            return st === 'pass' ? 'passou' : (st === 'skipped' ? 'pulado' : (st === 'error' ? 'erro' : ''));
+        },
+        replayBadgeStyle(n) {
+            const st = this.replayState(n);
+            let c = '#94A3B8';
+            if (st === 'ok') { const fs = this.nodeStep(n).final_state; c = fs === 'Refuse' ? '#C2620E' : (fs === 'Escalate' ? '#D14343' : '#1D9E75'); }
+            else if (st === 'pass') c = '#64748B';
+            else if (st === 'error') c = '#D14343';
+            return `background:${c}22; color:${c}`;
+        },
+        replayBadgeTitle(n) { const s = this.nodeStep(n); return s ? (s.diagnostic || s.skip_reason || s.final_state || '') : ''; },
 
         // ── conectar (arrastar da porta) ──
         startLink(ev, n) { this._suppressClick = false; this.linking = { from: n, x: n.x + n.w, y: n.y + this.NODE_H / 2 }; },
