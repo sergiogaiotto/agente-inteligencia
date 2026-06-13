@@ -31,6 +31,7 @@ PAGES = {
     "/history": {"template":"pages/history.html","title":"Histórico","section":"history"},
     "/settings": {"template":"pages/settings.html","title":"Configurações","section":"settings"},
     "/api-connectors": {"template":"pages/api_connectors.html","title":"API Connectors","section":"api_connectors"},
+    "/federation": {"template":"pages/federation.html","title":"Federação","section":"federation"},
 }
 
 async def _get_user(request: Request):
@@ -141,3 +142,6 @@ async def pg_settings(r: Request): return await _render(r, "/settings")
 
 @router.get("/api-connectors", response_class=HTMLResponse)
 async def pg_api_connectors(r: Request): return await _render(r, "/api-connectors")
+
+@router.get("/federation", response_class=HTMLResponse)
+async def pg_federation(r: Request): return await _render(r, "/federation")
