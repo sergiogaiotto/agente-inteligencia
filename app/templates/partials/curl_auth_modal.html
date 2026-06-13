@@ -1,0 +1,146 @@
+{# ════════════════════════════════════════════════════════════════════════
+   Estação de autenticação do cURL — partial reusável.
+
+   Requisitos no componente Alpine da página que inclui este partial:
+     function minhaPagina() { return { ...curlAuthStation(), ...resto }; }
+   e o <script src="/static/js/curl_auth.js"> (já carregado no base.html).
+
+   Abrir com: openCurlAuth({ url, title?, keyNameHint?, message?, bodyKey?, note? })
+   ════════════════════════════════════════════════════════════════════════ #}
+<div x-show="curlAuth.open" x-transition.opacity @click.self="closeCurlAuth()" style="display:none"
+     class="fixed inset-0 z-[9990] flex items-center justify-center bg-black/30 p-4">
+    <template x-if="curlAuth.open">
+        <div class="w-full max-w-xl rounded-2xl bg-white shadow-xl border border-surface-200 max-h-[90vh] overflow-y-auto" @click.stop>
+            <div class="flex items-center justify-between px-5 py-3 border-b border-surface-100">
+                <h3 class="text-[14px] font-bold text-brand-900" x-text="curlAuth.title"></h3>
+                <button @click="closeCurlAuth()" class="text-surface-400 hover:text-surface-600" aria-label="Fechar">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="px-5 py-4 space-y-3">
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-500 mb-1">Mensagem (entrada)</label>
+                    <input x-model="curlAuth.message" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[13px] outline-none focus:border-brand-400" placeholder="sua entrada aqui">
+                </div>
+
+                {# ── Seletor de modo de autenticação ── #}
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-500 mb-1">Autenticação</label>
+                    <div class="grid grid-cols-3 gap-2">
+                        <button @click="curlAuth.mode='embed'" type="button"
+                                :class="curlAuth.mode==='embed' ? 'border-emerald-400 bg-emerald-50 text-emerald-800' : 'border-surface-200 text-surface-500 hover:bg-surface-50'"
+                                class="rounded-lg border px-2 py-2 text-center transition-colors">
+                            <svg class="w-4 h-4 mx-auto mb-0.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H9v1.5H7.5v1.5H4.5a1.5 1.5 0 01-1.5-1.5v-2.379a1.5 1.5 0 01.44-1.06l5.66-5.66c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+                            <div class="text-[11.5px] font-medium leading-tight">Gerar e embutir</div>
+                            <div class="text-[9.5px] leading-tight" :class="curlAuth.mode==='embed' ? 'text-emerald-600' : 'text-surface-400'">recomendado</div>
+                        </button>
+                        <button @click="curlAuth.mode='existing'" type="button"
+                                :class="curlAuth.mode==='existing' ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-500 hover:bg-surface-50'"
+                                class="rounded-lg border px-2 py-2 text-center transition-colors">
+                            <svg class="w-4 h-4 mx-auto mb-0.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3.75 12h16.5m-16.5 5.25h16.5M3.75 6.75h16.5"/></svg>
+                            <div class="text-[11.5px] font-medium leading-tight">Chave existente</div>
+                            <div class="text-[9.5px] leading-tight text-surface-400">cole a sua</div>
+                        </button>
+                        <button @click="curlAuth.mode='placeholder'" type="button"
+                                :class="curlAuth.mode==='placeholder' ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-500 hover:bg-surface-50'"
+                                class="rounded-lg border px-2 py-2 text-center transition-colors">
+                            <svg class="w-4 h-4 mx-auto mb-0.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M17.25 6.75L22.5 12l-5.25 5.25M6.75 17.25L1.5 12l5.25-5.25M14.25 3.75l-4.5 16.5"/></svg>
+                            <div class="text-[11.5px] font-medium leading-tight">Placeholder</div>
+                            <div class="text-[9.5px] leading-tight text-surface-400">pra docs/CI</div>
+                        </button>
+                    </div>
+                </div>
+
+                {# ── Modo: gerar e embutir ── #}
+                <template x-if="curlAuth.mode==='embed'">
+                    <div class="space-y-2">
+                        <template x-if="!curlAuth.generatedKey">
+                            <div class="flex items-end gap-2">
+                                <div class="flex-1">
+                                    <label class="block text-[10.5px] font-semibold text-surface-500 mb-1">Expiração</label>
+                                    <select x-model="curlAuth.expiry" class="w-full rounded-lg border border-surface-200 bg-white px-2 py-2 text-[12px] outline-none focus:border-brand-400">
+                                        <template x-for="e in CURL_AUTH_EXPIRY" :key="e.v">
+                                            <option :value="e.v" x-text="e.l"></option>
+                                        </template>
+                                    </select>
+                                </div>
+                                <button @click="generateAndEmbed()" :disabled="curlAuth.creating" type="button"
+                                        class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-[12px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 whitespace-nowrap">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H9v1.5H7.5v1.5H4.5a1.5 1.5 0 01-1.5-1.5v-2.379a1.5 1.5 0 01.44-1.06l5.66-5.66c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+                                    <span x-text="curlAuth.creating ? 'Gerando…' : 'Gerar chave e embutir'"></span>
+                                </button>
+                            </div>
+                        </template>
+                        <template x-if="curlAuth.generatedKey">
+                            <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 leading-relaxed flex gap-2">
+                                <svg class="w-4 h-4 flex-none mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                                <span>Esta chave aparece <strong>só agora</strong> — o comando abaixo já a contém. Copie e guarde no seu gerenciador de senhas. Ela também ficou listada em Configurações → API Keys.</span>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+
+                {# ── Modo: chave existente ── #}
+                <template x-if="curlAuth.mode==='existing'">
+                    <div class="space-y-2">
+                        <template x-if="curlAuth.existingKeys.length">
+                            <div class="space-y-2">
+                                <select x-model="curlAuth.selectedPrefix" class="w-full rounded-lg border border-surface-200 bg-white px-2 py-2 text-[12px] outline-none focus:border-brand-400">
+                                    <option value="">Escolha uma chave…</option>
+                                    <template x-for="k in curlAuth.existingKeys" :key="k.id">
+                                        <option :value="k.prefix" x-text="k.name + ' (' + k.prefix + '…)'"></option>
+                                    </template>
+                                </select>
+                                <input x-model="curlAuth.pastedKey" placeholder="cole a chave que você guardou (ag_live_…)"
+                                       class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] font-mono outline-none focus:border-brand-400">
+                                <p class="text-[10px] text-surface-400 leading-relaxed">A plataforma guarda só o <strong>hash</strong> — o segredo não é recuperável. Cole a chave que você salvou ao criá-la; sem ela, o comando sai só com o prefixo.</p>
+                                <p x-show="curlAuth.pastedKey && curlAuth.selectedPrefix && !curlAuth.pastedKey.startsWith(curlAuth.selectedPrefix)" class="text-[10px] text-rose-600">A chave colada não bate com o prefixo selecionado.</p>
+                            </div>
+                        </template>
+                        <template x-if="!curlAuth.existingKeys.length">
+                            <p class="text-[11px] text-surface-400">Nenhuma chave ativa. Use <strong>Gerar e embutir</strong> pra criar uma agora.</p>
+                        </template>
+                    </div>
+                </template>
+
+                {# ── Modo: placeholder ── #}
+                <template x-if="curlAuth.mode==='placeholder'">
+                    <p class="text-[11px] text-surface-500 leading-relaxed">O comando sai com <code>SUA_API_KEY</code> — ideal pra colar em docs/README/CI, onde a chave entra por variável de ambiente em vez de virar texto fixo.</p>
+                </template>
+
+                {# ── Shells ── #}
+                <div class="flex gap-1 text-[11px]">
+                    <template x-for="sh in CURL_AUTH_SHELLS" :key="sh.k">
+                        <button @click="curlAuth.shell = sh.k" type="button"
+                                :class="curlAuth.shell === sh.k ? 'bg-brand-100 text-brand-700 border-brand-300' : 'bg-surface-50 text-surface-500 border-surface-200 hover:bg-surface-100'"
+                                class="rounded-md border px-2 py-1 font-medium transition-colors" x-text="sh.l"></button>
+                    </template>
+                </div>
+
+                {# ── Linha de máscara (só quando há segredo embutido) ── #}
+                <div x-show="curlAuthHasSecret" class="flex items-center justify-between text-[10.5px] text-surface-500">
+                    <span class="inline-flex items-center gap-1">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 0h10.5a2.25 2.25 0 012.25 2.25v6a2.25 2.25 0 01-2.25 2.25H6.75a2.25 2.25 0 01-2.25-2.25v-6a2.25 2.25 0 012.25-2.25z"/></svg>
+                        chave mascarada na tela — o botão Copiar leva o valor real
+                    </span>
+                    <button @click="curlAuth.reveal = !curlAuth.reveal" type="button" class="text-brand-600 hover:text-brand-700 font-medium" x-text="curlAuth.reveal ? 'ocultar' : 'mostrar'"></button>
+                </div>
+
+                <pre class="rounded-lg bg-brand-900 text-surface-50 p-3 text-[11.5px] overflow-x-auto whitespace-pre" x-text="curlAuthCommand"></pre>
+
+                <p class="text-[10.5px] text-surface-400 leading-relaxed">
+                    <span x-show="curlAuthHasSecret" class="text-amber-700 font-medium">Contém um segredo — trate como senha. </span>
+                    <span x-show="curlAuth.note" x-text="curlAuth.note"></span>
+                </p>
+
+                <div class="flex justify-end gap-2">
+                    <button @click="closeCurlAuth()" type="button" class="rounded-lg px-3 py-2 text-[12px] text-surface-500 hover:bg-surface-50">Fechar</button>
+                    <button @click="copyCurlAuth()" type="button" class="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75"/></svg>
+                        Copiar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>

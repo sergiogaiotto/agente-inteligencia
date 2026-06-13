@@ -422,6 +422,12 @@
                                     class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 hover:bg-amber-100 whitespace-nowrap">🧪 Sandbox</button>
                             <button x-show="entry.status === 'published' && pipelineDef" @click="openRunModal(false)"
                                     class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600 whitespace-nowrap">▶ Executar pipeline</button>
+                            <button x-show="entry.status === 'published' && pipelineDef" @click="openCatalogCurl()"
+                                    title="cURL pronto pra integração externa (Zapier, n8n, scripts)"
+                                    class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 px-3 py-2 text-[12px] font-semibold text-brand-700 hover:bg-brand-50 whitespace-nowrap">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M17.25 6.75L22.5 12l-5.25 5.25M6.75 17.25L1.5 12l5.25-5.25M14.25 3.75l-4.5 16.5"/></svg>
+                                cURL
+                            </button>
                         </div>
                     </div>
                     <template x-if="!pipelineDef">
@@ -665,6 +671,9 @@
         </div>
     </div>
 
+    <!-- ═══ MODAL: cURL de integração — estação de auth reusável ═══ -->
+    {% include 'partials/curl_auth_modal.html' %}
+
     <!-- ═══ MODAL: disparar execução (Onda 4) ═══ -->
     <div x-show="runModalOpen" @keydown.escape.window="if (!runSubmitting) runModalOpen = false"
          x-transition.opacity
@@ -877,6 +886,7 @@
 <script>
 function catalogDetailPage(entryId) {
     return {
+        ...curlAuthStation(),   // estação de auth do cURL (curl_auth.js)
         entryId,
         entry: null,
         disclosure: null,
@@ -1400,6 +1410,19 @@ function catalogDetailPage(entryId) {
             this.runInput = '';
             this.isSandboxRun = !!isSandbox;
             this.runModalOpen = true;
+        },
+        // cURL de integração externa — abre a estação de auth (curl_auth.js) apontada
+        // pro execute do Catálogo (kind-aware). Execução assíncrona → poll de executions.
+        openCatalogCurl() {
+            const isPipeline = this.entry?.kind === 'pipeline';
+            const verb = isPipeline ? 'execute-pipeline' : 'execute';
+            this.openCurlAuth({
+                url: window.location.origin + '/api/v1/catalog/entries/' + this.entryId + '/' + verb,
+                title: 'cURL de integração',
+                keyNameHint: 'cURL · ' + ((this.entry && this.entry.name) || 'catálogo'),
+                bodyKey: 'input',
+                note: 'Execução assíncrona: a resposta traz execution_id; consulte GET /api/v1/catalog/executions/{id}.',
+            });
         },
         async executeRecipe() {
             if (!this.runInput.trim()) return;
