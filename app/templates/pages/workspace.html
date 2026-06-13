@@ -1613,8 +1613,10 @@ function workspacePage() {
         async loadPipelineRoots(){
             try{
                 const t=await api.get('/api/v1/mesh/topology');const e=t.edges||[];const n=t.nodes||[];
+                // PR3 — consome `roots` do servidor (fonte única; fim da triplicação).
+                // Fallback client-side defensivo p/ topologia antiga sem `roots`.
                 const ts=new Set(e.map(x=>x.target));
-                const roots=[...new Set(e.map(x=>x.source))].filter(s=>!ts.has(s));
+                const roots=(t.roots&&t.roots.length)?t.roots:[...new Set(e.map(x=>x.source))].filter(s=>!ts.has(s));
                 this.pipelineRoots=roots.map(rid=>{
                     const nd=n.find(x=>x.id===rid);let len=1;const v=new Set([rid]);const q=[rid];
                     while(q.length){const c=q.shift();for(const ed of e){if(ed.source===c&&!v.has(ed.target)){v.add(ed.target);q.push(ed.target);len++}}}
