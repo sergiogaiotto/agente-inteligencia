@@ -17,7 +17,7 @@ _URN_RE = re.compile(
     r"^urn:maestro:([a-z0-9-]+):([a-z_]+):([a-z0-9-]+):([0-9]+\.[0-9]+\.[0-9]+)$"
 )
 
-VALID_KINDS = frozenset({"agent", "skill", "application", "recipe", "external_platform"})
+VALID_KINDS = frozenset({"agent", "skill", "application", "recipe", "external_platform", "pipeline"})
 
 
 class ParsedUrn(TypedDict):

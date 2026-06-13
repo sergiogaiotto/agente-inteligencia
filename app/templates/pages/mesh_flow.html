@@ -155,6 +155,16 @@
                         </div>
                     </div>
 
+                    <!-- PR4: publicar no Catálogo (cria entry kind=pipeline em rascunho → lifecycle no Catálogo) -->
+                    <div x-show="selectedPipeline.status !== 'aposentado'">
+                        <button @click="publishToCatalog()" :disabled="publishingCatalog"
+                                class="w-full flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 3h7l11 11-7 7L3 10V3zm4 4h.01"/></svg>
+                            <span x-text="publishingCatalog ? 'Publicando…' : 'Publicar no Catálogo'"></span>
+                        </button>
+                        <p class="mt-1 text-[9.5px] text-surface-400 leading-snug">Cria uma publicação (rascunho) no Catálogo; aprove e publique por lá.</p>
+                    </div>
+
                     <!-- membros -->
                     <div>
                         <div class="text-[10.5px] font-semibold uppercase tracking-wide text-surface-400 mb-1" x-text="'Agentes no pipeline (' + memberNodes.length + ')'"></div>
@@ -570,6 +580,7 @@ function meshFlowPage() {
         pipelines: [], selectedPipeline: null, membership: {}, pipePanel: true,
         sectionOpen: { rascunho: true, publicado: true, aposentado: false },
         renamingId: null, renameText: '',
+        publishingCatalog: false,
         pipeFilter: { domain: '', kind: '', q: '' },
 
         get agentCount() { return this.nodes.filter(n => !n.synthetic).length; },
@@ -900,6 +911,26 @@ function meshFlowPage() {
                 showToast('Status: ' + (this.PIPE_STATUS[to] ? this.PIPE_STATUS[to].label : to));
                 await this.loadPipelines();
             } catch (e) { showToast('Transição inválida: ' + e.message, 'error'); }
+        },
+        // PR4 — publica o pipeline no Catálogo (cria entry kind=pipeline em rascunho;
+        // o lifecycle submit/approve/publish acontece na página da entry).
+        async publishToCatalog() {
+            if (!this.selectedPipeline || this.publishingCatalog) return;
+            const version = (prompt('Versão da publicação no Catálogo (semver MAJOR.MINOR.PATCH):', '1.0.0') || '').trim();
+            if (!version) return;
+            this.publishingCatalog = true;
+            try {
+                const entry = await api.post('/api/v1/catalog/entries/from-pipeline', {
+                    pipeline_id: this.selectedPipeline.id,
+                    version,
+                });
+                showToast('Publicado no Catálogo (rascunho)');
+                if (entry && entry.id) window.location = '/catalog/' + entry.id;
+            } catch (e) {
+                showToast('Falha ao publicar no Catálogo: ' + e.message, 'error');
+            } finally {
+                this.publishingCatalog = false;
+            }
         },
 
         // paleta de inclusão / membros (sobre this.nodes = grafo completo)
