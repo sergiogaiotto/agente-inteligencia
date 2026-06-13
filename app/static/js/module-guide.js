@@ -46,7 +46,7 @@ window.MODULE_GUIDE = [
     usar: `<p>Pelo navegador:</p>
 <ol class="list-decimal pl-4 mt-2 space-y-1">
   <li>Crie um agent em cada camada em <a href="/agents" class="text-brand-500 underline">/agents</a>.</li>
-  <li>Em <a href="/mesh" class="text-brand-500 underline">/mesh</a>, conecte AOBD → AR → SA arrastando os nós.</li>
+  <li>Em <a href="/mesh/flow" class="text-brand-500 underline">/mesh/flow</a> (Fluxograma de agentes), conecte AOBD → AR → SA arrastando os nós.</li>
   <li>No <a href="/workspace" class="text-brand-500 underline">/workspace</a>, selecione o pipeline e envie uma mensagem — o trace mostra o trajeto pelas 3 camadas.</li>
 </ol>
 <p class="mt-2"><b>Dica de debugging:</b> se uma interação parece "pular" um agent, abra o trace em <a href="/observability" class="text-brand-500 underline">/observability</a> — provavelmente o agent está como pass-through (sem skill nem prompt customizado) e foi ignorado automaticamente para economizar LLM call.</p>`
@@ -127,7 +127,7 @@ window.MODULE_GUIDE = [
     "activation_keywords":["faq","duvida","pergunta"],
     "actor_profile":"customer"
   }'</pre>`,
-    usar: `<p>Em <a href="/mesh" class="text-brand-500 underline">/mesh</a>, na aba "CAR", você lista, cria e edita entradas. O matching é automático — quando AOBD recebe uma mensagem, consulta o CAR sozinho.</p>
+    usar: `<p>O CAR é consultado automaticamente pelo AOBD ao receber uma mensagem (matching semântico) — você gerencia entradas via API <code>/api/v1/car</code>.</p>
 <p class="mt-2"><b>Dica:</b> se um AR esperado nunca está sendo escolhido, abra o trace em /observability e procure pelo span <code>car.match</code> — ele mostra os candidatos avaliados e os scores. Se o seu nem aparece, falta entrada no CAR ou as keywords estão estreitas demais.</p>`
   },
 
