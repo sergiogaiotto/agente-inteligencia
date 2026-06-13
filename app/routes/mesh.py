@@ -30,6 +30,30 @@ def _fanout_roots(edges: list[dict]) -> list[str]:
     return [src for src, n in counts.items() if n >= 2]
 
 
+def _detect_roots(edges: list[dict]) -> list[str]:
+    """Raízes do mesh = sources que NUNCA são target (entrada de uma cadeia).
+
+    FONTE ÚNICA da detecção de raiz (PR3): `mesh.html` e `workspace.html`
+    consomem isto via `/topology` em vez de recomputar client-side (fim da
+    triplicação). Preserva a ordem de aparição dos sources. Fallback: se não
+    houver nenhuma raiz (mesh em ciclo puro), devolve todos os sources distintos
+    — mesmo comportamento que o `hierarchicalEdges` do mesh.html já tinha.
+    """
+    sources: list[str] = []
+    seen: set = set()
+    targets: set = set()
+    for e in edges:
+        s = e.get("source")
+        if s and s not in seen:
+            seen.add(s)
+            sources.append(s)
+        t = e.get("target")
+        if t:
+            targets.add(t)
+    roots = [s for s in sources if s not in targets]
+    return roots if roots else sources
+
+
 @router.get("/topology")
 async def get_topology():
     agents = await agents_repo.find_all(limit=200)
@@ -56,7 +80,25 @@ async def get_topology():
                 await mesh_repo.delete(c["id"])
             except Exception:
                 pass
-    return {"nodes": nodes, "edges": edges, "fanout_roots": _fanout_roots(edges)}
+    # PR3 — enriquecimento aditivo: `roots` (fonte única da detecção de raiz) e
+    # `pipeline_id` por nó (membership). A UI agrupa/rotula por pipeline-entidade
+    # no lugar dos `mesh_chain_names` soltos. Defensivo: membership é display-only;
+    # se falhar, segue sem pipeline_id (nunca derruba a topologia).
+    membership: dict = {}
+    try:
+        from app.core.database import pipeline_membership
+        for m in await pipeline_membership.all():
+            membership[m["agent_id"]] = m["pipeline_id"]
+    except Exception:
+        membership = {}
+    for n in nodes:
+        n["pipeline_id"] = membership.get(n["id"])
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "fanout_roots": _fanout_roots(edges),
+        "roots": _detect_roots(edges),
+    }
 
 @router.post("/connections", status_code=201)
 async def create_connection(data: MeshConnectionCreate):
