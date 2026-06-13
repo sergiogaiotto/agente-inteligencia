@@ -171,6 +171,13 @@ class PipelineStatusChange(BaseModel):
 class PipelineAddAgent(BaseModel):
     agent_id: str
 
+class PipelineInvokeRequest(BaseModel):
+    """Invoca um pipeline pela ENTIDADE (contrato API-first selado — Trilha A PR-A2)."""
+    message: Optional[str] = None
+    input: Optional[str] = None  # alias amigável p/ message
+    session_id: Optional[str] = None
+    channel: Optional[str] = "api"
+
 class KnowledgeSourceCreate(BaseModel):
     name: str; description: Optional[str] = None
     source_type: Optional[str] = "manual"

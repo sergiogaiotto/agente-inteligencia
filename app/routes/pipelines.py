@@ -20,6 +20,7 @@ from app.models.schemas import (
     PipelineUpdate,
     PipelineStatusChange,
     PipelineAddAgent,
+    PipelineInvokeRequest,
 )
 from app.core.database import (
     pipelines_repo,
@@ -229,3 +230,67 @@ async def remove_agent(pid: str, agent_id: str):
     })
     agent_ids = await pipeline_membership.agents_of(pid)
     return {"pipeline_id": pid, "agent_id": agent_id, "agent_ids": agent_ids}
+
+
+@router.post("/{pid}/invoke")
+async def invoke_pipeline(pid: str, data: PipelineInvokeRequest):
+    """Invoca um pipeline pela ENTIDADE (contrato API-first SELADO — Trilha A PR-A2).
+
+    Resolve a raiz + os membros do pipeline e executa via execute_pipeline
+    DELIMITADO ao subgrafo (allowed_agent_ids=membros) — a execução não vaza para
+    o mesh global. Mais estável que invocar o UUID do agente-raiz (que pode mudar
+    ao recabear o mesh). `aposentado` → 409 (não roteável); rascunho/publicado rodam.
+    Descoberta: GET /api/v1/pipelines (filtra ?status=publicado).
+    """
+    p = await _require(pid)
+    if p.get("status") == "aposentado":
+        raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
+    user_input = (data.message or data.input or "").strip()
+    if not user_input:
+        raise HTTPException(400, "Informe 'message' (ou 'input').")
+
+    # Resolve o subgrafo VIVO do pipeline (raiz + membros) — reusa o builder do
+    # snapshot do catálogo (mesma lógica: membership + arestas intra-pipeline + raiz).
+    from app.catalog.pipeline_defs import _build_subgraph
+    sub = await _build_subgraph(pid)
+    root = sub.get("root_agent_id")
+    members = {n.get("id") for n in sub.get("nodes", []) if n.get("id")}
+    if not root:
+        raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar.")
+
+    from app.agents.engine import execute_pipeline
+    try:
+        result = await execute_pipeline(
+            entry_agent_id=root,
+            user_input=user_input,
+            channel=data.channel or "api",
+            session_id=data.session_id,
+            allowed_agent_ids=members,  # SELA a execução ao subgrafo do pipeline
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Erro na execução do pipeline: {e}")
+
+    await audit_repo.create({
+        "entity_type": "pipeline",
+        "entity_id": pid,
+        "action": "invoked",
+        "details": json.dumps({
+            "root_agent_id": root,
+            "member_count": len(members),
+            "completed_agents": result.get("completed_agents", 0),
+            "interaction_id": result.get("interaction_id"),
+        }, ensure_ascii=False),
+    })
+    return {
+        "pipeline_id": pid,
+        "status": result.get("status", "completed"),
+        "output": result.get("output", ""),
+        "final_state": result.get("final_state"),
+        "interaction_id": result.get("interaction_id"),
+        "total_agents": result.get("total_agents", 0),
+        "completed_agents": result.get("completed_agents", 0),
+        "pipeline_steps": result.get("pipeline_steps", []),
+        "duration_ms": result.get("duration_ms"),
+    }
