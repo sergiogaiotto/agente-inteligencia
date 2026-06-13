@@ -408,12 +408,56 @@
             </div>
 
             <!-- Tab content: Execuções (apenas kind=recipe) -->
+            <!-- Tab content: Fluxograma read-only (apenas kind=pipeline) — PR6 -->
+            <div x-show="activeTab === 'pipeline'">
+                <div class="rounded-xl border border-surface-200 bg-white p-4">
+                    <div class="flex items-start justify-between mb-3 gap-3">
+                        <div>
+                            <h3 class="text-[12px] font-bold text-brand-900 uppercase tracking-wider">Fluxograma do pipeline</h3>
+                            <p class="text-[11px] text-surface-500 mt-0.5">Snapshot do grafo no momento da publicação — agentes + conexões tipadas (read-only). A execução roda o pipeline selado aos membros.</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button x-show="canMutate && pipelineDef" @click="openRunModal(true)"
+                                    title="Roda em qualquer status; custo NÃO vai para chargeback"
+                                    class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 hover:bg-amber-100 whitespace-nowrap">🧪 Sandbox</button>
+                            <button x-show="entry.status === 'published' && pipelineDef" @click="openRunModal(false)"
+                                    class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600 whitespace-nowrap">▶ Executar pipeline</button>
+                        </div>
+                    </div>
+                    <template x-if="!pipelineDef">
+                        <div class="rounded-lg bg-surface-50 border border-surface-100 px-3 py-6 text-center text-[12px] text-surface-400">
+                            O snapshot do grafo é gerado ao <strong>publicar</strong> o pipeline.
+                        </div>
+                    </template>
+                    <template x-if="pipelineDef">
+                        <div>
+                            <div class="overflow-auto rounded-lg border border-surface-100 bg-surface-50/40" style="max-height:440px">
+                                <svg :width="pipelineLayout.width" :height="pipelineLayout.height" class="block" style="min-width:100%">
+                                    <defs>
+                                        <marker id="cat-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M2 1.5 L8 5 L2 8.5" fill="none" stroke="#94A3B8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                                        </marker>
+                                    </defs>
+                                    <g x-html="pipelineSvg"></g>
+                                </svg>
+                            </div>
+                            <div class="mt-2 flex items-center gap-3 text-[10.5px] text-surface-400 flex-wrap">
+                                <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:#DB5A47"></span> Maestro</span>
+                                <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:#C2620E"></span> Triagem</span>
+                                <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:#1D9E75"></span> Especialista</span>
+                                <span class="ml-auto" x-text="(pipelineDef.nodes?.length || 0) + ' agentes · ' + (pipelineDef.edges?.length || 0) + ' conexões'"></span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
             <div x-show="activeTab === 'executions'">
                 <div class="rounded-xl border border-surface-200 bg-white p-4">
                     <div class="flex items-start justify-between mb-3 gap-3">
                         <div>
-                            <h3 class="text-[12px] font-bold text-brand-900 uppercase tracking-wider">Execuções do Recipe</h3>
-                            <p class="text-[11px] text-surface-500 mt-0.5">Chain sequencial: output[N-1] vira input[N]. Falha de step quebra chain (demais ficam skipped).</p>
+                            <h3 class="text-[12px] font-bold text-brand-900 uppercase tracking-wider" x-text="entry.kind === 'pipeline' ? 'Execuções do pipeline' : 'Execuções do Recipe'"></h3>
+                            <p class="text-[11px] text-surface-500 mt-0.5" x-text="entry.kind === 'pipeline' ? 'Cada execução roda o grafo do pipeline (selado aos membros) via execute_pipeline.' : 'Chain sequencial: output[N-1] vira input[N]. Falha de step quebra chain (demais ficam skipped).'"></p>
                         </div>
                         <div class="flex items-center gap-2">
                             <button x-show="canMutate && (recipe?.steps?.length || 0) > 0"
@@ -627,13 +671,13 @@
          class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
         <div @click.outside="if (!runSubmitting) runModalOpen = false" class="bg-white rounded-2xl w-full max-w-lg p-5 shadow-xl">
             <div class="flex items-center justify-between mb-3">
-                <h3 class="text-[14px] font-bold text-brand-900">
-                    <span x-show="!isSandboxRun">Executar Recipe</span>
-                    <span x-show="isSandboxRun">🧪 Sandbox de Recipe</span>
-                </h3>
+                <h3 class="text-[14px] font-bold text-brand-900" x-text="(isSandboxRun ? '🧪 Sandbox de ' : 'Executar ') + (entry.kind === 'pipeline' ? 'pipeline' : 'Recipe')"></h3>
                 <button @click="runModalOpen = false" :disabled="runSubmitting" class="text-surface-400 hover:text-brand-600 disabled:opacity-30">×</button>
             </div>
-            <p x-show="!isSandboxRun" class="text-[11px] text-surface-500 mb-3">
+            <p x-show="!isSandboxRun && entry.kind === 'pipeline'" class="text-[11px] text-surface-500 mb-3">
+                O input alimenta a <strong>raiz</strong> do grafo; a execução roda o pipeline <strong>selado aos membros</strong> (não vaza para o mesh global).
+            </p>
+            <p x-show="!isSandboxRun && entry.kind !== 'pipeline'" class="text-[11px] text-surface-500 mb-3">
                 Input vai alimentar o <strong>step 1</strong>. Output de cada step vira input do próximo (chain).
                 Steps em sequência: <strong x-text="(recipe?.steps?.length || 0) + ' steps'"></strong>.
             </p>
@@ -641,7 +685,7 @@
                 ⚠ <strong>Sandbox</strong>: roda em qualquer status (incl. draft), com LLM real. Custo <strong>não</strong> vai para dashboards de chargeback. Use para testar antes de publicar.
             </p>
             <textarea x-model="runInput" rows="6"
-                      placeholder="Digite o input inicial do recipe…"
+                      :placeholder="entry.kind === 'pipeline' ? 'Digite o input inicial do pipeline…' : 'Digite o input inicial do recipe…'"
                       class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400 font-mono"></textarea>
             <div class="text-[10px] text-surface-400 mt-1" x-text="runInput.length + ' / 50000 chars'"></div>
             <div class="flex justify-end gap-2 mt-4">
@@ -844,7 +888,8 @@ function catalogDetailPage(entryId) {
             {id: 'capability', label: 'Capability Disclosure'},
             {id: 'external', label: 'Metadata Externa', onlyKind: 'external_platform'},
             {id: 'recipe', label: 'Recipe Steps', onlyKind: 'recipe'},
-            {id: 'executions', label: 'Execuções', onlyKind: 'recipe'},
+            {id: 'pipeline', label: 'Fluxograma', onlyKind: 'pipeline'},
+            {id: 'executions', label: 'Execuções', onlyKind: ['recipe', 'pipeline']},
             {id: 'history', label: 'Histórico'},
             {id: 'manifest', label: 'Manifest'},
         ],
@@ -857,6 +902,9 @@ function catalogDetailPage(entryId) {
         externalForm: {},
         // Recipe (Onda 3)
         recipe: null,
+        // Pipeline (PR6) — snapshot do grafo (read-only) p/ kind=pipeline
+        pipelineDef: null,
+        KIND_COLOR: { aobd: '#DB5A47', router: '#C2620E', subagent: '#1D9E75', start: '#94A3B8' },
         recipeModalOpen: false,
         recipeSaving: false,
         recipeSteps: [],         // edição: lista mutável
@@ -873,7 +921,53 @@ function catalogDetailPage(entryId) {
         pollHandle: null,
 
         get visibleTabs() {
-            return this.tabs.filter(t => !t.onlyKind || t.onlyKind === this.entry?.kind);
+            const kind = this.entry?.kind;
+            return this.tabs.filter(t => !t.onlyKind || (Array.isArray(t.onlyKind) ? t.onlyKind.includes(kind) : t.onlyKind === kind));
+        },
+
+        // ── PR6: layout + SVG read-only do grafo do pipeline (do /pipeline-def) ──
+        get pipelineLayout() {
+            const def = this.pipelineDef;
+            if (!def || !(def.nodes || []).length) return { nodes: [], edges: [], byId: {}, NW: 150, NH: 42, width: 200, height: 80 };
+            const NW = 150, NH = 42, COLW = 210, ROWH = 58, PAD = 16;
+            const nodes = def.nodes.map(n => ({ ...n }));
+            const byId = {}; nodes.forEach(n => byId[n.id] = n);
+            const edges = (def.edges || []).filter(e => byId[e.source] && byId[e.target]);
+            const children = {}; edges.forEach(e => { (children[e.source] = children[e.source] || []).push(e.target); });
+            const root = (def.root_agent_id && byId[def.root_agent_id]) ? def.root_agent_id : nodes[0].id;
+            const layer = { [root]: 0 }; const q = [root]; let guard = 0;
+            while (q.length && guard++ < nodes.length + 2) {
+                const c = q.shift();
+                for (const t of (children[c] || [])) { const nl = (layer[c] || 0) + 1; if (layer[t] == null || layer[t] < nl) { layer[t] = nl; q.push(t); } }
+            }
+            nodes.forEach(n => { if (layer[n.id] == null) layer[n.id] = 0; });
+            const cols = {}; nodes.forEach(n => { (cols[layer[n.id]] = cols[layer[n.id]] || []).push(n); });
+            let maxRow = 1; Object.keys(cols).forEach(l => { cols[l].forEach((n, i) => { n._x = PAD + Number(l) * COLW; n._y = PAD + i * ROWH; }); maxRow = Math.max(maxRow, cols[l].length); });
+            const maxLayer = Math.max(0, ...nodes.map(n => layer[n.id]));
+            return { nodes, edges, byId, NW, NH, root, width: PAD * 2 + maxLayer * COLW + NW, height: PAD * 2 + (maxRow - 1) * ROWH + NH };
+        },
+        get pipelineSvg() {
+            const L = this.pipelineLayout; if (!L.nodes.length) return '';
+            const EDGE = { sequential: '#2E73E8', parallel: '#D14343', conditional: '#EF9F27', default: '#9AA0A6' };
+            const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            let s = '';
+            for (const e of (L.edges || [])) {
+                const a = L.byId[e.source], b = L.byId[e.target]; if (!a || !b) continue;
+                const x1 = a._x + L.NW, y1 = a._y + L.NH / 2, x2 = b._x, y2 = b._y + L.NH / 2, dx = Math.max(30, (x2 - x1) / 2);
+                const col = EDGE[e.type] || EDGE.sequential, dash = (e.type === 'default') ? ' stroke-dasharray="5 4"' : '';
+                s += `<path d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}" fill="none" stroke="${col}" stroke-width="1.6"${dash} marker-end="url(#cat-arrow)"></path>`;
+            }
+            for (const n of L.nodes) {
+                const c = this.KIND_COLOR[n.kind] || '#64748B';
+                const rootMark = (n.id === L.root) ? ' stroke="#1D9E75" stroke-width="2"' : ' stroke="#e2e8f0" stroke-width="1"';
+                s += `<g transform="translate(${n._x},${n._y})">`;
+                s += `<rect width="${L.NW}" height="${L.NH}" rx="8" fill="#fff"${rootMark}></rect>`;
+                s += `<rect width="4" height="${L.NH}" rx="2" fill="${c}"></rect>`;
+                s += `<text x="12" y="18" font-size="11.5" font-weight="600" fill="#1e293b">${esc(n.name).slice(0, 22)}</text>`;
+                s += `<text x="12" y="32" font-size="9" fill="#94a3b8">${esc((n.kind || '').toUpperCase())}</text>`;
+                s += '</g>';
+            }
+            return s;
         },
 
         get isRoot() { return (this.currentUser?.role || '').toLowerCase() === 'root'; },
@@ -947,6 +1041,15 @@ function catalogDetailPage(entryId) {
                             if (rr.ok) this.recipe = await rr.json();
                         } catch {}
                         // Onda 4: histórico de execuções (qualquer user que vê o recipe)
+                        this.loadExecutions();
+                    }
+
+                    // Pipeline (PR6, kind=pipeline): snapshot do grafo + execuções
+                    if (this.entry.kind === 'pipeline') {
+                        try {
+                            const pp = await fetch('/api/v1/catalog/entries/' + this.entryId + '/pipeline-def');
+                            if (pp.ok) this.pipelineDef = await pp.json();  // 404 normal se ainda não publicado
+                        } catch {}
                         this.loadExecutions();
                     }
 
@@ -1302,7 +1405,11 @@ function catalogDetailPage(entryId) {
             if (!this.runInput.trim()) return;
             this.runSubmitting = true;
             const inputSnapshot = this.runInput;
-            const endpoint = this.isSandboxRun ? '/sandbox' : '/execute';
+            // PR6: endpoint kind-aware — pipeline usa /execute-pipeline|/sandbox-pipeline (selado);
+            // recipe (e demais) usam /execute|/sandbox.
+            const isPipeline = this.entry?.kind === 'pipeline';
+            const verb = this.isSandboxRun ? 'sandbox' : 'execute';
+            const endpoint = isPipeline ? ('/' + verb + '-pipeline') : ('/' + verb);
             try {
                 const r = await fetch('/api/v1/catalog/entries/' + this.entryId + endpoint, {
                     method: 'POST',
