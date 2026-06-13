@@ -20,6 +20,7 @@ from app.models.schemas import (
     PipelineUpdate,
     PipelineStatusChange,
     PipelineAddAgent,
+    PipelineEntrySet,
     PipelineInvokeRequest,
 )
 from app.core.database import (
@@ -53,6 +54,7 @@ def _serialize(p: dict, agent_ids: list) -> dict:
         "description": p.get("description"),
         "agent_ids": agent_ids,
         "agent_count": len(agent_ids),
+        "entry_agent_id": p.get("entry_agent_id"),
         "next_states": list(next_pipeline_states(status)),
         "created_at": _iso(p.get("created_at")),
         "updated_at": _iso(p.get("updated_at")),
@@ -230,6 +232,33 @@ async def remove_agent(pid: str, agent_id: str):
     })
     agent_ids = await pipeline_membership.agents_of(pid)
     return {"pipeline_id": pid, "agent_id": agent_id, "agent_ids": agent_ids}
+
+
+@router.post("/{pid}/entry")
+async def set_pipeline_entry(pid: str, data: PipelineEntrySet):
+    """Define (ou limpa) o ponto de entrada EXPLÍCITO do pipeline.
+
+    agent_id deve ser MEMBRO do pipeline (ou null → volta ao automático:
+    _detect_roots/fallback). O invoke e o _build_subgraph passam a usar esse agente
+    como raiz — desempata 2+ raízes ou 0 conexões, dando controle de por onde o
+    pipeline começa. Validar membership evita apontar para um agente fora do selo.
+    """
+    await _require(pid)
+    agent_id = (data.agent_id or "").strip() or None
+    if agent_id is not None:
+        owner = await pipeline_membership.pipeline_of(agent_id)
+        if owner != pid:
+            raise HTTPException(422, "agent_id deve ser um membro deste pipeline (ou null para automático).")
+    await pipelines_repo.update(pid, {"entry_agent_id": agent_id, "updated_at": datetime.utcnow()})
+    await audit_repo.create({
+        "entity_type": "pipeline",
+        "entity_id": pid,
+        "action": "entry_set",
+        "details": json.dumps({"entry_agent_id": agent_id}, ensure_ascii=False),
+    })
+    fresh = await pipelines_repo.find_by_id(pid)
+    agent_ids = await pipeline_membership.agents_of(pid)
+    return _serialize(fresh, agent_ids)
 
 
 @router.post("/{pid}/invoke")

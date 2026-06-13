@@ -273,6 +273,7 @@
                 <div class="absolute transition-opacity" :data-nid="n.id" :style="`left:${n.x}px; top:${n.y}px; width:${n.w}px; cursor:${n.synthetic ? 'grab' : 'pointer'}; opacity:${nodeOpacity(n)}`"
                      @pointerdown.stop="onNodeDown($event, n)"
                      @pointerenter="hoverId = n.id" @pointerleave="onNodeLeave(n)"
+                     @contextmenu="onNodeContext($event, n)"
                      @click="selectNode(n)">
                     <div class="relative rounded-xl bg-white border transition-shadow"
                          :class="(linking && linkTargetId===n.id && !n.synthetic && linking.from.id!==n.id) ? 'border-emerald-400 ring-2 ring-emerald-200' : ((selected && selected.id===n.id) ? 'border-brand-400 shadow-md ring-2 ring-brand-100' : 'border-surface-200 shadow-sm hover:shadow')">
@@ -607,6 +608,67 @@
             </div>
         </template>
     </div>
+
+    <!-- (#1) Menu de contexto do Início (botão direito): definir entrada + cURL -->
+    <div x-show="startMenu" @click.away="closeStartMenu()" x-transition.opacity style="display:none"
+         :style="startMenu ? ('position:fixed; left:' + startMenu.x + 'px; top:' + startMenu.y + 'px') : ''"
+         class="z-50 w-64 rounded-xl bg-white border border-surface-200 shadow-xl py-1.5 text-[12px]">
+        <template x-if="startMenu">
+            <div>
+                <div class="px-3 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-surface-400">Definir início do pipeline</div>
+                <div class="max-h-52 overflow-y-auto">
+                    <template x-for="m in memberNodes" :key="m.id">
+                        <button @click="setEntry(m.id)" class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50">
+                            <span class="w-2 h-2 rounded-full flex-none" :style="`background:${m.color}`"></span>
+                            <span class="flex-1 min-w-0 truncate text-brand-900" x-text="m.name"></span>
+                            <span class="text-[9px] text-surface-300" x-text="m.roleLabel"></span>
+                            <span x-show="lensStart && lensStart.targets && lensStart.targets.includes(m.id)" class="text-emerald-600 text-[11px]" title="Entrada atual">✓</span>
+                            <span x-show="hasIncomingInLens(m.id)" class="text-amber-600 text-[11px]" title="Recebe conexões de outro agente — defini-lo como início ignora o upstream">↪</span>
+                        </button>
+                    </template>
+                    <p x-show="!memberNodes.length" class="px-3 py-1.5 text-surface-400">Sem agentes no pipeline.</p>
+                </div>
+                <button x-show="selectedPipeline && selectedPipeline.entry_agent_id" @click="setEntry(null)" class="w-full text-left px-3 py-1.5 text-surface-500 hover:bg-surface-50 border-t border-surface-100 mt-1">↺ Início automático (raiz por conexões)</button>
+                <div class="border-t border-surface-100 my-1"></div>
+                <button @click="openCurlModal()" class="w-full flex items-center gap-2 px-3 py-1.5 text-left text-brand-700 hover:bg-brand-50">
+                    <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M17.25 6.75L22.5 12l-5.25 5.25M6.75 17.25L1.5 12l5.25-5.25M14.25 3.75l-4.5 16.5"/></svg>
+                    Copiar cURL do invoke
+                </button>
+            </div>
+        </template>
+    </div>
+
+    <!-- (#2) Modal: cURL do invoke do pipeline -->
+    <div x-show="curlModal" x-transition.opacity @click.self="closeCurlModal()" style="display:none"
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+        <template x-if="curlModal">
+            <div class="w-full max-w-xl rounded-2xl bg-white shadow-xl border border-surface-200" @click.stop>
+                <div class="flex items-center justify-between px-5 py-3 border-b border-surface-100">
+                    <h3 class="text-[14px] font-bold text-brand-900">cURL do invoke</h3>
+                    <button @click="closeCurlModal()" class="text-surface-400 hover:text-surface-600" aria-label="Fechar">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <div class="px-5 py-4 space-y-3">
+                    <label class="block text-[11px] font-semibold text-surface-500">Mensagem (entrada)</label>
+                    <input x-model="curlModal.input" class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[13px] outline-none focus:border-brand-400" placeholder="sua entrada aqui">
+                    <div class="flex gap-1 text-[11px]">
+                        <template x-for="sh in CURL_SHELLS" :key="sh.k">
+                            <button @click="curlModal.shell = sh.k"
+                                    :class="curlModal.shell === sh.k ? 'bg-brand-100 text-brand-700 border-brand-300' : 'bg-surface-50 text-surface-500 border-surface-200 hover:bg-surface-100'"
+                                    class="rounded-md border px-2 py-1 font-medium transition-colors" x-text="sh.l"></button>
+                        </template>
+                    </div>
+                    <pre class="rounded-lg bg-brand-900 text-surface-50 p-3 text-[11.5px] overflow-x-auto whitespace-pre" x-text="curlCommand"></pre>
+                    <p class="text-[10.5px] text-surface-400 leading-relaxed">Troque <code>SUA_API_KEY</code> por uma chave <code>X-API-Key</code> (ou use o cookie de sessão). Pipeline aposentado → 409. A execução parte do Início → raiz (selado ao subgrafo).</p>
+                    <div class="flex justify-end gap-2">
+                        <button @click="closeCurlModal()" class="rounded-lg px-3 py-2 text-[12px] text-surface-500 hover:bg-surface-50">Fechar</button>
+                        <button @click="copyCurl()" class="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600">Copiar</button>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
 </div>
 
 <script>
@@ -654,7 +716,7 @@ function meshFlowPage() {
         scale: 1, panX: 40, panY: 30,
         canvasW: 2000, canvasH: 1200,
         selected: null, loaded: false,
-        hoverId: null, linking: null, linkTargetId: null, editor: null, sim: null, scopeSim: null, saving: false, fsm: null, agentDetail: null, replay: null, snap: false, groups: [], runModal: null,
+        hoverId: null, linking: null, linkTargetId: null, editor: null, sim: null, scopeSim: null, saving: false, fsm: null, agentDetail: null, replay: null, snap: false, groups: [], runModal: null, startMenu: null, curlModal: null,
         _drag: null, _pan: null, _saveTimer: null, _suppressClick: false,
 
         // Estúdio de Pipelines (PR1)
@@ -896,6 +958,67 @@ function meshFlowPage() {
             } catch (e) { this.runModal.error = e.message; }
             finally { this.runModal.busy = false; }
         },
+        // ── menu de contexto do Início (botão direito) ──
+        onNodeContext(ev, n) {
+            // só o "Início" da lente tem menu; agentes mantêm o menu padrão do browser
+            if (n.id === '__lens_start__' && this.selectedPipeline) {
+                ev.preventDefault();
+                this.startMenu = { x: ev.clientX, y: ev.clientY };
+            }
+        },
+        closeStartMenu() { this.startMenu = null; },
+        hasIncomingInLens(id) {
+            const ids = new Set(this.selectedPipeline ? (this.selectedPipeline.agent_ids || []) : []);
+            return this.edges.some(e => e.type !== 'start' && e.target === id && ids.has(e.source) && ids.has(e.target));
+        },
+        // (#1) define/limpa o ponto de entrada do pipeline (entry_agent_id)
+        async setEntry(agentId) {
+            if (!this.selectedPipeline) return;
+            this.closeStartMenu();
+            try {
+                const r = await api.post('/api/v1/pipelines/' + this.selectedPipeline.id + '/entry', { agent_id: agentId });
+                this.selectedPipeline.entry_agent_id = r.entry_agent_id;   // atualiza a lente (lensStart recomputa)
+                const idx = this.pipelines.findIndex(p => p.id === this.selectedPipeline.id);
+                if (idx >= 0) this.pipelines[idx].entry_agent_id = r.entry_agent_id;
+                showToast(agentId ? 'Início definido' : 'Início automático');
+            } catch (e) { showToast(e.message, 'error'); }
+        },
+        // (#2) cURL do invoke a partir do Início
+        openCurlModal() { this.closeStartMenu(); if (this.selectedPipeline) this.curlModal = { input: 'sua entrada aqui', shell: 'bash' }; },
+        closeCurlModal() { this.curlModal = null; },
+        CURL_SHELLS: [{ k: 'bash', l: 'Bash (Linux/macOS)' }, { k: 'powershell', l: 'PowerShell' }, { k: 'cmd', l: 'CMD (Windows)' }],
+        // gera o cURL por SHELL: muda continuação de linha e escaping do body JSON.
+        get curlCommand() {
+            if (!this.selectedPipeline) return '';
+            const url = window.location.origin + '/api/v1/pipelines/' + this.selectedPipeline.id + '/invoke';
+            const json = JSON.stringify({ message: (this.curlModal && this.curlModal.input) || '' });  // {"message":"..."}
+            const shell = (this.curlModal && this.curlModal.shell) || 'bash';
+            if (shell === 'powershell') {
+                // PowerShell: curl.exe (não o alias Invoke-WebRequest); continuação = backtick;
+                // aspas simples literais → escapa ' como '' dentro de '...'.
+                const body = json.replace(/'/g, "''");
+                const bt = '`';
+                return "curl.exe -X POST '" + url + "' " + bt + "\n" +
+                       "  -H 'Content-Type: application/json' " + bt + "\n" +
+                       "  -H 'X-API-Key: SUA_API_KEY' " + bt + "\n" +
+                       "  -d '" + body + "'";
+            }
+            if (shell === 'cmd') {
+                // CMD: continuação = ^; body em aspas duplas com as aspas do JSON escapadas (\").
+                const body = json.replace(/"/g, '\\"');
+                return 'curl -X POST "' + url + '" ^\n' +
+                       '  -H "Content-Type: application/json" ^\n' +
+                       '  -H "X-API-Key: SUA_API_KEY" ^\n' +
+                       '  -d "' + body + '"';
+            }
+            // Bash (Linux/macOS/Git Bash): continuação = \\; body em '...' com ' → '\'' .
+            const body = json.replace(/'/g, "'\\''");
+            return "curl -X POST '" + url + "' \\\n" +
+                   "  -H 'Content-Type: application/json' \\\n" +
+                   "  -H 'X-API-Key: SUA_API_KEY' \\\n" +
+                   "  -d '" + body + "'";
+        },
+        async copyCurl() { if (await window.copyText(this.curlCommand)) showToast('cURL copiado (' + ((this.curlModal && this.curlModal.shell) || 'bash') + ')', 'success'); },
         async loadReplay() {
             this.replay = { loading: true };
             try {
@@ -978,10 +1101,17 @@ function meshFlowPage() {
             if (ids.size === 0) return null;
             const byId = this.nodeById();
             const intra = this.edges.filter(e => e.type !== 'start' && ids.has(e.source) && ids.has(e.target));
-            const incoming = new Set(intra.map(e => e.target));
-            const outgoing = new Set(intra.map(e => e.source));
-            let targets = [...ids].filter(id => outgoing.has(id) && !incoming.has(id));        // raiz real
-            if (targets.length === 0 && intra.length > 0) targets = [...ids].filter(id => !incoming.has(id)); // parcial
+            // Entrada EXPLÍCITA (entry_agent_id) tem prioridade — desde que seja membro.
+            const entry = this.selectedPipeline.entry_agent_id;
+            let targets, explicit = false;
+            if (entry && ids.has(entry)) {
+                targets = [entry]; explicit = true;
+            } else {
+                const incoming = new Set(intra.map(e => e.target));
+                const outgoing = new Set(intra.map(e => e.source));
+                targets = [...ids].filter(id => outgoing.has(id) && !incoming.has(id));        // raiz topológica
+                if (targets.length === 0 && intra.length > 0) targets = [...ids].filter(id => !incoming.has(id)); // parcial
+            }
             const defined = targets.length > 0;
             const anchors = (defined ? targets : [...ids]).map(id => byId[id]).filter(Boolean);
             if (anchors.length === 0) return null;
@@ -989,10 +1119,10 @@ function meshFlowPage() {
             const minX = Math.min(...anchors.map(a => a.x));
             const avgY = anchors.reduce((s, a) => s + a.y, 0) / anchors.length;
             const node = this._mkNode({ id: '__lens_start__', kind: 'start', name: 'Início',
-                sub: defined ? 'entrada do pipeline' : 'conecte os agentes p/ definir' }, null, true);
+                sub: defined ? (explicit ? 'entrada definida ✓' : 'entrada (automática)') : 'conecte os agentes p/ definir' }, null, true);
             node.x = minX - (W + 80); node.y = avgY; node.computed = true;
             const edges = defined ? targets.map(t => ({ id: '__lens_start__->' + t, source: '__lens_start__', target: t, type: 'start', config: '{}' })) : [];
-            return { node, edges, defined };
+            return { node, edges, defined, explicit, targets };
         },
         get viewNodes() {
             const base = this.nodes.filter(n => this.nodeInLens(n));

@@ -171,6 +171,10 @@ class PipelineStatusChange(BaseModel):
 class PipelineAddAgent(BaseModel):
     agent_id: str
 
+class PipelineEntrySet(BaseModel):
+    """Define (ou limpa) o ponto de entrada do pipeline. agent_id=null → automático."""
+    agent_id: Optional[str] = None
+
 class PipelineInvokeRequest(BaseModel):
     """Invoca um pipeline pela ENTIDADE (contrato API-first selado — Trilha A PR-A2)."""
     message: Optional[str] = None

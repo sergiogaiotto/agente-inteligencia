@@ -354,3 +354,78 @@ class TestMigration:
         assert res["migrated"] == 0
         assert res["skipped"] is False
         assert settings["pipelines_migrated_from_groups"] == "1"
+
+
+# ─── Ponto de entrada (entry_agent_id) ────────────────────────────
+
+
+class TestPipelineEntry:
+    """POST /{id}/entry — define/limpa o ponto de entrada explícito do pipeline."""
+
+    def _add(self, client, pid, agent_id):
+        r = client.post(f"/api/v1/pipelines/{pid}/agents", json={"agent_id": agent_id})
+        assert r.status_code in (200, 201), r.text
+
+    def test_set_member_entry_and_persist(self, storage):
+        c = make_client()
+        pid = _create(c, "P")
+        self._add(c, pid, "a1"); self._add(c, pid, "a2")
+        r = c.post(f"/api/v1/pipelines/{pid}/entry", json={"agent_id": "a1"})
+        assert r.status_code == 200, r.text
+        assert r.json()["entry_agent_id"] == "a1"
+        listed = c.get("/api/v1/pipelines").json()["pipelines"]
+        assert next(p for p in listed if p["id"] == pid)["entry_agent_id"] == "a1"
+
+    def test_non_member_422(self, storage):
+        c = make_client()
+        pid = _create(c, "P")
+        self._add(c, pid, "a1")
+        r = c.post(f"/api/v1/pipelines/{pid}/entry", json={"agent_id": "a3"})  # a3 não é membro
+        assert r.status_code == 422
+
+    def test_clear_entry_null(self, storage):
+        c = make_client()
+        pid = _create(c, "P")
+        self._add(c, pid, "a1")
+        c.post(f"/api/v1/pipelines/{pid}/entry", json={"agent_id": "a1"})
+        r = c.post(f"/api/v1/pipelines/{pid}/entry", json={"agent_id": None})
+        assert r.status_code == 200 and r.json()["entry_agent_id"] is None
+
+    def test_pipeline_not_found_404(self, storage):
+        c = make_client()
+        r = c.post("/api/v1/pipelines/nope/entry", json={"agent_id": "a1"})
+        assert r.status_code == 404
+
+
+class TestBuildSubgraphEntry:
+    """_build_subgraph respeita entry_agent_id (prioridade sobre a raiz topológica)."""
+
+    def _bind(self, monkeypatch, members, conns, entry):
+        from app.catalog import pipeline_defs as pd
+        from app.core.database import pipelines_repo, pipeline_membership, mesh_repo, agents_repo
+        async def agents_of(pid): return list(members)
+        async def find_all(limit=1000): return conns
+        async def pl_find(pid): return {"id": pid, "entry_agent_id": entry}
+        async def ag_find(aid): return {"id": aid, "name": aid, "kind": "subagent"}
+        monkeypatch.setattr(pipeline_membership, "agents_of", agents_of)
+        monkeypatch.setattr(mesh_repo, "find_all", find_all)
+        monkeypatch.setattr(pipelines_repo, "find_by_id", pl_find)
+        monkeypatch.setattr(agents_repo, "find_by_id", ag_find)
+        return pd
+
+    _A1A2 = [{"id": "e", "source_agent_id": "a1", "target_agent_id": "a2", "connection_type": "sequential", "config": "{}"}]
+
+    def test_entry_overrides_topological_root(self, monkeypatch):
+        pd = self._bind(monkeypatch, ["a1", "a2", "a3"], self._A1A2, "a3")
+        sub = asyncio.run(pd._build_subgraph("p1"))
+        assert sub["root_agent_id"] == "a3"   # entry (membro) venceu a raiz topológica a1
+
+    def test_falls_back_to_topological_without_entry(self, monkeypatch):
+        pd = self._bind(monkeypatch, ["a1", "a2"], self._A1A2, None)
+        sub = asyncio.run(pd._build_subgraph("p1"))
+        assert sub["root_agent_id"] == "a1"   # source-never-target
+
+    def test_invalid_entry_ignored(self, monkeypatch):
+        pd = self._bind(monkeypatch, ["a1", "a2"], self._A1A2, "ghost")  # ghost não é membro
+        sub = asyncio.run(pd._build_subgraph("p1"))
+        assert sub["root_agent_id"] == "a1"

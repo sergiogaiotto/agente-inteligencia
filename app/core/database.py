@@ -966,6 +966,11 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE catalog_entries ADD COLUMN IF NOT EXISTS federated BOOLEAN DEFAULT FALSE",
     "ALTER TABLE catalog_entries ADD COLUMN IF NOT EXISTS remote_urn TEXT",
     "ALTER TABLE catalog_entries ADD COLUMN IF NOT EXISTS remote_peer_id TEXT",
+    # Estúdio de Pipelines: ponto de entrada EXPLÍCITO do pipeline. NULL = raiz
+    # automática (source-never-target via _detect_roots, fallback members[0]).
+    # Setado (membro) = o invoke/_build_subgraph usam ele como raiz — desempata
+    # 2+ raízes / 0 conexões, dando controle de "por onde o pipeline começa".
+    "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS entry_agent_id TEXT",
     # Onda Tabular: kb_mode declara o tipo de conteúdo da KS.
     # - 'text': só RAG (textos, FAQs, contratos). Upload de planilha vira chunks markdown.
     # - 'tabular': só Tabelas DuckDB. Rejeita formatos não-estruturados. ZERO chunks no Qdrant/Postgres.
