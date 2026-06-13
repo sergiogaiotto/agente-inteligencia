@@ -112,8 +112,13 @@ async def pg_catalog_cost(r: Request): return await _render(r, "/catalog/cost")
 async def pg_catalog_detail(r: Request, entry_id: str): return await _render(r, "/catalog/detail", entry_id=entry_id)
 @router.get("/workspace", response_class=HTMLResponse)
 async def pg_workspace(r: Request): return await _render(r, "/workspace")
-@router.get("/mesh", response_class=HTMLResponse)
-async def pg_mesh(r: Request): return await _render(r, "/mesh")
+@router.get("/mesh")
+async def pg_mesh(r: Request):
+    # Trilha B / PR-B2: a página "Topologia de conexões" foi aposentada — o
+    # Fluxograma de agentes é o editor único do mesh. /mesh redireciona p/ ele
+    # (bookmarks/links antigos continuam funcionando). A TABELA mesh_connections
+    # e os endpoints /api/v1/mesh/* permanecem (fonte do grafo executável).
+    return RedirectResponse("/mesh/flow", status_code=308)
 @router.get("/mesh/flow", response_class=HTMLResponse)
 async def pg_mesh_flow(r: Request): return await _render(r, "/mesh/flow")
 @router.get("/mcp", response_class=HTMLResponse)
