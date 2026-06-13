@@ -8,7 +8,7 @@ from fastapi.templating import Jinja2Templates
 from app.core.config import get_settings
 from app.core.database import init_db, close_db
 from app.core.otel import init_otel
-from app.routes import agents, skills, workspace, mesh, dashboard, frontend, wizard, users, pipelines
+from app.routes import agents, skills, workspace, mesh, dashboard, frontend, wizard, users, pipelines, federation
 from app.routes.api_connectors import router as api_connectors_router
 from app.routes.mcp_diagnostics import router as mcp_diagnostics_router
 from app.routes.skill_dryrun import router as skill_dryrun_router
@@ -106,6 +106,7 @@ app.include_router(workspace.router)
 app.include_router(mesh.router)
 app.include_router(mesh.car_router)
 app.include_router(pipelines.router)
+app.include_router(federation.router)
 app.include_router(dashboard.router)
 app.include_router(wizard.router)
 app.include_router(users.router)
