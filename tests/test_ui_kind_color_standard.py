@@ -28,7 +28,8 @@ KIND_COLOR_FILES = [
     "agents.html",
     "settings.html",
     "workspace.html",
-    "mesh.html",
+    # mesh.html (página Topologia) aposentada no PR-B2/B3 — o Fluxograma
+    # (mesh_flow.html) usa o KIND map central, fora do escopo deste guard.
     "skills.html",
 ]
 
@@ -88,14 +89,6 @@ def test_no_page_paints_router_or_orchestrator_with_forbidden_color():
             if hits:
                 offenders.append((path.name, key, hits))
     assert not offenders, f"Cores proibidas para kind encontradas: {offenders}"
-
-
-def test_mesh_regression_no_blue_router_no_red_aobd():
-    """Bug exato relatado: AI Mesh mostrava roteadores AZUIS e AOBD RED."""
-    text = _read("mesh.html")
-    assert "router'?'bg-brand" not in text, "mesh.html: no de router voltou a brand/azul"
-    assert "aobd'?'bg-red" not in text, "mesh.html: AOBD voltou a red puro"
-    assert "k==='router'?'bg-brand" not in text, "mesh.html: helper nodeKindColor voltou a brand"
 
 
 def test_skills_regression_no_blue_router_no_red_orchestrator():

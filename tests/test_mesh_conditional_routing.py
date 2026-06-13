@@ -528,28 +528,9 @@ class TestDocAnaliseImagemProseLeakRegression:
 
 
 class TestUiAndBackendWiring:
-    def test_mesh_html_has_condition_expr_field(self):
-        from pathlib import Path
-        src = (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "mesh.html").read_text(encoding="utf-8")
-        # Textarea x-show condicional
-        assert "x-show=\"connForm.connection_type === 'conditional'\"" in src
-        assert "x-model=\"connForm.condition_expr\"" in src
-        # Helpers mostrados na UI
-        assert "output_lower" in src
-        assert "final_state" in src
-
-    def test_save_connection_serializes_expr_when_conditional(self):
-        from pathlib import Path
-        src = (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "mesh.html").read_text(encoding="utf-8")
-        # Payload usa expr só quando type=conditional
-        assert "if (this.connForm.connection_type === 'conditional')" in src
-        # 2026-06-01: refactor do saveConnection para suportar dois eixos
-        # ortogonais no mesmo `config` (expr + context_scope). A expr
-        # continua sendo serializada exclusivamente quando type=conditional,
-        # mas agora via `cfg.expr = expr` em vez do ternário inline antigo.
-        assert "cfg.expr = expr" in src
-        assert "JSON.stringify(cfg)" in src
-
+    # PR-B3: os asserts sobre o markup de mesh.html (página Topologia aposentada)
+    # foram removidos; a edição condicional vive no Fluxograma (editor inline).
+    # O teste do endpoint /topology permanece (continua sendo a fonte do grafo).
     def test_topology_endpoint_returns_config(self):
         from pathlib import Path
         src = (Path(__file__).resolve().parent.parent / "app" / "routes" / "mesh.py").read_text(encoding="utf-8")
