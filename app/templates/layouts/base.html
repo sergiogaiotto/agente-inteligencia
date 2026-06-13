@@ -214,16 +214,9 @@
 
                 <div class="px-2 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-surface-400" x-show="!sidebarCollapsed">Operação</div>
 
-                <div class="relative" id="tour-nav-workspace">
-                    <a href="/workspace" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'workspace' %}active{% endif %}">
-                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242"/></svg>
-                        <span x-show="!sidebarCollapsed">Workspace</span>
-                    </a>
-                    <button @click="openHelp('workspace')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
-                </div>
                 <div id="tour-nav-mesh">
                     <div class="relative">
-                        <a href="/mesh/flow" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'mesh' %}active{% endif %}">
+                        <a href="/mesh/flow" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section in ['mesh','workspace'] %}active{% endif %}">
                             <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l3 8m5-8l-3 8M7.5 5h9"/></svg>
                             <span x-show="!sidebarCollapsed" class="flex-1">AI Mesh</span>
                             <button x-show="!sidebarCollapsed"
@@ -246,6 +239,10 @@
                         <a href="/mesh/flow" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if request.url.path == '/mesh/flow' %}active{% endif %}">
                             <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="5.5" cy="6" r="2"/><circle cx="5.5" cy="18" r="2"/><circle cx="18.5" cy="12" r="2"/><path d="M7.5 6.8l9 4.2m-9 6.2l9-4.2"/></svg>
                             <span>Fluxograma de agentes</span>
+                        </a>
+                        <a href="/workspace" id="tour-nav-workspace" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if section == 'workspace' %}active{% endif %}">
+                            <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242"/></svg>
+                            <span>Workspace</span>
                         </a>
                     </div>
                 </div>
@@ -852,11 +849,11 @@
                 try { localStorage.setItem('catalogSubmenuOpen', this.catalogSubmenuOpen ? '1' : '0'); } catch {}
             },
             // AI Mesh submenu — mesmo padrão do Catálogo: auto-abre quando a rota
-            // está em /mesh ou /mesh/*; senão respeita a última escolha em
-            // localStorage 'meshSubmenuOpen'.
+            // está em /mesh, /mesh/* ou /workspace (filhos do AI Mesh); senão
+            // respeita a última escolha em localStorage 'meshSubmenuOpen'.
             meshSubmenuOpen: (function() {
                 const path = window.location.pathname;
-                if (path === '/mesh' || path.startsWith('/mesh/')) return true;
+                if (path === '/mesh' || path.startsWith('/mesh/') || path === '/workspace') return true;
                 const stored = (() => { try { return localStorage.getItem('meshSubmenuOpen'); } catch { return null; } })();
                 return stored === '1';
             })(),
