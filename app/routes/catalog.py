@@ -1693,6 +1693,10 @@ async def execute_pipeline_endpoint(
         raise HTTPException(404, "Entry não encontrada")
     if entry.get("kind") != "pipeline":
         raise HTTPException(422, "Apenas entries kind='pipeline' são executáveis aqui (recipes usam /execute)")
+    if entry.get("federated"):
+        # Capability remota (PR8c): NÃO executável localmente (sem snapshot local).
+        # Guarda explícita — não confiar só no resolver retornar (None, set()).
+        raise HTTPException(422, "Entry federada (capability remota) — use POST /api/v1/federation/remote/{id}/invoke")
     if entry.get("status") != "published":
         raise HTTPException(
             409,
@@ -1745,6 +1749,8 @@ async def sandbox_pipeline_endpoint(
         raise HTTPException(403, "Apenas owner ou Root podem rodar sandbox")
     if entry.get("kind") != "pipeline":
         raise HTTPException(422, "Sandbox de pipeline só se aplica a kind='pipeline'")
+    if entry.get("federated"):
+        raise HTTPException(422, "Entry federada (capability remota) — não roda sandbox local")
     from app.catalog.pipeline_defs import resolve_pipeline_exec
     root, allowed = await resolve_pipeline_exec(entry)
     if not root:
