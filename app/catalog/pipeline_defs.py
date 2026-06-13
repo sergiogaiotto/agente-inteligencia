@@ -21,6 +21,7 @@ from app.core.database import (
     agents_repo,
     mesh_repo,
     pipeline_membership,
+    pipelines_repo,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,10 +49,21 @@ async def _build_subgraph(pipeline_id: str) -> dict:
                 "config": _parse_jsonish(c.get("config")) or {},
             })
 
-    # Raiz = source-never-target dentro do subgrafo (fonte única — reusa o PR3).
-    from app.routes.mesh import _detect_roots
-    roots = _detect_roots(edges)
-    root = roots[0] if roots else (members[0] if members else None)
+    # Raiz: ponto de entrada EXPLÍCITO (entry_agent_id) tem prioridade, desde que
+    # seja membro — dá controle e desempata 2+ raízes / 0 conexões. Sem entry válido,
+    # cai na raiz topológica (source-never-target, fonte única do PR3) → members[0].
+    entry = None
+    try:
+        p = await pipelines_repo.find_by_id(pipeline_id)
+        entry = (p or {}).get("entry_agent_id")
+    except Exception:
+        entry = None
+    if entry and entry in member_set:
+        root = entry
+    else:
+        from app.routes.mesh import _detect_roots
+        roots = _detect_roots(edges)
+        root = roots[0] if roots else (members[0] if members else None)
 
     nodes = []
     for aid in members:
