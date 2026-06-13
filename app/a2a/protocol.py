@@ -8,7 +8,7 @@ import time
 import json
 import hashlib
 import hmac
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from typing import Optional
 from app.core.database import envelopes_repo
 
@@ -49,7 +49,9 @@ class Envelope:
     deadline: str = ""
     status: str = "pending"
     signature: str = ""
-    created_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S"))
+    # UTC (gmtime): federação compara created_at contra utcnow() numa janela de
+    # replay — um default em horário LOCAL rejeitaria peers fora do UTC.
+    created_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()))
 
     def sign(self):
         payload = json.dumps({"id": self.envelope_id, "target": self.target_agent_id, "skill": self.skill_ref}, sort_keys=True)
@@ -133,6 +135,60 @@ class Envelope:
         d["context"] = json.dumps(self.context)
         d["budget_remaining"] = json.dumps(asdict(self.budget_remaining))
         return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Envelope":
+        """Reconstrói um Envelope do wire (federação/PR8b3). TOTAL e defensiva:
+        aceita intent/budget_remaining/context como dict OU string JSON (o formato
+        que `to_dict` emite) e LEVANTA ValueError em qualquer outro tipo — o caller
+        (ingress) traduz para 400, NUNCA deixa o crash vazar para verify_hmac (que
+        faria asdict() de um não-dict → 500 pré-auth). Ignora chaves desconhecidas."""
+        if d is not None and not isinstance(d, dict):
+            raise ValueError("envelope deve ser um objeto")
+        src = dict(d or {})
+
+        def _as_obj(val, what):
+            """str JSON → objeto; dict → dict; '' / '{}' / None → None; senão erro."""
+            if isinstance(val, str):
+                s = val.strip()
+                if not s or s == "{}":
+                    return None
+                try:
+                    val = json.loads(s)
+                except (ValueError, TypeError):
+                    raise ValueError(f"{what} inválido (JSON)")
+            if val is None or val == {}:
+                return None
+            if isinstance(val, dict):
+                return val
+            raise ValueError(f"{what} deve ser objeto ou JSON")
+
+        intent = _as_obj(src.get("intent"), "intent")
+        if intent is None:
+            src["intent"] = None
+        else:
+            ifields = {f.name for f in fields(IntentDescriptor)}
+            src["intent"] = IntentDescriptor(**{k: v for k, v in intent.items() if k in ifields})
+
+        budget = _as_obj(src.get("budget_remaining"), "budget_remaining")
+        if budget is None:
+            src.pop("budget_remaining", None)  # usa o default_factory (Budget())
+        else:
+            bfields = {f.name for f in fields(Budget)}
+            src["budget_remaining"] = Budget(**{k: v for k, v in budget.items() if k in bfields})
+
+        ctx = src.get("context")
+        if isinstance(ctx, str):
+            s = ctx.strip()
+            try:
+                src["context"] = json.loads(s) if s else {}
+            except (ValueError, TypeError):
+                raise ValueError("context inválido (JSON)")
+        elif ctx is not None and not isinstance(ctx, dict):
+            raise ValueError("context deve ser objeto ou JSON")
+
+        efields = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in src.items() if k in efields})
 
 
 @dataclass

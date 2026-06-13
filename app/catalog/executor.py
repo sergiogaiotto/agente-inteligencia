@@ -433,3 +433,8 @@ async def execute_pipeline_entry(
             await recompute_entry_trust(pipeline_entry_id)
         except Exception:
             logger.exception(f"recompute_entry_trust falhou: execution={execution_id}")
+
+    # PR8b3: devolve o result do engine (output não-truncado) p/ chamadores SÍNCRONOS
+    # (ingress de federação). Os chamadores via asyncio.create_task ignoram o retorno
+    # (comportamento inalterado). None nos caminhos de falha acima.
+    return result

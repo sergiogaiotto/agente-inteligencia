@@ -663,6 +663,10 @@ async def recompute_entry_trust(entry_id: str) -> dict:
             SELECT status, total_latency_ms, total_cost_usd
             FROM catalog_recipe_executions
             WHERE recipe_entry_id = $1 AND is_sandbox = FALSE AND status <> 'running'
+              -- Execuções FEDERADAS (consumer 'federation:<ws>') NÃO contam para o
+              -- trust EXIBIDO: um peer não pode envenenar reliability/latency/custo
+              -- da entry publicada do owner (integridade cross-tenant, PR8b3).
+              AND consumer_user_id NOT LIKE 'federation:%'
             """,
             entry_id,
         )

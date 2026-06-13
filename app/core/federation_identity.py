@@ -18,6 +18,7 @@ Rede e endpoints de federação são PRs seguintes (PR8b/PR8c); aqui só a funda
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 from app.catalog.urn import DEFAULT_WORKSPACE
@@ -71,3 +72,11 @@ async def federation_enabled() -> bool:
     except Exception:
         return False
     return raw in ("1", "true", "yes", "on")
+
+
+def secret_key_present() -> bool:
+    """True se MAESTRO_SECRET_KEY está setado. A federação FALHA FECHADO sem ele:
+    crypto.py cairia no fallback determinístico INSEGURO, e um segredo de peer
+    cifrado com chave previsível tornaria o HMAC forjável. Os endpoints de
+    federação (PR8b3+) devem 503 quando isto é False e a federação está ligada."""
+    return bool(os.environ.get("MAESTRO_SECRET_KEY", "").strip())
