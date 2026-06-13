@@ -20,12 +20,14 @@ from pydantic import BaseModel
 
 from app.a2a.protocol import Envelope
 from app.catalog import federation as fed
+from app.catalog import federation_egress as egress
 from app.catalog import federation_peers as peers
 from app.catalog.federation import build_manifest
-from app.catalog.queries import create_execution, get_execution, is_root
+from app.catalog.queries import create_execution, db_row_to_entry_dict, get_execution, is_root
 from app.core.auth import require_user
-from app.core.database import audit_repo
+from app.core.database import audit_repo, catalog_entries_repo, federation_peers_repo
 from app.core.federation_identity import federation_enabled, secret_key_present
+from app.core.ssrf import SSRFError
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,10 @@ router = APIRouter(tags=["federation"])
 _MAX_BODY_BYTES = 262_144   # 256 KB — cap pré-parse (proxy/uvicorn é o limite duro)
 _MAX_INPUT_CHARS = 100_000
 _EXEC_TIMEOUT_S = 120
+# Custo/latência vêm da RESPOSTA do peer (não-confiáveis) — clampados antes de
+# gravar para um peer malicioso não inflar chargeback / poluir métricas locais.
+_MAX_REMOTE_COST_USD = 1000.0
+_MAX_REMOTE_LATENCY_MS = 3_600_000.0
 
 
 @router.get("/.well-known/maestro-federation.json")
@@ -263,3 +269,96 @@ async def revoke_peer_route(peer_id: str, user: dict = Depends(require_user)):
         raise HTTPException(404, "Peer não encontrado")
     await _audit_peer("revoked", peer_id, user["id"], row.get("workspace", ""))
     return {"message": "Peer revogado", "id": peer_id}
+
+
+@peers_router.post("/{peer_id}/sync")
+async def sync_peer_route(peer_id: str, user: dict = Depends(require_user)):
+    """Puxa o manifesto do peer e registra/atualiza as capabilities remotas como
+    entries federadas (read-only) no catálogo local. ROOT-only. Guarda SSRF no egress."""
+    _require_root(user)
+    if not await federation_enabled():
+        raise HTTPException(409, "Federação desabilitada")
+    peer = await federation_peers_repo.find_by_id(peer_id)
+    if not peer or peer.get("status") != "active":
+        raise HTTPException(404, "Peer não encontrado ou revogado")
+    try:
+        res = await egress.sync_remote_entries(peer, user["id"])
+    except SSRFError as e:
+        raise HTTPException(400, f"base_url do peer rejeitada (SSRF): {e}")
+    except Exception:
+        logger.warning("sync_peer: falha ao sincronizar peer %s", peer_id, exc_info=True)
+        raise HTTPException(502, "Falha ao sincronizar com o peer")
+    await _audit_peer("synced", peer_id, user["id"], peer.get("workspace", ""))
+    return res
+
+
+# ── Remote invoke (PR8c egress) — invoca uma capability FEDERADA via o peer ──
+
+
+class RemoteInvokeRequest(BaseModel):
+    input: str
+
+
+@router.post("/api/v1/federation/remote/{entry_id}/invoke")
+async def remote_invoke_route(
+    entry_id: str, data: RemoteInvokeRequest, user: dict = Depends(require_user)
+):
+    """Invoca uma entry FEDERADA (capability de um peer) via o peer dono: assina o
+    envelope e faz POST no /federation/invoke remoto. Devolve a resposta do peer.
+    Requer usuário autenticado; fail-closed sem MAESTRO_SECRET_KEY."""
+    if not await federation_enabled():
+        raise HTTPException(409, "Federação desabilitada")
+    if not secret_key_present():
+        raise HTTPException(503, "Federação indisponível (MAESTRO_SECRET_KEY ausente)")
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not entry.get("federated") or not entry.get("remote_peer_id"):
+        raise HTTPException(422, "Entry não é federada — use /execute-pipeline para pipelines locais")
+    user_input = (data.input or "").strip()
+    if not user_input:
+        raise HTTPException(400, "input vazio")
+    if len(user_input) > _MAX_INPUT_CHARS:
+        raise HTTPException(413, "input excede o limite")
+    peer = await federation_peers_repo.find_by_id(entry["remote_peer_id"])
+    if not peer or peer.get("status") != "active":
+        raise HTTPException(409, "Peer da capability indisponível ou revogado")
+    try:
+        result = await egress.invoke_remote(entry, user_input, peer)
+    except SSRFError as e:
+        raise HTTPException(400, f"base_url do peer rejeitada (SSRF): {e}")
+    except Exception:
+        logger.warning("remote_invoke: falha ao invocar peer da entry %s", entry_id, exc_info=True)
+        raise HTTPException(502, "Falha ao invocar o peer")
+    # best-effort: registra uso local da capability remota (visibilidade/chargeback).
+    # Custo/latência são PEER-ATTESTED (não medidos localmente) → clamp a faixas sãs.
+    def _clamp(v, cap):
+        try:
+            return max(0.0, min(float(v or 0), cap))
+        except (ValueError, TypeError):
+            return 0.0
+    try:
+        from app.catalog.queries import record_invocation_cost
+        await record_invocation_cost(
+            entry_id, consumer_user_id=user["id"],
+            cost_usd=_clamp(result.get("total_cost_usd"), _MAX_REMOTE_COST_USD),
+            latency_ms=_clamp(result.get("total_latency_ms"), _MAX_REMOTE_LATENCY_MS),
+        )
+    except Exception:
+        logger.warning("remote_invoke: record_invocation_cost falhou", exc_info=True)
+    try:
+        await audit_repo.create({
+            "entity_type": "federation_remote_invoke",
+            "entity_id": entry_id,
+            "action": "invoked",
+            "actor": user["id"],
+            "details": json.dumps({
+                "peer_workspace": peer.get("workspace"),
+                "remote_urn": entry.get("remote_urn"),
+                "status": result.get("status"),
+            }),
+        })
+    except Exception:
+        logger.warning("remote_invoke: audit falhou", exc_info=True)
+    return result

@@ -63,11 +63,15 @@ _DISCLOSURE_SUMMARY_FIELDS = (
 def is_federation_exposable(entry: dict) -> bool:
     """True se a entry pode ser exposta/invocada por um peer (função pura).
 
-    Gate DEDICADO (não `can_user_see`): published + company + kind no allowlist."""
+    Gate DEDICADO (não `can_user_see`): published + company + kind no allowlist +
+    NÃO-federada. Excluir federadas impede RE-FEDERAÇÃO (expor a capability remota
+    de outro peer como se fosse nossa → loop/leak) e o ingress invoke (federada não
+    tem snapshot local executável)."""
     return (
         entry.get("status") == "published"
         and entry.get("visibility") == "company"
         and entry.get("kind") in _FEDERATION_KINDS
+        and not entry.get("federated")
     )
 
 
@@ -108,6 +112,7 @@ async def list_exposable_entries() -> list[dict]:
         rows = await con.fetch(
             "SELECT * FROM catalog_entries "
             "WHERE status='published' AND visibility='company' AND kind = ANY($1::text[]) "
+            "  AND (federated IS NULL OR federated = FALSE) "  # nunca re-expor capability remota
             "ORDER BY name",
             list(_FEDERATION_KINDS),
         )

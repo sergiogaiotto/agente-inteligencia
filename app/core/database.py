@@ -958,6 +958,14 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE catalog_entries ADD CONSTRAINT catalog_entries_kind_check CHECK (kind IN ('agent','skill','application','recipe','external_platform','pipeline'))",
     "ALTER TABLE catalog_entries DROP CONSTRAINT IF EXISTS catalog_entries_artifact_type_check",
     "ALTER TABLE catalog_entries ADD CONSTRAINT catalog_entries_artifact_type_check CHECK (artifact_type IN ('agent','skill','recipe','pipeline'))",
+    # Federação A2A (PR8c): entries que ESPELHAM capabilities de peers remotos.
+    # federated=TRUE = read-only local (não editável/publicável/executável via
+    # /execute-pipeline; invocada via /federation/remote/{id}/invoke). remote_urn =
+    # URN no workspace do peer; remote_peer_id liga ao federation_peers. Excluídas
+    # do manifesto e do ingress (is_federation_exposable) p/ evitar re-federação.
+    "ALTER TABLE catalog_entries ADD COLUMN IF NOT EXISTS federated BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE catalog_entries ADD COLUMN IF NOT EXISTS remote_urn TEXT",
+    "ALTER TABLE catalog_entries ADD COLUMN IF NOT EXISTS remote_peer_id TEXT",
     # Onda Tabular: kb_mode declara o tipo de conteúdo da KS.
     # - 'text': só RAG (textos, FAQs, contratos). Upload de planilha vira chunks markdown.
     # - 'tabular': só Tabelas DuckDB. Rejeita formatos não-estruturados. ZERO chunks no Qdrant/Postgres.
