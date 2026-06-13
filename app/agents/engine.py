@@ -3025,6 +3025,48 @@ async def execute_pipeline(
     if not entry_agent:
         raise ValueError(f"Agente '{entry_agent_id}' não encontrado.")
 
+    # PR2 — gate de runtime por status do pipeline (decisão travada 2026-06-12).
+    # SÓ 'aposentado' bloqueia, e SÓ na ENTRADA: um pipeline aposentado não é
+    # roteável. 'rascunho'/'publicado' NÃO afetam o runtime aqui (a distinção
+    # ganha sentido na Parte B / Catálogo). A cadeia downstream roda normal — não
+    # pulamos membros no meio da cadeia. Zero regressão p/ grupos migrados no PR1
+    # (que viraram pipelines 'rascunho'). FAIL-OPEN: se a resolução do pipeline
+    # falhar (ex.: pool indisponível), NÃO bloqueia — disponibilidade > enforcement.
+    from app.core.database import pipeline_membership, pipelines_repo
+    entry_pipeline_id = None
+    entry_pipeline = None
+    try:
+        entry_pipeline_id = await pipeline_membership.pipeline_of(entry_agent_id)
+        if entry_pipeline_id:
+            entry_pipeline = await pipelines_repo.find_by_id(entry_pipeline_id)
+    except Exception as gate_err:
+        logger.warning(
+            "pipeline.gate.lookup_failed",
+            extra={
+                "event": "pipeline.gate.lookup_failed",
+                "entry_agent_id": entry_agent_id,
+                "error": str(gate_err)[:200],
+            },
+        )
+        entry_pipeline = None
+    if entry_pipeline and entry_pipeline.get("status") == "aposentado":
+        try:
+            await audit_repo.create({
+                "entity_type": "pipeline",
+                "entity_id": entry_pipeline_id,
+                "action": "execution_blocked",
+                "details": json.dumps(
+                    {"entry_agent_id": entry_agent_id, "reason": "pipeline_aposentado", "channel": channel},
+                    ensure_ascii=False,
+                ),
+            })
+        except Exception:
+            pass  # auditoria não impede o bloqueio
+        raise ValueError(
+            f"Pipeline '{entry_pipeline.get('name')}' está aposentado — não é roteável. "
+            f"Reative-o (aposentado→publicado) para voltar a executar."
+        )
+
     chain, parent_of = await _resolve_ordered_chain_with_parents(entry_agent_id)
     if not chain:
         chain = [entry_agent_id]
