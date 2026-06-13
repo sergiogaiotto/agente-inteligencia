@@ -3008,8 +3008,14 @@ async def execute_pipeline(
     progress_callback=None,
     session_id: str | None = None,
     context_mode: str = "auto",
+    allowed_agent_ids: set | None = None,
 ) -> dict:
     """Executa pipeline completo pelo AI Mesh.
+
+    `allowed_agent_ids` (Trilha A / PR-A1, opt-in): SELA a execução ao subgrafo
+    do pipeline — a cadeia só inclui agentes do conjunto (membros). None = BFS
+    global (histórico). Usado pela execução de pipeline do Catálogo (snapshot) e,
+    futuramente, pelo invoke-por-pipeline.
 
     MELHORIA: Short-circuit para agentes pass-through.
     Agentes sem SKILL.md e com prompt genérico são ignorados (0ms),
@@ -3067,7 +3073,7 @@ async def execute_pipeline(
             f"Reative-o (aposentado→publicado) para voltar a executar."
         )
 
-    chain, parent_of = await _resolve_ordered_chain_with_parents(entry_agent_id)
+    chain, parent_of = await _resolve_ordered_chain_with_parents(entry_agent_id, allowed_agent_ids)
     if not chain:
         chain = [entry_agent_id]
         parent_of = {}
@@ -4686,7 +4692,9 @@ async def _resolve_context_scope(
     }
 
 
-async def _resolve_ordered_chain_with_parents(entry_agent_id: str) -> tuple[list, dict]:
+async def _resolve_ordered_chain_with_parents(
+    entry_agent_id: str, allowed_agent_ids: set | None = None
+) -> tuple[list, dict]:
     """Resolve a cadeia ordenada downstream (BFS) **e** o mapa `parent_of`.
 
     Devolve `(chain, parent_of)`:
@@ -4694,6 +4702,11 @@ async def _resolve_ordered_chain_with_parents(entry_agent_id: str) -> tuple[list
     - `parent_of`: `{child_id: source_id}` — o agente que DESCOBRIU cada
       filho (a aresta real `source→child` que o trouxe à cadeia). O entry
       é raiz e não aparece como chave.
+
+    `allowed_agent_ids` (Trilha A / PR-A1, opt-in): quando fornecido, a BFS só
+    anda para targets DENTRO do conjunto — SELANDO a execução ao subgrafo do
+    pipeline (membros), sem vazar para o mesh global. `None` (default) = BFS
+    global, comportamento histórico → ZERO regressão p/ /invoke e workspace.
 
     Importante: ESTA função NÃO consulta `connection_type` — ela devolve
     a topologia completa (todos os possíveis filhos). A decisão de pular
@@ -4710,6 +4723,7 @@ async def _resolve_ordered_chain_with_parents(entry_agent_id: str) -> tuple[list
     o output do source, não do irmão anterior na lista (que era o bug).
     """
     from app.core.database import mesh_repo
+    allowed = set(allowed_agent_ids) if allowed_agent_ids is not None else None
     chain = [entry_agent_id]
     visited = {entry_agent_id}
     queue = [entry_agent_id]
@@ -4719,11 +4733,14 @@ async def _resolve_ordered_chain_with_parents(entry_agent_id: str) -> tuple[list
         conns = await mesh_repo.find_all(source_agent_id=current, limit=20)
         for conn in conns:
             tid = conn.get("target_agent_id", "")
-            if tid and tid not in visited:
-                visited.add(tid)
-                chain.append(tid)
-                parent_of[tid] = current
-                queue.append(tid)
+            if not tid or tid in visited:
+                continue
+            if allowed is not None and tid not in allowed:
+                continue  # selado: não sai do subgrafo do pipeline
+            visited.add(tid)
+            chain.append(tid)
+            parent_of[tid] = current
+            queue.append(tid)
     return chain, parent_of
 
 

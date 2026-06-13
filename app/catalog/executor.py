@@ -338,6 +338,7 @@ async def execute_pipeline_entry(
     consumer_user: dict,
     user_input: str,
     is_sandbox: bool = False,
+    allowed_agent_ids: set | None = None,
 ) -> None:
     """Executa um pipeline publicado (kind='pipeline') REUSANDO o motor do mesh
     (engine.execute_pipeline) a partir da raiz. Grava na MESMA tabela das runs de
@@ -361,6 +362,7 @@ async def execute_pipeline_entry(
             entry_agent_id=root_agent_id,
             user_input=user_input,
             channel="catalog",
+            allowed_agent_ids=allowed_agent_ids,  # selado ao subgrafo do pipeline (PR-A1)
         )
     except Exception as e:
         logger.exception(f"execute_pipeline_entry crashed (engine): execution={execution_id}")

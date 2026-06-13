@@ -180,7 +180,7 @@ class TestExecutePipelineRoute:
         monkeypatch.setattr(catalog_routes, "create_execution", _async({"id": "exec1", "started_at": None}))
         monkeypatch.setattr(catalog_routes, "_audit", _async(None))
         import app.catalog.pipeline_defs as pdefs
-        monkeypatch.setattr(pdefs, "resolve_pipeline_root", _async("root1"))
+        monkeypatch.setattr(pdefs, "resolve_pipeline_exec", _async(("root1", {"root1"})))
         monkeypatch.setattr(ex, "execute_pipeline_entry", _async(None))
         r = _make_client({"id": "u1", "role": "comum"}).post("/api/v1/catalog/entries/e1/execute-pipeline", json={"input": "oi"})
         assert r.status_code == 202, r.text
