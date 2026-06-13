@@ -13,6 +13,7 @@ Decisões:
 from __future__ import annotations
 
 import re
+import json
 import asyncio
 import logging
 from typing import Any, Optional
@@ -782,6 +783,34 @@ CREATE TABLE IF NOT EXISTS saved_queries (
     updated_at TIMESTAMP DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_saved_queries_table ON saved_queries(data_table_id, status);
+
+-- ═══════════════════════════════════════════════════════════════
+-- Estúdio de Pipelines (PR1) — pipeline vira ENTIDADE de 1ª classe.
+-- Antes era EMERGENTE (uma raiz + sua cadeia BFS downstream). Agora há
+-- organização explícita + lifecycle governado (rascunho|publicado|aposentado).
+-- As CONEXÕES seguem só em mesh_connections (fonte única do grafo executável);
+-- pipeline_agents é APENAS membership (exclusiva). Runtime não muda no PR1.
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS pipelines (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'rascunho'
+        CHECK (status IN ('rascunho','publicado','aposentado')),
+    domain TEXT,
+    color TEXT DEFAULT 'teal',
+    description TEXT,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+
+-- Membership EXCLUSIVA: PK em agent_id garante 1 agente → no máximo 1 pipeline
+-- (mesmo modelo dos grupos da Topologia). Mover um agente = upsert ON CONFLICT.
+CREATE TABLE IF NOT EXISTS pipeline_agents (
+    agent_id TEXT PRIMARY KEY,
+    pipeline_id TEXT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_agents_pipeline ON pipeline_agents(pipeline_id);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -1282,6 +1311,11 @@ catalog_costs_repo = Repository("catalog_costs")
 # Onda 4: execuções reais de recipes (PK = id; helpers especializados em queries.py)
 catalog_recipe_executions_repo = Repository("catalog_recipe_executions")
 
+# Estúdio de Pipelines (PR1): pipeline como entidade de 1ª classe (PK = id).
+# A membership (tabela pipeline_agents, PK = agent_id) vive no singleton
+# pipeline_membership abaixo — o Repository genérico assume PK 'id'.
+pipelines_repo = Repository("pipelines")
+
 
 # ═══════════════════════════════════════════════════════════════
 # Settings store (key-value para configurações da plataforma)
@@ -1327,3 +1361,164 @@ class SettingsStore:
 
 
 settings_store = SettingsStore()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Pipeline membership (tabela pipeline_agents, PK = agent_id)
+# ═══════════════════════════════════════════════════════════════
+# O Repository genérico assume PK 'id'; aqui a PK é agent_id (membership
+# exclusiva: 1 agente → no máximo 1 pipeline). Modelado como singleton igual
+# ao settings_store — objeto compartilhado entre rotas e testes, fácil de
+# monkeypatch. As CONEXÕES continuam só em mesh_connections.
+
+
+def _affected_rows(res: str) -> int:
+    """Nº de linhas afetadas a partir do status string do asyncpg ('DELETE n')."""
+    try:
+        return int(res.rsplit(" ", 1)[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+class PipelineMembership:
+    """Membership exclusiva agente→pipeline (1 agente em no máximo 1 pipeline)."""
+
+    async def set(self, agent_id: str, pipeline_id: str) -> None:
+        """Inclui/move o agente para o pipeline (upsert pela PK agent_id)."""
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            await con.execute(
+                "INSERT INTO pipeline_agents (agent_id, pipeline_id) VALUES ($1, $2) "
+                "ON CONFLICT (agent_id) DO UPDATE SET pipeline_id = EXCLUDED.pipeline_id",
+                agent_id,
+                pipeline_id,
+            )
+
+    async def remove(self, agent_id: str) -> bool:
+        """Remove o agente de qualquer pipeline. True se removeu algo."""
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            res = await con.execute("DELETE FROM pipeline_agents WHERE agent_id=$1", agent_id)
+            return _affected_rows(res) > 0
+
+    async def remove_from(self, pipeline_id: str, agent_id: str) -> bool:
+        """Remove o agente SÓ se ele pertence a este pipeline. True se removeu."""
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            res = await con.execute(
+                "DELETE FROM pipeline_agents WHERE agent_id=$1 AND pipeline_id=$2",
+                agent_id,
+                pipeline_id,
+            )
+            return _affected_rows(res) > 0
+
+    async def agents_of(self, pipeline_id: str) -> list[str]:
+        """agent_ids membros de um pipeline."""
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            rows = await con.fetch(
+                "SELECT agent_id FROM pipeline_agents WHERE pipeline_id=$1", pipeline_id
+            )
+            return [r["agent_id"] for r in rows]
+
+    async def pipeline_of(self, agent_id: str) -> Optional[str]:
+        """pipeline_id do agente, ou None se não pertence a nenhum."""
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            return await con.fetchval(
+                "SELECT pipeline_id FROM pipeline_agents WHERE agent_id=$1", agent_id
+            )
+
+    async def all(self) -> list[dict]:
+        """Toda a membership como [{agent_id, pipeline_id}] — 1 query p/ a lente."""
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            rows = await con.fetch("SELECT agent_id, pipeline_id FROM pipeline_agents")
+            return [dict(r) for r in rows]
+
+
+pipeline_membership = PipelineMembership()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Migração mesh_groups → pipelines (idempotente, roda no startup)
+# ═══════════════════════════════════════════════════════════════
+
+_PIPELINES_MIGRATION_FLAG = "pipelines_migrated_from_groups"
+
+
+def _parse_json_list(raw: str) -> list:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _parse_json_dict(raw: str) -> dict:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+async def migrate_mesh_groups_to_pipelines() -> dict:
+    """Converte mesh_groups (metadados UI-only) em pipelines de 1ª classe.
+
+    Idempotente: guardada por um flag em platform_settings — roda só uma vez,
+    para NÃO clobberar edições que o usuário faça depois nos pipelines. Cada
+    grupo vira um pipeline 'rascunho' (mesmo id/name/color/agent_ids). Se um
+    root de mesh_chain_names virou membro de um pipeline, o pipeline herda o
+    nome do chain (nome explícito do usuário > rótulo do grupo).
+
+    mesh_groups NÃO é apagado — a Topologia ainda o consome até o PR3.
+    Retorna {migrated, renamed, skipped} para logging.
+    """
+    flag = await settings_store.get(_PIPELINES_MIGRATION_FLAG, "")
+    if flag == "1":
+        return {"migrated": 0, "renamed": 0, "skipped": True}
+
+    groups = _parse_json_list(await settings_store.get("mesh_groups", ""))
+    migrated = 0
+    for g in groups:
+        if not isinstance(g, dict):
+            continue
+        gid, name = g.get("id"), g.get("name")
+        if not gid or not name:
+            continue
+        pid = str(gid)
+        if await pipelines_repo.find_by_id(pid):
+            continue  # já migrado (idempotência defensiva, além do flag)
+        await pipelines_repo.create({
+            "id": pid,
+            "name": str(name),
+            "status": "rascunho",
+            "domain": None,
+            "color": str(g.get("color") or "teal"),
+            "description": None,
+        })
+        aids = g.get("agent_ids")
+        if isinstance(aids, list):
+            for aid in aids:
+                if aid:
+                    await pipeline_membership.set(str(aid), pid)
+        migrated += 1
+
+    # Herança de nome via mesh_chain_names: {rootId: "nome do pipeline"}.
+    chain_names = _parse_json_dict(await settings_store.get("mesh_chain_names", ""))
+    renamed = 0
+    for root_id, chain_name in chain_names.items():
+        if not chain_name:
+            continue
+        pid = await pipeline_membership.pipeline_of(str(root_id))
+        if pid:
+            await pipelines_repo.update(pid, {"name": str(chain_name)})
+            renamed += 1
+
+    await settings_store.set(_PIPELINES_MIGRATION_FLAG, "1")
+    return {"migrated": migrated, "renamed": renamed, "skipped": False}
