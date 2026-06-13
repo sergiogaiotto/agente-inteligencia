@@ -1692,8 +1692,8 @@ async def execute_pipeline_endpoint(
             409,
             f"Pipeline em status '{entry.get('status')}' não é executável — só pipelines published rodam",
         )
-    from app.catalog.pipeline_defs import resolve_pipeline_root
-    root = await resolve_pipeline_root(entry)
+    from app.catalog.pipeline_defs import resolve_pipeline_exec
+    root, allowed = await resolve_pipeline_exec(entry)
     if not root:
         raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar")
 
@@ -1709,10 +1709,12 @@ async def execute_pipeline_endpoint(
         root_agent_id=root,
         consumer_user=user,
         user_input=data.input,
+        allowed_agent_ids=allowed,  # SELA a execução ao subgrafo do snapshot (PR-A1)
     ))
     await _audit("pipeline_execution_started", entry_id, user["id"], {
         "execution_id": execution["id"],
         "root_agent_id": root,
+        "member_count": len(allowed),
         "input_length": len(data.input),
     })
     return {
@@ -1737,8 +1739,8 @@ async def sandbox_pipeline_endpoint(
         raise HTTPException(403, "Apenas owner ou Root podem rodar sandbox")
     if entry.get("kind") != "pipeline":
         raise HTTPException(422, "Sandbox de pipeline só se aplica a kind='pipeline'")
-    from app.catalog.pipeline_defs import resolve_pipeline_root
-    root = await resolve_pipeline_root(entry)
+    from app.catalog.pipeline_defs import resolve_pipeline_exec
+    root, allowed = await resolve_pipeline_exec(entry)
     if not root:
         raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar")
 
@@ -1756,10 +1758,12 @@ async def sandbox_pipeline_endpoint(
         consumer_user=user,
         user_input=data.input,
         is_sandbox=True,
+        allowed_agent_ids=allowed,  # SELA a execução ao subgrafo do snapshot (PR-A1)
     ))
     await _audit("pipeline_sandbox_started", entry_id, user["id"], {
         "execution_id": execution["id"],
         "root_agent_id": root,
+        "member_count": len(allowed),
         "entry_status": entry.get("status"),
     })
     return {

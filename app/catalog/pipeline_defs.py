@@ -124,11 +124,24 @@ async def get_pipeline_def(entry_id: str) -> Optional[dict]:
 async def resolve_pipeline_root(entry: dict) -> Optional[str]:
     """Raiz p/ execução: do snapshot (def) se houver; senão computa do mesh vivo
     (entries publicadas antes do PR5, ou snapshot que falhou)."""
+    root, _ = await resolve_pipeline_exec(entry)
+    return root
+
+
+async def resolve_pipeline_exec(entry: dict) -> tuple[Optional[str], set]:
+    """(root, allowed_agent_ids) p/ execução SELADA (Trilha A / PR-A1).
+
+    Do snapshot (def) se houver — execução determinística pelo grafo congelado
+    na publicação; senão computa do mesh vivo (fallback). allowed_agent_ids = ids
+    dos membros (nodes), passado a execute_pipeline para delimitar a BFS.
+    """
     d = await get_pipeline_def(entry["id"])
     if d and d.get("root_agent_id"):
-        return d["root_agent_id"]
+        members = {n.get("id") for n in (d.get("nodes") or []) if n.get("id")}
+        return d["root_agent_id"], members
     pipeline_id = entry.get("artifact_id")
     if not pipeline_id:
-        return None
+        return None, set()
     sub = await _build_subgraph(pipeline_id)
-    return sub.get("root_agent_id")
+    members = {n.get("id") for n in sub.get("nodes", []) if n.get("id")}
+    return sub.get("root_agent_id"), members
