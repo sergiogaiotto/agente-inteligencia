@@ -833,6 +833,24 @@ CREATE TABLE IF NOT EXISTS pipeline_agents (
     created_at TIMESTAMP DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_agents_pipeline ON pipeline_agents(pipeline_id);
+
+-- Federação A2A (PR8b2): registro de PEERS confiáveis (outras instâncias).
+-- Infra compartilhada por ingress (verifica HMAC com shared_secret) e egress
+-- (assina + chama base_url). shared_secret/secret_prev são CIFRADOS (enc:: via
+-- crypto.py) at-rest. workspace UNIQUE = identidade do peer; PK 'id' p/ casar o
+-- Repository genérico. secret_prev sustenta rotação com janela de sobreposição.
+CREATE TABLE IF NOT EXISTS federation_peers (
+    id TEXT PRIMARY KEY,
+    workspace TEXT NOT NULL UNIQUE,
+    base_url TEXT,
+    shared_secret TEXT NOT NULL,
+    secret_prev TEXT,
+    fingerprint TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now(),
+    rotated_at TIMESTAMP
+);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -1345,6 +1363,10 @@ catalog_recipe_executions_repo = Repository("catalog_recipe_executions")
 # A membership (tabela pipeline_agents, PK = agent_id) vive no singleton
 # pipeline_membership abaixo — o Repository genérico assume PK 'id'.
 pipelines_repo = Repository("pipelines")
+
+# Federação A2A (PR8b2): peers confiáveis (PK = id; workspace UNIQUE). Secrets
+# cifrados; helpers de registro/rotação/verificação em app/catalog/federation_peers.py.
+federation_peers_repo = Repository("federation_peers")
 
 
 # ═══════════════════════════════════════════════════════════════
