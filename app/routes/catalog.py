@@ -533,6 +533,14 @@ async def publish_entry(entry_id: str, user: dict = Depends(require_user)):
         "updated_at": now,
     })
     await _audit("published", entry_id, user["id"], {"urn": entry.get("urn")})
+    # PR5: ao publicar um pipeline, congela o snapshot do subgrafo (display + raiz
+    # p/ execução). Best-effort — não derruba a publicação se o snapshot falhar.
+    if entry.get("kind") == "pipeline":
+        try:
+            from app.catalog.pipeline_defs import snapshot_pipeline_def
+            await snapshot_pipeline_def(entry)
+        except Exception as e:
+            logger.warning(f"snapshot_pipeline_def falhou para {entry_id}: {e}")
     return db_row_to_entry_dict(updated) if updated else {"message": "publicada"}
 
 
@@ -1638,6 +1646,128 @@ async def sandbox_recipe_endpoint(
         "started_at": execution.get("started_at").isoformat()
             if execution.get("started_at") and hasattr(execution["started_at"], "isoformat")
             else execution.get("started_at"),
+    }
+
+
+def _started_iso(execution: dict):
+    sa = execution.get("started_at")
+    return sa.isoformat() if sa is not None and hasattr(sa, "isoformat") else sa
+
+
+@router.get("/entries/{entry_id}/pipeline-def")
+async def get_pipeline_def_endpoint(entry_id: str, user: dict = Depends(require_user)):
+    """PR5 — snapshot do GRAFO do pipeline (nodes/edges/root_agent_id). Alimenta a
+    UI (PR6, mini-fluxograma read-only) e auditoria. 404 se ainda não gerado
+    (gera-se na publicação)."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not can_user_see(user, entry):
+        raise HTTPException(404, "Entry não encontrada")
+    from app.catalog.pipeline_defs import get_pipeline_def
+    d = await get_pipeline_def(entry_id)
+    if not d:
+        raise HTTPException(404, "Snapshot do pipeline ainda não gerado — publique o pipeline para gerá-lo")
+    return d
+
+
+@router.post("/entries/{entry_id}/execute-pipeline", status_code=202)
+async def execute_pipeline_endpoint(
+    entry_id: str, data: RecipeExecutionRequest, user: dict = Depends(require_user)
+):
+    """PR5 — executa um pipeline publicado (kind='pipeline') reusando o motor do
+    mesh (execute_pipeline) a partir da raiz do snapshot. Mesmo contrato dos
+    recipes: 202 + polling em GET /executions/{id}."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not can_user_see(user, entry):
+        raise HTTPException(404, "Entry não encontrada")
+    if entry.get("kind") != "pipeline":
+        raise HTTPException(422, "Apenas entries kind='pipeline' são executáveis aqui (recipes usam /execute)")
+    if entry.get("status") != "published":
+        raise HTTPException(
+            409,
+            f"Pipeline em status '{entry.get('status')}' não é executável — só pipelines published rodam",
+        )
+    from app.catalog.pipeline_defs import resolve_pipeline_root
+    root = await resolve_pipeline_root(entry)
+    if not root:
+        raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar")
+
+    execution = await create_execution(
+        recipe_entry_id=entry_id,
+        consumer_user_id=user["id"],
+        input_text=data.input,
+    )
+    from app.catalog.executor import execute_pipeline_entry
+    asyncio.create_task(execute_pipeline_entry(
+        execution_id=execution["id"],
+        pipeline_entry_id=entry_id,
+        root_agent_id=root,
+        consumer_user=user,
+        user_input=data.input,
+    ))
+    await _audit("pipeline_execution_started", entry_id, user["id"], {
+        "execution_id": execution["id"],
+        "root_agent_id": root,
+        "input_length": len(data.input),
+    })
+    return {
+        "execution_id": execution["id"],
+        "entry_id": entry_id,
+        "status": "running",
+        "started_at": _started_iso(execution),
+    }
+
+
+@router.post("/entries/{entry_id}/sandbox-pipeline", status_code=202)
+async def sandbox_pipeline_endpoint(
+    entry_id: str, data: RecipeExecutionRequest, user: dict = Depends(require_user)
+):
+    """PR5 — sandbox de pipeline. Como /execute-pipeline, mas: só owner/root,
+    aceita qualquer status (testar antes de publicar) e NÃO grava em catalog_costs."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou Root podem rodar sandbox")
+    if entry.get("kind") != "pipeline":
+        raise HTTPException(422, "Sandbox de pipeline só se aplica a kind='pipeline'")
+    from app.catalog.pipeline_defs import resolve_pipeline_root
+    root = await resolve_pipeline_root(entry)
+    if not root:
+        raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar")
+
+    execution = await create_execution(
+        recipe_entry_id=entry_id,
+        consumer_user_id=user["id"],
+        input_text=data.input,
+        is_sandbox=True,
+    )
+    from app.catalog.executor import execute_pipeline_entry
+    asyncio.create_task(execute_pipeline_entry(
+        execution_id=execution["id"],
+        pipeline_entry_id=entry_id,
+        root_agent_id=root,
+        consumer_user=user,
+        user_input=data.input,
+        is_sandbox=True,
+    ))
+    await _audit("pipeline_sandbox_started", entry_id, user["id"], {
+        "execution_id": execution["id"],
+        "root_agent_id": root,
+        "entry_status": entry.get("status"),
+    })
+    return {
+        "execution_id": execution["id"],
+        "entry_id": entry_id,
+        "status": "running",
+        "is_sandbox": True,
+        "started_at": _started_iso(execution),
     }
 
 
