@@ -25,9 +25,28 @@ from app.catalog import federation_peers as peers
 from app.catalog.federation import build_manifest
 from app.catalog.queries import create_execution, db_row_to_entry_dict, get_execution, is_root
 from app.core.auth import require_user
-from app.core.database import audit_repo, catalog_entries_repo, federation_peers_repo
-from app.core.federation_identity import federation_enabled, secret_key_present
+from app.core.database import (
+    _get_pool,
+    audit_repo,
+    catalog_entries_repo,
+    federation_peers_repo,
+    settings_store,
+)
+from app.core.federation_identity import (
+    ENABLED_SETTING_KEY,
+    WORKSPACE_SETTING_KEY,
+    federation_enabled,
+    is_valid_workspace,
+    local_workspace,
+    secret_key_present,
+)
 from app.core.ssrf import SSRFError
+
+_DEV_ALLOW_HTTP_KEY = "federation.dev_allow_http"
+
+
+def _truthy(raw: str) -> bool:
+    return (raw or "").strip().lower() in ("1", "true", "yes", "on")
 
 logger = logging.getLogger(__name__)
 
@@ -362,3 +381,68 @@ async def remote_invoke_route(
     except Exception:
         logger.warning("remote_invoke: audit falhou", exc_info=True)
     return result
+
+
+# ── Config (PR8d UI) — enable/workspace/dev_allow_http; ROOT-only ────────────
+
+
+class FederationConfig(BaseModel):
+    enabled: Optional[bool] = None
+    workspace: Optional[str] = None
+    dev_allow_http: Optional[bool] = None
+
+
+async def _federation_config_dict() -> dict:
+    return {
+        "enabled": await federation_enabled(),
+        "workspace": await local_workspace(),
+        "dev_allow_http": _truthy(await settings_store.get(_DEV_ALLOW_HTTP_KEY, "")),
+        "secret_key_present": secret_key_present(),
+    }
+
+
+@router.get("/api/v1/federation/config")
+async def get_federation_config(user: dict = Depends(require_user)):
+    """Config atual da federação (+ flag secret_key_present p/ a UI avisar fail-closed)."""
+    _require_root(user)
+    return await _federation_config_dict()
+
+
+@router.put("/api/v1/federation/config")
+async def put_federation_config(data: FederationConfig, user: dict = Depends(require_user)):
+    """Atualiza enabled/workspace/dev_allow_http (parcial). Valida o charset do workspace."""
+    _require_root(user)
+    if data.workspace is not None:
+        ws = data.workspace.strip()
+        if not is_valid_workspace(ws):
+            raise HTTPException(422, "workspace inválido (esperado [a-z0-9-]+)")
+        await settings_store.set(WORKSPACE_SETTING_KEY, ws)
+    if data.enabled is not None:
+        await settings_store.set(ENABLED_SETTING_KEY, "true" if data.enabled else "false")
+    if data.dev_allow_http is not None:
+        await settings_store.set(_DEV_ALLOW_HTTP_KEY, "true" if data.dev_allow_http else "false")
+    await _audit_peer("config_updated", "federation", user["id"], data.workspace or "")
+    return await _federation_config_dict()
+
+
+@router.get("/api/v1/federation/remote-entries")
+async def list_remote_entries(user: dict = Depends(require_user)):
+    """Lista as entries FEDERADAS (capabilities remotas espelhadas localmente)."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT id, name, version, remote_urn, adapter_config "
+            "FROM catalog_entries WHERE federated = TRUE ORDER BY name"
+        )
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            cfg = json.loads(d.get("adapter_config") or "{}")
+        except (ValueError, TypeError):
+            cfg = {}
+        out.append({
+            "id": d["id"], "name": d["name"], "version": d.get("version"),
+            "remote_urn": d.get("remote_urn"), "peer_workspace": cfg.get("peer_workspace"),
+        })
+    return {"entries": out}
