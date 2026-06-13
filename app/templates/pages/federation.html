@@ -1,0 +1,260 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="federationPage()" x-init="load()" class="max-w-5xl mx-auto space-y-6">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-[20px] font-bold text-brand-900">Federação A2A</h1>
+      <p class="text-[12px] text-surface-400 mt-0.5">Descubra e invoque capabilities publicadas por outras instâncias — e exponha as suas.</p>
+    </div>
+    <span class="rounded-full px-2.5 py-1 text-[11px] font-semibold"
+          :class="config.enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-surface-100 text-surface-500'"
+          x-text="config.enabled ? 'Ativa' : 'Desligada'"></span>
+  </div>
+
+  <!-- Fail-closed warning -->
+  <div x-show="config.enabled && !config.secret_key_present"
+       class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800">
+    <strong>MAESTRO_SECRET_KEY não está setado.</strong> A federação está ligada mas os endpoints de invoke retornam 503
+    (fail-closed) — sem a master key, segredos de peer usariam o fallback inseguro do crypto. Configure no ambiente antes de federar de verdade.
+  </div>
+
+  <!-- ═══════ Config ═══════ -->
+  <div class="rounded-2xl border border-surface-200 bg-white p-5">
+    <h2 class="text-[14px] font-bold text-brand-900 mb-4">Configuração</h2>
+    <div class="grid gap-4 sm:grid-cols-2">
+      <label class="flex items-center gap-3">
+        <input type="checkbox" x-model="config.enabled" class="h-4 w-4 rounded border-surface-300 text-brand-600">
+        <span class="text-[13px] text-brand-900">Habilitar federação</span>
+      </label>
+      <label class="flex items-center gap-3">
+        <input type="checkbox" x-model="config.dev_allow_http" class="h-4 w-4 rounded border-surface-300 text-brand-600">
+        <span class="text-[13px] text-brand-900">Permitir http:// (dev)</span>
+      </label>
+      <div class="sm:col-span-2">
+        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Workspace desta instância (namespace dos URNs)</label>
+        <input x-model="config.workspace" type="text" placeholder="default" pattern="[a-z0-9-]+"
+               class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[13px] text-brand-900 outline-none focus:border-brand-400">
+        <p class="text-[10px] text-surface-400 mt-1">Só <code>a-z 0-9 -</code>. Capabilities locais ficam <code x-text="'urn:maestro:' + (config.workspace || 'default') + ':pipeline:…'"></code></p>
+      </div>
+    </div>
+    <div class="mt-4 flex justify-end">
+      <button @click="saveConfig()" :disabled="saving"
+              class="rounded-lg bg-brand-500 px-4 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+        <span x-text="saving ? 'Salvando…' : 'Salvar configuração'"></span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ═══════ Manifesto (o que esta instância expõe) ═══════ -->
+  <div class="rounded-2xl border border-surface-200 bg-white p-5">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-[14px] font-bold text-brand-900">Meu manifesto</h2>
+      <button @click="loadManifest()" class="text-[12px] font-medium text-brand-600 hover:text-brand-700">Atualizar</button>
+    </div>
+    <template x-if="manifest === null">
+      <p class="text-[12px] text-surface-400">Habilite a federação e clique em Atualizar para ver as capabilities expostas (só published + company).</p>
+    </template>
+    <template x-if="manifest !== null">
+      <div>
+        <p class="text-[12px] text-surface-500 mb-2">Workspace <code x-text="manifest.workspace"></code> · <span x-text="manifest.capabilities.length"></span> capability(ies) exposta(s)</p>
+        <div class="space-y-1.5">
+          <template x-for="cap in manifest.capabilities" :key="cap.urn">
+            <div class="flex items-center gap-2 rounded-lg bg-surface-50 px-3 py-2">
+              <span class="text-[12px] font-semibold text-brand-900" x-text="cap.name"></span>
+              <code class="text-[10px] text-surface-400 truncate flex-1" x-text="cap.urn"></code>
+              <span x-show="cap.fingerprint" class="text-[9px] text-emerald-600 font-mono" :title="cap.fingerprint" x-text="(cap.fingerprint||'').slice(0,14)+'…'"></span>
+            </div>
+          </template>
+          <p x-show="manifest.capabilities.length === 0" class="text-[12px] text-surface-400">Nenhuma capability exposta. Publique um pipeline (kind=pipeline) com visibilidade <em>company</em>.</p>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ═══════ Peers ═══════ -->
+  <div class="rounded-2xl border border-surface-200 bg-white p-5">
+    <h2 class="text-[14px] font-bold text-brand-900 mb-4">Peers confiáveis</h2>
+
+    <!-- secret reveal (uma vez) -->
+    <div x-show="lastSecret" class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+      <p class="text-[12px] font-semibold text-emerald-800 mb-1" x-text="lastSecret?.title"></p>
+      <div class="flex items-center gap-2">
+        <code class="flex-1 break-all rounded bg-white px-2 py-1 text-[11px] text-brand-900 border border-emerald-200" x-text="lastSecret?.secret"></code>
+        <button @click="copySecret()" class="rounded bg-emerald-600 px-2 py-1 text-[11px] text-white hover:bg-emerald-700">Copiar</button>
+        <button @click="lastSecret=null" class="rounded px-2 py-1 text-[11px] text-emerald-700 hover:bg-emerald-100">Ocultar</button>
+      </div>
+      <p class="text-[10px] text-emerald-700 mt-1">Compartilhe com o peer agora — não será mostrado de novo.</p>
+    </div>
+
+    <!-- register form -->
+    <div class="flex flex-wrap items-end gap-2 mb-4">
+      <div class="flex-1 min-w-[140px]">
+        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Workspace do peer</label>
+        <input x-model="newPeer.workspace" type="text" placeholder="acme-prod"
+               class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[13px] outline-none focus:border-brand-400">
+      </div>
+      <div class="flex-[2] min-w-[200px]">
+        <label class="block text-[11px] font-semibold text-surface-500 mb-1">base_url (opcional, p/ consumir)</label>
+        <input x-model="newPeer.base_url" type="text" placeholder="https://peer.example"
+               class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[13px] outline-none focus:border-brand-400">
+      </div>
+      <button @click="registerPeer()" :disabled="!newPeer.workspace"
+              class="rounded-lg bg-brand-500 px-4 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">Registrar</button>
+    </div>
+
+    <!-- peers table -->
+    <div class="overflow-x-auto">
+      <table class="w-full text-[12px]">
+        <thead><tr class="text-left text-surface-400 border-b border-surface-100">
+          <th class="py-2 font-semibold">Workspace</th><th class="font-semibold">base_url</th>
+          <th class="font-semibold">Status</th><th class="font-semibold text-right">Ações</th>
+        </tr></thead>
+        <tbody>
+          <template x-for="p in peers" :key="p.id">
+            <tr class="border-b border-surface-50">
+              <td class="py-2 font-semibold text-brand-900" x-text="p.workspace"></td>
+              <td class="text-surface-500 truncate max-w-[200px]" x-text="p.base_url || '—'"></td>
+              <td><span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                        :class="p.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-surface-100 text-surface-500'"
+                        x-text="p.status"></span></td>
+              <td class="text-right space-x-1">
+                <button @click="syncPeer(p)" :disabled="!p.base_url" title="Puxar manifesto + registrar capabilities"
+                        class="rounded bg-brand-50 px-2 py-1 text-[11px] text-brand-600 hover:bg-brand-100 disabled:opacity-40">Sync</button>
+                <button @click="rotatePeer(p)" class="rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-700 hover:bg-amber-100">Rotacionar</button>
+                <button @click="revokePeer(p)" class="rounded bg-rose-50 px-2 py-1 text-[11px] text-rose-600 hover:bg-rose-100">Revogar</button>
+              </td>
+            </tr>
+          </template>
+          <tr x-show="peers.length === 0"><td colspan="4" class="py-3 text-center text-surface-400">Nenhum peer registrado.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════ Capabilities remotas ═══════ -->
+  <div class="rounded-2xl border border-surface-200 bg-white p-5">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-[14px] font-bold text-brand-900">Capabilities remotas</h2>
+      <button @click="loadRemote()" class="text-[12px] font-medium text-brand-600 hover:text-brand-700">Atualizar</button>
+    </div>
+    <p x-show="remote.length === 0" class="text-[12px] text-surface-400">Nenhuma capability remota registrada. Faça <strong>Sync</strong> de um peer (com base_url) para puxá-las.</p>
+    <div class="space-y-2">
+      <template x-for="e in remote" :key="e.id">
+        <div class="rounded-lg border border-surface-100 px-3 py-2.5">
+          <div class="flex items-center gap-2">
+            <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-bold text-emerald-700">remota</span>
+            <span class="text-[13px] font-semibold text-brand-900" x-text="e.name"></span>
+            <span class="text-[10px] text-surface-400" x-text="'@' + (e.peer_workspace || '?')"></span>
+            <code class="text-[10px] text-surface-300 truncate flex-1" x-text="e.remote_urn"></code>
+            <button @click="e._open = !e._open" class="rounded bg-brand-50 px-2 py-1 text-[11px] text-brand-600 hover:bg-brand-100">Invocar</button>
+          </div>
+          <div x-show="e._open" x-transition class="mt-2 flex gap-2">
+            <input x-model="e._input" type="text" placeholder="Entrada para a capability remota…"
+                   class="flex-1 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[12px] outline-none focus:border-brand-400">
+            <button @click="invokeRemote(e)" :disabled="e._busy || !e._input"
+                    class="rounded-lg bg-brand-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+              <span x-text="e._busy ? '…' : 'Enviar'"></span>
+            </button>
+          </div>
+          <div x-show="e._result" class="mt-2 rounded-lg bg-surface-50 px-3 py-2 text-[12px] text-brand-900">
+            <span class="text-[10px] font-semibold text-surface-400" x-text="'status: ' + (e._result?.status || '?')"></span>
+            <p class="mt-1 whitespace-pre-wrap" x-text="e._result?.output"></p>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function federationPage() {
+  return {
+    config: { enabled: false, workspace: 'default', dev_allow_http: false, secret_key_present: false },
+    saving: false,
+    manifest: null,
+    peers: [],
+    remote: [],
+    newPeer: { workspace: '', base_url: '' },
+    lastSecret: null,
+
+    async load() {
+      await Promise.all([this.loadConfig(), this.loadPeers(), this.loadRemote()]);
+    },
+    async loadConfig() {
+      try { this.config = await api.get('/api/v1/federation/config'); }
+      catch (e) { showToast('Falha ao carregar config: ' + e.message, 'error'); }
+    },
+    async saveConfig() {
+      this.saving = true;
+      try {
+        this.config = await api.put('/api/v1/federation/config', {
+          enabled: this.config.enabled,
+          workspace: (this.config.workspace || '').trim() || 'default',
+          dev_allow_http: this.config.dev_allow_http,
+        });
+        showToast('Configuração salva', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+      finally { this.saving = false; }
+    },
+    async loadManifest() {
+      try { this.manifest = await api.get('/.well-known/maestro-federation.json'); }
+      catch (e) { this.manifest = null; showToast('Manifesto indisponível (federação desligada?): ' + e.message, 'error'); }
+    },
+    async loadPeers() {
+      try { this.peers = (await api.get('/api/v1/federation/peers')).peers || []; }
+      catch (e) { this.peers = []; }
+    },
+    async loadRemote() {
+      try {
+        const list = (await api.get('/api/v1/federation/remote-entries')).entries || [];
+        this.remote = list.map(e => ({ ...e, _open: false, _input: '', _busy: false, _result: null }));
+      } catch (e) { this.remote = []; }
+    },
+    async registerPeer() {
+      try {
+        const r = await api.post('/api/v1/federation/peers', {
+          workspace: this.newPeer.workspace.trim(),
+          base_url: this.newPeer.base_url.trim() || null,
+        });
+        this.lastSecret = { title: 'Segredo do peer ' + r.workspace, secret: r.shared_secret };
+        this.newPeer = { workspace: '', base_url: '' };
+        await this.loadPeers();
+        showToast('Peer registrado', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+    },
+    async syncPeer(p) {
+      try {
+        const r = await api.post('/api/v1/federation/peers/' + p.id + '/sync', {});
+        showToast('Sync: ' + r.registered + ' registrada(s), ' + r.skipped + ' pulada(s)', 'success');
+        await this.loadRemote();
+      } catch (e) { showToast(e.message, 'error'); }
+    },
+    async rotatePeer(p) {
+      try {
+        const r = await api.post('/api/v1/federation/peers/' + p.id + '/rotate', {});
+        this.lastSecret = { title: 'Novo segredo do peer ' + r.workspace, secret: r.shared_secret };
+        await this.loadPeers();
+      } catch (e) { showToast(e.message, 'error'); }
+    },
+    async revokePeer(p) {
+      if (!confirm('Revogar o peer ' + p.workspace + '?')) return;
+      try { await api.del('/api/v1/federation/peers/' + p.id); await this.loadPeers(); showToast('Peer revogado', 'info'); }
+      catch (e) { showToast(e.message, 'error'); }
+    },
+    async invokeRemote(e) {
+      e._busy = true; e._result = null;
+      try { e._result = await api.post('/api/v1/federation/remote/' + e.id + '/invoke', { input: e._input }); }
+      catch (err) { showToast(err.message, 'error'); }
+      finally { e._busy = false; }
+    },
+    async copySecret() {
+      if (this.lastSecret && await window.copyText(this.lastSecret.secret)) showToast('Copiado', 'success');
+    },
+  };
+}
+</script>
+{% endblock %}
