@@ -688,6 +688,27 @@ CREATE INDEX IF NOT EXISTS idx_catalog_recipe_exec_status
     ON catalog_recipe_executions(status);
 
 -- ═══════════════════════════════════════════════════════════════
+-- Pipeline defs do Catálogo (PR5, Parte B) — SNAPSHOT do subgrafo de um
+-- pipeline (kind='pipeline') no momento da publicação. Diferente de
+-- catalog_recipes.steps (linear): aqui é o GRAFO (agentes + conexões tipadas).
+-- 1:1 com a entry. root_agent_id = entrada da cadeia (execução reusa
+-- execute_pipeline a partir dele). Execuções vão em catalog_recipe_executions
+-- (genérico; recipe_entry_id guarda o id da entry do pipeline).
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS catalog_pipeline_defs (
+    entry_id TEXT PRIMARY KEY REFERENCES catalog_entries(id) ON DELETE CASCADE,
+    root_agent_id TEXT NOT NULL,
+    -- nodes: [{id, name, kind, status, version}, ...] (membros do pipeline)
+    nodes JSONB NOT NULL DEFAULT '[]',
+    -- edges: [{id, source, target, type, config}, ...] (conexões intra-pipeline)
+    edges JSONB NOT NULL DEFAULT '[]',
+    snapshot_at TIMESTAMP DEFAULT now(),
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_pipeline_defs_root ON catalog_pipeline_defs(root_agent_id);
+
+-- ═══════════════════════════════════════════════════════════════
 -- Onda Tabular — promoção de CSV/XLSX a tabela consultável via SQL.
 -- Metadata em Postgres; dados ficam em DuckDB embarcado (data/tabular/).
 -- Skills consomem via seção `## Data Tables` no SKILL.md (declarative,

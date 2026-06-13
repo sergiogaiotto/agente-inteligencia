@@ -314,3 +314,113 @@ async def execute_recipe(
             logger.exception(
                 f"finalize_execution também falhou: execution={execution_id}"
             )
+
+
+async def _finalize_failed(execution_id: str, start: float, err: Exception) -> None:
+    """Best-effort: sela a execução como 'failed' (nunca deixa 'running' forever)."""
+    try:
+        await finalize_execution(
+            execution_id,
+            status="failed",
+            total_cost_usd=0.0,
+            total_latency_ms=int((time.time() - start) * 1000),
+            error_message=f"{type(err).__name__}: {err}"[:500],
+        )
+    except Exception:
+        logger.exception(f"finalize_execution(failed) também falhou: execution={execution_id}")
+
+
+async def execute_pipeline_entry(
+    *,
+    execution_id: str,
+    pipeline_entry_id: str,
+    root_agent_id: str,
+    consumer_user: dict,
+    user_input: str,
+    is_sandbox: bool = False,
+) -> None:
+    """Executa um pipeline publicado (kind='pipeline') REUSANDO o motor do mesh
+    (engine.execute_pipeline) a partir da raiz. Grava na MESMA tabela das runs de
+    recipe (catalog_recipe_executions; recipe_entry_id guarda o id da entry do
+    pipeline) e reusa trust/custo (record_invocation_cost). Background task —
+    cliente faz polling em GET /executions/{id}.
+
+    Mapeia o resultado do mesh (pipeline_steps) em steps_results. Status final:
+    'completed' (tudo ok) | 'partial' (algum step com erro, mas houve execução) |
+    'failed' (crash ou nada executou).
+
+    CUSTO: os steps do mesh ainda NÃO expõem cost_usd/tokens_used (igual aos
+    recipes nesta onda — ver docstring de execute_recipe). Logo a soma de custo
+    fica 0 por ora (latência/invocation_count são reais). A soma é mantida
+    forward-compatible: passa a refletir custo quando o engine expuser por step.
+    """
+    start = time.time()
+    try:
+        from app.agents.engine import execute_pipeline
+        result = await execute_pipeline(
+            entry_agent_id=root_agent_id,
+            user_input=user_input,
+            channel="catalog",
+        )
+    except Exception as e:
+        logger.exception(f"execute_pipeline_entry crashed (engine): execution={execution_id}")
+        await _finalize_failed(execution_id, start, e)
+        return
+
+    # Gravação guardada: um erro de DB aqui NÃO pode deixar a row 'running' forever
+    # (espelha o catch-all de execute_recipe). Sela como 'failed' no except.
+    try:
+        steps = result.get("pipeline_steps") or []
+        total_cost_usd = 0.0
+        for i, s in enumerate(steps):
+            cost = float(s.get("cost_usd") or 0)  # 0 até o engine expor custo por step
+            total_cost_usd += cost
+            await append_step_result(execution_id, {
+                "order": i + 1,
+                "agent_id": s.get("agent_id"),
+                "agent_name": s.get("agent_name"),
+                "status": s.get("status"),
+                "final_state": s.get("final_state"),
+                "output": _truncate(s.get("output", "") or ""),
+                "error": s.get("error"),
+                "cost_usd": cost,
+                "tokens_used": int(s.get("tokens_used") or 0),
+                "latency_ms": float(s.get("duration_ms") or s.get("latency_ms") or 0),
+            })
+
+        total_latency_ms = int(result.get("duration_ms") or (time.time() - start) * 1000)
+        executed = int(result.get("completed_agents") or 0)
+        had_error = any(str(s.get("status", "")).startswith("error") for s in steps)
+        if had_error and executed == 0:
+            final_status = "failed"
+        elif had_error:
+            final_status = "partial"
+        else:
+            final_status = "completed"
+
+        await finalize_execution(
+            execution_id,
+            status=final_status,
+            total_cost_usd=total_cost_usd,
+            total_latency_ms=total_latency_ms,
+            error_message=None,
+        )
+    except Exception as e:
+        logger.exception(f"execute_pipeline_entry crashed (recording): execution={execution_id}")
+        await _finalize_failed(execution_id, start, e)
+        return
+
+    # Trust/custo: bump na entry do pipeline (não em sandbox). cost_usd=0 por ora
+    # (ver docstring); invocation_count/last_invoked refletem o uso real.
+    if not is_sandbox:
+        try:
+            await record_invocation_cost(
+                pipeline_entry_id,
+                consumer_user_id=consumer_user["id"],
+                interaction_id=result.get("interaction_id"),
+                cost_usd=total_cost_usd,
+                tokens_used=0,
+                latency_ms=float(total_latency_ms),
+            )
+        except Exception:
+            logger.exception(f"record_invocation_cost falhou: execution={execution_id}")
