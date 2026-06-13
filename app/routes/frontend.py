@@ -20,7 +20,6 @@ PAGES = {
     "/catalog/stewardship": {"template":"pages/catalog_stewardship.html","title":"Stewardship","section":"catalog_stewardship"},
     "/catalog/cost": {"template":"pages/catalog_cost.html","title":"Custo & Consumo","section":"catalog_cost"},
     "/workspace": {"template":"pages/workspace.html","title":"Workspace","section":"workspace"},
-    "/mesh": {"template":"pages/mesh.html","title":"AI Mesh","section":"mesh"},
     "/mesh/flow": {"template":"pages/mesh_flow.html","title":"Fluxograma de agentes","section":"mesh"},
     "/mcp": {"template":"pages/tools.html","title":"MCP","section":"tools"},
     "/rag": {"template":"pages/evidence.html","title":"RAG — Base de Conhecimento","section":"evidence"},

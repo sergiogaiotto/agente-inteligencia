@@ -117,6 +117,7 @@ def test_mesh_flow_page_registered_as_submenu():
     assert "/mesh/flow" in PAGES
     p = PAGES["/mesh/flow"]
     assert p["template"] == "pages/mesh_flow.html"
-    # mesma 'section' que /mesh → o item-pai "AI Mesh" fica ativo nas duas views
+    # section='mesh' mantém o item-pai "AI Mesh" ativo. PR-B3: a página Topologia
+    # (/mesh) foi aposentada — /mesh redireciona p/ /mesh/flow e não tem mais
+    # entry em PAGES (só o handler de redirect em frontend.py).
     assert p["section"] == "mesh"
-    assert PAGES["/mesh"]["section"] == "mesh"
