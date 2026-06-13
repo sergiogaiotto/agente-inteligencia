@@ -628,6 +628,61 @@ async def record_invocation_cost(
     }
 
 
+def _compute_trust(rows: list) -> dict:
+    """Computa trust a partir de execuções FINALIZADAS (não-running).
+
+    - reliability = completed / finished (0..1).
+    - latency_p95_ms = percentil 95 de total_latency_ms.
+    - avg_cost_usd = média de total_cost_usd.
+    Função pura (testável sem DB). Cada row tem status/total_latency_ms/total_cost_usd.
+    """
+    finished = [r for r in rows if (r.get("status") or "") != "running"]
+    n = len(finished)
+    if not n:
+        return {"reliability": 0.0, "latency_p95_ms": 0.0, "avg_cost_usd": 0.0, "n": 0}
+    completed = sum(1 for r in finished if r.get("status") == "completed")
+    reliability = completed / n
+    lat = sorted(int(r.get("total_latency_ms") or 0) for r in finished)
+    import math
+    idx = min(len(lat) - 1, max(0, math.ceil(0.95 * len(lat)) - 1))
+    p95 = float(lat[idx])
+    avg_cost = sum(float(r.get("total_cost_usd") or 0) for r in finished) / n
+    return {"reliability": round(reliability, 4), "latency_p95_ms": round(p95, 1),
+            "avg_cost_usd": round(avg_cost, 6), "n": n}
+
+
+async def recompute_entry_trust(entry_id: str) -> dict:
+    """PR7 — recalcula trust_reliability/latency_p95/avg_cost da entry a partir
+    das execuções REAIS (catalog_recipe_executions, não-sandbox, finalizadas) e
+    atualiza catalog_entries. invocation_count/last_invoked seguem via
+    record_invocation_cost. Genérico (serve recipe E pipeline)."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        rows = await con.fetch(
+            """
+            SELECT status, total_latency_ms, total_cost_usd
+            FROM catalog_recipe_executions
+            WHERE recipe_entry_id = $1 AND is_sandbox = FALSE AND status <> 'running'
+            """,
+            entry_id,
+        )
+        t = _compute_trust([dict(r) for r in rows])
+        if t["n"] == 0:
+            return t
+        await con.execute(
+            """
+            UPDATE catalog_entries SET
+              trust_reliability = $2,
+              trust_latency_p95_ms = $3,
+              trust_avg_cost_usd = $4,
+              updated_at = now()
+            WHERE id = $1
+            """,
+            entry_id, t["reliability"], t["latency_p95_ms"], t["avg_cost_usd"],
+        )
+    return t
+
+
 async def aggregate_costs(
     *,
     group_by: str = "entry",

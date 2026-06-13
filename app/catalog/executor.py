@@ -27,6 +27,7 @@ from typing import Optional
 from app.catalog.queries import (
     append_step_result,
     finalize_execution,
+    recompute_entry_trust,
     record_invocation_cost,
 )
 from app.core.database import catalog_entries_repo
@@ -350,10 +351,9 @@ async def execute_pipeline_entry(
     'completed' (tudo ok) | 'partial' (algum step com erro, mas houve execução) |
     'failed' (crash ou nada executou).
 
-    CUSTO: os steps do mesh ainda NÃO expõem cost_usd/tokens_used (igual aos
-    recipes nesta onda — ver docstring de execute_recipe). Logo a soma de custo
-    fica 0 por ora (latência/invocation_count são reais). A soma é mantida
-    forward-compatible: passa a refletir custo quando o engine expuser por step.
+    CUSTO (PR7): os steps do mesh agora EXPÕEM cost_usd/tokens_used (cost auto-wire
+    no engine), então a soma de custo/tokens é REAL. Após finalizar, recalcula o
+    trust da entry (reliability/latency_p95/avg_cost) a partir das execuções reais.
     """
     start = time.time()
     try:
@@ -375,7 +375,7 @@ async def execute_pipeline_entry(
         steps = result.get("pipeline_steps") or []
         total_cost_usd = 0.0
         for i, s in enumerate(steps):
-            cost = float(s.get("cost_usd") or 0)  # 0 até o engine expor custo por step
+            cost = float(s.get("cost_usd") or 0)  # real desde o PR7 (cost auto-wire no engine)
             total_cost_usd += cost
             await append_step_result(execution_id, {
                 "order": i + 1,
@@ -412,17 +412,24 @@ async def execute_pipeline_entry(
         await _finalize_failed(execution_id, start, e)
         return
 
-    # Trust/custo: bump na entry do pipeline (não em sandbox). cost_usd=0 por ora
-    # (ver docstring); invocation_count/last_invoked refletem o uso real.
+    # Trust/custo: bump na entry do pipeline (não em sandbox). Com o cost auto-wire
+    # do PR7, total_cost_usd/tokens já são REAIS (somados dos steps do mesh).
     if not is_sandbox:
+        total_tokens = sum(int(s.get("tokens_used") or 0) for s in steps)
         try:
             await record_invocation_cost(
                 pipeline_entry_id,
                 consumer_user_id=consumer_user["id"],
                 interaction_id=result.get("interaction_id"),
                 cost_usd=total_cost_usd,
-                tokens_used=0,
+                tokens_used=total_tokens,
                 latency_ms=float(total_latency_ms),
             )
         except Exception:
             logger.exception(f"record_invocation_cost falhou: execution={execution_id}")
+        # PR7 — recalcula trust_reliability/latency_p95/avg_cost da entry a partir
+        # das execuções reais (reliability/latência já valem; custo agora também).
+        try:
+            await recompute_entry_trust(pipeline_entry_id)
+        except Exception:
+            logger.exception(f"recompute_entry_trust falhou: execution={execution_id}")
