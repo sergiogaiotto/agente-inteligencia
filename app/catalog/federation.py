@@ -18,14 +18,21 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from datetime import datetime
 from typing import Optional
 
+from app.a2a.protocol import Envelope
+from app.catalog import federation_peers as _peers
 from app.catalog.pipeline_defs import get_pipeline_def
 from app.catalog.queries import db_row_to_entry_dict, get_disclosure
 from app.core.database import _get_pool
 from app.core.federation_identity import local_workspace
 
 logger = logging.getLogger(__name__)
+
+# Anti-replay: janela de aceitação do created_at do envelope + TTL dos nonces.
+REPLAY_WINDOW_SECONDS = 300       # ±5min de skew aceitável
+_NONCE_TTL_SECONDS = 1200         # >> janela; só bound de crescimento da tabela
 
 # Allowlist de kinds expostos via federação. Começa só com 'pipeline' (a unidade
 # SELADA executável); agentes/recipes podem entrar numa onda futura.
@@ -164,3 +171,66 @@ async def resolve_federated_exec(entry: dict) -> tuple[Optional[str], set]:
     if not members or root not in members:
         return None, set()
     return root, members
+
+
+# ── Ingress (PR8b3): autenticação de envelope + anti-replay + lookup por URN ──
+
+
+async def get_entry_by_urn(urn: str) -> Optional[dict]:
+    """Entry local pelo URN — a capability que o peer quer invocar."""
+    if not urn:
+        return None
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        r = await con.fetchrow("SELECT * FROM catalog_entries WHERE urn=$1", urn)
+    return db_row_to_entry_dict(r) if r else None
+
+
+async def verify_inbound_envelope(env: Envelope, signature: str) -> Optional[dict]:
+    """Autentica o envelope contra o peer ATIVO de `env.origin_workspace`,
+    verificando o HMAC contra os segredos válidos (atual + anterior na janela de
+    rotação). Devolve a row do peer se válido, senão None — o caller responde 403
+    indistinto (não revela se o peer existe vs assinatura inválida)."""
+    if not signature:
+        return None
+    peer = await _peers.get_active_peer_by_workspace(env.origin_workspace)
+    if not peer:
+        return None
+    for secret in _peers.peer_secrets(peer):
+        if env.verify_hmac(secret, signature):
+            return peer
+    return None
+
+
+def within_replay_window(created_at: str, now_utc: datetime, window_s: int = REPLAY_WINDOW_SECONDS) -> bool:
+    """True se `created_at` (UTC naive 'YYYY-MM-DDTHH:MM:SS') está dentro de
+    ±window_s de agora. Envelopes de federação DEVEM usar UTC (egress/PR8c)."""
+    if not created_at:
+        return False
+    try:
+        ts = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%S")
+    except (ValueError, TypeError):
+        return False
+    return abs((now_utc - ts).total_seconds()) <= window_s
+
+
+async def check_and_record_nonce(nonce: str, peer_workspace: str) -> bool:
+    """True se o nonce é NOVO (registrado agora); False se já visto (replay).
+    Limpa nonces expirados no mesmo passo (bound de crescimento). Só deve ser
+    chamado APÓS autenticar (senão um atacante enche a tabela sem assinatura)."""
+    if not nonce:
+        return False
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        await con.execute(
+            f"DELETE FROM federation_nonces WHERE seen_at < now() - interval '{_NONCE_TTL_SECONDS} seconds'"
+        )
+        res = await con.execute(
+            "INSERT INTO federation_nonces (nonce, peer_workspace) VALUES ($1, $2) "
+            "ON CONFLICT (nonce) DO NOTHING",
+            nonce, peer_workspace,
+        )
+    try:
+        return int(res.split()[-1]) == 1  # "INSERT 0 1" inseriu; "INSERT 0 0" = replay
+    except (ValueError, IndexError):
+        return False

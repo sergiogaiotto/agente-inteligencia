@@ -851,6 +851,16 @@ CREATE TABLE IF NOT EXISTS federation_peers (
     updated_at TIMESTAMP DEFAULT now(),
     rotated_at TIMESTAMP
 );
+
+-- Federação A2A (PR8b3): nonces de envelopes já vistos (anti-replay). O ingress
+-- insere o envelope_id; conflito = replay → rejeita. seen_at sustenta a limpeza
+-- por TTL (bound de crescimento; a janela de replay é curta, ~5min).
+CREATE TABLE IF NOT EXISTS federation_nonces (
+    nonce TEXT PRIMARY KEY,
+    peer_workspace TEXT,
+    seen_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_federation_nonces_seen_at ON federation_nonces(seen_at);
 """
 
 # ═══════════════════════════════════════════════════════════════
