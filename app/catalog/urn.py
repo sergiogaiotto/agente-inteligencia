@@ -79,3 +79,17 @@ def parse_urn(urn: str) -> Optional[ParsedUrn]:
 def is_valid_urn(urn: str) -> bool:
     """True se o URN é sintaticamente válido."""
     return parse_urn(urn) is not None
+
+
+def is_local_urn(urn: str, local_workspace: str = DEFAULT_WORKSPACE) -> bool:
+    """True se o URN pertence ao workspace DESTA instância (PR8a — federação).
+
+    URN malformado não é local nem remoto (ambos os helpers devolvem False)."""
+    p = parse_urn(urn)
+    return p is not None and p["workspace"] == local_workspace
+
+
+def is_remote_urn(urn: str, local_workspace: str = DEFAULT_WORKSPACE) -> bool:
+    """True se o URN pertence a OUTRO workspace (capability federada)."""
+    p = parse_urn(urn)
+    return p is not None and p["workspace"] != local_workspace

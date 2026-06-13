@@ -67,8 +67,9 @@ from app.catalog.queries import (
     upsert_external_metadata,
     upsert_recipe,
 )
-from app.catalog.urn import make_urn
+from app.catalog.urn import make_urn, parse_urn
 from app.core.auth import require_user
+from app.core.federation_identity import local_workspace
 from app.core.database import (
     audit_repo,
     catalog_entries_repo,
@@ -164,7 +165,7 @@ async def create_entry(data: CatalogEntryCreate, user: dict = Depends(require_us
         raise HTTPException(422, str(e))
 
     try:
-        urn = make_urn(data.kind, data.name, data.version)
+        urn = make_urn(data.kind, data.name, data.version, workspace=await local_workspace())
     except ValueError as e:
         raise HTTPException(422, f"URN inválido: {e}")
 
@@ -224,7 +225,7 @@ async def create_entry_from_pipeline(
 
     name = (data.name or pipeline.get("name") or "").strip() or "Pipeline"
     try:
-        urn = make_urn("pipeline", name, data.version)
+        urn = make_urn("pipeline", name, data.version, workspace=await local_workspace())
     except ValueError as e:
         raise HTTPException(422, f"URN inválido: {e}")
 
@@ -306,8 +307,13 @@ async def update_entry(
     if "name" in changes or "version" in changes:
         new_name = changes.get("name") or existing["name"]
         new_version = changes.get("version") or existing["version"]
+        # Preserva o workspace do URN existente — NÃO rebatiza p/ o workspace
+        # local (uma entry federada/importada mantém seu namespace de origem).
+        # Fallback ao workspace local só se o URN atual for ilegível.
+        parsed = parse_urn(existing.get("urn") or "")
+        ws = (parsed["workspace"] if parsed else None) or await local_workspace()
         try:
-            changes["urn"] = make_urn(existing["kind"], new_name, new_version)
+            changes["urn"] = make_urn(existing["kind"], new_name, new_version, workspace=ws)
         except ValueError as e:
             raise HTTPException(422, f"URN inválido: {e}")
 
