@@ -510,9 +510,10 @@ CREATE TABLE IF NOT EXISTS catalog_entries (
     urn TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
-    kind TEXT NOT NULL CHECK(kind IN ('agent','skill','application','recipe','external_platform')),
-    -- Vínculo com artefato Maestro existente (NULL para external_platform / recipe stub)
-    artifact_type TEXT CHECK(artifact_type IN ('agent','skill','recipe')),
+    kind TEXT NOT NULL CHECK(kind IN ('agent','skill','application','recipe','external_platform','pipeline')),
+    -- Vínculo com artefato Maestro existente (NULL para external_platform / recipe stub).
+    -- 'pipeline' (PR4): referencia um pipeline do Estúdio (artifact_id = pipelines.id).
+    artifact_type TEXT CHECK(artifact_type IN ('agent','skill','recipe','pipeline')),
     artifact_id TEXT,
     domain TEXT,
     version TEXT DEFAULT '0.1.0',
@@ -900,6 +901,14 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE catalog_submissions DROP CONSTRAINT IF EXISTS catalog_submissions_entry_id_fkey",
     """ALTER TABLE catalog_submissions ADD CONSTRAINT catalog_submissions_entry_id_fkey
        FOREIGN KEY (entry_id) REFERENCES catalog_entries(id) ON DELETE CASCADE""",
+    # PR4 (Parte B): catalog_entries.kind/artifact_type ganham 'pipeline'. CHECK
+    # inline não é alterável por ALTER COLUMN — DROP+ADD (idempotente; nome
+    # auto-gerado pelo Postgres p/ CHECK de coluna inline é <tabela>_<coluna>_check).
+    # NULL passa em CHECK, então artifact_type NULL de entries antigas não viola.
+    "ALTER TABLE catalog_entries DROP CONSTRAINT IF EXISTS catalog_entries_kind_check",
+    "ALTER TABLE catalog_entries ADD CONSTRAINT catalog_entries_kind_check CHECK (kind IN ('agent','skill','application','recipe','external_platform','pipeline'))",
+    "ALTER TABLE catalog_entries DROP CONSTRAINT IF EXISTS catalog_entries_artifact_type_check",
+    "ALTER TABLE catalog_entries ADD CONSTRAINT catalog_entries_artifact_type_check CHECK (artifact_type IN ('agent','skill','recipe','pipeline'))",
     # Onda Tabular: kb_mode declara o tipo de conteúdo da KS.
     # - 'text': só RAG (textos, FAQs, contratos). Upload de planilha vira chunks markdown.
     # - 'tabular': só Tabelas DuckDB. Rejeita formatos não-estruturados. ZERO chunks no Qdrant/Postgres.

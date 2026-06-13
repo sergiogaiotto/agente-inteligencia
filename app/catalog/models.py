@@ -14,11 +14,11 @@ from pydantic import BaseModel, Field, field_validator
 from app.catalog.lifecycle import ENTRY_STATES, REVIEW_STATES
 from app.catalog.urn import VALID_KINDS, is_valid_urn
 
-EntryKind = Literal["agent", "skill", "application", "recipe", "external_platform"]
+EntryKind = Literal["agent", "skill", "application", "recipe", "external_platform", "pipeline"]
 EntryStatus = Literal["draft", "submitted", "approved", "published", "deprecated", "archived"]
 EntryVisibility = Literal["private", "department", "company"]
 AdapterType = Literal["a2a", "mcp", "http", "openai_assistants"]
-ArtifactType = Literal["agent", "skill", "recipe"]
+ArtifactType = Literal["agent", "skill", "recipe", "pipeline"]
 ReviewStatus = Literal["pending", "approved", "rejected", "changes_requested"]
 VerificationMethod = Literal["declared", "fingerprint", "execution"]
 
@@ -64,12 +64,37 @@ class CatalogEntryCreate(BaseModel):
 
         Recipe (Onda 3): não tem artefato — sua definição é a composição
         declarativa em catalog_recipes.steps.
+
+        Pipeline (PR4): referencia um pipeline do Estúdio (artifact_type='pipeline',
+        artifact_id = pipelines.id) — exige vínculo, como agent/skill.
         """
-        if self.kind in ("agent", "skill"):
+        if self.kind in ("agent", "skill", "pipeline"):
             if not self.artifact_type or not self.artifact_id:
                 raise ValueError(
                     f"kind={self.kind} requer artifact_type + artifact_id (vínculo a artefato existente)"
                 )
+
+
+class PipelinePublishRequest(BaseModel):
+    """PR4 — publica um pipeline do Estúdio como entry kind='pipeline' (draft).
+
+    A entry referencia o pipeline (artifact_type='pipeline', artifact_id=pipeline_id)
+    e segue o lifecycle existente (submit/approve/publish). O grafo (snapshot) e a
+    execução são PR5.
+    """
+
+    pipeline_id: str = Field(..., min_length=1)
+    name: Optional[str] = Field(default=None, max_length=200)  # default: nome do pipeline
+    version: str = "1.0.0"
+    visibility: EntryVisibility = "private"
+
+    @field_validator("version")
+    @classmethod
+    def _version_semver(cls, v: str) -> str:
+        import re
+        if not re.match(r"^[0-9]+\.[0-9]+\.[0-9]+$", v):
+            raise ValueError("version deve ser semver MAJOR.MINOR.PATCH")
+        return v
 
 
 class CatalogEntryUpdate(BaseModel):

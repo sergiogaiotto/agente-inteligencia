@@ -1230,10 +1230,11 @@ function catalogDetailPage(entryId) {
 
         // ── Helpers de formatação ──────────────────────────
         kindLabel(k) {
-            return ({agent:'Agente', skill:'Skill', recipe:'Recipe', application:'Aplicação', external_platform:'Externa'})[k] || k;
+            return ({agent:'Agente', skill:'Skill', recipe:'Recipe', pipeline:'Pipeline', application:'Aplicação', external_platform:'Externa'})[k] || k;
         },
         kindBadgeClass(k) {
-            return ({agent:'bg-red-50 text-red-700', skill:'bg-teal-50 text-teal-700', recipe:'bg-brand-50 text-brand-700',
+            // 'pipeline' usa emerald (paleta proíbe roxo/violet — ver test_platform_red_palette)
+            return ({agent:'bg-red-50 text-red-700', skill:'bg-teal-50 text-teal-700', recipe:'bg-brand-50 text-brand-700', pipeline:'bg-emerald-50 text-emerald-700',
                      application:'bg-amber-50 text-amber-700', external_platform:'bg-rose-50 text-rose-700'})[k] || 'bg-surface-100 text-surface-600';
         },
         statusBadgeClass(s) {

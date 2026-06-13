@@ -34,6 +34,7 @@ from app.catalog.models import (
     CatalogEntryUpdate,
     ExternalPlatformMetadata,
     InvocationCostRecord,
+    PipelinePublishRequest,
     ReassignPayload,
     RecipeDefinition,
     RecipeExecutionRequest,
@@ -201,6 +202,68 @@ async def create_entry(data: CatalogEntryCreate, user: dict = Depends(require_us
         raise
 
     await _audit("created", entry_id, user["id"], {"urn": urn, "kind": data.kind})
+    return db_row_to_entry_dict(row)
+
+
+@router.post("/entries/from-pipeline", status_code=201)
+async def create_entry_from_pipeline(
+    data: PipelinePublishRequest, user: dict = Depends(require_user)
+):
+    """PR4 — publica um pipeline do Estúdio como entry kind='pipeline' (draft).
+
+    Cria a entry referenciando o pipeline (artifact_type='pipeline',
+    artifact_id=pipeline_id) e devolve-a em status='draft'. Daqui segue o
+    lifecycle EXISTENTE na página da entry (submit → approve → publish). O grafo
+    (snapshot em catalog_pipeline_defs) e a execução via execute_pipeline são PR5.
+    """
+    from app.core.database import pipelines_repo
+
+    pipeline = await pipelines_repo.find_by_id(data.pipeline_id)
+    if not pipeline:
+        raise HTTPException(404, "Pipeline não encontrado")
+
+    name = (data.name or pipeline.get("name") or "").strip() or "Pipeline"
+    try:
+        urn = make_urn("pipeline", name, data.version)
+    except ValueError as e:
+        raise HTTPException(422, f"URN inválido: {e}")
+
+    entry_id = str(uuid.uuid4())
+    row = {
+        "id": entry_id,
+        "urn": urn,
+        "name": name,
+        "description": pipeline.get("description") or "",
+        "kind": "pipeline",
+        "artifact_type": "pipeline",
+        "artifact_id": data.pipeline_id,
+        "domain": pipeline.get("domain"),
+        "version": data.version,
+        "status": "draft",
+        "visibility": data.visibility,
+        "visibility_scope": None,
+        "owner_user_id": user["id"],
+        "steward_team": None,
+        "adapter_type": "a2a",
+        # adapter_config guarda só a referência no PR4; o snapshot do grafo é PR5.
+        "adapter_config": json.dumps({"pipeline_id": data.pipeline_id}),
+        "tags": json.dumps([]),
+    }
+    try:
+        await catalog_entries_repo.create(row)
+    except Exception as e:
+        if "duplicate key" in str(e).lower() or "unique" in str(e).lower():
+            raise HTTPException(
+                409,
+                f"Já existe uma publicação para '{name}' versão {data.version}. "
+                f"Use uma versão diferente (ex: {data.version.rsplit('.', 1)[0]}.1).",
+            )
+        raise
+
+    await _audit(
+        "created", entry_id, user["id"],
+        {"urn": urn, "kind": "pipeline", "pipeline_id": data.pipeline_id},
+    )
     return db_row_to_entry_dict(row)
 
 
