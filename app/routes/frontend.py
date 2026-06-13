@@ -13,7 +13,7 @@ PAGES = {
     "/skills": {"template":"pages/skills.html","title":"Skills","section":"skills"},
     "/skills/new": {"template":"pages/skill_form.html","title":"Nova Skill","section":"skills"},
     "/catalog": {"template":"pages/catalog.html","title":"Catálogo","section":"catalog"},
-    "/catalog/detail": {"template":"pages/catalog_detail.html","title":"Detalhe da Entry","section":"catalog"},
+    "/catalog/detail": {"template":"pages/catalog_detail.html","title":"Detalhe da Entrada","section":"catalog"},
     "/catalog/publish": {"template":"pages/catalog_publish.html","title":"Publicar no Catálogo","section":"catalog"},
     "/catalog/queue": {"template":"pages/catalog_queue.html","title":"Fila de Revisão","section":"catalog_queue"},
     "/catalog/inventory": {"template":"pages/catalog_inventory.html","title":"Inventário Regulatório","section":"catalog_inventory"},
