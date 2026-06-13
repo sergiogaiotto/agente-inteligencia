@@ -3000,6 +3000,32 @@ def _build_pipeline_trace_data(
     }
 
 
+def _step_cost_and_tokens(result: dict, agent: dict) -> tuple:
+    """(cost_usd, tokens_used) de um result do execute_interaction (PR7 cost auto-wire).
+
+    Os tokens vivem em result['trace']['tokens'] (input/output/total) e o provider/
+    model EFETIVAMENTE usados em result['trace']['agent_provider'|'agent_model'] — é
+    o MESMO desempacotamento que o executor de recipe faz (_invoke_step). Usar
+    trace['agent_model'] (não agent['model']) reflete o modelo de fato usado (o
+    engine pode rerotear por task_type numa cópia local do agent). Defensivo: trace
+    ausente / preço desconhecido → (0.0, 0).
+    """
+    trace = result.get("trace") or {}
+    tok = trace.get("tokens") or {}
+    ti = int(tok.get("input") or 0)
+    to = int(tok.get("output") or 0)
+    try:
+        from app.core.llm_pricing import compute_cost
+        cost = compute_cost(
+            trace.get("agent_provider") or (agent or {}).get("llm_provider"),
+            trace.get("agent_model") or (agent or {}).get("model"),
+            ti, to,
+        )
+    except Exception:
+        cost = 0.0
+    return float(cost or 0.0), (int(tok.get("total") or 0) or (ti + to))
+
+
 async def execute_pipeline(
     entry_agent_id: str,
     user_input: str,
@@ -3460,6 +3486,8 @@ async def execute_pipeline(
             else:
                 child_interaction_ids.append(iid)
 
+            # PR7 (cost auto-wire): custo/tokens REAIS por step do mesh (helper testável).
+            _step_cost, _step_tokens = _step_cost_and_tokens(result, agent)
             steps.append({
                 "agent_id": agent_id,
                 "agent_name": agent.get("name",""),
@@ -3473,6 +3501,8 @@ async def execute_pipeline(
                 "transitions": result.get("transitions", []),
                 "trace": result.get("trace"),
                 "interaction_id": iid,
+                "tokens_used": _step_tokens,
+                "cost_usd": _step_cost,
                 # Dispatcher: anexos efetivamente entregues a este SA (i>0). Surge
                 # no painel de rastreabilidade — operador vê que o arquivo chegou.
                 **({"dispatched_attachments": _fwd_names} if _fwd_names else {}),
