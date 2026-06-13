@@ -7,6 +7,7 @@ import uuid
 import time
 import json
 import hashlib
+import hmac
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 from app.core.database import envelopes_repo
@@ -37,6 +38,7 @@ class Envelope:
     parent_span_id: str = ""
     origin_agent_id: str = ""
     origin_skill_urn: str = ""
+    origin_workspace: str = ""  # PR8a: namespace da instância de origem (federação)
     target_agent_id: str = ""
     target_skill_urn: str = ""
     intent: Optional[IntentDescriptor] = None
@@ -52,6 +54,78 @@ class Envelope:
     def sign(self):
         payload = json.dumps({"id": self.envelope_id, "target": self.target_agent_id, "skill": self.skill_ref}, sort_keys=True)
         self.signature = hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+    # ── Assinatura HMAC para federação cross-instância (PR8a) ────────────
+    # `sign()` acima é um DIGEST sem segredo (sha256 de {id,target,skill}) — ok
+    # para correlação intra-mesh, mas FORJÁVEL: qualquer um recomputa. Para
+    # confiança entre instâncias, HMAC-SHA256 com um segredo compartilhado por
+    # peer. O payload assinado é EXPLICITAMENTE enumerado (não `asdict`) para que
+    # adicionar campos ao dataclass NUNCA mude silenciosamente a superfície
+    # assinada. PR8b2 liga adicionalmente método+caminho+sha256(body) HTTP.
+
+    _SIG_ALG = "hmac-sha256"
+
+    def _canonical_signing_payload(self) -> str:
+        """JSON determinístico dos campos que AUTORIZAM a delegação (chaves
+        ordenadas, sem espaços). `context` e `intent` entram como hash para não
+        inflar a assinatura.
+
+        ASSINADOS: alvo (target_agent_id, target_skill_urn, skill_ref), ação
+        (intent), dados (context), orçamento (budget), prazo (deadline), origem
+        (origin_workspace), id/nonce (envelope_id), created_at, alg.
+        NÃO assinados de propósito: campos de TRANSPORTE/correlação que não
+        autorizam nada e mudam por hop — trace_id, span_id, parent_span_id,
+        state_pointer, status. PR8b2 liga adicionalmente método+caminho+
+        sha256(body) HTTP (cobre o payload da requisição inteira)."""
+        ctx = json.dumps(self.context or {}, sort_keys=True, separators=(",", ":"))
+        ctx_hash = hashlib.sha256(ctx.encode("utf-8")).hexdigest()
+        intent_obj = asdict(self.intent) if self.intent else {}
+        intent_canon = json.dumps(intent_obj, sort_keys=True, separators=(",", ":"))
+        intent_hash = hashlib.sha256(intent_canon.encode("utf-8")).hexdigest()
+        b = self.budget_remaining or Budget()
+        payload = {
+            "alg": self._SIG_ALG,
+            "envelope_id": self.envelope_id,  # também serve de nonce (único por envelope)
+            "origin_workspace": self.origin_workspace,
+            "target_agent_id": self.target_agent_id,
+            "target_skill_urn": self.target_skill_urn,
+            "skill_ref": self.skill_ref,
+            "intent_sha256": intent_hash,
+            "context_sha256": ctx_hash,
+            "budget": {"tokens": b.tokens, "wall_ms": b.wall_ms, "usd": b.usd},
+            "deadline": self.deadline,
+            "created_at": self.created_at,
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    def sign_hmac(self, secret: str) -> str:
+        """Assina com HMAC-SHA256(segredo) sobre o payload canônico. Grava e
+        devolve a assinatura (hex)."""
+        if not secret:
+            raise ValueError("sign_hmac exige um segredo não vazio")
+        mac = hmac.new(
+            secret.encode("utf-8"),
+            self._canonical_signing_payload().encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        self.signature = mac
+        return mac
+
+    def verify_hmac(self, secret: str, signature: Optional[str] = None) -> bool:
+        """Verifica a assinatura HMAC em tempo constante. Usa `self.signature`
+        se `signature` não for passado. False se o segredo, a assinatura ou
+        qualquer campo canônico divergir."""
+        if not secret:
+            return False
+        candidate = signature if signature is not None else self.signature
+        if not candidate:
+            return False
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            self._canonical_signing_payload().encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(expected, candidate)
 
     def to_dict(self):
         d = asdict(self)
