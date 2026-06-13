@@ -42,7 +42,7 @@
             </div>
             <button @click="snap = !snap" class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] transition-colors"
                     :class="snap ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-600 hover:bg-surface-50'"
-                    title="Alinhar à grade ao arrastar">
+                    title="Mostrar a grade e alinhar os nós a ela ao arrastar">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M3.75 3.75h16.5v16.5H3.75zM3.75 9h16.5M3.75 15h16.5M9 3.75v16.5M15 3.75v16.5"/></svg>
                 Grade
             </button>
@@ -225,7 +225,10 @@
     <!-- ══ CANVAS ══ -->
     <div class="relative flex-1 overflow-hidden bg-surface-50"
          x-ref="vp"
-         style="background-image: radial-gradient(rgba(15,23,42,0.07) 0.7px, transparent 0.7px); background-size: 19px 19px; cursor: grab; touch-action: none"
+         style="cursor: grab; touch-action: none"
+         :style="snap
+            ? { backgroundImage: 'linear-gradient(to right, rgba(11,125,218,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(11,125,218,0.16) 1px, transparent 1px)', backgroundSize: (GRID*scale)+'px '+(GRID*scale)+'px', backgroundPosition: panX+'px '+panY+'px' }
+            : { backgroundImage: 'radial-gradient(rgba(15,23,42,0.07) 0.7px, transparent 0.7px)', backgroundSize: '19px 19px', backgroundPosition: '0 0' }"
          @pointerdown="onCanvasDown($event)" @pointermove="onMove($event)" @pointerup="onUp($event)" @pointerleave="onUp($event)" @wheel.prevent="onWheel($event)">
 
         <!-- banner de replay -->
@@ -321,6 +324,12 @@
                 <p class="text-[14px] text-surface-500 font-medium" x-text="'“' + (selectedPipeline ? selectedPipeline.name : '') + '” ainda não tem agentes'"></p>
                 <p class="text-[12px] text-surface-400 mt-1">Use os filtros no painel à esquerda para incluir agentes neste pipeline.</p>
             </div>
+        </div>
+
+        <!-- dica: pipeline COM agentes mas SEM início definido (sem conexões internas) -->
+        <div x-show="loaded && selectedPipeline && memberNodes.length>0 && lensStart && !lensStart.defined"
+             class="absolute top-3 left-1/2 -translate-x-1/2 z-20 rounded-lg border border-amber-200 bg-amber-50/95 backdrop-blur-sm px-3 py-1.5 text-[11px] text-amber-700 pointer-events-none">
+            Início indefinido — conecte os agentes (arraste da bolinha de saída) para definir por onde o pipeline começa.
         </div>
 
         <!-- legend -->
@@ -713,6 +722,8 @@ function meshFlowPage() {
 
         get renderEdges() {
             const byId = this.nodeById();
+            const ls = this.lensStart;
+            if (ls) byId[ls.node.id] = ls.node;   // resolve geometria das arestas do Início da lente
             const out = [];
             for (const e of this.viewEdges) {
                 const s = byId[e.source], t = byId[e.target];
@@ -886,12 +897,47 @@ function meshFlowPage() {
             if (n.synthetic) return false;                     // esconde o "Início"
             return (this.selectedPipeline.agent_ids || []).includes(n.id);
         },
-        get viewNodes() { return this.nodes.filter(n => this.nodeInLens(n)); },
+        // Nó "Início" SCOPADO ao pipeline (lente): indica POR ONDE o pipeline começa.
+        // Computado (não persistido), ligado às raízes INTERNAS (membro source-nunca-
+        // target nas conexões intra-pipeline). Estados:
+        //  defined   → há raiz: Início → raiz(es) reais (ou, parcial, membros sem incoming).
+        //  undefined → sem conexões internas (raiz indefinida): mostra o nó com dica e
+        //              SEM arestas — não inventa fan-out para todos os membros.
+        // fit() enquadra viewNodes, então o Início à esquerda dos membros entra em tela.
+        get lensStart() {
+            if (!this.selectedPipeline) return null;
+            const ids = new Set(this.selectedPipeline.agent_ids || []);
+            if (ids.size === 0) return null;
+            const byId = this.nodeById();
+            const intra = this.edges.filter(e => e.type !== 'start' && ids.has(e.source) && ids.has(e.target));
+            const incoming = new Set(intra.map(e => e.target));
+            const outgoing = new Set(intra.map(e => e.source));
+            let targets = [...ids].filter(id => outgoing.has(id) && !incoming.has(id));        // raiz real
+            if (targets.length === 0 && intra.length > 0) targets = [...ids].filter(id => !incoming.has(id)); // parcial
+            const defined = targets.length > 0;
+            const anchors = (defined ? targets : [...ids]).map(id => byId[id]).filter(Boolean);
+            if (anchors.length === 0) return null;
+            const W = this.KIND.start.w;
+            const minX = Math.min(...anchors.map(a => a.x));
+            const avgY = anchors.reduce((s, a) => s + a.y, 0) / anchors.length;
+            const node = this._mkNode({ id: '__lens_start__', kind: 'start', name: 'Início',
+                sub: defined ? 'entrada do pipeline' : 'conecte os agentes p/ definir' }, null, true);
+            node.x = minX - (W + 80); node.y = avgY; node.computed = true;
+            const edges = defined ? targets.map(t => ({ id: '__lens_start__->' + t, source: '__lens_start__', target: t, type: 'start', config: '{}' })) : [];
+            return { node, edges, defined };
+        },
+        get viewNodes() {
+            const base = this.nodes.filter(n => this.nodeInLens(n));
+            const ls = this.lensStart;
+            return ls ? [...base, ls.node] : base;
+        },
         get viewEdges() {
             if (!this.selectedPipeline) return this.edges;
             const ids = new Set(this.selectedPipeline.agent_ids || []);
-            // conexões intra-pipeline: AMBAS as pontas membros (exclui synthetic 'start')
-            return this.edges.filter(e => ids.has(e.source) && ids.has(e.target));
+            // conexões intra-pipeline: AMBAS as pontas membros (exclui synthetic 'start' global)
+            const intra = this.edges.filter(e => ids.has(e.source) && ids.has(e.target));
+            const ls = this.lensStart;
+            return (ls && ls.edges.length) ? [...intra, ...ls.edges] : intra;
         },
 
         selectMesh() { this.selectedPipeline = null; this.selected = null; this.$nextTick(() => this.fit()); },
@@ -1183,7 +1229,7 @@ function meshFlowPage() {
         },
 
         // ── drag de nó ──
-        onNodeDown(ev, n) { this._suppressClick = false; this._drag = { n, sx: ev.clientX, sy: ev.clientY, ox: n.x, oy: n.y, moved: false }; },
+        onNodeDown(ev, n) { if (n.id === '__lens_start__') return; this._suppressClick = false; this._drag = { n, sx: ev.clientX, sy: ev.clientY, ox: n.x, oy: n.y, moved: false }; },
         onCanvasDown(ev) { if (this._drag || this.linking) return; this._pan = { sx: ev.clientX, sy: ev.clientY, ox: this.panX, oy: this.panY, moved: false }; },
         onMove(ev) {
             if (this._drag) {
