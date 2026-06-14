@@ -989,7 +989,24 @@
                 </div>
                 <div>
                     <label class="block text-[11px] font-semibold text-surface-600 mb-1">Base URL <span class="text-rose-500">*</span></label>
-                    <input type="url" x-model="adapterForm.base_url" placeholder="https://api.openai.com" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400 font-mono">
+                    <div class="flex gap-2">
+                        <input type="url" x-model="adapterForm.base_url" placeholder="https://api.openai.com" class="flex-1 rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400 font-mono">
+                        <button @click="discoverAdapter()" :disabled="discovering || !adapterForm.base_url"
+                                title="Detecta o tipo da plataforma pela URL e pré-preenche a conexão"
+                                class="shrink-0 rounded-lg border border-brand-300 bg-brand-50 px-2 py-1.5 text-[11px] font-semibold text-brand-700 hover:bg-brand-100 disabled:opacity-50">
+                            <span x-text="discovering ? 'Detectando…' : '🔎 Descobrir'"></span>
+                        </button>
+                    </div>
+                    <template x-if="discoverResult">
+                        <div class="mt-1 text-[10px]" :class="(discoverResult.detected && discoverResult.detected.length) ? 'text-emerald-700' : 'text-amber-700'">
+                            <template x-if="discoverResult.detected && discoverResult.detected.length">
+                                <span>✓ <span x-text="discoverResult.detected.map(d => d.detail).join(' · ')"></span></span>
+                            </template>
+                            <template x-if="!(discoverResult.detected && discoverResult.detected.length)">
+                                <span x-text="discoverResult.error || 'nada detectado'"></span>
+                            </template>
+                        </div>
+                    </template>
                 </div>
                 <div>
                     <label class="block text-[11px] font-semibold text-surface-600 mb-1">Path</label>
@@ -1110,6 +1127,9 @@ function catalogDetailPage(entryId) {
         adapterSaving: false,
         adapterTesting: false,
         adapterTestResult: null,
+        // Discovery por URL (PR7)
+        discovering: false,
+        discoverResult: null,
         // Conformidade / DAST para IA (PR3)
         conformanceReport: null,
         conformanceRunning: false,
@@ -1492,6 +1512,35 @@ function catalogDetailPage(entryId) {
             };
             this.adapterTestResult = null;
             this.adapterModalOpen = true;
+        },
+
+        async discoverAdapter() {
+            this.discovering = true;
+            this.discoverResult = null;
+            try {
+                const body = { base_url: this.adapterForm.base_url };
+                if (this.adapterForm.secret) body.secret = this.adapterForm.secret;
+                const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/external-discover', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                if (!r.ok) { const e = await r.json(); throw new Error(e.detail || JSON.stringify(e)); }
+                const res = await r.json();
+                this.discoverResult = res;
+                // pré-preenche a config a partir da sugestão
+                const s = res.suggested;
+                if (s) {
+                    this.adapterForm.mode = s.mode || this.adapterForm.mode;
+                    if (s.path) this.adapterForm.path = s.path;
+                    if (s.model) this.adapterForm.model = s.model;
+                    if (s.auth_type) this.adapterForm.auth_type = s.auth_type;
+                    showToast('Conexão pré-preenchida pelo discovery');
+                }
+            } catch (e) {
+                this.discoverResult = { detected: [], error: e.message };
+            }
+            this.discovering = false;
         },
 
         _adapterProbePayload() {
