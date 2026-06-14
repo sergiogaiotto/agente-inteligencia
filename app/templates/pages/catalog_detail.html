@@ -390,6 +390,59 @@
                         </div>
                     </template>
                 </div>
+
+                <!-- Conformidade / DAST para IA (PR3) -->
+                <div class="rounded-xl border border-surface-200 bg-white p-4 mt-3">
+                    <div class="flex items-start justify-between gap-3 mb-2">
+                        <div>
+                            <h3 class="text-[12px] font-bold text-brand-900 uppercase tracking-wider">Conformidade <span class="text-surface-400 normal-case">(DAST para IA)</span></h3>
+                            <p class="text-[11px] text-surface-500 mt-0.5">Bateria de probes contra a plataforma: disponibilidade, latência, autenticação obrigatória, resistência a prompt-injection e coerência com a Divulgação de Capacidade. Cada check faz 1 chamada real (custo do vendor).</p>
+                        </div>
+                        <button x-show="canMutate && adapterConfig.base_url" @click="runConformance()" :disabled="conformanceRunning"
+                                title="Roda a suíte de conformidade contra o vendor (billing real)"
+                                class="rounded-lg bg-brand-500 px-3 py-1 text-[11px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 shrink-0">
+                            <span x-text="conformanceRunning ? 'Rodando…' : '🛡️ Rodar suíte'"></span>
+                        </button>
+                    </div>
+                    <template x-if="!adapterConfig.base_url">
+                        <p class="text-[11px] text-surface-400 italic">Configure a conexão acima para rodar a suíte.</p>
+                    </template>
+                    <template x-if="adapterConfig.base_url && !conformanceReport && !conformanceRunning">
+                        <p class="text-[11px] text-surface-400 italic">Nenhuma suíte rodada ainda.</p>
+                    </template>
+                    <template x-if="conformanceReport">
+                        <div>
+                            <div class="flex items-center gap-3 flex-wrap mb-3">
+                                <span class="rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-wide" :class="sealClass(conformanceReport.seal)" x-text="sealLabel(conformanceReport.seal)"></span>
+                                <span class="text-[11px] text-surface-500">
+                                    <span class="text-emerald-700 font-semibold" x-text="(conformanceReport.summary?.pass||0) + ' ✓'"></span> ·
+                                    <span class="text-amber-700 font-semibold" x-text="(conformanceReport.summary?.warn||0) + ' ⚠'"></span> ·
+                                    <span class="text-rose-700 font-semibold" x-text="(conformanceReport.summary?.fail||0) + ' ✗'"></span> ·
+                                    <span class="text-surface-400" x-text="(conformanceReport.summary?.skip||0) + ' –'"></span>
+                                </span>
+                                <span class="text-[10px] text-surface-400" x-text="'rodado ' + formatDate(conformanceReport.ran_at)"></span>
+                            </div>
+                            <div class="space-y-1.5">
+                                <template x-for="ck in (conformanceReport.checks||[])" :key="ck.key">
+                                    <div class="flex items-start gap-2 rounded-lg border border-surface-100 bg-surface-50/50 p-2">
+                                        <span class="text-[13px] leading-none mt-0.5" :class="verdictColor(ck.verdict)" x-text="verdictIcon(ck.verdict)"></span>
+                                        <div class="flex-1 min-w-0">
+                                            <div class="flex items-center gap-1.5 flex-wrap">
+                                                <span class="text-[12px] font-semibold text-brand-900" x-text="ck.title"></span>
+                                                <span class="rounded px-1 py-0.5 text-[8px] font-bold uppercase bg-surface-100 text-surface-500" x-text="ck.category"></span>
+                                                <span x-show="ck.severity==='high'" class="rounded px-1 py-0.5 text-[8px] font-bold uppercase bg-rose-50 text-rose-600">alta</span>
+                                                <span x-show="ck.heuristic" class="rounded px-1 py-0.5 text-[8px] font-bold uppercase bg-amber-50 text-amber-600" title="indicador, não prova formal">heurístico</span>
+                                            </div>
+                                            <p class="text-[11px] text-surface-600 mt-0.5" x-text="ck.reason"></p>
+                                            <p x-show="ck.evidence" class="text-[10px] text-surface-400 font-mono mt-0.5 truncate" x-text="'« ' + ck.evidence + ' »'"></p>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                            <p class="text-[10px] text-surface-400 mt-2 italic">Checks <strong>heurísticos</strong> (injeção/disclosure) são indicadores, não prova formal. SLA e autenticação são determinísticos.</p>
+                        </div>
+                    </template>
+                </div>
             </div>
 
             <!-- Tab content: Recipe Steps (apenas kind=recipe) -->
@@ -1050,6 +1103,9 @@ function catalogDetailPage(entryId) {
         adapterSaving: false,
         adapterTesting: false,
         adapterTestResult: null,
+        // Conformidade / DAST para IA (PR3)
+        conformanceReport: null,
+        conformanceRunning: false,
         // Recipe (Onda 3)
         recipe: null,
         // Pipeline (PR6) — snapshot do grafo (read-only) p/ kind=pipeline
@@ -1186,6 +1242,11 @@ function catalogDetailPage(entryId) {
                         try {
                             const ar = await fetch('/api/v1/catalog/entries/' + this.entryId + '/external-adapter');
                             if (ar.ok) { const j = await ar.json(); this.adapterConfig = j.probe || {}; }
+                        } catch {}
+                        // Conformidade (último relatório, se houver)
+                        try {
+                            const cr = await fetch('/api/v1/catalog/entries/' + this.entryId + '/conformance');
+                            if (cr.ok) this.conformanceReport = await cr.json();
                         } catch {}
                     }
 
@@ -1489,6 +1550,24 @@ function catalogDetailPage(entryId) {
             }
             this.adapterTesting = false;
         },
+
+        // ─── Conformidade / DAST para IA (PR3) ─────────────────────
+        async runConformance() {
+            this.conformanceRunning = true;
+            try {
+                const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/conformance', { method: 'POST' });
+                if (!r.ok) { const e = await r.json(); throw new Error(e.detail || JSON.stringify(e)); }
+                this.conformanceReport = await r.json();
+                showToast('Suíte concluída: ' + this.sealLabel(this.conformanceReport.seal));
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+            this.conformanceRunning = false;
+        },
+        sealLabel(s) { return ({conforme:'✓ Conforme', parcial:'⚠ Parcial', divergente:'✗ Divergente'})[s] || s; },
+        sealClass(s) { return ({conforme:'bg-emerald-50 text-emerald-700', parcial:'bg-amber-50 text-amber-700', divergente:'bg-rose-50 text-rose-700'})[s] || 'bg-surface-100 text-surface-500'; },
+        verdictIcon(v) { return ({pass:'✓', warn:'⚠', fail:'✗', skip:'–'})[v] || '·'; },
+        verdictColor(v) { return ({pass:'text-emerald-600', warn:'text-amber-600', fail:'text-rose-600', skip:'text-surface-400'})[v] || 'text-surface-400'; },
 
         contractBadgeClass(s) {
             return ({
