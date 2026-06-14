@@ -240,14 +240,20 @@
                         </a>
                     </div>
                     <div x-show="meshSubmenuOpen && !sidebarCollapsed" class="ml-4 border-l border-surface-200 pl-2 space-y-0.5 mt-0.5">
-                        <a href="/mesh/flow" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if request.url.path == '/mesh/flow' %}active{% endif %}">
-                            <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="5.5" cy="6" r="2"/><circle cx="5.5" cy="18" r="2"/><circle cx="18.5" cy="12" r="2"/><path d="M7.5 6.8l9 4.2m-9 6.2l9-4.2"/></svg>
-                            <span>Fluxograma de agentes</span>
-                        </a>
-                        <a href="/workspace" id="tour-nav-workspace" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if section == 'workspace' %}active{% endif %}">
-                            <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242"/></svg>
-                            <span>Workspace</span>
-                        </a>
+                        <div class="relative" id="tour-nav-fluxograma">
+                            <a href="/mesh/flow" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if request.url.path == '/mesh/flow' %}active{% endif %}">
+                                <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="5.5" cy="6" r="2"/><circle cx="5.5" cy="18" r="2"/><circle cx="18.5" cy="12" r="2"/><path d="M7.5 6.8l9 4.2m-9 6.2l9-4.2"/></svg>
+                                <span>Fluxograma de agentes</span>
+                            </a>
+                            <button @click.prevent.stop="openHelp('mesh')" type="button" class="help-btn absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[9px] font-bold hover:bg-brand-100" title="Ajuda desta página">?</button>
+                        </div>
+                        <div class="relative">
+                            <a href="/workspace" id="tour-nav-workspace" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if section == 'workspace' %}active{% endif %}">
+                                <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242"/></svg>
+                                <span>Workspace</span>
+                            </a>
+                            <button @click.prevent.stop="openHelp('workspace')" type="button" class="help-btn absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[9px] font-bold hover:bg-brand-100" title="Ajuda desta página">?</button>
+                        </div>
                     </div>
                 </div>
                 <div class="relative" id="tour-nav-tools">
@@ -274,11 +280,12 @@
                     <button @click="openHelp('api_connectors')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100">?</button>
                 </div>
 
-                <div class="relative">
+                <div class="relative" id="tour-nav-federation">
                     <a href="/federation" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'federation' %}active{% endif %}">
                         <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 21a9 9 0 100-18 9 9 0 000 18zm0 0c2.5 0 4.5-4.03 4.5-9S14.5 3 12 3m0 18c-2.5 0-4.5-4.03-4.5-9S9.5 3 12 3M3.6 9h16.8M3.6 15h16.8"/></svg>
                         <span x-show="!sidebarCollapsed">Federação</span>
                     </a>
+                    <button @click="openHelp('federation')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100" title="Ajuda desta página">?</button>
                 </div>
 
                 <div class="px-2 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-surface-400" x-show="!sidebarCollapsed">Ciclo de Vida</div>
@@ -898,16 +905,17 @@
                 {el:'tour-nav-dashboard', title:'Dashboard', description:'O raio-X da plataforma. Em 5 segundos você vê quantos agents estão ativos, quantas interações rodaram nas últimas 24h e qual o estado geral. Use como ponto de partida do dia.'},
                 {el:'tour-nav-agents', title:'Agentes', description:'Os "trabalhadores" da plataforma. Cada agent combina um prompt, um modelo de linguagem e (opcionalmente) ferramentas. Aqui você cria, edita, duplica e invoca — versionado, rastreável, sem código.'},
                 {el:'tour-nav-skills', title:'Skills', description:'Competências reutilizáveis em arquivos SKILL.md. Define o passo-a-passo, quais ferramentas usar e o formato da resposta. A mesma skill serve em vários agents — garante consistência sem replicar lógica.'},
-                {el:'tour-nav-catalog', title:'Catálogo', description:'Marketplace interno da empresa: agents, skills, recipes (composições) e plataformas externas aprovadas (ChatGPT, Cursor). Cada entry passa por revisão Root antes de ficar disponível — governança via etiqueta nutricional.'},
-                {el:'tour-nav-catalog-queue', title:'Fila de Revisão', description:'Onde Root (e só Root) revisa e aprova submissões do Catálogo. Pré-checks automáticos rodam no submit; aqui você vê o relatório e decide aprovar, rejeitar ou pedir mudanças.', optional: true},
+                {el:'tour-nav-catalog', title:'Catálogo', description:'Marketplace interno da empresa: agents, skills, recipes, pipelines (1ª classe, com status Rascunho/Em revisão/Publicada) e plataformas externas aprovadas (ChatGPT, Cursor). Pipelines publicados são invocáveis selados via POST /api/v1/pipelines/{id}/invoke. Cada entry passa por revisão Root — governança via etiqueta nutricional.'},
+                {el:'tour-nav-catalog-queue', title:'Fila de Revisão', description:'Onde Root revisa e aprova submissões do Catálogo. Pré-verificações automáticas rodam no submit; aqui você vê o relatório e decide aprovar, rejeitar ou pedir mudanças.', optional: true},
                 {el:'tour-nav-catalog-inventory', title:'Inventário Regulatório', description:'Inventário compliance da IA na empresa. Quais agents/skills processam PII, dados regulados, têm soberania específica. Exporta CSV para auditoria. Visível só para Root.', optional: true},
-                {el:'tour-nav-catalog-stewardship', title:'Curadoria', description:'Painel para curador de área — você vê os agents do seu domínio (fiscal, RH, jurídico…) e identifica órfãos, parados ou pouco confiáveis. Aberto a quem tem domains, não só Root.', optional: true},
-                {el:'tour-nav-catalog-cost', title:'Custo & Consumo', description:'Quanto cada agent custou em USD, por quem, em que dia. Base para chargeback interno. Anomalias (pico, limite global) aparecem como banner vermelho automático.'},
+                {el:'tour-nav-catalog-stewardship', title:'Curadoria', description:'Painel para curador de área — você vê os agents e pipelines do seu domínio (fiscal, RH, jurídico…) e identifica órfãos, parados ou pouco confiáveis. Aberto a quem tem domains, não só Root.', optional: true},
+                {el:'tour-nav-catalog-cost', title:'Custo & Consumo', description:'Quanto cada agent, pipeline e skill custou em USD, por quem, em que dia, em qual modelo. Base para chargeback interno. Anomalias (pico, limite global) aparecem como alerta automático.'},
                 {el:'tour-nav-workspace', title:'Workspace', description:'O "chat" da plataforma — onde você invoca um agent e vê a resposta ao vivo com cada etapa da execução: recuperação de evidência, raciocínio, verificação. É a tela mais usada no dia-a-dia.'},
-                {el:'tour-nav-mesh', title:'AI Mesh', description:'Topologia visual de como os agents se conectam. Você desenha pipelines sequenciais (A→B→C), paralelos (fan-out) ou condicionais. Agents pass-through são pulados automaticamente.'},
+                {el:'tour-nav-mesh', title:'AI Mesh — Fluxograma de agentes', description:'Editor visual ÚNICO do AI Mesh: desenhe pipelines (sequenciais A→B→C, paralelos/fan-out ou condicionais), edite agentes, organize em pipelines, gerencie o ciclo de vida e publique no Catálogo. Agents pass-through são ignorados automaticamente. Invoque um pipeline via POST /api/v1/pipelines/{id}/invoke.'},
                 {el:'tour-nav-tools', title:'Ferramentas (MCP)', description:'Catálogo de ferramentas externas que os agents podem chamar — consultar ERP, validar CPF/CNPJ, ler banco de dados. Falamos com tools via protocolo MCP padronizado.'},
                 {el:'tour-nav-evidence', title:'Bases de Conhecimento', description:'Onde você cadastra os documentos que o agent vai consultar para responder com fonte: manuais, regulamentos, FAQs. Busca híbrida BM25 + vetorial. Sem isso, o LLM "inventa" do treinamento.'},
                 {el:'tour-nav-api-connectors', title:'API Connectors', description:'Registre APIs externas (CRM, ERP, e-mail, etc.) para que os agents invoquem via HTTP. Builder visual para testar antes, histórico de chamadas, health check periódico.'},
+                {el:'tour-nav-federation', title:'Federação A2A', description:'Compartilhe agentes e pipelines entre organizações com segurança. Como provider você publica um manifest + ingress assinado; como consumer você puxa peers remotos e invoca de forma assinada e auditada. Desligada por padrão (fail-closed sem chave).', optional: true},
                 {el:'tour-nav-harness', title:'Harness de Avaliação', description:'O "CI/CD de qualidade". Antes de promover uma release, o Harness roda casos do Golden Dataset e decide se passou. Gate automático com thresholds calibráveis.'},
                 {el:'tour-nav-releases', title:'Releases', description:'Versionamento atômico da configuração inteira (modelo + prompt + índice + policy). Promoção gated staging → canary → production. Detecção de drift e rollback automático.'},
                 {el:'tour-nav-quality', title:'Qualidade', description:'A "nota" que a plataforma dá para cada resposta. Verifier multi-dimensional avalia factuality, completeness, tom e safety — 4 dimensões. Detecta drift e alucinação cedo.'},

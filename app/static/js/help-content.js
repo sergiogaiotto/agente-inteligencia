@@ -61,13 +61,13 @@ window.HELP_CONTENT = {
         kind: 'fundamentos',
         title: 'Fundamentos',
         body: `
-          <p>Agentes não vivem soltos — eles fazem parte de uma <strong>topologia em 3 camadas</strong>:</p>
+          <p>Agentes não vivem soltos — eles fazem parte de uma <strong>rede em 3 camadas</strong>:</p>
           <ul>
-            <li><strong>Subagent (SA)</strong> — o nível operacional. Executa uma tarefa específica (responder dúvida fiscal, classificar e-mail, gerar resumo). Cada SA é especialista num pedaço pequeno.</li>
-            <li><strong>Router (AR)</strong> — recebe um pedido genérico e decide qual SA é o mais adequado. Pense num supervisor de fila.</li>
-            <li><strong>Orchestrator (AOBD)</strong> — coordena múltiplos AR + SA para tarefas compostas. Pense num gerente de projeto.</li>
+            <li><strong>Especialista / Subagente (SA)</strong> — o nível operacional. Executa uma tarefa específica (responder dúvida fiscal, classificar e-mail, gerar resumo). Cada Especialista cuida de um pedaço pequeno.</li>
+            <li><strong>Triagem / Roteador (AR)</strong> — recebe um pedido genérico e decide qual Especialista é o mais adequado. Pense num supervisor de fila.</li>
+            <li><strong>Maestro / Orquestrador (AOBD)</strong> — coordena múltiplas Triagens + Especialistas para tarefas compostas. Pense num gerente de projeto.</li>
           </ul>
-          <p>A maioria dos agentes que você cria serão <strong>Subagents</strong>. Roteador e Orquestrador são usados quando há complexidade que justifique — não comece por eles.</p>
+          <p>A maioria dos agentes que você cria serão <strong>Especialistas</strong>. Triagem e Maestro são usados quando há complexidade que justifique — não comece por eles.</p>
           <p>Cada invocação de agent passa por uma <strong>máquina de estados</strong> internamente: intake → policy check → execução → verificação → resposta. Isso garante que toda interação tem rastro de auditoria, métricas de custo, e (quando habilitado) verificação de evidência das respostas.</p>
         `
       },
@@ -362,7 +362,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   workspace: {
     title: 'Workspace',
-    summary: 'O "chat" onde você invoca um agent ou pipeline e acompanha cada etapa da execução ao vivo.',
+    summary: 'O "chat" onde você invoca um agent, pipeline ou recipe publicado e acompanha cada etapa da execução ao vivo.',
     sections: [
       {
         kind: 'concept',
@@ -428,18 +428,18 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   },
 
   // ═════════════════════════════════════════════════════════════════
-  // /mesh — AI Mesh (topologia de pipelines)
+  // /mesh — AI Mesh (Fluxograma de agentes + Estúdio de Pipelines)
   // ═════════════════════════════════════════════════════════════════
   mesh: {
-    title: 'AI Mesh',
-    summary: 'Visualização e desenho da rede de agents — quem chama quem, em que ordem, sob qual condição.',
+    title: 'AI Mesh — Fluxograma de agentes',
+    summary: 'Editor visual único da rede de agents (o Fluxograma): quem chama quem, em que ordem e sob qual condição. Também é onde você monta pipelines e os publica no Catálogo.',
     sections: [
       {
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>O AI Mesh é a "rede" de agents. Quando você precisa que uma tarefa passe por mais de um agent (extrair → validar → resumir), aqui é onde você desenha esse fluxo visualmente.</p>
-          <p>Cada nó é um agent. Cada aresta é uma chamada. O Maestro executa o fluxo respeitando ordem e dependências.</p>
+          <p>O AI Mesh é a "rede" de agents. O <strong>Fluxograma de agentes</strong> (<code>/mesh/flow</code>) é o editor ÚNICO dessa rede — a antiga página "Topologia de conexões" foi aposentada. Quando uma tarefa precisa passar por mais de um agent (extrair → validar → resumir), aqui é onde você desenha o fluxo visualmente.</p>
+          <p>Cada nó é um agent. Cada aresta é uma chamada. Você também agrupa nós em <strong>pipelines</strong> (entidade de 1ª classe, com ciclo de vida) e os publica no Catálogo como <code>kind=pipeline</code> — invocáveis selados via <code>POST /api/v1/pipelines/{id}/invoke</code>.</p>
         `
       },
       {
@@ -460,7 +460,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'casos_de_uso',
         title: 'Casos de uso',
         items: [
-          { title: 'Pipeline ETL com IA', body: 'Agent 1 extrai dados de um e-mail. Agent 2 valida CNPJ via tool MCP. Agent 3 gera resumo executivo. Sequencial, definido no Mesh, invocado por uma chamada só.' },
+          { title: 'Pipeline ETL com IA (publicável)', body: 'No Fluxograma: Agent 1 extrai dados de um e-mail → Agent 2 valida CNPJ via tool MCP → Agent 3 gera resumo executivo. Salve como pipeline, publique no Catálogo e invoque por uma chamada só: POST /api/v1/pipelines/{id}/invoke.' },
           { title: 'Comparar múltiplos modelos', body: 'Fan-out: mesma pergunta para 3 agents idênticos exceto pelo modelo (gpt-4o, claude, sabia-4). Você vê 3 respostas em paralelo para comparar qualidade.' },
           { title: 'Roteamento por idioma', body: 'Agent classificador detecta o idioma. Se PT → agent A. Se EN → agent B. Condicional baseado no resultado do classificador.' }
         ]
@@ -469,12 +469,56 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
-          { title: 'Mesh ≠ CAR ≠ Recipe', severity: 'info', body: 'Mesh = pipeline desenhado visualmente (dev define). CAR = catálogo para roteamento automático (AOBD decide). Recipe = composição declarativa no Catálogo (sem dev, declarativo, publicável). 3 conceitos distintos.' },
+          { title: 'Mesh / Pipeline ≠ CAR ≠ Recipe', severity: 'info', body: 'Fluxograma/Pipeline = fluxo desenhado visualmente (você define), publicável no Catálogo como kind=pipeline. CAR = catálogo para roteamento automático (o Maestro decide). Recipe = composição declarativa no Catálogo. Conceitos distintos.' },
           { title: 'Pass-through sumiu da execução', severity: 'warning', body: 'Se um agent "desapareceu" do log, provavelmente está pass-through. Adicione skill ou prompt customizado para ativar.' }
         ]
       }
     ],
     related: ['agents', 'catalog', 'workspace']
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // /federation — Federação A2A
+  // ═════════════════════════════════════════════════════════════════
+  federation: {
+    title: 'Federação A2A',
+    summary: 'Compartilhe agentes e pipelines entre organizações: o provider publica manifest + ingress assinado; o consumer puxa peers e invoca remoto de forma assinada e auditada.',
+    sections: [
+      {
+        kind: 'concept',
+        title: 'O que é',
+        body: `
+          <p>Federação conecta dois ou mais Maestros (A2A — Agent-to-Agent). Uma organização <strong>provider</strong> expõe capacidades selecionadas; uma <strong>consumer</strong> as descobre e invoca remotamente — toda chamada é assinada e auditada (W3C Trace Context).</p>
+          <p>Vem <strong>desligada por padrão</strong> e falha fechada (fail-closed) sem <code>MAESTRO_SECRET_KEY</code> configurada.</p>
+        `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Fundamentos',
+        body: `
+          <p><strong>Provider (egress de capacidade):</strong> publica um manifest em <code>/.well-known/maestro-federation.json</code> e expõe um ingress assinado <code>POST /federation/invoke</code> (verificação HMAC + proteção de replay + execução selada).</p>
+          <p><strong>Consumer (ingestão):</strong> registra peers (segredos cifrados), faz <code>sync</code> para puxar o manifest + entries remotas e invoca via <code>/federation/remote/{id}/invoke</code>. Uma guarda SSRF protege contra alvos internos.</p>
+          <p>O custo da chamada remota é atestado pelo peer e limitado (clamp) na origem.</p>
+        `
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Casos de uso',
+        items: [
+          { title: 'Disponibilizar um pipeline para um parceiro', body: 'Como provider, publique a capability e gere as credenciais. O parceiro registra você como peer e invoca o pipeline remotamente — assinado e auditado.' },
+          { title: 'Consumir um agente de outra org', body: 'Como consumer, registre o peer, rode o sync para descobrir as capabilities e invoque dentro do seu próprio fluxo. O custo é atestado pela origem.' }
+        ]
+      },
+      {
+        kind: 'pegadinhas',
+        title: 'Pegadinhas',
+        items: [
+          { title: 'Desligada por padrão', severity: 'warning', body: 'Sem MAESTRO_SECRET_KEY, a federação falha fechada (nada entra nem sai). Configure a chave antes de registrar peers.' },
+          { title: 'Seal de execução é opt-in', severity: 'info', body: 'A execução federada é selada ao subgrafo declarado na capability — não vaza para o mesh global.' }
+        ]
+      }
+    ],
+    related: ['mesh', 'catalog', 'api_connectors']
   },
 
   // ═════════════════════════════════════════════════════════════════
