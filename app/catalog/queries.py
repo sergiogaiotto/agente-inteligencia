@@ -144,6 +144,63 @@ async def get_entry_adapter_raw(entry_id: str) -> dict:
     return cfg if isinstance(cfg, dict) else {}
 
 
+# ─── Conformance reports (PR3 — DAST para IA) ─────────────────────
+
+
+def _normalize_conformance_row(r) -> dict:
+    d = dict(r)
+    for k in ("checks", "summary"):
+        v = d.get(k)
+        if isinstance(v, str):
+            try:
+                d[k] = json.loads(v) if v else ([] if k == "checks" else {})
+            except json.JSONDecodeError:
+                d[k] = [] if k == "checks" else {}
+    return d
+
+
+async def save_conformance_report(
+    *,
+    entry_id: str,
+    seal: str,
+    checks: list,
+    summary: dict,
+    ran_by_user_id: str,
+) -> dict:
+    """Persiste um relatório de conformidade e retorna o row normalizado."""
+    import uuid
+    rid = str(uuid.uuid4())
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        r = await con.fetchrow(
+            """
+            INSERT INTO catalog_conformance_reports
+              (id, entry_id, seal, checks, summary, ran_by_user_id)
+            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+            RETURNING id, entry_id, seal, checks, summary, ran_by_user_id, ran_at
+            """,
+            rid, entry_id, seal, json.dumps(checks), json.dumps(summary), ran_by_user_id,
+        )
+    return _normalize_conformance_row(r)
+
+
+async def get_latest_conformance(entry_id: str) -> Optional[dict]:
+    """Último relatório de conformidade da entry (ou None)."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        r = await con.fetchrow(
+            """
+            SELECT id, entry_id, seal, checks, summary, ran_by_user_id, ran_at
+            FROM catalog_conformance_reports
+            WHERE entry_id=$1
+            ORDER BY ran_at DESC
+            LIMIT 1
+            """,
+            entry_id,
+        )
+    return _normalize_conformance_row(r) if r else None
+
+
 # ─── List com visibility-awareness (SQL nativo) ───────────────────
 
 

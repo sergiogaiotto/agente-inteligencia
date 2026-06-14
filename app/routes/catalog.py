@@ -58,6 +58,7 @@ from app.catalog.queries import (
     get_execution,
     get_entry_adapter_raw,
     get_external_metadata,
+    get_latest_conformance,
     get_recipe,
     is_root,
     list_costs_raw,
@@ -67,11 +68,13 @@ from app.catalog.queries import (
     list_submissions_for_review,
     list_visible_entries,
     record_invocation_cost,
+    save_conformance_report,
     update_entry_adapter,
     upsert_disclosure,
     upsert_external_metadata,
     upsert_recipe,
 )
+from app.catalog.conformance import run_conformance
 from app.catalog.external_probe import run_probe
 from app.core.crypto import encrypt_secret
 from app.catalog.urn import make_urn, parse_urn
@@ -984,6 +987,67 @@ async def probe_external_endpoint(
         "is_sandbox": True,
         "started_at": _started_iso(execution),
     }
+
+
+@router.get("/entries/{entry_id}/conformance")
+async def get_conformance_endpoint(entry_id: str, user: dict = Depends(require_user)):
+    """PR3 — último relatório de conformidade (DAST para IA) da plataforma externa.
+    Visível para quem vê a entry. 404 se kind != external_platform ou sem relatório."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if not can_user_see(user, entry):
+        raise HTTPException(404, "Entry não encontrada")
+    if entry.get("kind") != "external_platform":
+        raise HTTPException(404, "Conformidade só se aplica a kind='external_platform'")
+    report = await get_latest_conformance(entry_id)
+    if not report:
+        raise HTTPException(404, "Nenhum relatório de conformidade ainda — rode a suíte")
+    return report
+
+
+@router.post("/entries/{entry_id}/conformance")
+async def run_conformance_endpoint(entry_id: str, user: dict = Depends(require_user)):
+    """PR3 — roda a Suíte de Conformidade ("DAST para IA") contra a plataforma
+    externa: bateria de probes (disponibilidade/latência/auth/injeção/disclosure),
+    agrega num selo (conforme/parcial/divergente) e persiste o relatório.
+
+    Owner/root, kind='external_platform', exige conexão configurada. Síncrono:
+    roda os probes concorrentes e devolve o relatório (cada check faz 1 chamada
+    real ao vendor — billing do cliente)."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if entry.get("kind") != "external_platform":
+        raise HTTPException(422, "Conformidade só se aplica a kind='external_platform'")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem rodar a suíte de conformidade")
+
+    raw_cfg = await get_entry_adapter_raw(entry_id)
+    probe_cfg = raw_cfg.get("probe") if isinstance(raw_cfg, dict) else None
+    if not isinstance(probe_cfg, dict) or not probe_cfg.get("base_url"):
+        raise HTTPException(
+            422,
+            "Conexão não configurada — configure o adapter (base_url) antes de rodar a suíte",
+        )
+    secret = probe_cfg.get("secret_cipher") or ""
+    disclosure = await get_disclosure(entry_id)
+
+    result = await run_conformance(config=probe_cfg, secret=secret, disclosure=disclosure)
+    report = await save_conformance_report(
+        entry_id=entry_id,
+        seal=result["seal"],
+        checks=result["checks"],
+        summary=result["summary"],
+        ran_by_user_id=user["id"],
+    )
+    await _audit("external_conformance_ran", entry_id, user["id"], {
+        "seal": result["seal"],
+        "summary": result["summary"],
+    })
+    return report
 
 
 # ═════════════════════════════════════════════════════════════════

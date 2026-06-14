@@ -709,6 +709,26 @@ CREATE TABLE IF NOT EXISTS catalog_pipeline_defs (
 CREATE INDEX IF NOT EXISTS idx_catalog_pipeline_defs_root ON catalog_pipeline_defs(root_agent_id);
 
 -- ═══════════════════════════════════════════════════════════════
+-- Conformance Reports (PR3 — "DAST para IA") — resultado de rodar a suíte
+-- de conformidade contra uma Plataforma Externa (kind='external_platform').
+-- Cada relatório agrega N checks (availability/latency/auth/injection/disclosure)
+-- num selo (conforme|parcial|divergente). 1:N com a entry; histórico por ran_at.
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS catalog_conformance_reports (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL REFERENCES catalog_entries(id) ON DELETE CASCADE,
+    seal TEXT NOT NULL CHECK(seal IN ('conforme','parcial','divergente')),
+    -- checks: [{key, category, severity, verdict:pass|warn|fail|skip, title, reason, evidence}]
+    checks JSONB NOT NULL DEFAULT '[]',
+    -- summary: {pass, warn, fail, skip, total}
+    summary JSONB NOT NULL DEFAULT '{}',
+    ran_by_user_id TEXT NOT NULL,
+    ran_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_conformance_entry
+    ON catalog_conformance_reports(entry_id, ran_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════
 -- Onda Tabular — promoção de CSV/XLSX a tabela consultável via SQL.
 -- Metadata em Postgres; dados ficam em DuckDB embarcado (data/tabular/).
 -- Skills consomem via seção `## Data Tables` no SKILL.md (declarative,
