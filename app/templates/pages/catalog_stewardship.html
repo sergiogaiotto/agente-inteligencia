@@ -13,7 +13,7 @@
         <div class="flex items-start justify-between gap-3">
             <div>
                 <h2 class="text-[18px] font-bold text-brand-900">Painel de Curadoria</h2>
-                <p class="text-[12px] text-surface-400 mt-0.5">Entries agrupadas por área responsável. Detecta órfãs (owner inativo), entries paradas (30+ dias sem uso) e baixa confiabilidade.</p>
+                <p class="text-[12px] text-surface-400 mt-0.5">Entradas agrupadas por área responsável. Detecta órfãs (dono inativo), entradas paradas (30+ dias sem uso) e baixa confiabilidade.</p>
             </div>
             <button @click="load()" :disabled="loading" class="inline-flex items-center gap-2 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] font-medium text-brand-900 hover:border-brand-300">
                 <svg class="w-3.5 h-3.5" :class="loading ? 'animate-spin' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
@@ -32,7 +32,7 @@
 
     <template x-if="!forbidden && !viewerIsRoot && viewerDomains.length === 0">
         <div class="rounded-xl border-2 border-dashed border-amber-200 bg-amber-50/30 p-10 text-center">
-            <p class="text-[14px] font-semibold text-amber-800 mb-1">Você não é steward de nenhuma área</p>
+            <p class="text-[14px] font-semibold text-amber-800 mb-1">Você não é curador de nenhuma área</p>
             <p class="text-[12px] text-surface-500 mb-3 max-w-md mx-auto">Para ver entradas em curadoria, peça ao Root para associar você a um ou mais domínios (campo <code class="bg-white px-1 rounded">domains</code> no usuário).</p>
             <a href="/catalog" class="text-[12px] text-brand-600 hover:underline">Voltar ao catálogo</a>
         </div>
@@ -73,7 +73,7 @@
                         :disabled="totals.orphan === 0">
                     <div class="text-[9px] font-semibold uppercase text-rose-700">Órfãs</div>
                     <div class="text-[18px] font-bold text-rose-700 mt-0.5" x-text="totals.orphan"></div>
-                    <div class="text-[9px] text-rose-600">owner inativo / deletado</div>
+                    <div class="text-[9px] text-rose-600">dono inativo / deletado</div>
                 </button>
                 <button type="button" @click="toggleStatFilter('stale')"
                         class="text-left rounded-lg border px-3 py-2.5 transition-all"
@@ -82,7 +82,7 @@
                         :disabled="totals.stale === 0">
                     <div class="text-[9px] font-semibold uppercase text-amber-700">Paradas</div>
                     <div class="text-[18px] font-bold text-amber-700 mt-0.5" x-text="totals.stale"></div>
-                    <div class="text-[9px] text-amber-600">published sem uso há 30+ dias</div>
+                    <div class="text-[9px] text-amber-600">publicadas sem uso há 30+ dias</div>
                 </button>
                 <button type="button" @click="toggleStatFilter('low_reliability')"
                         class="text-left rounded-lg border px-3 py-2.5 transition-all"
@@ -91,7 +91,7 @@
                         :disabled="totals.low_reliability === 0">
                     <div class="text-[9px] font-semibold uppercase text-red-700">Baixa confiab.</div>
                     <div class="text-[18px] font-bold text-red-700 mt-0.5" x-text="totals.low_reliability"></div>
-                    <div class="text-[9px] text-red-600">reliability &lt; 50%</div>
+                    <div class="text-[9px] text-red-600">confiabilidade &lt; 50%</div>
                 </button>
             </div>
 
@@ -101,7 +101,7 @@
                  :class="statBannerClass()">
                 <span>
                     <strong>Filtro ativo:</strong> <span x-text="activeStatFilterLabel()"></span>
-                    <span class="ml-2 opacity-75" x-text="filteredEntries.length + ' / ' + entries.length + ' entries'"></span>
+                    <span class="ml-2 opacity-75" x-text="filteredEntries.length + ' / ' + entries.length + ' entradas'"></span>
                 </span>
                 <button @click="activeStatFilter = ''" class="font-semibold hover:underline">Limpar</button>
             </div>
@@ -117,7 +117,7 @@
                         </template>
                     </select>
                     <button x-show="filterTeam" @click="filterTeam=''; load()" class="text-[11px] text-surface-500 hover:text-brand-600 px-2 py-1.5">Limpar</button>
-                    <span class="ml-auto text-[10px] text-surface-400" x-text="filteredEntries.length + ' entries' + (activeStatFilter ? ' (filtrado)' : '')"></span>
+                    <span class="ml-auto text-[10px] text-surface-400" x-text="filteredEntries.length + ' entradas' + (activeStatFilter ? ' (filtrado)' : '')"></span>
                 </div>
             </div>
 
@@ -129,13 +129,13 @@
                  Caso o filtro stat tenha zerado, oferece botão direto para limpar. -->
             <template x-if="!loading && entries.length === 0">
                 <div class="rounded-xl border border-surface-200 bg-white p-8 text-center">
-                    <p class="text-[13px] text-surface-500">Nenhuma entry encontrada.</p>
+                    <p class="text-[13px] text-surface-500">Nenhuma entrada encontrada.</p>
                 </div>
             </template>
             <template x-if="!loading && entries.length > 0 && filteredEntries.length === 0">
                 <div class="rounded-xl border border-dashed border-surface-300 bg-white p-8 text-center">
-                    <p class="text-[13px] text-brand-900 mb-1">Nenhuma entry com <span class="font-semibold" x-text="activeStatFilterLabel()"></span></p>
-                    <p class="text-[11px] text-surface-500 mb-3">Existem <span x-text="entries.length"></span> entries no total, mas nenhuma combina com este filtro.</p>
+                    <p class="text-[13px] text-brand-900 mb-1">Nenhuma entrada com <span class="font-semibold" x-text="activeStatFilterLabel()"></span></p>
+                    <p class="text-[11px] text-surface-500 mb-3">Existem <span x-text="entries.length"></span> entradas no total, mas nenhuma combina com este filtro.</p>
                     <button @click="activeStatFilter = ''" class="text-[11px] text-brand-600 hover:underline font-medium">Limpar filtro</button>
                 </div>
             </template>
@@ -147,7 +147,7 @@
                         <div class="flex items-center justify-between border-b border-surface-100 px-4 py-3">
                             <div>
                                 <h3 class="text-[14px] font-bold text-brand-900" x-text="team"></h3>
-                                <p class="text-[10px] text-surface-400" x-text="group.length + ' entries · ' + countTeamFlags(group)"></p>
+                                <p class="text-[10px] text-surface-400" x-text="group.length + ' entradas · ' + countTeamFlags(group)"></p>
                             </div>
                         </div>
                         <div class="divide-y divide-surface-100">
@@ -163,16 +163,16 @@
                                                   :class="statusBadgeClass(e.status)" x-text="e.status"></span>
                                         </div>
                                         <div class="text-[10px] text-surface-500 mt-0.5">
-                                            owner: <span class="font-mono" x-text="e.owner_username || e.owner_user_id"></span>
+                                            dono: <span class="font-mono" x-text="e.owner_username || e.owner_user_id"></span>
                                             <span x-show="e.trust_invocation_count" class="text-surface-400 ml-2" x-text="(e.trust_invocation_count || 0) + ' invocações'"></span>
                                             <span x-show="e.trust_last_invoked_at" class="text-surface-400 ml-2" x-text="'última: ' + formatDate(e.trust_last_invoked_at)"></span>
                                         </div>
                                     </a>
                                     <!-- Flags -->
                                     <div class="flex items-center gap-1 shrink-0">
-                                        <span x-show="e.is_orphan" class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Owner inativo ou deletado">Órfã</span>
-                                        <span x-show="e.is_stale" class="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Published sem uso há 30+ dias">Parada</span>
-                                        <span x-show="e.has_low_reliability" class="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Reliability < 50%">Baixa conf.</span>
+                                        <span x-show="e.is_orphan" class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Dono inativo ou deletado">Órfã</span>
+                                        <span x-show="e.is_stale" class="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Publicada sem uso há 30+ dias">Parada</span>
+                                        <span x-show="e.has_low_reliability" class="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-[9px] font-bold uppercase" title="Confiabilidade < 50%">Baixa conf.</span>
                                     </div>
                                     <!-- Ações Root -->
                                     <button x-show="viewerIsRoot" @click="openReassign(e)" class="text-[11px] text-brand-600 hover:underline shrink-0">Realocar</button>
@@ -190,17 +190,17 @@
          x-transition.opacity
          class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
         <div @click.outside="reassignModalOpen = false" class="bg-white rounded-2xl w-full max-w-md p-5 shadow-xl">
-            <h3 class="text-[14px] font-bold text-brand-900 mb-2">Realocar entry</h3>
+            <h3 class="text-[14px] font-bold text-brand-900 mb-2">Realocar entrada</h3>
             <p class="text-[12px] text-surface-600 mb-3" x-text="reassignTarget?.name"></p>
             <div class="space-y-3 text-[12px]">
                 <div>
-                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">Novo owner (user_id)</label>
+                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">Novo dono (user_id)</label>
                     <input type="text" x-model="reassignForm.new_owner_user_id" :placeholder="reassignTarget?.owner_user_id" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] font-mono outline-none focus:border-brand-400">
                     <p class="text-[9px] text-surface-400 mt-0.5">Deixe vazio para não alterar. User precisa existir.</p>
                 </div>
                 <div>
                     <label class="block text-[11px] font-semibold text-surface-600 mb-1">Nova área (steward_team)</label>
-                    <input type="text" x-model="reassignForm.new_steward_team" :placeholder="reassignTarget?.steward_team || '(sem steward)'" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400">
+                    <input type="text" x-model="reassignForm.new_steward_team" :placeholder="reassignTarget?.steward_team || '(sem curador)'" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400">
                     <p class="text-[9px] text-surface-400 mt-0.5">Deixe vazio para não alterar. Para limpar, digite algo e apague.</p>
                 </div>
             </div>
@@ -260,7 +260,7 @@ function stewardshipPage() {
                 this.viewerIsRoot = !!data.viewer_is_root;
                 this.viewerDomains = data.viewer_domains || [];
             } catch {
-                showToast('Erro ao carregar stewardship', 'error');
+                showToast('Erro ao carregar curadoria', 'error');
             }
             this.loading = false;
         },
@@ -282,7 +282,7 @@ function stewardshipPage() {
         get entriesByTeam() {
             const groups = {};
             for (const e of this.filteredEntries) {
-                const team = e.steward_team || '(sem steward)';
+                const team = e.steward_team || '(sem curador)';
                 if (!groups[team]) groups[team] = [];
                 groups[team].push(e);
             }
@@ -301,9 +301,9 @@ function stewardshipPage() {
 
         activeStatFilterLabel() {
             return ({
-                orphan: 'órfãs (owner inativo/deletado)',
-                stale: 'paradas (published sem uso há 30+ dias)',
-                low_reliability: 'baixa confiabilidade (reliability < 50%)',
+                orphan: 'órfãs (dono inativo/deletado)',
+                stale: 'paradas (publicadas sem uso há 30+ dias)',
+                low_reliability: 'baixa confiabilidade (confiabilidade < 50%)',
             })[this.activeStatFilter] || '';
         },
 
@@ -361,7 +361,7 @@ function stewardshipPage() {
                     body: JSON.stringify(payload),
                 });
                 if (!r.ok) throw new Error((await r.json()).detail || 'erro');
-                showToast('Entry realocada');
+                showToast('Entrada realocada');
                 this.reassignModalOpen = false;
                 await this.load();
             } catch (e) {
