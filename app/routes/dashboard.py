@@ -2206,6 +2206,10 @@ class SettingsSave(BaseModel):
         default="pt-BR",
         pattern=r"^[a-z]{2}(-[A-Z]{2})?$",
     )
+    # Timezone da plataforma (IANA tz database). Default America/Sao_Paulo (GMT-3
+    # Brasília). Aplicado via apply_settings_to_env → os.environ['TZ'] + tzset, e
+    # exposto à UI como window.PLATFORM_TZ (formatação de datas no fuso da plataforma).
+    timezone: Optional[str] = "America/Sao_Paulo"
     # Grounded-by-default (2026-06-06): True = agentes respondem SÓ com base em
     # evidências; respostas sem evidência são recusadas. False fura o princípio
     # anti-alucinação globalmente (preferir o escape hatch por agente).

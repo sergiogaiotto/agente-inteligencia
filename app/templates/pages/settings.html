@@ -178,6 +178,36 @@
             </p>
         </div>
 
+        <!-- Timezone da plataforma — fuso aplicado na exibição de datas/horas em
+             toda a UI (e no horário local do backend). Padrão GMT-3 Brasília. -->
+        <div class="rounded-xl border-2 border-red-300 bg-gradient-to-br from-red-50 to-white p-5 mb-5">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="text-lg">🕒</span>
+                <div>
+                    <div class="text-[13px] font-semibold text-brand-900">Timezone da Plataforma</div>
+                    <div class="text-[11px] text-surface-500">Fuso usado para <strong>exibir datas e horas</strong> em toda a plataforma (e no horário local do servidor). As datas são armazenadas em UTC — só a exibição muda.</div>
+                </div>
+            </div>
+            <div>
+                <label class="block text-[11px] font-semibold text-surface-500 mb-1">Fuso horário</label>
+                <select x-model="config.timezone" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none focus:border-red-400">
+                    <option value="America/Sao_Paulo">Brasília — GMT-3 (America/Sao_Paulo)</option>
+                    <option value="America/Manaus">Manaus — GMT-4 (America/Manaus)</option>
+                    <option value="America/Rio_Branco">Rio Branco — GMT-5 (America/Rio_Branco)</option>
+                    <option value="America/Noronha">Fernando de Noronha — GMT-2 (America/Noronha)</option>
+                    <option value="UTC">UTC — GMT+0</option>
+                    <option value="America/New_York">Nova York — ET (America/New_York)</option>
+                    <option value="America/Los_Angeles">Los Angeles — PT (America/Los_Angeles)</option>
+                    <option value="Europe/Lisbon">Lisboa (Europe/Lisbon)</option>
+                    <option value="Europe/London">Londres (Europe/London)</option>
+                    <option value="Europe/Paris">Paris (Europe/Paris)</option>
+                </select>
+                <p class="text-[10px] text-red-700 mt-2 flex items-center gap-1">
+                    <span>ⓘ</span> Padrão: <strong>GMT-3 Brasília</strong>. Aplica-se após salvar — recarregue a página para ver as datas no novo fuso.
+                </p>
+            </div>
+        </div>
+
         <!-- Grounded-by-default — princípio anti-alucinação global (2026-06-06).
              Espelha o card de Idioma: política global com override por agente. -->
         <div class="rounded-xl border-2 border-red-300 bg-gradient-to-br from-red-50 to-white p-5 mb-5">
@@ -1080,6 +1110,8 @@ function settingsPage() {
             primary_provider:'', primary_model:'',
             // Idioma de resposta (default global) — fallback quando agent.response_language vazio
             default_response_language: 'pt-BR',
+            // Timezone da plataforma (IANA) — exibição de datas/horas. Padrão GMT-3 Brasília.
+            timezone: 'America/Sao_Paulo',
             // Grounded-by-default (2026-06-06): true = agentes respondem só com evidências
             grounding_strict: true,
             // MCP per-tool (D) — default OFF (flag avançada)

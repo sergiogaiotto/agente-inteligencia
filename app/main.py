@@ -98,6 +98,12 @@ app.state.templates.env.globals["app_version"] = APP_VERSION
 # render), sem restart. Default OFF → a aba "Perguntar" não renderiza.
 from app.data_tables.runtime import text_to_sql_enabled as _text_to_sql_enabled
 app.state.templates.env.globals["text_to_sql_enabled"] = _text_to_sql_enabled
+# Timezone da plataforma (parametrizável em Configurações > Plataforma). CALLABLE
+# avaliado a cada render: lê os.environ['TZ'] (setado por apply_settings_to_env a
+# partir de platform_settings) com fallback America/Sao_Paulo (GMT-3 Brasília).
+# Exposto aos templates como {{ platform_tz() }} → window.PLATFORM_TZ.
+import os as _os
+app.state.templates.env.globals["platform_tz"] = lambda: (_os.environ.get("TZ") or "America/Sao_Paulo")
 
 # API routes
 app.include_router(agents.router)
