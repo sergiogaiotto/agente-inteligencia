@@ -336,6 +336,16 @@ class ExternalProbeRunRequest(BaseModel):
     input: Optional[str] = Field(None, max_length=50000)
 
 
+class ExternalDiscoverRequest(BaseModel):
+    """Payload do POST /entries/{id}/external-discover (PR7 — discovery por URL).
+
+    Detecta o tipo da plataforma a partir de `base_url`; `secret` opcional ajuda a
+    listar modelos em endpoints OpenAI-compatíveis auth-gated."""
+
+    base_url: str = Field(..., min_length=1, max_length=500)
+    secret: Optional[str] = Field(None, max_length=4000)
+
+
 # ─── Stewardship reassign (Onda 2) ───────────────────────────────
 
 

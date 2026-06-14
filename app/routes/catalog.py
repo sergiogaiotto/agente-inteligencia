@@ -33,6 +33,7 @@ from app.catalog.models import (
     CatalogEntryCreate,
     CatalogEntryUpdate,
     ExternalAdapterUpdate,
+    ExternalDiscoverRequest,
     ExternalPlatformMetadata,
     ExternalProbeRunRequest,
     ExternalTestRequest,
@@ -75,6 +76,7 @@ from app.catalog.queries import (
     upsert_recipe,
 )
 from app.catalog.conformance import run_conformance
+from app.catalog.external_discovery import discover as discover_external
 from app.catalog.external_probe import run_probe
 from app.core.crypto import encrypt_secret
 from app.catalog.urn import make_urn, parse_urn
@@ -924,6 +926,32 @@ async def external_test_inline(
         "mode": data.probe.mode,
         "ok": result.get("ok"),
         "status": result.get("status"),
+    })
+    return result
+
+
+@router.post("/entries/{entry_id}/external-discover")
+async def external_discover_endpoint(
+    entry_id: str,
+    data: ExternalDiscoverRequest,
+    user: dict = Depends(require_user),
+):
+    """PR7 — discovery por URL: detecta o tipo da plataforma (OpenAI-compatível /
+    instância Maestro) a partir da base_url e sugere a config de conexão. Owner/root,
+    kind='external_platform'. Não persiste — apenas inspeciona (com guarda SSRF)."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if entry.get("kind") != "external_platform":
+        raise HTTPException(422, "Discovery só se aplica a kind='external_platform'")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem rodar o discovery")
+
+    result = await discover_external(data.base_url, secret=data.secret or "")
+    await _audit("external_discover", entry_id, user["id"], {
+        "base_url": result.get("base_url"),
+        "detected": [d.get("type") for d in result.get("detected", [])],
     })
     return result
 
