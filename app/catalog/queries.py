@@ -802,6 +802,51 @@ async def recompute_entry_trust(entry_id: str) -> dict:
     return t
 
 
+async def recompute_external_trust(entry_id: str) -> dict:
+    """PR — trust REAL para kind='external_platform' a partir das execuções de
+    probe ('Provar Capacidade').
+
+    Diferente de recompute_entry_trust: **INCLUI** execuções is_sandbox=TRUE — para
+    uma plataforma externa o probe É o sinal de produção (não há execução 'real'
+    separada). Atualiza também trust_invocation_count e trust_last_invoked_at, que
+    para external NÃO passam por record_invocation_cost. Execuções federadas
+    continuam excluídas (integridade cross-tenant)."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        rows = await con.fetch(
+            """
+            SELECT status, total_latency_ms, total_cost_usd, finished_at
+            FROM catalog_recipe_executions
+            WHERE recipe_entry_id = $1 AND status <> 'running'
+              AND consumer_user_id NOT LIKE 'federation:%'
+            """,
+            entry_id,
+        )
+        dict_rows = [dict(r) for r in rows]
+        t = _compute_trust(dict_rows)
+        if t["n"] == 0:
+            return t
+        last = max(
+            (r["finished_at"] for r in dict_rows if r.get("finished_at") is not None),
+            default=None,
+        )
+        await con.execute(
+            """
+            UPDATE catalog_entries SET
+              trust_reliability = $2,
+              trust_latency_p95_ms = $3,
+              trust_avg_cost_usd = $4,
+              trust_invocation_count = $5,
+              trust_last_invoked_at = COALESCE($6, trust_last_invoked_at),
+              updated_at = now()
+            WHERE id = $1
+            """,
+            entry_id, t["reliability"], t["latency_p95_ms"], t["avg_cost_usd"],
+            t["n"], last,
+        )
+    return t
+
+
 async def aggregate_costs(
     *,
     group_by: str = "entry",
