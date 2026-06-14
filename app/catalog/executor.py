@@ -40,9 +40,11 @@ logger = logging.getLogger(__name__)
 # o JSONB. Output completo fica em interactions (caso target = agent).
 _MAX_OUTPUT_CHARS = 5000
 
-# Kinds que sabemos invocar de fato hoje. Recipe → recipe é anti-ciclo
-# intencional. Skill/external_platform/application não têm executor próprio.
+# Kinds invocáveis como STEP de recipe. 'agent' roda no engine interno;
+# 'external_platform' (openai_chat) roda via run_probe (orquestração híbrida).
+# Recipe → recipe é anti-ciclo intencional; skill/application não têm executor.
 _EXECUTABLE_KIND = "agent"
+_RECIPE_STEP_KINDS = ("agent", "external_platform")
 
 
 def _iso(ts: Optional[datetime] = None) -> str:
@@ -69,24 +71,75 @@ async def _resolve_target(target_entry_id: str) -> tuple[Optional[dict], Optiona
             f"'{entry.get('status')}' (só published é executável)"
         )
     kind = entry.get("kind")
-    if kind != _EXECUTABLE_KIND:
+    if kind not in _RECIPE_STEP_KINDS:
         return entry, (
             f"target '{entry.get('name')}' é kind='{kind}'; "
-            f"executor Onda 4 só roda kind='agent'"
+            f"recipe só roda steps kind='agent' ou 'external_platform'"
         )
-    if not entry.get("artifact_id"):
-        return entry, f"target '{entry.get('name')}' não tem artifact_id"
+    if kind == "agent":
+        if not entry.get("artifact_id"):
+            return entry, f"target '{entry.get('name')}' não tem artifact_id"
+        return entry, None
+
+    # external_platform — precisa de conexão configurada (openai_chat, p/ produzir
+    # saída encadeável). http_ping não gera texto para o próximo step.
+    from app.catalog.queries import get_entry_adapter_raw
+    cfg = await get_entry_adapter_raw(target_entry_id)
+    probe = cfg.get("probe") if isinstance(cfg, dict) else None
+    if not isinstance(probe, dict) or not probe.get("base_url"):
+        return entry, (
+            f"target '{entry.get('name')}' (plataforma externa) não tem conexão "
+            f"configurada — configure o adapter antes de usar como step"
+        )
+    if (probe.get("mode") or "openai_chat") != "openai_chat":
+        return entry, (
+            f"target '{entry.get('name')}' está em modo '{probe.get('mode')}' "
+            f"(sem saída para encadear) — use openai_chat para usar como step de recipe"
+        )
     return entry, None
+
+
+async def _invoke_external_step(target_entry: dict, current_input: str) -> dict:
+    """Invoca uma Plataforma Externa (openai_chat) como step de recipe, via
+    run_probe. current_input vira o prompt; a saída alimenta o próximo step.
+    Levanta em falha (não-2xx/erro) para o caller quebrar a chain."""
+    from app.catalog.external_probe import run_probe
+    from app.catalog.queries import get_entry_adapter_raw
+
+    cfg = await get_entry_adapter_raw(target_entry["id"])
+    probe = (cfg.get("probe") if isinstance(cfg, dict) else None) or {}
+    secret = probe.get("secret_cipher") or ""
+    res = await run_probe(probe, secret=secret, input_text=current_input)
+    if not res.get("ok"):
+        raise RuntimeError(
+            res.get("error") or f"plataforma externa respondeu HTTP {res.get('status')}"
+        )
+    tok_in = int(res.get("tokens_input") or 0)
+    tok_out = int(res.get("tokens_output") or 0)
+    return {
+        "output": res.get("output") or "",
+        "duration_ms": int(res.get("latency_ms") or 0),
+        "tokens_input": tok_in,
+        "tokens_output": tok_out,
+        "tokens_total": tok_in + tok_out,
+        "provider": probe.get("base_url"),
+        "model": probe.get("model"),
+        "interaction_id": None,
+        "final_state": "external",
+    }
 
 
 async def _invoke_step(
     target_entry: dict, current_input: str, consumer_user_id: str
 ) -> dict:
-    """Invoca o agente do target e retorna dict normalizado:
+    """Invoca o target (agent ou external_platform) e retorna dict normalizado:
     {output, duration_ms, tokens_input, tokens_output, tokens_total,
      provider, model, interaction_id, final_state}.
     Levanta exception para erros técnicos (caller trata)."""
-    # Import lazy — engine carrega LLM clients pesados na importação.
+    if target_entry.get("kind") == "external_platform":
+        return await _invoke_external_step(target_entry, current_input)
+
+    # agent — import lazy (engine carrega LLM clients pesados na importação).
     from app.agents.engine import execute_interaction
 
     result = await execute_interaction(

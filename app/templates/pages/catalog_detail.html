@@ -733,7 +733,7 @@
                 <h3 class="text-[14px] font-bold text-brand-900">Passos do Recipe</h3>
                 <button @click="recipeModalOpen = false" class="text-surface-400 hover:text-brand-600">×</button>
             </div>
-            <p class="text-[11px] text-surface-500 mb-3">Composição declarativa. Steps são invocados em sequência pelo engine de recipes — output de um vira input do próximo.</p>
+            <p class="text-[11px] text-surface-500 mb-3">Composição declarativa. Steps — agentes internos <strong>ou plataformas externas</strong> (modo openai_chat) — são invocados em sequência: output de um vira input do próximo. Os targets precisam estar <strong>publicados</strong>.</p>
 
             <!-- Lista editável dos steps -->
             <div class="space-y-2 mb-3">
