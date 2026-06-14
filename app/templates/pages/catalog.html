@@ -39,12 +39,12 @@
             </select>
             <select x-model="filterStatus" class="rounded-lg border border-surface-200 bg-white px-2.5 py-2 text-[11px] outline-none">
                 <option value="">Todos status</option>
-                <option value="draft">Draft</option>
-                <option value="submitted">Submitted</option>
-                <option value="approved">Approved</option>
-                <option value="published">Published</option>
-                <option value="deprecated">Deprecated</option>
-                <option value="archived">Archived</option>
+                <option value="draft">Rascunho</option>
+                <option value="submitted">Em revisão</option>
+                <option value="approved">Aprovada</option>
+                <option value="published">Publicada</option>
+                <option value="deprecated">Depreciada</option>
+                <option value="archived">Arquivada</option>
             </select>
             <input type="text" x-model="filterDomain"
                    placeholder="Domínio..."
@@ -93,7 +93,7 @@
                     </div>
                     <span class="rounded-full px-2 py-0.5 text-[9px] font-bold uppercase shrink-0"
                           :class="statusBadgeClass(entry.status)"
-                          x-text="entry.status"></span>
+                          x-text="catalogStatusLabel(entry.status)"></span>
                 </div>
 
                 <!-- Badges: kind + version + domain -->

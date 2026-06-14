@@ -1052,9 +1052,9 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
-          { title: 'Capability Disclosure incompleta = submit reprovado', severity: 'warning', body: 'Pré-check obriga disclosure. Se você marcar "stores_input" mas não preencher retention_days, Root rejeita.' },
+          { title: 'Capability Disclosure incompleta = submit reprovado', severity: 'warning', body: 'Pré-verificação obriga disclosure. Se você marcar "stores_input" mas não preencher retention_days, Root rejeita.' },
           { title: 'Versão não pode regredir', severity: 'danger', body: 'Você publicou v1.2.0. Não pode publicar v1.1.0 depois. Sempre incremente.' },
-          { title: 'Recipe sem steps = não executa', severity: 'info', body: 'Criou entry kind=recipe mas esqueceu de declarar os steps? Pré-check vai pegar. Use a aba "Recipe Steps" da página de detalhe.' }
+          { title: 'Recipe sem steps = não executa', severity: 'info', body: 'Criou entry kind=recipe mas esqueceu de declarar os steps? Pré-verificação vai pegar. Use a aba "Passos do Recipe" da página de detalhe.' }
         ]
       }
     ],
@@ -1261,14 +1261,14 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   catalog_queue: {
     title: 'Fila de Revisão',
-    summary: 'Onde Root revisa submissões do Catálogo antes de publicar. Pré-checks rodam automático no submit; aqui você vê o relatório e decide.',
+    summary: 'Onde Root revisa submissões do Catálogo antes de publicar. Pré-verificações rodam automático no submit; aqui você vê o relatório e decide.',
     sections: [
       {
         kind: 'concept',
         title: 'O que é',
         body: `
           <p>Toda entry submetida ao Catálogo (agent, skill, recipe, plataforma externa) cai aqui antes de ficar disponível. <strong>Só usuários com papel <code>root</code></strong> têm acesso. A fila é o ponto único de governança — sem aprovação aqui, nada vira <code>published</code>.</p>
-          <p>Pré-checks automáticos rodam no momento do submit (cobertura de disclosure, formatação de URN, vendor obrigatório para externas). Eles são <em>informativos</em>: você pode aprovar mesmo com warning, ou rejeitar mesmo com tudo verde.</p>
+          <p>Pré-verificações automáticas rodam no momento do submit (cobertura de disclosure, formatação de URN, vendor obrigatório para externas). Elas são <em>informativas</em>: você pode aprovar mesmo com aviso, ou rejeitar mesmo com tudo verde.</p>
         `
       },
       {
@@ -1284,7 +1284,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'casos_de_uso',
         title: 'Casos de uso',
         items: [
-          { title: 'Aprovar um agent simples', body: 'Click na submissão → leia o disclosure + pré-checks → "Aprovar". Entry vai para published e fica visível conforme visibility (private/department/company).' },
+          { title: 'Aprovar um agent simples', body: 'Clique na submissão → leia a divulgação + pré-verificações → "Aprovar". A entrada vai para publicada e fica visível conforme a visibilidade (privada/departamento/empresa).' },
           { title: 'Pedir mudanças sem rejeitar', body: 'Use "Pedir mudanças" com comentário objetivo (ex: "Falta marcar processa_pii"). Submitter recebe a entry de volta em draft para corrigir e re-submeter.' },
           { title: 'Triagem em lote por kind', body: 'Filtre por kind=recipe quando o time de FinOps pedir revisão de recipes específicos. Aprova/rejeita em sequência sem perder contexto.' }
         ]
@@ -1293,7 +1293,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
-          { title: 'Pré-checks não bloqueiam', severity: 'info', body: 'Warnings em pré-checks são informativos. Root decide se aprovar mesmo assim — o pré-check é input, não veto.' },
+          { title: 'Pré-verificações não bloqueiam', severity: 'info', body: 'Avisos em pré-verificações são informativos. Root decide se aprovar mesmo assim — a pré-verificação é insumo, não veto.' },
           { title: 'Rejeitar não deleta', severity: 'info', body: 'Status volta para draft e fica visível ao owner. Para apagar de verdade, vá em /catalog/{id} → DELETE (só draft/archived).' },
           { title: 'Visível só para Root', severity: 'warning', body: 'Usuários comuns recebem 403 ao tentar acessar /catalog/queue. Se você está vendo "Acesso restrito", peça promoção de papel ou use Curadoria.' }
         ]
@@ -1372,7 +1372,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           <ul>
             <li><strong>Órfãs</strong>: <code>owner_user_id</code> aponta para usuário inativo (deletado ou sem login recente). Sinal de processo de offboarding mal-feito.</li>
             <li><strong>Paradas</strong> (stale): published há 30+ dias sem registro de invocação em <code>catalog_recipe_executions</code> ou <code>interactions</code>. Pode estar obsoleta.</li>
-            <li><strong>Baixa confiabilidade</strong>: trust score (calculado em background) abaixo do threshold. Olha rejeições, anomalias e drift.</li>
+            <li><strong>Baixa confiabilidade</strong>: pontuação de confiança (calculada em segundo plano) abaixo do limiar. Olha rejeições, anomalias e drift.</li>
           </ul>
           <p>Cards de stat no topo viram <strong>filtros clicáveis</strong> (toggle on/off) — útil para focar só no que precisa de atenção.</p>
         `
@@ -1392,7 +1392,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { title: 'Sem domains = tela vazia', severity: 'warning', body: 'Usuário comum sem nenhum domínio cadastrado vê mensagem "associe-se a domínios". Não é bug — é design (steward sem domínio não tem o que stewardar).' },
           { title: 'Sandbox conta como uso', severity: 'info', body: 'Execuções sandbox (botão 🧪) entram no cálculo de "parada". Se um agent só roda em testes, ele não vai aparecer como stale mesmo que ninguém o use em produção.' },
-          { title: 'Trust score atualiza em background', severity: 'info', body: 'A coluna "confiabilidade" pode demorar até 1 hora para refletir mudanças (rejeições, anomalias). Se acabou de aprovar a entry, espere o ciclo do job rodar.' }
+          { title: 'Pontuação de confiança atualiza em segundo plano', severity: 'info', body: 'A coluna "confiabilidade" pode demorar até 1 hora para refletir mudanças (rejeições, anomalias). Se acabou de aprovar a entry, espere o ciclo do job rodar.' }
         ]
       }
     ],
