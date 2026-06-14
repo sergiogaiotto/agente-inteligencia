@@ -516,9 +516,15 @@ class TestProbeExecutor:
         async def fake_finalize(execution_id, *, status, total_cost_usd, total_latency_ms, error_message=None):
             finals.append({"status": status, "error": error_message, "latency": total_latency_ms})
 
+        self.trust_calls = []
+
+        async def fake_trust(entry_id):
+            self.trust_calls.append(entry_id)
+
         monkeypatch.setattr("app.catalog.external_probe.run_probe", fake_run)
         monkeypatch.setattr(ex, "append_step_result", fake_append)
         monkeypatch.setattr(ex, "finalize_execution", fake_finalize)
+        monkeypatch.setattr(ex, "recompute_external_trust", fake_trust)
         return steps, finals
 
     def test_success_completes(self, monkeypatch):
@@ -549,3 +555,73 @@ class TestProbeExecutor:
         ))
         assert steps[0]["status"] == "error" and steps[0]["error"] == "Auth falhou"
         assert finals[0]["status"] == "failed" and finals[0]["error"] == "Auth falhou"
+
+    def test_probe_recomputes_external_trust(self, monkeypatch):
+        from app.catalog.executor import probe_external_platform
+        self._patch_exec(monkeypatch, {"ok": True, "status": 200, "latency_ms": 5, "output": "OK"})
+        asyncio.run(probe_external_platform(
+            execution_id="e1", entry_id="ext-1", entry_name="X",
+            config={"base_url": "https://api.x"}, secret="", user_input="oi",
+        ))
+        assert self.trust_calls == ["ext-1"]  # trust real recalculado após o probe
+
+
+# ═════════════════════════════════════════════════════════════════
+# recompute_external_trust — trust real a partir das execuções de probe
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestRecomputeExternalTrust:
+    def _fake_pool(self, monkeypatch, rows):
+        captured = {"update": None}
+
+        class C:
+            async def fetch(self, sql, *p):
+                return rows
+
+            async def execute(self, sql, *p):
+                captured["update"] = p
+
+        class A:
+            def __init__(s, c):
+                s.c = c
+
+            async def __aenter__(s):
+                return s.c
+
+            async def __aexit__(s, *a):
+                return False
+
+        class P:
+            def __init__(s, c):
+                s.c = c
+
+            def acquire(s):
+                return A(s.c)
+
+        import app.catalog.queries as q
+        monkeypatch.setattr(q, "_get_pool", lambda: P(C()))
+        return captured
+
+    def test_computes_and_updates_all_trust_fields(self, monkeypatch):
+        from datetime import datetime, timezone
+        from app.catalog.queries import recompute_external_trust
+        dt = datetime(2026, 6, 14, tzinfo=timezone.utc)
+        rows = [
+            {"status": "completed", "total_latency_ms": 100, "total_cost_usd": 0.0, "finished_at": dt},
+            {"status": "completed", "total_latency_ms": 200, "total_cost_usd": 0.0, "finished_at": dt},
+            {"status": "failed", "total_latency_ms": 300, "total_cost_usd": 0.0, "finished_at": dt},
+        ]
+        cap = self._fake_pool(monkeypatch, rows)
+        t = asyncio.run(recompute_external_trust("ext-1"))
+        assert t["n"] == 3 and t["reliability"] == round(2 / 3, 4)
+        p = cap["update"]
+        assert p[0] == "ext-1"      # entry_id
+        assert p[4] == 3            # trust_invocation_count = n (inclui probes/sandbox)
+        assert p[5] == dt           # trust_last_invoked_at = max finished_at
+
+    def test_empty_does_not_update(self, monkeypatch):
+        from app.catalog.queries import recompute_external_trust
+        cap = self._fake_pool(monkeypatch, [])
+        t = asyncio.run(recompute_external_trust("ext-1"))
+        assert t["n"] == 0 and cap["update"] is None

@@ -28,6 +28,7 @@ from app.catalog.queries import (
     append_step_result,
     finalize_execution,
     recompute_entry_trust,
+    recompute_external_trust,
     record_invocation_cost,
 )
 from app.core.database import catalog_entries_repo
@@ -493,6 +494,7 @@ async def probe_external_platform(
             total_latency_ms=latency,
             error_message=None if ok else step["error"],
         )
+        await _recompute_external_trust_safe(entry_id, execution_id)
     except Exception as e:
         logger.exception(
             "probe_external_platform crashed: execution=%s entry=%s", execution_id, entry_id
@@ -505,5 +507,15 @@ async def probe_external_platform(
                 total_latency_ms=0,
                 error_message=f"{type(e).__name__}: {str(e)[:160]}",
             )
+            await _recompute_external_trust_safe(entry_id, execution_id)
         except Exception:
             logger.exception(f"finalize_execution(failed) falhou: execution={execution_id}")
+
+
+async def _recompute_external_trust_safe(entry_id: str, execution_id: str) -> None:
+    """Recalcula trust real da plataforma externa a partir das execuções de probe.
+    Best-effort: nunca derruba o fluxo do probe."""
+    try:
+        await recompute_external_trust(entry_id)
+    except Exception:
+        logger.exception(f"recompute_external_trust falhou: execution={execution_id}")

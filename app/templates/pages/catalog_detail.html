@@ -126,7 +126,14 @@
             <div x-show="activeTab === 'overview'" class="space-y-4">
                 <!-- Trust metrics card -->
                 <div class="rounded-xl border border-surface-200 bg-white p-4">
-                    <h3 class="text-[12px] font-bold text-brand-900 mb-3 uppercase tracking-wider">Métricas de Confiabilidade</h3>
+                    <div class="flex items-center gap-2 mb-3">
+                        <h3 class="text-[12px] font-bold text-brand-900 uppercase tracking-wider">Métricas de Confiabilidade</h3>
+                        <span x-show="entry.trust_invocation_count > 0 && entry.trust_invocation_count < 5"
+                              class="rounded-full bg-amber-50 text-amber-700 px-2 py-0.5 text-[9px] font-bold uppercase"
+                              title="Poucas execuções — métricas provisórias, tendem a variar. A partir de 5 execuções ficam mais estáveis.">
+                            provisório · <span x-text="(entry.trust_invocation_count || 0) + ' exec'"></span>
+                        </span>
+                    </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div>
                             <div class="text-surface-400 text-[10px] uppercase tracking-wider">Confiabilidade</div>
