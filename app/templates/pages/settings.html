@@ -648,7 +648,7 @@
                          :class="previewPromptId === p.id ? 'border-brand-400 bg-brand-50/30 shadow-sm' : 'border-surface-200 hover:border-brand-200 hover:shadow-sm'"
                          @click="previewPromptId = p.id; previewPrompt = p">
                         <div class="flex h-8 w-8 items-center justify-center rounded-lg shrink-0 text-[9px] font-bold"
-                             :class="p.kind==='router'?'bg-orange-100 text-orange-600':p.kind==='aobd'?'bg-rose-100 text-rose-600':'bg-teal-100 text-teal-600'"
+                             :class="p.kind==='router'?'bg-orange-100 text-orange-600':p.kind==='aobd'?'bg-slate-100 text-slate-700':'bg-teal-100 text-teal-600'"
                              x-text="(p.name||'SP').substring(0,2).toUpperCase()"></div>
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center gap-1.5">
@@ -657,7 +657,7 @@
                                 <span x-show="p.is_default" class="rounded-full bg-amber-50 px-1.5 py-0.5 text-[8px] font-bold text-amber-600 shrink-0">DEFAULT</span>
                             </div>
                             <div class="flex items-center gap-1.5 mt-0.5">
-                                <span class="text-[9px] font-bold uppercase" :class="p.kind==='router'?'text-orange-500':p.kind==='aobd'?'text-rose-500':'text-teal-500'" x-text="p.kind"></span>
+                                <span class="text-[9px] font-bold uppercase" :class="p.kind==='router'?'text-orange-500':p.kind==='aobd'?'text-slate-700':'text-teal-500'" x-text="p.kind"></span>
                                 <span class="text-[9px] text-surface-400" x-text="p.category"></span>
                             </div>
                         </div>

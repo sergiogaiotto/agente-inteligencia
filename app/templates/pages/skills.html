@@ -39,7 +39,7 @@
                      @click="openPreview(skill)">
                     <!-- Icon -->
                     <div class="flex h-9 w-9 items-center justify-center rounded-lg shrink-0 text-[10px] font-bold"
-                         :class="skill.kind==='router'?'bg-orange-100 text-orange-600':skill.kind==='orchestrator'?'bg-rose-100 text-rose-600':'bg-teal-100 text-teal-600'"
+                         :class="skill.kind==='router'?'bg-orange-100 text-orange-600':skill.kind==='orchestrator'?'bg-slate-100 text-slate-700':'bg-teal-100 text-teal-600'"
                          x-text="(skill.name||'SK').substring(0,2).toUpperCase()"></div>
                     <!-- Info -->
                     <div class="flex-1 min-w-0">
@@ -48,7 +48,7 @@
                             <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-400 shrink-0" x-text="'v' + (skill.version || '0.1.0')"></span>
                         </div>
                         <div class="flex items-center gap-1.5 mt-0.5">
-                            <span x-show="skill.kind" class="text-[9px] font-bold uppercase" :class="skill.kind==='router'?'text-orange-500':skill.kind==='orchestrator'?'text-rose-500':'text-teal-500'" x-text="skill.kind"></span>
+                            <span x-show="skill.kind" class="text-[9px] font-bold uppercase" :class="skill.kind==='router'?'text-orange-500':skill.kind==='orchestrator'?'text-slate-700':'text-teal-500'" x-text="skill.kind"></span>
                             <span x-show="skill.stability" class="text-[9px]"
                                   :class="skill.stability==='stable'?'text-emerald-500':skill.stability==='beta'?'text-amber-500':'text-surface-400'"
                                   x-text="skill.stability"></span>
