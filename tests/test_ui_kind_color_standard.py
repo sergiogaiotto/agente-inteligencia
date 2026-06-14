@@ -1,10 +1,10 @@
 """Trava anti-drift: padrao canonico de cores por *kind* de agente em toda a UI.
 
-Padrao (pedido do usuario, 2026-06-06): AR/router = laranja, AOBD = vermelho,
+Padrao: AR/router = laranja, AOBD = quase preto (slate, padronizado 2026-06-13),
 SA = verde. Materializado na plataforma como:
 
     router               -> orange
-    aobd / orchestrator  -> rose   (familia vermelha do palette permitido)
+    aobd / orchestrator  -> slate  (quase preto — padronizado 2026-06-13)
     subagente / else     -> teal   (familia verde do palette permitido)
 
 Telas de referencia ja conformes antes desta trava: agents.html, settings.html,
@@ -35,7 +35,8 @@ KIND_COLOR_FILES = [
 
 # Familias de cor que router/orquestrador JAMAIS podem usar.
 # - brand/blue/sky/indigo/cyan: azul (o bug do AI Mesh).
-# - red puro: deve ser padronizado em "rose" para o orquestrador.
+# - red/rose: o orquestrador (AOBD/Maestro) foi padronizado em "slate" (quase
+#   preto) em 2026-06-13; vermelho/rose ficam reservados para erro/danger.
 FORBIDDEN_FAMILY = r"(?:brand|blue|sky|indigo|cyan|red)"
 
 # Chaves que representam o papel "orquestrador" (AOBD em agentes / orchestrator em skills).
@@ -58,16 +59,19 @@ def test_router_is_orange_never_blue(name):
 
 
 @pytest.mark.parametrize("name", KIND_COLOR_FILES)
-def test_orchestrator_is_rose_never_blue_or_red(name):
-    """aobd/orchestrator precisa ser rose e nunca azul nem red puro."""
+def test_orchestrator_is_slate_near_black(name):
+    """aobd/orchestrator precisa ser slate (quase preto) e nunca azul nem red.
+
+    Padronização pedida pelo user (2026-06-13): o Maestro/AOBD deve ser quase
+    preto, no mesmo padrão das demais cores (AR=orange, SA=teal)."""
     text = _read(name)
-    found_rose = False
+    found_slate = False
     for key in ORCH_KEYS:
         bad = re.findall(rf"{key}'\s*\?\s*'(?:bg|text)-{FORBIDDEN_FAMILY}\b", text)
-        assert not bad, f"{name}: {key} pintado com cor proibida {bad} (deve ser rose)"
-        if re.search(rf"{key}'\s*\?\s*'(?:bg|text)-rose", text):
-            found_rose = True
-    assert found_rose, f"{name}: nenhum mapeamento aobd/orchestrator->rose encontrado"
+        assert not bad, f"{name}: {key} pintado com cor proibida {bad} (deve ser slate)"
+        if re.search(rf"{key}'\s*\?\s*'(?:bg|text)-slate", text):
+            found_slate = True
+    assert found_slate, f"{name}: nenhum mapeamento aobd/orchestrator->slate encontrado"
 
 
 @pytest.mark.parametrize("name", KIND_COLOR_FILES)

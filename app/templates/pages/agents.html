@@ -43,7 +43,7 @@
                      @click="openPreview(agent)">
                     <!-- Avatar -->
                     <div class="flex h-9 w-9 items-center justify-center rounded-lg shrink-0 text-[10px] font-bold text-white"
-                         :class="agent.kind==='aobd'?'bg-rose-500':agent.kind==='router'?'bg-orange-500':'bg-teal-500'"
+                         :class="agent.kind==='aobd'?'bg-slate-800':agent.kind==='router'?'bg-orange-500':'bg-teal-500'"
                          x-text="agent.name?.substring(0,2).toUpperCase()"></div>
                     <!-- Info -->
                     <div class="flex-1 min-w-0">
@@ -55,7 +55,7 @@
                             <span x-show="isAgentPassthrough(agent)" class="rounded-full bg-amber-50 px-1.5 py-0.5 text-[8px] font-bold text-amber-600 shrink-0">PASS-THROUGH</span>
                         </div>
                         <div class="flex items-center gap-1.5 mt-0.5">
-                            <span class="text-[9px] font-bold uppercase" :class="agent.kind==='aobd'?'text-rose-500':agent.kind==='router'?'text-orange-500':'text-teal-500'" x-text="agent.kind==='aobd'?'AOBD':agent.kind==='router'?'AR':'SA'"></span>
+                            <span class="text-[9px] font-bold uppercase" :class="agent.kind==='aobd'?'text-slate-700':agent.kind==='router'?'text-orange-500':'text-teal-500'" x-text="agent.kind==='aobd'?'AOBD':agent.kind==='router'?'AR':'SA'"></span>
                             <span class="text-[9px] text-surface-400" x-text="agent.model"></span>
                             <span x-show="agent._skill_name" class="text-[9px] text-teal-500 truncate max-w-[120px]" x-text="agent._skill_name"></span>
                         </div>
@@ -101,7 +101,7 @@
         <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3">
             <div class="flex items-center gap-2 min-w-0">
                 <div class="flex h-7 w-7 items-center justify-center rounded-lg text-[9px] font-bold text-white shrink-0"
-                     :class="previewAgent?.kind==='aobd'?'bg-rose-500':previewAgent?.kind==='router'?'bg-orange-500':'bg-teal-500'"
+                     :class="previewAgent?.kind==='aobd'?'bg-slate-800':previewAgent?.kind==='router'?'bg-orange-500':'bg-teal-500'"
                      x-text="(previewAgent?.name||'').substring(0,2).toUpperCase()"></div>
                 <span class="text-[12px] font-semibold text-brand-900 truncate" x-text="previewAgent?.name"></span>
             </div>
@@ -121,7 +121,7 @@
             <!-- Badges -->
             <div class="flex flex-wrap gap-1.5">
                 <span class="rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase"
-                      :class="previewAgent?.kind==='aobd'?'bg-rose-50 text-rose-700':previewAgent?.kind==='router'?'bg-orange-50 text-orange-700':'bg-teal-50 text-teal-700'"
+                      :class="previewAgent?.kind==='aobd'?'bg-slate-100 text-slate-700':previewAgent?.kind==='router'?'bg-orange-50 text-orange-700':'bg-teal-50 text-teal-700'"
                       x-text="previewAgent?.kind==='aobd'?'AOBD — Orquestrador':previewAgent?.kind==='router'?'AR — Roteador':'SA — Subagente'"></span>
                 <span class="flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-medium"
                       :class="previewAgent?.status==='active'?'bg-emerald-50 text-emerald-700':'bg-surface-100 text-surface-500'">
