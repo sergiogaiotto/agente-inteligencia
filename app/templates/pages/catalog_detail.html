@@ -264,8 +264,8 @@
                             <div x-show="sub.review_notes" class="rounded-lg bg-surface-50 px-3 py-2 text-[11px] text-surface-700 italic" x-text="'« ' + sub.review_notes + ' »'"></div>
                             <details x-show="sub.precheck_report" class="mt-2">
                                 <summary class="text-[10px] text-brand-600 cursor-pointer hover:underline">
-                                    Pré-checks (<span x-text="parseReport(sub.precheck_report)?.errors_count || 0"></span> errors,
-                                    <span x-text="parseReport(sub.precheck_report)?.warnings_count || 0"></span> warnings)
+                                    Pré-verificações (<span x-text="parseReport(sub.precheck_report)?.errors_count || 0"></span> erros,
+                                    <span x-text="parseReport(sub.precheck_report)?.warnings_count || 0"></span> avisos)
                                 </summary>
                                 <pre class="rounded-lg bg-surface-50 border border-surface-100 p-2 text-[10px] font-mono mt-2 overflow-x-auto" x-text="JSON.stringify(parseReport(sub.precheck_report), null, 2)"></pre>
                             </details>

@@ -22,7 +22,7 @@
                 </button>
                 <a :href="csvUrl()" target="_blank" class="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-emerald-600">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-                    Export CSV
+                    Exportar CSV
                 </a>
             </div>
         </div>
@@ -70,16 +70,16 @@
                     </select>
                     <select x-model="filters.status" @change="load()" class="rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] outline-none">
                         <option value="">Todos status</option>
-                        <option value="draft">Draft</option>
-                        <option value="submitted">Submitted</option>
-                        <option value="approved">Approved</option>
-                        <option value="published">Published</option>
-                        <option value="deprecated">Deprecated</option>
-                        <option value="archived">Archived</option>
+                        <option value="draft">Rascunho</option>
+                        <option value="submitted">Em revisão</option>
+                        <option value="approved">Aprovada</option>
+                        <option value="published">Publicada</option>
+                        <option value="deprecated">Depreciada</option>
+                        <option value="archived">Arquivada</option>
                     </select>
-                    <input type="text" x-model="filters.residency" @change="load()" placeholder="Residency (BR/EU/US/global)" class="rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] outline-none w-[200px]">
+                    <input type="text" x-model="filters.residency" @change="load()" placeholder="Residência (BR/EU/US/global)" class="rounded-lg border border-surface-200 px-2.5 py-1.5 text-[11px] outline-none w-[200px]">
                     <button @click="resetFilters()" class="text-[11px] text-surface-500 hover:text-brand-600 px-2 py-1.5">Limpar</button>
-                    <span class="ml-auto text-[10px] text-surface-400" x-text="total + ' entries'"></span>
+                    <span class="ml-auto text-[10px] text-surface-400" x-text="total + ' entradas'"></span>
                 </div>
             </div>
 
@@ -128,7 +128,7 @@
                  :class="statBannerClass()">
                 <span>
                     <strong>Filtro ativo:</strong> <span x-text="activeStatFilterLabel()"></span>
-                    <span class="ml-2 opacity-75" x-text="filteredEntries.length + ' / ' + entries.length + ' entries'"></span>
+                    <span class="ml-2 opacity-75" x-text="filteredEntries.length + ' / ' + entries.length + ' entradas'"></span>
                 </span>
                 <button @click="activeStatFilter = ''" class="font-semibold hover:underline">Limpar</button>
             </div>
@@ -157,12 +157,12 @@
                     <table class="w-full text-[11px]">
                         <thead class="bg-surface-50 border-b border-surface-200">
                             <tr class="text-left">
-                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Entry</th>
-                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Kind / Status</th>
-                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Owner</th>
-                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Capabilities</th>
-                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Residency</th>
-                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Vendor</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Entrada</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Tipo / Status</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Dono</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Capacidades</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Residência</th>
+                                <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px]">Fornecedor</th>
                                 <th class="px-3 py-2 font-semibold text-surface-500 uppercase text-[10px] text-right">Custo/mês</th>
                             </tr>
                         </thead>
@@ -180,7 +180,7 @@
                                     <td class="px-3 py-2">
                                         <span class="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase"
                                               :class="kindBadgeClass(e.kind)" x-text="e.kind"></span>
-                                        <p class="text-[9px] text-surface-500 mt-0.5" x-text="e.status"></p>
+                                        <p class="text-[9px] text-surface-500 mt-0.5" x-text="catalogStatusLabel(e.status)"></p>
                                     </td>
                                     <td class="px-3 py-2">
                                         <p class="font-mono text-surface-700 text-[10px]" x-text="e.owner_user_id"></p>
@@ -262,7 +262,7 @@
                                         <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-600"
                                               x-text="'v' + drawerData.entry.version"></span>
                                         <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-surface-600"
-                                              x-text="drawerData.entry.status"></span>
+                                              x-text="catalogStatusLabel(drawerData.entry.status)"></span>
                                     </div>
                                     <p class="text-[10px] font-mono text-surface-400 mt-1 break-all" x-text="drawerData.entry.urn"></p>
                                 </div>
@@ -327,11 +327,11 @@
 
                             <!-- Identidade & governance -->
                             <section class="rounded-xl border border-surface-200 bg-white p-4">
-                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Identidade &amp; governance</h3>
+                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Identidade &amp; governança</h3>
                                 <dl class="space-y-1.5 text-[11px]">
-                                    <div class="flex justify-between gap-2"><dt class="text-surface-500">Owner</dt><dd class="text-brand-900 truncate"
+                                    <div class="flex justify-between gap-2"><dt class="text-surface-500">Dono</dt><dd class="text-brand-900 truncate"
                                         x-text="drawerData.owner?.email || drawerData.owner?.id || '—'"></dd></div>
-                                    <div class="flex justify-between gap-2"><dt class="text-surface-500">Steward</dt><dd class="text-brand-900 truncate"
+                                    <div class="flex justify-between gap-2"><dt class="text-surface-500">Curador</dt><dd class="text-brand-900 truncate"
                                         x-text="drawerData.entry.steward_team || '—'"></dd></div>
                                     <div class="flex justify-between gap-2"><dt class="text-surface-500">Domínio</dt><dd class="text-brand-900"
                                         x-text="drawerData.entry.domain || '—'"></dd></div>
@@ -346,7 +346,7 @@
 
                             <!-- Risk surface (capability disclosure organizada) -->
                             <section class="rounded-xl border border-surface-200 bg-white p-4">
-                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Risk surface</h3>
+                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Superfície de risco</h3>
                                 <template x-if="!drawerData.disclosure">
                                     <p class="text-[11px] italic text-surface-400">Capability Disclosure não declarada — comitê não consegue avaliar.</p>
                                 </template>
@@ -392,7 +392,7 @@
                                         <div>
                                             <p class="text-[10px] font-semibold text-emerald-700 mb-1">Modelo</p>
                                             <div class="flex flex-wrap gap-1.5">
-                                                <span x-show="drawerData.disclosure.trains_on_input" class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[10px] font-semibold">Input vira training data</span>
+                                                <span x-show="drawerData.disclosure.trains_on_input" class="rounded-full bg-rose-100 text-rose-700 px-2 py-0.5 text-[10px] font-semibold">Input vira dado de treinamento</span>
                                                 <span x-show="drawerData.disclosure.output_is_deterministic" class="rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-[10px] font-semibold">Output determinístico</span>
                                                 <span x-show="!drawerData.disclosure.trains_on_input && !drawerData.disclosure.output_is_deterministic" class="text-[10px] italic text-surface-400">Sem flags ativas</span>
                                             </div>
@@ -445,7 +445,7 @@
                                         <p class="text-[11px] text-brand-900" x-text="relativeTime(drawerData.metrics.last_invoked_at)"></p>
                                     </div>
                                     <div x-show="drawerData.metrics.success_rate !== null && drawerData.metrics.success_rate !== undefined">
-                                        <p class="text-[10px] text-surface-500">Reliability</p>
+                                        <p class="text-[10px] text-surface-500">Confiabilidade</p>
                                         <p class="text-[11px] text-brand-900" x-text="((drawerData.metrics.success_rate || 0) * 100).toFixed(0) + '%'"></p>
                                     </div>
                                 </div>
@@ -455,7 +455,7 @@
                             <section x-show="drawerData.external_metadata" class="rounded-xl border border-rose-200 bg-rose-50/30 p-4">
                                 <h3 class="text-[10px] font-bold uppercase tracking-wider text-rose-700 mb-2">Plataforma externa</h3>
                                 <dl class="space-y-1 text-[11px]">
-                                    <div class="flex justify-between"><dt class="text-surface-500">Vendor</dt><dd class="font-semibold text-brand-900" x-text="drawerData.external_metadata?.vendor || '—'"></dd></div>
+                                    <div class="flex justify-between"><dt class="text-surface-500">Fornecedor</dt><dd class="font-semibold text-brand-900" x-text="drawerData.external_metadata?.vendor || '—'"></dd></div>
                                     <div class="flex justify-between"><dt class="text-surface-500">Contrato</dt><dd class="text-brand-900" x-text="drawerData.external_metadata?.contract_status || '—'"></dd></div>
                                     <div class="flex justify-between"><dt class="text-surface-500">Custo mensal</dt><dd class="font-mono text-emerald-700" x-text="drawerData.external_metadata?.monthly_cost_usd ? '$' + drawerData.external_metadata.monthly_cost_usd.toLocaleString() : '—'"></dd></div>
                                     <div x-show="drawerData.external_metadata?.restrictions" class="pt-2 border-t border-rose-100">
@@ -467,7 +467,7 @@
 
                             <!-- Recipe steps (só para kind=recipe) -->
                             <section x-show="drawerData.recipe && drawerData.recipe.steps?.length" class="rounded-xl border border-brand-200 bg-brand-50/30 p-4">
-                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Recipe steps</h3>
+                                <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Passos do Recipe</h3>
                                 <ol class="space-y-1 text-[11px]">
                                     <template x-for="(step, i) in (drawerData.recipe?.steps || [])" :key="i">
                                         <li class="flex items-start gap-2">
