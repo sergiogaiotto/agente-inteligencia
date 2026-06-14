@@ -13,7 +13,7 @@
         <div class="flex items-start justify-between gap-3">
             <div>
                 <h2 class="text-[18px] font-bold text-brand-900">Inventário Regulatório</h2>
-                <p class="text-[12px] text-surface-400 mt-0.5">Cross-entries com capability disclosure. Para comitê de privacidade/segurança — "quais entries processam PII? quais APIs externas chamamos? qual exposição mensal?"</p>
+                <p class="text-[12px] text-surface-400 mt-0.5">Cruza entries com a divulgação de capacidade. Para comitê de privacidade/segurança — "quais entries processam PII? quais APIs externas chamamos? qual exposição mensal?"</p>
             </div>
             <div class="flex items-center gap-2 shrink-0">
                 <button @click="load()" :disabled="loading" class="inline-flex items-center gap-2 rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] font-medium text-brand-900 hover:border-brand-300">
@@ -348,7 +348,7 @@
                             <section class="rounded-xl border border-surface-200 bg-white p-4">
                                 <h3 class="text-[10px] font-bold uppercase tracking-wider text-brand-700 mb-2">Superfície de risco</h3>
                                 <template x-if="!drawerData.disclosure">
-                                    <p class="text-[11px] italic text-surface-400">Capability Disclosure não declarada — comitê não consegue avaliar.</p>
+                                    <p class="text-[11px] italic text-surface-400">Divulgação de Capacidade não declarada — comitê não consegue avaliar.</p>
                                 </template>
                                 <template x-if="drawerData.disclosure">
                                     <div class="space-y-3">
@@ -793,7 +793,7 @@ function inventoryPage() {
         },
         // Narrativa curta: "Alto risco: processa PII, dados de saúde, chama APIs externas"
         riskNarrative(data) {
-            if (!data?.disclosure) return 'Capability não declarada — comitê precisa revisar manualmente.';
+            if (!data?.disclosure) return 'Divulgação não declarada — comitê precisa revisar manualmente.';
             const driverLabels = {
                 processes_pii: 'PII',
                 processes_financial: 'dados financeiros',
