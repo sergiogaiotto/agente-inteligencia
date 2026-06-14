@@ -21,9 +21,9 @@ window.MODULE_GUIDE = [
     label: 'Topologia AOBD → AR → SA',
     fundamento: `<p>A plataforma organiza agents em três camadas com responsabilidades distintas — como uma empresa que tem gerente, supervisor e operador.</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
-  <li><b>AOBD (Orchestrator)</b> — o "gerente". Recebe uma pergunta vinda do usuário, interpreta a intenção e decide qual fluxo executar. Consulta o CAR (§6) para escolher.</li>
-  <li><b>AR (Router)</b> — o "supervisor". Decompõe um fluxo em etapas, controla dependências entre subagents, gerencia o DAG de execução.</li>
-  <li><b>SA (Subagent)</b> — o "operador". Executa uma tarefa atômica: chama uma tool, gera uma resposta, classifica um item. Stateless por design.</li>
+  <li><b>AOBD — Maestro (Orquestrador)</b> — o "gerente". Recebe uma pergunta vinda do usuário, interpreta a intenção e decide qual fluxo executar. Consulta o CAR (§6) para escolher.</li>
+  <li><b>AR — Triagem (Roteador)</b> — o "supervisor". Decompõe um fluxo em etapas, controla dependências entre subagents, gerencia o DAG de execução.</li>
+  <li><b>SA — Especialista (Subagente)</b> — o "operador". Executa uma tarefa atômica: chama uma tool, gera uma resposta, classifica um item. Stateless por design.</li>
 </ul>
 <p class="mt-2">Comunicação entre camadas é via <b>Protocolo A2A</b> (§7) — envelopes tipados e assinados, com rastreabilidade total.</p>
 <p class="mt-2"><b>Quando se importar com isso:</b> só quando tiver mais de 3-4 agents resolvendo coisas relacionadas. Para um agent isolado, ignorar — todo SA funciona sozinho.</p>`,
