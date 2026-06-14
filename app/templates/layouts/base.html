@@ -22,6 +22,26 @@
         }},
     }
     </script>
+    <!-- Timezone da plataforma (Configurações > Plataforma; padrão America/Sao_Paulo =
+         GMT-3 Brasília). Injeta o fuso configurado em TODA formatação de data via
+         toLocale*, sem precisar passar timeZone em cada chamada. Patcheia só Date
+         (Number.toLocaleString fica intacto) e respeita um timeZone explícito. -->
+    <script>
+      window.PLATFORM_TZ = "{{ platform_tz() if platform_tz is defined else 'America/Sao_Paulo' }}";
+      (function () {
+        var tz = window.PLATFORM_TZ;
+        if (!tz) return;
+        ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'].forEach(function (m) {
+          var orig = Date.prototype[m];
+          Date.prototype[m] = function (locales, options) {
+            if (!options || options.timeZone == null) {
+              options = Object.assign({}, options, { timeZone: tz });
+            }
+            return orig.call(this, locales, options);
+          };
+        });
+      })();
+    </script>
     <style>
         [x-cloak]{display:none!important}
         .scrollbar-thin::-webkit-scrollbar{width:5px}

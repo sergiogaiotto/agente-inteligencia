@@ -367,6 +367,9 @@ _UI_TO_ENV_MAP = {
     "primary_model":    "PRIMARY_MODEL",
     # Idioma de resposta global (BCP-47: pt-BR, en-US, ...)
     "default_response_language": "DEFAULT_RESPONSE_LANGUAGE",
+    # Timezone da plataforma (IANA: America/Sao_Paulo = GMT-3 Brasília, padrão).
+    # Aplicado a os.environ['TZ'] + time.tzset() e exposto à UI (window.PLATFORM_TZ).
+    "timezone": "TZ",
     # Grounded-by-default: 'true'/'false'. Desliga a recusa global de respostas
     # sem evidência (não recomendado — fura o princípio anti-alucinação).
     "grounding_strict": "GROUNDING_STRICT",
@@ -409,6 +412,7 @@ _NON_MODEL_UI_KEYS = {
     "default_response_language", # idioma de resposta global (BCP-47)
     "mcp_per_tool_enabled",      # flag do modo per-tool MCP (default OFF)
     "text_to_sql_enabled",       # flag do Tier 2 text-to-SQL governado (default OFF)
+    "timezone",                  # timezone da plataforma (IANA); default Brasília
 }
 
 # Cobre: Azure, OpenAI público, Maritaca, Ollama, GPT-OSS 120b/20b, embedding
@@ -473,6 +477,15 @@ async def apply_settings_to_env() -> int:
         "event=settings.model_seal applied=%d removed=%d sealed_total=%d",
         applied, removed, len(_SEALED_ENV_VARS),
     )
+
+    # Timezone da plataforma: reflete TZ no time local do processo (datetime.now,
+    # strftime). time.tzset() só existe em Unix (Docker); no-op em Windows (dev).
+    try:
+        import time as _time
+        if hasattr(_time, "tzset"):
+            _time.tzset()
+    except Exception:
+        pass
 
     # Invalida cache pra próxima chamada de get_settings() rebuild com novas envs
     get_settings.cache_clear()
