@@ -349,6 +349,47 @@
                         </div>
                     </div>
                 </template>
+
+                <!-- Conexão de teste (PR1) — endpoint + credencial p/ testar a plataforma -->
+                <div class="rounded-xl border border-surface-200 bg-white p-4 mt-3">
+                    <div class="flex items-start justify-between gap-3 mb-2">
+                        <div>
+                            <h3 class="text-[12px] font-bold text-brand-900 uppercase tracking-wider">Conexão de teste</h3>
+                            <p class="text-[11px] text-surface-500 mt-0.5">Endpoint + credencial para <strong>testar</strong> a plataforma (chat OpenAI-compatível ou ping HTTP). O segredo é cifrado e nunca volta a ser exibido.</p>
+                        </div>
+                        <div class="flex gap-2 shrink-0">
+                            <button x-show="canMutate && entry.status === 'draft'" @click="openAdapterEdit()" class="text-[11px] text-brand-600 hover:underline" x-text="adapterConfig.base_url ? 'Editar' : 'Configurar'"></button>
+                            <button x-show="canMutate && adapterConfig.base_url" @click="testConnection(false)" :disabled="adapterTesting"
+                                    title="Ping rápido — não registra execução"
+                                    class="rounded-lg border border-brand-300 bg-brand-50 px-2 py-1 text-[11px] font-semibold text-brand-700 hover:bg-brand-100 disabled:opacity-50">
+                                <span x-text="adapterTesting ? 'Testando…' : '🔌 Testar conexão'"></span>
+                            </button>
+                            <button x-show="canMutate && adapterConfig.base_url" @click="openRunModal(true)"
+                                    title="Roda o probe e registra como execução (com polling e histórico)"
+                                    class="rounded-lg bg-brand-500 px-3 py-1 text-[11px] font-semibold text-white hover:bg-brand-600">🧪 Provar Capacidade</button>
+                        </div>
+                    </div>
+                    <template x-if="!adapterConfig.base_url">
+                        <p class="text-[11px] text-surface-400 italic">Conexão não configurada.<span x-show="canMutate && entry.status === 'draft'"> Clique em “Configurar”.</span></p>
+                    </template>
+                    <template x-if="adapterConfig.base_url">
+                        <div class="grid grid-cols-2 gap-2 text-[11px] mt-1">
+                            <div><span class="text-surface-400 uppercase text-[9px]">Modo</span><p class="text-brand-900 font-mono" x-text="adapterConfig.mode"></p></div>
+                            <div><span class="text-surface-400 uppercase text-[9px]">Endpoint</span><p class="text-brand-900 font-mono truncate" x-text="adapterConfig.base_url + (adapterConfig.path || '')"></p></div>
+                            <div><span class="text-surface-400 uppercase text-[9px]">Auth</span><p class="text-brand-900 font-mono" x-text="adapterConfig.auth_type"></p></div>
+                            <div><span class="text-surface-400 uppercase text-[9px]">Segredo</span><p :class="adapterConfig.secret_set ? 'text-emerald-700' : 'text-surface-400'" x-text="adapterConfig.secret_set ? '•••• salvo' : '— não definido'"></p></div>
+                        </div>
+                    </template>
+                    <template x-if="adapterTestResult">
+                        <div class="mt-3 rounded-lg border p-2 text-[11px]" :class="adapterTestResult.ok ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50'">
+                            <p class="font-semibold" :class="adapterTestResult.ok ? 'text-emerald-800' : 'text-rose-800'"
+                               x-text="(adapterTestResult.ok ? '✓ Conexão OK' : '✗ Falhou') + ' · HTTP ' + adapterTestResult.status + ' · ' + adapterTestResult.latency_ms + 'ms'"></p>
+                            <p x-show="adapterTestResult.output" class="mt-1 text-surface-700 font-mono whitespace-pre-wrap" x-text="adapterTestResult.output"></p>
+                            <p x-show="adapterTestResult.error" class="mt-1 text-rose-700" x-text="adapterTestResult.error"></p>
+                            <p x-show="adapterTestResult.hint" class="mt-1 text-surface-500 italic" x-text="adapterTestResult.hint"></p>
+                        </div>
+                    </template>
+                </div>
             </div>
 
             <!-- Tab content: Recipe Steps (apenas kind=recipe) -->
@@ -680,29 +721,32 @@
          class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
         <div @click.outside="if (!runSubmitting) runModalOpen = false" class="bg-white rounded-2xl w-full max-w-lg p-5 shadow-xl">
             <div class="flex items-center justify-between mb-3">
-                <h3 class="text-[14px] font-bold text-brand-900" x-text="(isSandboxRun ? '🧪 Sandbox de ' : 'Executar ') + (entry.kind === 'pipeline' ? 'pipeline' : 'Recipe')"></h3>
+                <h3 class="text-[14px] font-bold text-brand-900" x-text="entry.kind === 'external_platform' ? ('🧪 Provar Capacidade — ' + (entry.name || '')) : ((isSandboxRun ? '🧪 Sandbox de ' : 'Executar ') + (entry.kind === 'pipeline' ? 'pipeline' : 'Recipe'))"></h3>
                 <button @click="runModalOpen = false" :disabled="runSubmitting" class="text-surface-400 hover:text-brand-600 disabled:opacity-30">×</button>
             </div>
+            <p x-show="entry.kind === 'external_platform'" class="text-[11px] text-surface-500 mb-3">
+                Roda o <strong>probe configurado</strong> contra a plataforma (modo <span class="font-mono" x-text="adapterConfig.mode || 'openai_chat'"></span>). Prompt opcional — vazio usa o prompt de teste salvo. Registrado como execução <strong>sandbox</strong> (custo não vai para chargeback).
+            </p>
             <p x-show="!isSandboxRun && entry.kind === 'pipeline'" class="text-[11px] text-surface-500 mb-3">
                 O input alimenta a <strong>raiz</strong> do grafo; a execução roda o pipeline <strong>selado aos membros</strong> (não vaza para o mesh global).
             </p>
-            <p x-show="!isSandboxRun && entry.kind !== 'pipeline'" class="text-[11px] text-surface-500 mb-3">
+            <p x-show="!isSandboxRun && entry.kind !== 'pipeline' && entry.kind !== 'external_platform'" class="text-[11px] text-surface-500 mb-3">
                 Input vai alimentar o <strong>step 1</strong>. Output de cada step vira input do próximo (chain).
                 Steps em sequência: <strong x-text="(recipe?.steps?.length || 0) + ' steps'"></strong>.
             </p>
-            <p x-show="isSandboxRun" class="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">
+            <p x-show="isSandboxRun && entry.kind !== 'external_platform'" class="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">
                 ⚠ <strong>Sandbox</strong>: roda em qualquer status (incl. draft), com LLM real. Custo <strong>não</strong> vai para dashboards de chargeback. Use para testar antes de publicar.
             </p>
             <textarea x-model="runInput" rows="6"
-                      :placeholder="entry.kind === 'pipeline' ? 'Digite o input inicial do pipeline…' : 'Digite o input inicial do recipe…'"
+                      :placeholder="entry.kind === 'external_platform' ? 'Prompt de teste (opcional)…' : (entry.kind === 'pipeline' ? 'Digite o input inicial do pipeline…' : 'Digite o input inicial do recipe…')"
                       class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400 font-mono"></textarea>
             <div class="text-[10px] text-surface-400 mt-1" x-text="runInput.length + ' / 50000 chars'"></div>
             <div class="flex justify-end gap-2 mt-4">
                 <button @click="runModalOpen = false" :disabled="runSubmitting" class="px-3 py-1.5 text-[12px] rounded-lg border border-surface-200 hover:bg-surface-50 disabled:opacity-50">Cancelar</button>
-                <button @click="executeRecipe()" :disabled="runSubmitting || !runInput.trim() || runInput.length > 50000"
-                        :class="isSandboxRun ? 'bg-amber-500 hover:bg-amber-600' : 'bg-brand-500 hover:bg-brand-600'"
+                <button @click="executeRecipe()" :disabled="runSubmitting || (entry.kind !== 'external_platform' && !runInput.trim()) || runInput.length > 50000"
+                        :class="(isSandboxRun || entry.kind === 'external_platform') ? 'bg-amber-500 hover:bg-amber-600' : 'bg-brand-500 hover:bg-brand-600'"
                         class="px-3 py-1.5 text-[12px] rounded-lg text-white disabled:opacity-50">
-                    <span x-text="runSubmitting ? 'Disparando…' : (isSandboxRun ? '🧪 Rodar sandbox' : '▶ Executar')"></span>
+                    <span x-text="runSubmitting ? 'Disparando…' : (entry.kind === 'external_platform' ? '🧪 Provar' : (isSandboxRun ? '🧪 Rodar sandbox' : '▶ Executar'))"></span>
                 </button>
             </div>
         </div>
@@ -860,6 +904,95 @@
         </div>
     </div>
 
+    <!-- ═══ MODAL: configurar conexão de teste (PR1) ═══ -->
+    <div x-show="adapterModalOpen" @keydown.escape.window="adapterModalOpen = false"
+         x-transition.opacity
+         class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" style="display:none">
+        <div @click.outside="adapterModalOpen = false" class="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5 shadow-xl">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-[14px] font-bold text-brand-900">Conexão de teste — Plataforma Externa</h3>
+                <button @click="adapterModalOpen = false" class="text-surface-400 hover:text-brand-600">×</button>
+            </div>
+            <div class="space-y-3 text-[12px]">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-600 mb-1">Modo</label>
+                        <select x-model="adapterForm.mode" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none">
+                            <option value="openai_chat">Chat OpenAI-compatível</option>
+                            <option value="http_ping">Ping HTTP (saúde)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-600 mb-1">Timeout (ms)</label>
+                        <input type="number" min="1000" max="120000" step="1000" x-model.number="adapterForm.timeout_ms" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400 font-mono">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">Base URL <span class="text-rose-500">*</span></label>
+                    <input type="url" x-model="adapterForm.base_url" placeholder="https://api.openai.com" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400 font-mono">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">Path</label>
+                    <input type="text" x-model="adapterForm.path" :placeholder="adapterForm.mode === 'openai_chat' ? '/v1/chat/completions (default)' : '/ (default)'" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400 font-mono">
+                </div>
+                <div x-show="adapterForm.mode === 'openai_chat'">
+                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">Modelo</label>
+                    <input type="text" x-model="adapterForm.model" placeholder="gpt-4o-mini" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400 font-mono">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-600 mb-1">Auth</label>
+                        <select x-model="adapterForm.auth_type" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none">
+                            <option value="none">Nenhum</option>
+                            <option value="bearer">Bearer token</option>
+                            <option value="api_key">API key (header)</option>
+                            <option value="basic">Basic (user:pass)</option>
+                        </select>
+                    </div>
+                    <div x-show="adapterForm.auth_type === 'api_key'">
+                        <label class="block text-[11px] font-semibold text-surface-600 mb-1">Nome do header</label>
+                        <input type="text" x-model="adapterForm.auth_header" placeholder="X-API-Key" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400 font-mono">
+                    </div>
+                </div>
+                <div x-show="adapterForm.auth_type !== 'none'">
+                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">
+                        Segredo / token
+                        <span x-show="adapterConfig.secret_set" class="text-emerald-600 font-normal">(já salvo — deixe vazio p/ manter)</span>
+                    </label>
+                    <input type="password" x-model="adapterForm.secret" autocomplete="off"
+                           :placeholder="adapterConfig.secret_set ? '•••••••• (não exibido)' : 'cole o token aqui'"
+                           class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400 font-mono">
+                    <p class="text-[10px] text-surface-400 mt-1">Cifrado com Fernet ao salvar. Nunca é exibido de volta (write-only).</p>
+                </div>
+                <div>
+                    <label class="block text-[11px] font-semibold text-surface-600 mb-1">Prompt de teste</label>
+                    <input type="text" x-model="adapterForm.test_prompt" placeholder="Responda apenas: OK" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400">
+                </div>
+                <template x-if="adapterTestResult">
+                    <div class="rounded-lg border p-2 text-[11px]" :class="adapterTestResult.ok ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50'">
+                        <p class="font-semibold" :class="adapterTestResult.ok ? 'text-emerald-800' : 'text-rose-800'"
+                           x-text="(adapterTestResult.ok ? '✓ Conexão OK' : '✗ Falhou') + ' · HTTP ' + adapterTestResult.status + ' · ' + adapterTestResult.latency_ms + 'ms'"></p>
+                        <p x-show="adapterTestResult.output" class="mt-1 text-surface-700 font-mono whitespace-pre-wrap" x-text="adapterTestResult.output"></p>
+                        <p x-show="adapterTestResult.error" class="mt-1 text-rose-700" x-text="adapterTestResult.error"></p>
+                        <p x-show="adapterTestResult.hint" class="mt-1 text-surface-500 italic" x-text="adapterTestResult.hint"></p>
+                    </div>
+                </template>
+            </div>
+            <div class="flex justify-between gap-2 mt-5">
+                <button @click="testConnection(true)" :disabled="adapterTesting || !adapterForm.base_url"
+                        class="px-3 py-1.5 text-[12px] rounded-lg border border-brand-300 bg-brand-50 text-brand-700 hover:bg-brand-100 disabled:opacity-50">
+                    <span x-text="adapterTesting ? 'Testando…' : '🔌 Testar agora'"></span>
+                </button>
+                <div class="flex gap-2">
+                    <button @click="adapterModalOpen = false" class="px-3 py-1.5 text-[12px] rounded-lg border border-surface-200 hover:bg-surface-50">Fechar</button>
+                    <button @click="saveAdapter()" :disabled="adapterSaving || !adapterForm.base_url" class="px-3 py-1.5 text-[12px] rounded-lg bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50">
+                        <span x-text="adapterSaving ? 'Salvando…' : 'Salvar'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ═══ MODAL: decisão Root ═══ -->
     <div x-show="decideModalOpen" @keydown.escape.window="decideModalOpen = false"
          x-transition.opacity
@@ -910,6 +1043,13 @@ function catalogDetailPage(entryId) {
         externalModalOpen: false,
         externalSaving: false,
         externalForm: {},
+        // Conexão de teste de plataforma externa (PR1) — config redigida (sem segredo)
+        adapterConfig: {},
+        adapterModalOpen: false,
+        adapterForm: {},
+        adapterSaving: false,
+        adapterTesting: false,
+        adapterTestResult: null,
         // Recipe (Onda 3)
         recipe: null,
         // Pipeline (PR6) — snapshot do grafo (read-only) p/ kind=pipeline
@@ -1041,6 +1181,11 @@ function catalogDetailPage(entryId) {
                         try {
                             const er = await fetch('/api/v1/catalog/entries/' + this.entryId + '/external-metadata');
                             if (er.ok) this.externalMeta = await er.json();
+                        } catch {}
+                        // Conexão de teste (config de adapter, redigida — sem segredo)
+                        try {
+                            const ar = await fetch('/api/v1/catalog/entries/' + this.entryId + '/external-adapter');
+                            if (ar.ok) { const j = await ar.json(); this.adapterConfig = j.probe || {}; }
                         } catch {}
                     }
 
@@ -1263,6 +1408,88 @@ function catalogDetailPage(entryId) {
             this.externalSaving = false;
         },
 
+        // ─── Conexão de teste (PR1) ───────────────────────────────
+        openAdapterEdit() {
+            const c = this.adapterConfig || {};
+            this.adapterForm = {
+                mode: c.mode || 'openai_chat',
+                base_url: c.base_url || '',
+                path: c.path || '',
+                model: c.model || '',
+                auth_type: c.auth_type || 'bearer',
+                auth_header: c.auth_header || 'X-API-Key',
+                test_prompt: c.test_prompt || 'Responda apenas: OK',
+                timeout_ms: c.timeout_ms || 30000,
+                secret: '',   // write-only; vazio mantém o segredo salvo
+            };
+            this.adapterTestResult = null;
+            this.adapterModalOpen = true;
+        },
+
+        _adapterProbePayload() {
+            const f = this.adapterForm;
+            return {
+                mode: f.mode || 'openai_chat',
+                base_url: (f.base_url || '').trim(),
+                path: f.path || null,
+                model: f.model || null,
+                auth_type: f.auth_type || 'none',
+                auth_header: f.auth_header || 'X-API-Key',
+                test_prompt: f.test_prompt || 'Responda apenas: OK',
+                timeout_ms: f.timeout_ms || 30000,
+            };
+        },
+
+        async saveAdapter() {
+            this.adapterSaving = true;
+            try {
+                const body = { probe: this._adapterProbePayload() };
+                if (this.adapterForm.secret) body.secret = this.adapterForm.secret;
+                const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/external-adapter', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                if (!r.ok) { const e = await r.json(); throw new Error(e.detail || JSON.stringify(e)); }
+                const j = await r.json();
+                this.adapterConfig = j.probe || {};
+                showToast('Conexão salva');
+                this.adapterModalOpen = false;
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+            this.adapterSaving = false;
+        },
+
+        async testConnection(fromModal = false) {
+            this.adapterTesting = true;
+            this.adapterTestResult = null;
+            try {
+                // No modal: usa os valores do form (testa antes de salvar).
+                // No card: usa a config salva (backend cai no segredo cifrado).
+                let probe;
+                if (fromModal) {
+                    probe = this._adapterProbePayload();
+                } else {
+                    probe = { ...this.adapterConfig };
+                    delete probe.secret_set;  // campo de exibição, não faz parte do schema
+                }
+                if (!probe.base_url) throw new Error('configure a base_url primeiro');
+                const body = { probe };
+                if (fromModal && this.adapterForm.secret) body.secret = this.adapterForm.secret;
+                const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/external-test-inline', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                if (!r.ok) { const e = await r.json(); throw new Error(e.detail || JSON.stringify(e)); }
+                this.adapterTestResult = await r.json();
+            } catch (e) {
+                this.adapterTestResult = { ok: false, status: 0, latency_ms: 0, error: e.message };
+            }
+            this.adapterTesting = false;
+        },
+
         contractBadgeClass(s) {
             return ({
                 active: 'bg-emerald-50 text-emerald-700',
@@ -1430,19 +1657,20 @@ function catalogDetailPage(entryId) {
             });
         },
         async executeRecipe() {
-            if (!this.runInput.trim()) return;
+            const isExternal = this.entry?.kind === 'external_platform';
+            if (!isExternal && !this.runInput.trim()) return;
             this.runSubmitting = true;
             const inputSnapshot = this.runInput;
-            // PR6: endpoint kind-aware — pipeline usa /execute-pipeline|/sandbox-pipeline (selado);
-            // recipe (e demais) usam /execute|/sandbox.
+            // Endpoint kind-aware — pipeline: /execute-pipeline|/sandbox-pipeline (selado);
+            // external_platform (PR2): /probe (sempre sandbox); recipe: /execute|/sandbox.
             const isPipeline = this.entry?.kind === 'pipeline';
             const verb = this.isSandboxRun ? 'sandbox' : 'execute';
-            const endpoint = isPipeline ? ('/' + verb + '-pipeline') : ('/' + verb);
+            const endpoint = isExternal ? '/probe' : (isPipeline ? ('/' + verb + '-pipeline') : ('/' + verb));
             try {
                 const r = await fetch('/api/v1/catalog/entries/' + this.entryId + endpoint, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({input: inputSnapshot}),
+                    body: JSON.stringify(isExternal ? {input: inputSnapshot || null} : {input: inputSnapshot}),
                 });
                 if (!r.ok) {
                     const err = await r.json().catch(() => ({detail: 'erro desconhecido'}));
