@@ -34,6 +34,7 @@ from app.catalog.models import (
     CatalogEntryUpdate,
     ExternalAdapterUpdate,
     ExternalPlatformMetadata,
+    ExternalProbeRunRequest,
     ExternalTestRequest,
     InvocationCostRecord,
     PipelinePublishRequest,
@@ -922,6 +923,67 @@ async def external_test_inline(
         "status": result.get("status"),
     })
     return result
+
+
+@router.post("/entries/{entry_id}/probe", status_code=202)
+async def probe_external_endpoint(
+    entry_id: str,
+    data: ExternalProbeRunRequest,
+    user: dict = Depends(require_user),
+):
+    """PR2 — 'Provar Capacidade': roda o probe CONFIGURADO contra a plataforma
+    externa como execução (sandbox), registrando em catalog_recipe_executions
+    (reusa o polling universal de GET /executions/{id}).
+
+    Owner/root, kind='external_platform', qualquer status. 202 + execution_id.
+    Exige conexão já configurada (PUT /external-adapter com base_url)."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if entry.get("kind") != "external_platform":
+        raise HTTPException(422, "Provar Capacidade só se aplica a kind='external_platform'")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem provar a plataforma")
+
+    raw_cfg = await get_entry_adapter_raw(entry_id)
+    probe_cfg = raw_cfg.get("probe") if isinstance(raw_cfg, dict) else None
+    if not isinstance(probe_cfg, dict) or not probe_cfg.get("base_url"):
+        raise HTTPException(
+            422,
+            "Conexão não configurada — configure o adapter (base_url) antes de provar",
+        )
+    secret = probe_cfg.get("secret_cipher") or ""
+    user_input = data.input or probe_cfg.get("test_prompt") or "Responda apenas: OK"
+
+    execution = await create_execution(
+        recipe_entry_id=entry_id,
+        consumer_user_id=user["id"],
+        input_text=user_input,
+        is_sandbox=True,
+    )
+
+    from app.catalog.executor import probe_external_platform
+    asyncio.create_task(probe_external_platform(
+        execution_id=execution["id"],
+        entry_id=entry_id,
+        entry_name=entry.get("name") or entry_id,
+        config=probe_cfg,
+        secret=secret,
+        user_input=user_input,
+    ))
+
+    await _audit("external_probe_started", entry_id, user["id"], {
+        "execution_id": execution["id"],
+        "mode": probe_cfg.get("mode"),
+    })
+    return {
+        "execution_id": execution["id"],
+        "entry_id": entry_id,
+        "status": "running",
+        "is_sandbox": True,
+        "started_at": _started_iso(execution),
+    }
 
 
 # ═════════════════════════════════════════════════════════════════

@@ -438,3 +438,72 @@ async def execute_pipeline_entry(
     # (ingress de federação). Os chamadores via asyncio.create_task ignoram o retorno
     # (comportamento inalterado). None nos caminhos de falha acima.
     return result
+
+
+async def probe_external_platform(
+    *,
+    execution_id: str,
+    entry_id: str,
+    entry_name: str,
+    config: dict,
+    secret: str,
+    user_input: str,
+) -> None:
+    """PR2 — 'Provar Capacidade': roda UM probe contra a plataforma externa e
+    grava como execução de 1 step em catalog_recipe_executions (reusa o trilho
+    de polling de recipes/pipelines). Pensado para asyncio.create_task.
+
+    is_sandbox é selado pelo endpoint (probe é sempre teste — custo não vai p/
+    chargeback). run_probe é fail-soft; o try/except é cinto-e-suspensório p/
+    nunca deixar a row em 'running'."""
+    from app.catalog.external_probe import run_probe  # lazy: httpx/ssrf
+
+    started = _iso()
+    try:
+        res = await run_probe(config, secret=secret, input_text=user_input)
+        ok = bool(res.get("ok"))
+        latency = int(res.get("latency_ms") or 0)
+        tok_in = int(res.get("tokens_input") or 0)
+        tok_out = int(res.get("tokens_output") or 0)
+        step = {
+            "order": 1,
+            "target_entry_id": entry_id,
+            "target_name": entry_name,
+            "status": "success" if ok else "error",
+            "output": _truncate(res.get("output") or ""),
+            "error": None if ok else (res.get("error") or f"HTTP {res.get('status')}"),
+            "cost_usd": 0.0,
+            "tokens_input": tok_in,
+            "tokens_output": tok_out,
+            "tokens_total": tok_in + tok_out,
+            "provider": config.get("base_url"),
+            "model": config.get("model"),
+            "interaction_id": None,
+            "latency_ms": latency,
+            "http_status": res.get("status"),
+            "hint": res.get("hint"),
+            "started_at": started,
+            "finished_at": _iso(),
+        }
+        await append_step_result(execution_id, step)
+        await finalize_execution(
+            execution_id,
+            status="completed" if ok else "failed",
+            total_cost_usd=0.0,
+            total_latency_ms=latency,
+            error_message=None if ok else step["error"],
+        )
+    except Exception as e:
+        logger.exception(
+            "probe_external_platform crashed: execution=%s entry=%s", execution_id, entry_id
+        )
+        try:
+            await finalize_execution(
+                execution_id,
+                status="failed",
+                total_cost_usd=0.0,
+                total_latency_ms=0,
+                error_message=f"{type(e).__name__}: {str(e)[:160]}",
+            )
+        except Exception:
+            logger.exception(f"finalize_execution(failed) falhou: execution={execution_id}")

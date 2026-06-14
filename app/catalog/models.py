@@ -327,6 +327,15 @@ class ExternalTestRequest(BaseModel):
     input: Optional[str] = Field(None, max_length=10000)
 
 
+class ExternalProbeRunRequest(BaseModel):
+    """Payload do POST /entries/{id}/probe (PR2 — 'Provar Capacidade').
+
+    Usa a config + segredo JÁ salvos na entry. `input` opcional sobrepõe o
+    test_prompt salvo (vazio = usa o test_prompt)."""
+
+    input: Optional[str] = Field(None, max_length=50000)
+
+
 # ─── Stewardship reassign (Onda 2) ───────────────────────────────
 
 

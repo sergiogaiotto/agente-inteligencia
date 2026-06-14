@@ -412,3 +412,140 @@ class TestTestInline:
         c = _client(OWNER)
         r = c.post("/api/v1/catalog/entries/ext-1/external-test-inline", json={"probe": _cfg()})
         assert r.status_code == 200
+
+
+# ═════════════════════════════════════════════════════════════════
+# PR2 — POST /entries/{id}/probe ("Provar Capacidade")
+# ═════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def probe_storage(monkeypatch):
+    """Mock dos repos + queries + background task usados por POST /probe."""
+    state = {
+        "entry": _entry(status="published"),
+        "raw_cfg": {"probe": {
+            "mode": "openai_chat", "base_url": "https://api.vendor.example",
+            "test_prompt": "Responda apenas: OK", "secret_cipher": "enc::stored",
+        }},
+        "created": None,
+        "bg_calls": [],
+    }
+
+    async def fake_find_by_id(eid):
+        e = state["entry"]
+        return dict(e) if e and e["id"] == eid else None
+
+    async def fake_audit_create(data):
+        return data
+
+    async def fake_get_raw(entry_id):
+        return dict(state["raw_cfg"])
+
+    async def fake_create_execution(*, recipe_entry_id, consumer_user_id, input_text, is_sandbox=False):
+        row = {
+            "id": "exec-probe-1", "recipe_entry_id": recipe_entry_id,
+            "consumer_user_id": consumer_user_id, "input": input_text,
+            "is_sandbox": is_sandbox, "started_at": None, "status": "running",
+        }
+        state["created"] = dict(row)
+        return dict(row)
+
+    async def fake_probe_bg(**kwargs):
+        state["bg_calls"].append(kwargs)
+
+    monkeypatch.setattr(catalog_entries_repo, "find_by_id", fake_find_by_id)
+    monkeypatch.setattr(audit_repo, "create", fake_audit_create)
+    monkeypatch.setattr("app.routes.catalog.get_entry_adapter_raw", fake_get_raw)
+    monkeypatch.setattr("app.routes.catalog.create_execution", fake_create_execution)
+    monkeypatch.setattr("app.catalog.executor.probe_external_platform", fake_probe_bg)
+    return state
+
+
+class TestProbeEndpoint:
+    def test_owner_dispatches_sandbox_execution(self, probe_storage):
+        c = _client(OWNER)
+        r = c.post("/api/v1/catalog/entries/ext-1/probe", json={"input": "olá"})
+        assert r.status_code == 202
+        body = r.json()
+        assert body["execution_id"] == "exec-probe-1" and body["is_sandbox"] is True
+        # execução criada como sandbox, com o input fornecido
+        assert probe_storage["created"]["is_sandbox"] is True
+        assert probe_storage["created"]["input"] == "olá"
+
+    def test_input_falls_back_to_test_prompt(self, probe_storage):
+        c = _client(OWNER)
+        r = c.post("/api/v1/catalog/entries/ext-1/probe", json={})
+        assert r.status_code == 202
+        assert probe_storage["created"]["input"] == "Responda apenas: OK"
+
+    def test_no_adapter_configured_422(self, probe_storage):
+        probe_storage["raw_cfg"] = {}  # sem probe.base_url
+        c = _client(OWNER)
+        r = c.post("/api/v1/catalog/entries/ext-1/probe", json={})
+        assert r.status_code == 422
+
+    def test_non_owner_403(self, probe_storage):
+        c = _client(OTHER)
+        r = c.post("/api/v1/catalog/entries/ext-1/probe", json={})
+        assert r.status_code == 403
+
+    def test_non_external_422(self, probe_storage):
+        probe_storage["entry"] = _entry(kind="recipe", status="published")
+        c = _client(OWNER)
+        r = c.post("/api/v1/catalog/entries/ext-1/probe", json={})
+        assert r.status_code == 422
+
+
+# ═════════════════════════════════════════════════════════════════
+# PR2 — executor probe_external_platform (grava 1 step + finaliza)
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestProbeExecutor:
+    def _patch_exec(self, monkeypatch, probe_result):
+        import app.catalog.executor as ex
+        steps, finals = [], []
+
+        async def fake_run(config, *, secret="", input_text="", allow_http=False):
+            return probe_result
+
+        async def fake_append(execution_id, step):
+            steps.append(step)
+
+        async def fake_finalize(execution_id, *, status, total_cost_usd, total_latency_ms, error_message=None):
+            finals.append({"status": status, "error": error_message, "latency": total_latency_ms})
+
+        monkeypatch.setattr("app.catalog.external_probe.run_probe", fake_run)
+        monkeypatch.setattr(ex, "append_step_result", fake_append)
+        monkeypatch.setattr(ex, "finalize_execution", fake_finalize)
+        return steps, finals
+
+    def test_success_completes(self, monkeypatch):
+        from app.catalog.executor import probe_external_platform
+        steps, finals = self._patch_exec(monkeypatch, {
+            "ok": True, "status": 200, "latency_ms": 30,
+            "output": "OK", "tokens_input": 5, "tokens_output": 2,
+        })
+        asyncio.run(probe_external_platform(
+            execution_id="e1", entry_id="ext-1", entry_name="ChatGPT",
+            config={"base_url": "https://api.x", "model": "gpt-4o-mini"},
+            secret="enc::s", user_input="oi",
+        ))
+        assert len(steps) == 1
+        assert steps[0]["status"] == "success" and steps[0]["output"] == "OK"
+        assert steps[0]["tokens_total"] == 7 and steps[0]["target_name"] == "ChatGPT"
+        assert finals[0]["status"] == "completed"
+
+    def test_failure_marks_failed(self, monkeypatch):
+        from app.catalog.executor import probe_external_platform
+        steps, finals = self._patch_exec(monkeypatch, {
+            "ok": False, "status": 401, "latency_ms": 12,
+            "error": "Auth falhou", "output": "",
+        })
+        asyncio.run(probe_external_platform(
+            execution_id="e1", entry_id="ext-1", entry_name="ChatGPT",
+            config={"base_url": "https://api.x"}, secret="", user_input="oi",
+        ))
+        assert steps[0]["status"] == "error" and steps[0]["error"] == "Auth falhou"
+        assert finals[0]["status"] == "failed" and finals[0]["error"] == "Auth falhou"
