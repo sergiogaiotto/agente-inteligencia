@@ -17,7 +17,7 @@ PAGES = {
     "/catalog/publish": {"template":"pages/catalog_publish.html","title":"Publicar no Catálogo","section":"catalog"},
     "/catalog/queue": {"template":"pages/catalog_queue.html","title":"Fila de Revisão","section":"catalog_queue"},
     "/catalog/inventory": {"template":"pages/catalog_inventory.html","title":"Inventário Regulatório","section":"catalog_inventory"},
-    "/catalog/stewardship": {"template":"pages/catalog_stewardship.html","title":"Stewardship","section":"catalog_stewardship"},
+    "/catalog/stewardship": {"template":"pages/catalog_stewardship.html","title":"Curadoria","section":"catalog_stewardship"},
     "/catalog/cost": {"template":"pages/catalog_cost.html","title":"Custo & Consumo","section":"catalog_cost"},
     "/workspace": {"template":"pages/workspace.html","title":"Workspace","section":"workspace"},
     "/mesh/flow": {"template":"pages/mesh_flow.html","title":"Fluxograma de agentes","section":"mesh"},
