@@ -558,5 +558,89 @@ docker compose up -d caddy</pre>`,
 ./infra/scripts/check-secrets-leak.sh --staged</pre>
 <p class="mt-2">Documentação completa em <code>infra/README.md §13</code>: rotação de chaves por provider, caminhos de evolução (Sealed Secrets, HashiCorp Vault).</p>
 <p class="mt-2"><b>Pegadinha clássica:</b> chave que vazou no git history continua acessível mesmo depois de <code>git rm</code>. Sempre revogue a chave no provider, gere nova, e em seguida considere reescrever o histórico (ou aceitar que a chave antiga está queimada).</p>`
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // Estúdio de Pipelines
+  // ═════════════════════════════════════════════════════════════════
+  {
+    id: 'pipeline_studio',
+    section: 'Estúdio',
+    label: 'Estúdio de Pipelines',
+    fundamento: `<p>Um <b>pipeline</b> é um subgrafo do AI Mesh promovido a <b>entidade de 1ª classe</b>: tem nome, domínio, ciclo de vida (rascunho → publicado → aposentado) e um conjunto SELADO de agentes membros (cada agente pertence a no máximo um pipeline).</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Membership exclusiva</b> — o pipeline define a fronteira de execução; a execução não vaza para o mesh global.</li>
+  <li><b>Ciclo de vida</b> — só <code>aposentado</code> bloqueia a invocação (na entrada); rascunho e publicado rodam.</li>
+  <li><b>Invocável selado</b> — <code>POST /api/v1/pipelines/{id}/invoke</code> roda só dentro do subgrafo do pipeline.</li>
+</ul>
+<p class="mt-2">O <b>Fluxograma de agentes</b> é o editor único — a antiga página "Topologia de conexões" foi aposentada.</p>`,
+    aplicacao: `<p>Use pipelines quando um fluxo de vários agentes precisa virar uma unidade — versionada, publicável e invocável por um endpoint só.</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Produto interno</b> — empacote "Análise de crédito" (triagem → especialistas → consolidação) e exponha como 1 chamada.</li>
+  <li><b>Governança</b> — publique no Catálogo como <code>kind=pipeline</code>, passe por revisão Root e ganhe métricas de confiabilidade/custo reais.</li>
+  <li><b>Reuso</b> — o mesmo pipeline publicado é invocável por Workspace, API e (com federação) por outras orgs.</li>
+</ul>`,
+    ativar: `<p>Nativo da plataforma. No Fluxograma, painel "Pipelines" → "Novo". Por API:</p>
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">curl -X POST /api/v1/pipelines \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"Análise de crédito","domain":"credito"}'
+# adicionar membros:
+curl -X POST /api/v1/pipelines/{id}/agents -d '{"agent_id":"..."}'</pre>`,
+    usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
+  <li>No <a href="/mesh/flow" class="text-brand-500 underline">Fluxograma</a>, crie um pipeline, arraste os agentes membros e defina o nó <b>Início</b>.</li>
+  <li>Clique em <b>Publicar no Catálogo</b> (cria um rascunho de entry <code>kind=pipeline</code>); aprove e publique pela <a href="/catalog" class="text-brand-500 underline">página do Catálogo</a>.</li>
+  <li>Invoque <code>POST /api/v1/pipelines/{id}/invoke</code> com <code>{"message":"..."}</code> — use o botão "cURL do invoke" no Fluxograma para copiar o comando pronto.</li>
+</ol>`
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // Federação A2A
+  // ═════════════════════════════════════════════════════════════════
+  {
+    id: 'federation',
+    section: 'Federação',
+    label: 'Federação A2A',
+    fundamento: `<p>Federação conecta dois ou mais Maestros (A2A — Agent-to-Agent) de forma assinada e auditada, no modelo provider/consumer:</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Provider</b> — publica um manifest em <code>/.well-known/maestro-federation.json</code> e expõe ingress assinado <code>POST /federation/invoke</code> (HMAC + anti-replay + execução selada).</li>
+  <li><b>Consumer</b> — registra peers (segredos cifrados), faz <code>sync</code> para puxar manifest + entries remotas e invoca via <code>/federation/remote/{id}/invoke</code> (guarda SSRF).</li>
+</ul>
+<p class="mt-2"><b>Desligada por padrão</b>; falha fechada (fail-closed) sem <code>MAESTRO_SECRET_KEY</code>. O custo da chamada remota é atestado pelo peer e limitado (clamp) na origem.</p>`,
+    aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Compartilhar com parceiro</b> — exponha um pipeline como capability federada; o parceiro invoca remotamente, auditado.</li>
+  <li><b>Consumir de terceiro</b> — descubra capabilities de outra org e use no seu fluxo; o custo fica na origem.</li>
+  <li><b>Mesh distribuído</b> — várias instâncias do Maestro colaborando sem expor o mesh interno.</li>
+</ul>`,
+    ativar: `<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]"># .env (obrigatório — sem isso, fail-closed)
+MAESTRO_SECRET_KEY=&lt;chave-forte&gt;
+FEDERATION_ENABLED=true</pre>
+<p class="mt-2">Depois configure provider/consumer na página <a href="/federation" class="text-brand-500 underline">/federation</a>.</p>`,
+    usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
+  <li>Em <a href="/federation" class="text-brand-500 underline">/federation</a>, escolha publicar uma capability (provider) ou registrar um peer (consumer).</li>
+  <li>Como consumer: registre o peer, rode <b>Sync</b> e invoque a capability remota.</li>
+  <li>Acompanhe o trace federado (W3C Trace Context) ponta-a-ponta.</li>
+</ol>`
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // Estação de cURL do invoke (autenticação)
+  // ═════════════════════════════════════════════════════════════════
+  {
+    id: 'curl_invoke',
+    section: 'Integração',
+    label: 'cURL do invoke (auth)',
+    fundamento: `<p>A "estação de autenticação" do cURL transforma o snippet de invoke num comando pronto para rodar — sem você sair para Configurações criar uma chave na mão.</p>
+<p class="mt-2">A plataforma guarda só o <b>hash</b> da API key (o segredo não é recuperável). Por isso o modo recomendado é <b>Gerar e embutir</b>: cria a chave no momento (único instante do plaintext) e injeta no comando, mascarada na tela.</p>`,
+    aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Integração rápida</b> — copie um cURL funcional para Zapier, n8n, script próprio ou app mobile.</li>
+  <li><b>Higiene</b> — chave com nome de origem e expiração (90 dias por padrão); a máscara evita vazar o segredo em prints.</li>
+  <li><b>Sem segredo no texto</b> — o modo "Placeholder" mantém <code>SUA_API_KEY</code> para docs/CI (chave via variável de ambiente).</li>
+</ul>`,
+    ativar: `<p>Nativo. As chaves vivem em Configurações → API Keys; a estação reusa o mesmo endpoint <code>POST /api/v1/api-keys</code>.</p>`,
+    usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
+  <li>No <a href="/mesh/flow" class="text-brand-500 underline">Fluxograma</a>, abra o menu do nó <b>Início</b> → "cURL do invoke".</li>
+  <li>Escolha <b>Gerar e embutir</b> (1 clique cria a chave e cola no comando), <b>Chave existente</b> (cola a sua) ou <b>Placeholder</b>.</li>
+  <li>Selecione o shell (Bash/PowerShell/CMD) e clique em <b>Copiar</b> — o comando leva o segredo real (mascarado na tela).</li>
+</ol>`
   }
 ];

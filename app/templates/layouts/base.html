@@ -380,7 +380,7 @@
                             </button>
                             <button @click="guideMenuOpen=false; openModuleGuide()" class="block w-full text-left px-3 py-2.5 hover:bg-surface-50 border-t border-surface-100">
                                 <div class="text-[12px] font-semibold text-brand-900">📚 Guia dos Módulos</div>
-                                <div class="text-[10px] text-surface-400 mt-0.5">Fundamento, aplicação, ativar e usar — 14 módulos</div>
+                                <div class="text-[10px] text-surface-400 mt-0.5">Fundamento, aplicação, ativar e usar — <span x-text="(window.MODULE_GUIDE ? window.MODULE_GUIDE.length : 0)"></span> módulos</div>
                             </button>
                             <button @click="guideMenuOpen=false; openPageHelp()" class="block w-full text-left px-3 py-2.5 hover:bg-surface-50 border-t border-surface-100">
                                 <div class="text-[12px] font-semibold text-brand-900">💡 Ajuda desta página</div>
@@ -472,7 +472,7 @@
                 <header class="flex items-center justify-between border-b border-surface-100 px-5 py-3 shrink-0">
                     <div>
                         <h2 class="text-[14px] font-semibold text-brand-900">📚 Guia dos Módulos</h2>
-                        <p class="text-[10px] text-surface-400">Fundamento · Aplicação · Como ativar · Como usar — 14 módulos</p>
+                        <p class="text-[10px] text-surface-400">Fundamento · Aplicação · Como ativar · Como usar — <span x-text="(window.MODULE_GUIDE ? window.MODULE_GUIDE.length : 0)"></span> módulos</p>
                     </div>
                     <button @click="moduleGuideOpen=false" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
