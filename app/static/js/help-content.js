@@ -505,7 +505,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'casos_de_uso',
         title: 'Casos de uso',
         items: [
-          { title: 'Disponibilizar um pipeline para um parceiro', body: 'Como provider, publique a capability e gere as credenciais. O parceiro registra você como peer e invoca o pipeline remotamente — assinado e auditado.' },
+          { title: 'Disponibilizar um pipeline para um parceiro', body: 'Como provider, publique a capacidade e gere as credenciais. O parceiro registra você como peer e invoca o pipeline remotamente — assinado e auditado.' },
           { title: 'Consumir um agente de outra org', body: 'Como consumer, registre o peer, rode o sync para descobrir as capabilities e invoque dentro do seu próprio fluxo. O custo é atestado pela origem.' }
         ]
       },
@@ -514,7 +514,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Pegadinhas',
         items: [
           { title: 'Desligada por padrão', severity: 'warning', body: 'Sem MAESTRO_SECRET_KEY, a federação falha fechada (nada entra nem sai). Configure a chave antes de registrar peers.' },
-          { title: 'Seal de execução é opt-in', severity: 'info', body: 'A execução federada é selada ao subgrafo declarado na capability — não vaza para o mesh global.' }
+          { title: 'Seal de execução é opt-in', severity: 'info', body: 'A execução federada é selada ao subgrafo declarado na capacidade — não vaza para o mesh global.' }
         ]
       }
     ],
@@ -1056,7 +1056,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   catalog: {
     title: 'Catálogo',
-    summary: 'Marketplace interno de agents, skills, recipes e plataformas externas — com governança, capability disclosure e versionamento.',
+    summary: 'Marketplace interno de agents, skills, recipes e plataformas externas — com governança, divulgação de capacidade e versionamento.',
     sections: [
       {
         kind: 'concept',
@@ -1080,14 +1080,14 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
             <li><strong>archived</strong> — fora de uso</li>
           </ol>
           <p>Tipos (<code>kind</code>): <code>agent</code>, <code>skill</code>, <code>recipe</code> (composição declarativa), <code>external_platform</code> (ChatGPT/etc).</p>
-          <p><strong>Capability Disclosure</strong> (etiqueta nutricional R6.3) é obrigatório: 12 flags + soberania de dados + retenção. Quem consome o agent sabe exatamente o que ele faz com os dados.</p>
+          <p><strong>Divulgação de Capacidade</strong> (etiqueta nutricional R6.3) é obrigatória: 12 flags + soberania de dados + retenção. Quem consome o agent sabe exatamente o que ele faz com os dados.</p>
         `
       },
       {
         kind: 'casos_de_uso',
         title: 'Casos de uso',
         items: [
-          { title: 'Publicar agent para a empresa toda', body: 'Você criou um agent que valida cálculo de hora extra. Cria entry kind=agent, declara capability disclosure (processa dados pessoais, não treina, retém 30 dias), submete. Root aprova. Agora qualquer área pode invocar.' },
+          { title: 'Publicar agent para a empresa toda', body: 'Você criou um agent que valida cálculo de hora extra. Cria entry kind=agent, declara a divulgação de capacidade (processa dados pessoais, não treina, retém 30 dias), submete. Root aprova. Agora qualquer área pode invocar.' },
           { title: 'Recipe que encadeia 3 agents', body: 'Em vez de um agent gigante, cria 3 pequenos no Catálogo (Extrator, Validador, Resumo) e um Recipe que invoca em sequência. Reutilizável.' },
           { title: 'Cadastrar ChatGPT Plus', body: 'A empresa aprovou ChatGPT Plus para uso geral? Cria entry kind=external_platform, declara vendor + contrato vigente + casos de uso aprovados. Inventário regulatório fica completo.' }
         ]
@@ -1096,7 +1096,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
-          { title: 'Capability Disclosure incompleta = submit reprovado', severity: 'warning', body: 'Pré-verificação obriga disclosure. Se você marcar "stores_input" mas não preencher retention_days, Root rejeita.' },
+          { title: 'Divulgação de Capacidade incompleta = submit reprovado', severity: 'warning', body: 'Pré-verificação obriga a divulgação. Se você marcar "stores_input" mas não preencher retention_days, Root rejeita.' },
           { title: 'Versão não pode regredir', severity: 'danger', body: 'Você publicou v1.2.0. Não pode publicar v1.1.0 depois. Sempre incremente.' },
           { title: 'Recipe sem steps = não executa', severity: 'info', body: 'Criou entry kind=recipe mas esqueceu de declarar os steps? Pré-verificação vai pegar. Use a aba "Passos do Recipe" da página de detalhe.' }
         ]
@@ -1112,7 +1112,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // priorizar a seção correspondente do conteúdo abaixo.
   catalog_publish: {
     title: 'Publicar no Catálogo',
-    summary: 'Wizard de 4 passos para registrar um artefato no catálogo: escolha do artefato → metadata → capability disclosure → revisão.',
+    summary: 'Wizard de 4 passos para registrar um artefato no catálogo: escolha do artefato → metadados → divulgação de capacidade → revisão.',
 
     sections: [
       {
@@ -1120,7 +1120,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'O que é',
         body: `
           <p>Publicar uma <strong>entry</strong> no Catálogo é o ato de cadastrar oficialmente um agente, skill, recipe ou plataforma externa para que outras pessoas da empresa possam descobrir, avaliar e invocar.</p>
-          <p>O fluxo é deliberadamente em quatro passos para garantir que a entry tenha <strong>todos os metadados de governança</strong> antes de ir para revisão Root — nome único, versão semver, disclosure das capacidades e (quando aplicável) dados de contrato/custo.</p>
+          <p>O fluxo é deliberadamente em quatro passos para garantir que a entry tenha <strong>todos os metadados de governança</strong> antes de ir para revisão Root — nome único, versão semver, divulgação das capacidades e (quando aplicável) dados de contrato/custo.</p>
           <p>Ao final do wizard, a entry é criada em status <code>draft</code> e automaticamente submetida para a fila Root (<code>submitted</code>). Root aprova/rejeita/pede mudanças; aprovação habilita a publicação efetiva.</p>
         `
       },
@@ -1132,8 +1132,8 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           <ul>
             <li><strong>Passo 1 — Artefato:</strong> escolha o tipo (plataforma externa, recipe, agente interno ou skill interna). A escolha determina quais campos aparecem nos passos seguintes.</li>
             <li><strong>Passo 2 — Metadata:</strong> nome, versão semver (ex: 1.0.0), descrição, domínio (opcional), visibilidade (privada/empresa/departamento) e steward.</li>
-            <li><strong>Passo 3 — Capability Disclosure:</strong> 12 flags obrigatórias declarando o que a entry faz com dados (lê/escreve KB, chama APIs, processa PII/financeiro/saúde, etc.) + soberania e retenção.</li>
-            <li><strong>Passo 4 — Revisão:</strong> resumo de tudo. Clicar em "Confirmar e Submeter" dispara: <code>POST /entries</code> (cria draft) → <code>PUT /entries/{id}/capability</code> (salva disclosure) → <code>POST /entries/{id}/submit</code> (envia para fila Root).</li>
+            <li><strong>Passo 3 — Divulgação de Capacidade:</strong> 12 flags obrigatórias declarando o que a entry faz com dados (lê/escreve KB, chama APIs, processa PII/financeiro/saúde, etc.) + soberania e retenção.</li>
+            <li><strong>Passo 4 — Revisão:</strong> resumo de tudo. Clicar em "Confirmar e Submeter" dispara: <code>POST /entries</code> (cria draft) → <code>PUT /entries/{id}/capability</code> (salva a divulgação) → <code>POST /entries/{id}/submit</code> (envia para fila Root).</li>
           </ul>
           <p>O <strong>identificador único</strong> (URN interno) é gerado a partir de tipo + nome + versão. A mesma combinação não pode existir duas vezes — para republicar, suba a versão (1.0.0 → 1.0.1).</p>
         `
@@ -1203,7 +1203,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
       },
       {
         kind: 'campos',
-        title: 'Passo 3 — Capability Disclosure',
+        title: 'Passo 3 — Divulgação de Capacidade',
         items: [
           {
             name: 'Lê base de conhecimento do consumer',
@@ -1264,7 +1264,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           {
             name: 'Confirmar e Submeter para Revisão',
-            body: 'Botão final: dispara a criação da entry em draft, salva a capability disclosure, submete para fila Root e redireciona para a página da entry. O processo é atômico para o usuário; se algum passo falha, a UI mostra erro acionável.'
+            body: 'Botão final: dispara a criação da entry em draft, salva a divulgação de capacidade, submete para fila Root e redireciona para a página da entry. O processo é atômico para o usuário; se algum passo falha, a UI mostra erro acionável.'
           },
           {
             name: 'Já existe esta versão',
@@ -1288,7 +1288,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { title: 'Versão semver é obrigatória', severity: 'warning', body: 'Strings como "v1" ou "beta" não passam na validação. Use sempre o formato MAJOR.MINOR.PATCH (1.0.0, 2.3.1, etc.).' },
           { title: 'URN duplicada', severity: 'info', body: 'A combinação tipo + nome + versão é o identificador único. Se já existe, a UI mostra caixa âmbar com botão para subir a versão automaticamente. Não delete a entry anterior — versionar é a forma correta.' },
-          { title: 'Capability disclosure não é opcional', severity: 'warning', body: 'Root precisa do disclosure preenchido para aprovar. As 12 flags + soberania são parte do contrato de governança — descreva o que a entry faz, mesmo que parcialmente.' },
+          { title: 'Divulgação de capacidade não é opcional', severity: 'warning', body: 'Root precisa da divulgação preenchida para aprovar. As 12 flags + soberania são parte do contrato de governança — descreva o que a entry faz, mesmo que parcialmente.' },
           { title: 'Visibility "Departamento" exige scope', severity: 'info', body: 'Se escolher visibility=department, declare um domínio no scope (ex: "fiscal"). Sem isso a entry fica invisível para todos os usuários que não são owner/Root.' },
           { title: 'External Platform precisa de vendor', severity: 'warning', body: 'Para kind=external_platform, o campo "vendor" no passo 3 é obrigatório. Sem ele a entry não é criada. Outros campos da metadata externa são refináveis depois em /catalog/{id}.' }
         ]
@@ -1312,7 +1312,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'O que é',
         body: `
           <p>Toda entry submetida ao Catálogo (agent, skill, recipe, plataforma externa) cai aqui antes de ficar disponível. <strong>Só usuários com papel <code>root</code></strong> têm acesso. A fila é o ponto único de governança — sem aprovação aqui, nada vira <code>published</code>.</p>
-          <p>Pré-verificações automáticas rodam no momento do submit (cobertura de disclosure, formatação de URN, vendor obrigatório para externas). Elas são <em>informativas</em>: você pode aprovar mesmo com aviso, ou rejeitar mesmo com tudo verde.</p>
+          <p>Pré-verificações automáticas rodam no momento do submit (cobertura da divulgação, formatação de URN, vendor obrigatório para externas). Elas são <em>informativas</em>: você pode aprovar mesmo com aviso, ou rejeitar mesmo com tudo verde.</p>
         `
       },
       {
@@ -1351,13 +1351,13 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   catalog_inventory: {
     title: 'Inventário Regulatório',
-    summary: 'Cross-entries com capability disclosure. Para comitê de privacidade/segurança: quais entries processam PII, dados sensíveis, chamam APIs externas, têm soberania específica.',
+    summary: 'Cruza entries com a divulgação de capacidade. Para comitê de privacidade/segurança: quais entries processam PII, dados sensíveis, chamam APIs externas, têm soberania específica.',
     sections: [
       {
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>Painel de <strong>compliance da IA na empresa</strong>. Cruza todas as entries publicadas com as flags do capability disclosure (PII, saúde, biométrico, output não-determinístico, dados de treino, soberania, etc).</p>
+          <p>Painel de <strong>compliance da IA na empresa</strong>. Cruza todas as entries publicadas com as flags da divulgação de capacidade (PII, saúde, biométrico, output não-determinístico, dados de treino, soberania, etc).</p>
           <p>Resposta para perguntas que aparecem em auditoria: "quais agents processam dados clínicos?", "que entries chamam APIs externas para US?", "temos algo com input virando training data?". <strong>Só Root acessa</strong> — não é dashboard operacional, é instrumento de auditoria.</p>
         `
       },
@@ -1385,7 +1385,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Pegadinhas',
         items: [
           { title: 'Tristate confunde', severity: 'warning', body: '"Vazio" não é o mesmo que "false". Vazio = não filtra; false = filtra explicitamente quem marcou false. Cuidado para não excluir entries por engano.' },
-          { title: 'Disclosure incompleto vira ausência', severity: 'info', body: 'Entries antigas sem disclosure preenchido NÃO aparecem em filtros de flag. Para incluí-las, peça ao owner para reabrir submissão e preencher.' },
+          { title: 'Divulgação incompleta vira ausência', severity: 'info', body: 'Entries antigas sem divulgação preenchida NÃO aparecem em filtros de flag. Para incluí-las, peça ao owner para reabrir submissão e preencher.' },
           { title: 'Residency é string livre', severity: 'info', body: 'O campo aceita texto (BR, EU, US, global, "BR e EU"). Não há validação de enum — bom para flexibilidade, ruim para queries agregadas. Padronize com seu time.' }
         ]
       }
