@@ -32,7 +32,9 @@ from app.catalog.models import (
     CapabilityDisclosure,
     CatalogEntryCreate,
     CatalogEntryUpdate,
+    ExternalAdapterUpdate,
     ExternalPlatformMetadata,
+    ExternalTestRequest,
     InvocationCostRecord,
     PipelinePublishRequest,
     ReassignPayload,
@@ -53,6 +55,7 @@ from app.catalog.queries import (
     delete_recipe,
     get_disclosure,
     get_execution,
+    get_entry_adapter_raw,
     get_external_metadata,
     get_recipe,
     is_root,
@@ -63,10 +66,13 @@ from app.catalog.queries import (
     list_submissions_for_review,
     list_visible_entries,
     record_invocation_cost,
+    update_entry_adapter,
     upsert_disclosure,
     upsert_external_metadata,
     upsert_recipe,
 )
+from app.catalog.external_probe import run_probe
+from app.core.crypto import encrypt_secret
 from app.catalog.urn import make_urn, parse_urn
 from app.core.auth import require_user
 from app.core.federation_identity import local_workspace
@@ -801,6 +807,121 @@ async def put_external(
             500,
             f"Erro ao salvar metadata externa: {type(e).__name__}: {str(e)[:160]}",
         )
+
+
+# ═════════════════════════════════════════════════════════════════
+# External Platforms — config de conexão (adapter) + teste (PR1)
+# ═════════════════════════════════════════════════════════════════
+
+
+@router.get("/entries/{entry_id}/external-adapter")
+async def get_external_adapter(entry_id: str, user: dict = Depends(require_user)):
+    """Lê a config de conexão (probe) da plataforma externa — REDIGIDA: sem o
+    segredo, apenas probe.secret_set (bool). Visível para quem vê a entry. 404 se
+    kind != external_platform."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)  # já redige secret_cipher
+    if not can_user_see(user, entry):
+        raise HTTPException(404, "Entry não encontrada")
+    if entry.get("kind") != "external_platform":
+        raise HTTPException(404, "Config de conexão só se aplica a kind='external_platform'")
+    probe = (entry.get("adapter_config") or {}).get("probe") or {}
+    return {"probe": probe}
+
+
+@router.put("/entries/{entry_id}/external-adapter")
+async def put_external_adapter(
+    entry_id: str,
+    data: ExternalAdapterUpdate,
+    user: dict = Depends(require_user),
+):
+    """Salva a config de conexão (probe) da plataforma externa. Owner/root,
+    apenas draft, apenas kind='external_platform'.
+
+    O segredo (`secret`, em claro) é cifrado com Fernet antes de persistir e nunca
+    volta na API. Omitir `secret` mantém o segredo já salvo."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if entry.get("kind") != "external_platform":
+        raise HTTPException(422, "Config de conexão só se aplica a kind='external_platform'")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem configurar a conexão")
+    if entry.get("status") != "draft":
+        raise HTTPException(
+            409,
+            f"Entry em status '{entry.get('status')}' não aceita edição de conexão — "
+            "depreque + nova versão para alterar",
+        )
+
+    # Lê o adapter CRU p/ preservar o segredo atual quando o PUT não traz secret novo.
+    raw_cfg = await get_entry_adapter_raw(entry_id)
+    existing_probe = raw_cfg.get("probe") if isinstance(raw_cfg, dict) else None
+    existing_cipher = (
+        existing_probe.get("secret_cipher", "") if isinstance(existing_probe, dict) else ""
+    )
+
+    probe = data.probe.model_dump()
+    if data.secret:
+        probe["secret_cipher"] = encrypt_secret(data.secret)
+    elif existing_cipher:
+        probe["secret_cipher"] = existing_cipher  # mantém o anterior
+
+    new_cfg = dict(raw_cfg) if isinstance(raw_cfg, dict) else {}
+    new_cfg["probe"] = probe
+    await update_entry_adapter(entry_id, new_cfg)
+    await _audit("external_adapter_configured", entry_id, user["id"], {
+        "mode": probe.get("mode"),
+        "auth_type": probe.get("auth_type"),
+        "secret_changed": bool(data.secret),
+    })
+
+    redacted = dict(probe)
+    has = bool(redacted.pop("secret_cipher", ""))
+    redacted["secret_set"] = has
+    return {"probe": redacted}
+
+
+@router.post("/entries/{entry_id}/external-test-inline")
+async def external_test_inline(
+    entry_id: str,
+    data: ExternalTestRequest,
+    user: dict = Depends(require_user),
+):
+    """Testa a conexão à plataforma externa SEM persistir execução. Owner/root,
+    kind='external_platform' (qualquer status — testar é dev).
+
+    Usa o `secret` do body (em claro) se vier; senão, o segredo salvo (cifrado).
+    Retorna {ok, status, latency_ms, output, tokens_*, error, hint}."""
+    entry_row = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry_row:
+        raise HTTPException(404, "Entry não encontrada")
+    entry = db_row_to_entry_dict(entry_row)
+    if entry.get("kind") != "external_platform":
+        raise HTTPException(422, "Teste de conexão só se aplica a kind='external_platform'")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem testar a conexão")
+
+    secret = data.secret or ""
+    if not secret:
+        raw_cfg = await get_entry_adapter_raw(entry_id)
+        probe_saved = raw_cfg.get("probe") if isinstance(raw_cfg, dict) else None
+        secret = probe_saved.get("secret_cipher", "") if isinstance(probe_saved, dict) else ""
+
+    result = await run_probe(
+        data.probe.model_dump(),
+        secret=secret,
+        input_text=data.input or "",
+    )
+    await _audit("external_test_inline", entry_id, user["id"], {
+        "mode": data.probe.mode,
+        "ok": result.get("ok"),
+        "status": result.get("status"),
+    })
+    return result
 
 
 # ═════════════════════════════════════════════════════════════════

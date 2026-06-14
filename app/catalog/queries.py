@@ -69,12 +69,32 @@ def can_user_see(user: dict, entry: dict) -> bool:
 _JSON_FIELDS = ("tags", "adapter_config")
 
 
+def _redact_adapter_config(cfg: Any) -> Any:
+    """Remove o segredo cifrado do adapter_config antes de expor na API.
+
+    A config de conexão de plataforma externa (PR1) guarda o token cifrado em
+    adapter_config['probe']['secret_cipher']. Esse campo NUNCA volta na API —
+    é trocado por probe['secret_set'] (bool). Para o runtime (probe/teste) que
+    precisa do cipher, use get_entry_adapter_raw (lê o adapter_config CRU)."""
+    if not isinstance(cfg, dict):
+        return cfg
+    probe = cfg.get("probe")
+    if not isinstance(probe, dict) or "secret_cipher" not in probe:
+        return cfg
+    probe = dict(probe)
+    has = bool(probe.pop("secret_cipher", ""))
+    probe["secret_set"] = has
+    cfg = dict(cfg)
+    cfg["probe"] = probe
+    return cfg
+
+
 def db_row_to_entry_dict(row: Any) -> dict:
     """Converte um asyncpg.Record (ou dict) em dict serializável.
 
     Parseia campos JSON armazenados como TEXT. Mantém datetimes
-    intactos (FastAPI serializa para ISO 8601 na resposta).
-    """
+    intactos (FastAPI serializa para ISO 8601 na resposta). Redige o segredo
+    cifrado do adapter_config (ver _redact_adapter_config)."""
     out = dict(row) if not isinstance(row, dict) else dict(row)
     for key in _JSON_FIELDS:
         v = out.get(key)
@@ -83,7 +103,45 @@ def db_row_to_entry_dict(row: Any) -> dict:
                 out[key] = json.loads(v) if v else ([] if key == "tags" else {})
             except json.JSONDecodeError:
                 out[key] = [] if key == "tags" else {}
+    if isinstance(out.get("adapter_config"), dict):
+        out["adapter_config"] = _redact_adapter_config(out["adapter_config"])
     return out
+
+
+async def update_entry_adapter(entry_id: str, adapter_config: dict) -> Optional[dict]:
+    """Persiste o adapter_config (JSON) da entry. Usado pela config de conexão de
+    plataforma externa (PR1). Retorna o row REDIGIDO (sem secret_cipher)."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        r = await con.fetchrow(
+            """
+            UPDATE catalog_entries
+            SET adapter_config=$2, updated_at=now()
+            WHERE id=$1
+            RETURNING *
+            """,
+            entry_id, json.dumps(adapter_config),
+        )
+    return db_row_to_entry_dict(r) if r else None
+
+
+async def get_entry_adapter_raw(entry_id: str) -> dict:
+    """Lê o adapter_config CRU (com secret_cipher) — uso interno do runtime
+    (probe/teste). NÃO expor na API: o cipher deve ser decifrado só no uso."""
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        r = await con.fetchrow(
+            "SELECT adapter_config FROM catalog_entries WHERE id=$1", entry_id
+        )
+    if not r:
+        return {}
+    cfg = r["adapter_config"]
+    if isinstance(cfg, str):
+        try:
+            cfg = json.loads(cfg) if cfg else {}
+        except json.JSONDecodeError:
+            cfg = {}
+    return cfg if isinstance(cfg, dict) else {}
 
 
 # ─── List com visibility-awareness (SQL nativo) ───────────────────

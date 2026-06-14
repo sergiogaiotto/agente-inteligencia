@@ -269,6 +269,64 @@ class ExternalPlatformMetadata(BaseModel):
         return v
 
 
+# ─── External Platform — config de conexão / probe (PR1) ─────────
+
+ProbeMode = Literal["openai_chat", "http_ping"]
+ProbeAuthType = Literal["none", "api_key", "bearer", "basic"]
+
+
+class ExternalProbeConfig(BaseModel):
+    """Config de conexão para TESTAR/PROVAR uma plataforma externa.
+
+    Persistida em catalog_entries.adapter_config['probe']. O segredo NÃO mora
+    neste model — vai cifrado (Fernet) em adapter_config['probe']['secret_cipher']
+    e é write-only: nunca volta em claro nem cifrado na API (ver
+    db_row_to_entry_dict, que troca secret_cipher por secret_set bool).
+
+    Modos:
+    - openai_chat: POST {base_url}{path} com {model, messages} (OpenAI-compatível).
+    - http_ping: GET {base_url}{path} — só valida que o endpoint responde.
+    """
+
+    mode: ProbeMode = "openai_chat"
+    base_url: str = Field(..., min_length=1, max_length=500)
+    auth_type: ProbeAuthType = "bearer"
+    auth_header: str = Field("X-API-Key", max_length=100)
+    model: Optional[str] = Field(None, max_length=200)
+    path: Optional[str] = Field(None, max_length=300)
+    test_prompt: str = Field("Responda apenas: OK", max_length=2000)
+    timeout_ms: int = Field(30000, ge=1000, le=120000)
+
+    @field_validator("base_url")
+    @classmethod
+    def _base_url_scheme(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not (v.startswith("https://") or v.startswith("http://")):
+            raise ValueError("base_url deve começar com https:// (http:// só em dev)")
+        return v.rstrip("/")
+
+
+class ExternalAdapterUpdate(BaseModel):
+    """Payload do PUT /entries/{id}/external-adapter.
+
+    `secret` é o token em claro (write-only). Vazio/omitido = mantém o segredo
+    atual. Cifrado com Fernet antes de persistir."""
+
+    probe: ExternalProbeConfig
+    secret: Optional[str] = Field(None, max_length=4000)
+
+
+class ExternalTestRequest(BaseModel):
+    """Payload do POST /entries/{id}/external-test-inline — testa sem persistir.
+
+    `secret` em claro opcional; se omitido, usa o segredo já salvo na entry.
+    `input` opcional sobrepõe o test_prompt do config."""
+
+    probe: ExternalProbeConfig
+    secret: Optional[str] = Field(None, max_length=4000)
+    input: Optional[str] = Field(None, max_length=10000)
+
+
 # ─── Stewardship reassign (Onda 2) ───────────────────────────────
 
 
