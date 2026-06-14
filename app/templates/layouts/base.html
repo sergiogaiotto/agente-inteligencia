@@ -176,7 +176,7 @@
                     <div class="relative" id="tour-nav-catalog-queue">
                         <a href="/catalog/queue" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if section == 'catalog_queue' %}active{% endif %}">
                             <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"/></svg>
-                            <span>Fila Root <span class="text-[9px] text-surface-400 font-normal">(revisão)</span></span>
+                            <span>Fila de Revisão</span>
                         </a>
                         <button @click.prevent.stop="openHelp('catalog_queue')" type="button"
                                 class="help-btn absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[9px] font-bold hover:bg-brand-100"
@@ -196,7 +196,7 @@
                     <div class="relative" id="tour-nav-catalog-stewardship">
                         <a href="/catalog/stewardship" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if section == 'catalog_stewardship' %}active{% endif %}">
                             <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                            <span>Stewardship</span>
+                            <span>Curadoria</span>
                         </a>
                         <button @click.prevent.stop="openHelp('catalog_stewardship')" type="button"
                                 class="help-btn absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[9px] font-bold hover:bg-brand-100"
@@ -897,9 +897,9 @@
                 {el:'tour-nav-agents', title:'Agentes', description:'Os "trabalhadores" da plataforma. Cada agent combina um prompt, um modelo de linguagem e (opcionalmente) ferramentas. Aqui você cria, edita, duplica e invoca — versionado, rastreável, sem código.'},
                 {el:'tour-nav-skills', title:'Skills', description:'Competências reutilizáveis em arquivos SKILL.md. Define o passo-a-passo, quais ferramentas usar e o formato da resposta. A mesma skill serve em vários agents — garante consistência sem replicar lógica.'},
                 {el:'tour-nav-catalog', title:'Catálogo', description:'Marketplace interno da empresa: agents, skills, recipes (composições) e plataformas externas aprovadas (ChatGPT, Cursor). Cada entry passa por revisão Root antes de ficar disponível — governança via etiqueta nutricional.'},
-                {el:'tour-nav-catalog-queue', title:'Fila Root', description:'Onde Root (e só Root) revisa e aprova submissões do Catálogo. Pré-checks automáticos rodam no submit; aqui você vê o relatório e decide aprovar, rejeitar ou pedir mudanças.', optional: true},
+                {el:'tour-nav-catalog-queue', title:'Fila de Revisão', description:'Onde Root (e só Root) revisa e aprova submissões do Catálogo. Pré-checks automáticos rodam no submit; aqui você vê o relatório e decide aprovar, rejeitar ou pedir mudanças.', optional: true},
                 {el:'tour-nav-catalog-inventory', title:'Inventário Regulatório', description:'Inventário compliance da IA na empresa. Quais agents/skills processam PII, dados regulados, têm soberania específica. Exporta CSV para auditoria. Visível só para Root.', optional: true},
-                {el:'tour-nav-catalog-stewardship', title:'Stewardship', description:'Painel para steward de área — você vê os agents do seu domínio (fiscal, RH, jurídico…) e identifica órfãos, stale ou pouco confiáveis. Aberto a quem tem domains, não só Root.', optional: true},
+                {el:'tour-nav-catalog-stewardship', title:'Curadoria', description:'Painel para curador de área — você vê os agents do seu domínio (fiscal, RH, jurídico…) e identifica órfãos, parados ou pouco confiáveis. Aberto a quem tem domains, não só Root.', optional: true},
                 {el:'tour-nav-catalog-cost', title:'Custo & Consumo', description:'Quanto cada agent custou em USD, por quem, em que dia. Base para chargeback interno. Anomalias (pico, limite global) aparecem como banner vermelho automático.'},
                 {el:'tour-nav-workspace', title:'Workspace', description:'O "chat" da plataforma — onde você invoca um agent e vê a resposta ao vivo com cada etapa da execução: recuperação de evidência, raciocínio, verificação. É a tela mais usada no dia-a-dia.'},
                 {el:'tour-nav-mesh', title:'AI Mesh', description:'Topologia visual de como os agents se conectam. Você desenha pipelines sequenciais (A→B→C), paralelos (fan-out) ou condicionais. Agents pass-through são pulados automaticamente.'},

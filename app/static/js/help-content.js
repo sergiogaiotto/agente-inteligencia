@@ -1260,7 +1260,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // /catalog/queue — Fila de revisão Root
   // ═════════════════════════════════════════════════════════════════
   catalog_queue: {
-    title: 'Fila Root',
+    title: 'Fila de Revisão',
     summary: 'Onde Root revisa submissões do Catálogo antes de publicar. Pré-checks rodam automático no submit; aqui você vê o relatório e decide.',
     sections: [
       {
@@ -1295,7 +1295,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { title: 'Pré-checks não bloqueiam', severity: 'info', body: 'Warnings em pré-checks são informativos. Root decide se aprovar mesmo assim — o pré-check é input, não veto.' },
           { title: 'Rejeitar não deleta', severity: 'info', body: 'Status volta para draft e fica visível ao owner. Para apagar de verdade, vá em /catalog/{id} → DELETE (só draft/archived).' },
-          { title: 'Visível só para Root', severity: 'warning', body: 'Usuários comuns recebem 403 ao tentar acessar /catalog/queue. Se você está vendo "Acesso restrito", peça promoção de papel ou use Stewardship.' }
+          { title: 'Visível só para Root', severity: 'warning', body: 'Usuários comuns recebem 403 ao tentar acessar /catalog/queue. Se você está vendo "Acesso restrito", peça promoção de papel ou use Curadoria.' }
         ]
       }
     ],
@@ -1353,7 +1353,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // /catalog/stewardship — Painel de stewards de área
   // ═════════════════════════════════════════════════════════════════
   catalog_stewardship: {
-    title: 'Stewardship',
+    title: 'Curadoria',
     summary: 'Entries agrupadas por área responsável. Detecta órfãs (owner inativo), paradas (30+ dias sem uso) e baixa confiabilidade. Aberto a quem tem domains, não só Root.',
     sections: [
       {
