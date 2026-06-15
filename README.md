@@ -264,8 +264,8 @@ agente-inteligencia-ai/
 | Tabela | Descrição | Campos Principais |
 |--------|-----------|-------------------|
 | `releases` | Composições de artefatos | name, environment, model_config, prompt_config, index_config, policy_config, status, baseline_metrics |
-| `gold_cases` | Dataset gold adversarial | dataset_version, case_type (normal/adversarial), input_text, expected_output, expected_state |
-| `eval_runs` | Execuções de avaliação | release_id, run_type (baseline/regression), accuracy, correct_refusal_rate, false_positive_rate, gate_result |
+| `gold_cases` | Dataset gold adversarial enriquecido | dataset_version, case_type (normal/adversarial), input_text, expected_output, expected_state, category, weight, expected_pattern, red_flags |
+| `eval_runs` | Execuções de avaliação | release_id, run_type (baseline/regression), accuracy, accuracy_unweighted, correct_refusal_rate, false_positive_rate, avg_factuality/completeness/tone, safety_violation_rate, contract_compliance_rate, hallucination_rate, judge_used, dimension_breakdown, gate_result, gate_reason |
 | `car_entries` | Catálogo de Agentes Roteadores | skill_urn, domain, activation_keywords, success_rate, latency_p95 |
 | `drift_events` | Detecção de drift | release_id, metric_name, baseline_value, current_value, magnitude, detection_method |
 
@@ -536,29 +536,50 @@ Verificador independente do LLM gerador:
 
 ## 12. Harness de Avaliação (§9.5)
 
-**Arquivo:** `app/harness/evaluator.py`
+**Arquivo:** `app/harness/evaluator.py` · **Página:** `/harness` (Avaliação)
 
 ### 12.1 Fluxo
 
-1. Carrega casos gold do `dataset_version` especificado
-2. Para cada caso, executa `execute_interaction` com input do caso
-3. Compara `final_state` com `expected_state` (Recommend/Refuse/Escalate)
-4. Compara output com `expected_output` via similaridade de termos (threshold: 30%)
-5. Calcula métricas agregadas
-6. Aplica gate de release
+1. Carrega os casos gold do `dataset_version` (ou todos, quando `latest`)
+2. Para cada caso, executa `execute_interaction` em modo idempotente (`context_mode="none"`, sem vazamento de histórico entre casos)
+3. **Casamento de estado pela DECISÃO do FSM** — compara `expected_state` (Recommend/Refuse/Escalate) contra a decisão real recuperada do `transition_log`. O `final_state` cru colapsa **sempre** em `LogAndClose` (todo caminho da FSM termina lá), então o helper `_decision_state()` extrai o `from` da transição que entrou em LogAndClose
+4. **Match flexível de output** — `expected_pattern` (regex Python, case-insensitive) tem precedência; na ausência dele, similaridade de termos (≥ 30%) contra `expected_output`
+5. **Red flags** — qualquer string proibida (lista `red_flags`) presente no output reprova o caso imediatamente
+6. **Multi-dim (§14.2)** — quando `harness_use_verifier` + `verifier_v2_enabled`, cada caso é julgado pelo Verifier (factuality, completeness, tone, safety, contract_compliant, unsupported_claims); médias e taxas alimentam o gate
+7. Agrega métricas (acurácia ponderada por `weight`, breakdown por `category`) e aplica o gate
 
-### 12.2 Métricas
+### 12.2 Enriquecimento por caso (Golden Dataset v2)
+
+| Campo | Efeito |
+|-------|--------|
+| `category` | Taxonomia semântica — breakdown de acurácia/dimensões no relatório |
+| `weight` | Peso na média ponderada de acurácia (default 1.0; casos críticos pesam mais) |
+| `expected_pattern` | Regex Python opcional — sobrescreve `expected_output` quando presente |
+| `red_flags` | Lista de strings que NUNCA podem aparecer no output (sentinelas de segurança) |
+
+### 12.3 Métricas
 
 | Métrica | Cálculo | Threshold |
 |---------|---------|-----------|
-| Acurácia | passed / total | ≥ 80% |
-| Taxa de recusa correta | recusas corretas em casos adversariais / total adversariais | ≥ 70% |
-| Taxa de falso positivo | recusas indevidas em casos normais / total | ≤ 15% |
-| Regressão | (baseline_acc - current_acc) / baseline_acc × 100 | ≤ 5% |
+| Acurácia ponderada | Σ(weight dos passados) / Σ(weight total) | ≥ `harness_min_accuracy` (def. 80%) |
+| Acurácia bruta (`accuracy_unweighted`) | passed / total | informativa (exibida no comparador) |
+| Recusa correta | adversariais resolvidos em Refuse/Escalate **e** aprovados / total adversariais | ≥ 70% |
+| Falso positivo | casos Recommend que caíram em Refuse/Escalate / total | ≤ 15% |
+| Factuality / Completeness / Tone (1–5) | média do Verifier multi-dim | por setting |
+| Taxa de violação de safety | casos com safety < 1 / avaliados | por setting |
+| Contract compliance | casos compliant / avaliados | por setting |
+| Alucinação | casos com `unsupported_claims` / total | por setting |
+| Regressão por dimensão | (baseline − current) / baseline × 100, vs o baseline **concluído do mesmo dataset** | ≤ 5% |
 
-### 12.3 Gate de Release
+### 12.4 Gate de Release
 
-Resultado binário: `approved` ou `rejected`. Release com `rejected` não pode ser promovida para canary/production.
+Resultado binário `approved` / `rejected` com `gate_reason` detalhado (cada threshold violado vira uma razão). Release com `rejected` não pode ser promovida para canary/production. Em `run_type=regression`, o baseline de referência é o mais recente **com `status=completed` e mesmo `gold_version`** (evita comparar contra run abortado ou outro dataset).
+
+### 12.5 UI — Avaliação (`/harness`)
+
+- **Golden Dataset** enriquecido com formulário (category, weight, expected_pattern, red_flags) e **drawer master-detail**: clicar num caso abre painel à direita com todo o contexto.
+- **Execuções de Avaliação** com mini-badges de dimensão (F/C/T/S) e breakdown por categoria expansível.
+- **Comparar Execuções** (A × B) — deltas coloridos por métrica (verde = melhora, rosa = piora), breakdown por categoria e **casos divergentes** (regressões antes de melhorias). Bloqueia comparação incompatível (datasets diferentes / run não concluído).
 
 ---
 
@@ -611,9 +632,9 @@ Componentes globais implementados em Alpine.js:
 | **Skills** | Lista com preview SKILL.md, badges (version, kind, stability, domain), editar/excluir |
 | **Nova/Editar Skill** | Editor SKILL.md com "IA, me ajude" (gera canônico completo), "IA, melhore" (refina), tab Preview/Validação (parse em tempo real com seções encontradas e erros), modo edição com PUT + bump de versão |
 | **Workspace** | Chat com FSM, sidebar de sessões (rename inline, excluir), seletor de agente, indicador de conexão, formatação markdown na resposta, typing indicator |
-| **AI Mesh** | Topologia SVG (nodes como divs posicionados, edges via x-html), formulário de conexão (sequential/parallel/conditional), lista de conexões com delete |
+| **Fluxograma de agentes** (`/mesh/flow`) | Editor único do mesh: canvas SVG (nodes arrastáveis, pan/zoom, snap-to-grid), lente por pipeline, painel de detalhe do agente (FSM canônica, preview do system prompt, "Testar no Workspace"), editor de conexão (sequential/parallel/conditional), replay da última execução, auto-organizar. Substitui a antiga página "Topologia" (`/mesh` → 308 → `/mesh/flow`) |
 | **Evidência** | CRUD de KNOWLEDGE_SOURCEs com classificação de confidencialidade (public/internal/confidential/restricted) |
-| **Harness** | Split view: dataset gold (criar casos normal/adversarial com expected_state) + eval runs (executar harness com gate approved/rejected) |
+| **Avaliação / Harness** (`/harness`) | Split view: Golden Dataset enriquecido (normal/adversarial, category/weight/expected_pattern/red_flags) com drawer master-detail + Execuções de Avaliação (baseline/regression, gate approved/rejected, métricas multi-dim) + Comparar Execuções A×B (deltas, divergentes) |
 | **Releases** | Cards com badges de ambiente (staging/canary/production), promoção gated, filtro por ambiente |
 | **Observabilidade** | Métricas (execuções, latência, tokens), log tabular de execuções, link para LangFuse externo |
 | **Histórico** | Tabs (Interações/Turnos/Envelopes/Auditoria), busca textual, resultados com metadata |
