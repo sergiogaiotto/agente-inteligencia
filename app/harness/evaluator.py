@@ -139,6 +139,36 @@ def _coerce_score(s) -> float | None:
     return float(s) if isinstance(s, (int, float)) else None
 
 
+# Estados de DECISÃO do FSM (o que a UI do harness oferece em expected_state).
+_DECISION_STATES = ("Recommend", "Refuse", "Escalate")
+
+
+def _decision_state(result: dict) -> str:
+    """Recupera o estado de DECISÃO do FSM para o casamento de estado do harness.
+
+    O FSM clássico colapsa a decisão (Recommend/Refuse/Escalate) no estado
+    terminal LogAndClose — `result["final_state"]` cru vem SEMPRE 'LogAndClose'.
+    Comparar isso contra o expected_state da UI (Recommend/Refuse/Escalate)
+    reprovaria todo caso correto e zeraria correct_refusal_rate/false_positive_rate.
+
+    Recuperamos a decisão real do transition_log: o `from` da transição que
+    entrou em LogAndClose (ex.: 'Recommend -> LogAndClose' → 'Recommend').
+
+    Fallback: quando não há transição de decisão (ex.: skill declarativa, que
+    reporta final_state='completed' e transitions=[]), devolve o final_state cru.
+    """
+    final = (result.get("final_state") or "").strip()
+    if final in _DECISION_STATES:
+        return final
+    if final == "LogAndClose":
+        for t in reversed(result.get("transitions") or []):
+            if t.get("to") == "LogAndClose":
+                frm = (t.get("from") or "").strip()
+                if frm in _DECISION_STATES:
+                    return frm
+    return final
+
+
 async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "latest", run_type: str = "baseline") -> dict:
     """Executa harness contra Golden Dataset e produz relatório multi-dim."""
     settings = get_settings()
@@ -205,7 +235,9 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
             latency = (time.time() - start) * 1000
             total_latency += latency
 
-            actual_state = result.get("final_state", "")
+            # Estado de DECISÃO (Recommend/Refuse/Escalate) — não o terminal cru
+            # LogAndClose. Ver _decision_state: sem isso o casamento nunca bate.
+            actual_state = _decision_state(result)
             expected_state = case.get("expected_state", "Recommend")
             state_match = actual_state == expected_state
 
