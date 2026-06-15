@@ -938,6 +938,9 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS judge_model TEXT",
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS gate_reason TEXT",
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS dimension_breakdown TEXT DEFAULT '{}'",
+    # Acurácia bruta (não-ponderada): calculada e exibida no Comparar Execuções,
+    # mas faltava a coluna → delta "Acurácia bruta" vinha sempre vazio.
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS accuracy_unweighted REAL",
     # Tabela `traces` foi criada no schema mas nunca escrita por ninguém — traces
     # vivem no Tempo via OTLP. Drop idempotente p/ remover de instâncias antigas
     # (sempre vazia, sem dependentes).
