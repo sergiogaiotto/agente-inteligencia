@@ -56,7 +56,9 @@
             </div>
             <div class="divide-y divide-surface-50 max-h-80 overflow-y-auto scrollbar-thin">
                 <template x-for="c in goldCases" :key="c.id">
-                    <div class="px-5 py-3">
+                    <div @click="openCase(c)"
+                         class="px-5 py-3 cursor-pointer transition-colors hover:bg-surface-50/60"
+                         :class="caseDrawerOpen && selectedCase && selectedCase.id===c.id ? 'bg-brand-50/60' : ''">
                         <div class="flex items-center gap-2 mb-1 flex-wrap">
                             <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
                                   :class="c.case_type==='adversarial'?'bg-rose-50 text-rose-700':'bg-surface-100 text-surface-500'"
@@ -387,6 +389,105 @@
             </template>
         </div>
     </div>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- DRAWER do caso — padrão da plataforma (cf. catalog_inventory): -->
+    <!-- aside fixed right-0, overlay, ESC + clique-fora + botão fecham. -->
+    <!-- Render síncrono: o caso já está em memória (goldCases).         -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <div x-show="caseDrawerOpen" x-cloak class="fixed inset-0 z-[9990]" @keydown.escape.window="closeCaseDrawer()" style="display:none;">
+        <div x-show="caseDrawerOpen" x-transition.opacity.duration.150ms class="fixed inset-0 bg-black/30" @click="closeCaseDrawer()"></div>
+        <aside x-show="caseDrawerOpen"
+               x-transition:enter="transition ease-out duration-200" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
+               x-transition:leave="transition ease-in duration-150" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full"
+               class="fixed right-0 top-0 bottom-0 w-full sm:w-[480px] bg-white shadow-2xl flex flex-col"
+               role="dialog" aria-label="Detalhes do caso do Golden Dataset">
+
+            <!-- Header -->
+            <header class="border-b border-surface-100 p-5 shrink-0 bg-gradient-to-br from-brand-50/40 to-white">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0 flex-1">
+                        <p class="text-[10px] font-semibold uppercase tracking-wider text-brand-600">Caso do Golden Dataset</p>
+                        <h2 class="text-[15px] font-bold text-brand-900 mt-0.5 break-words" x-text="selectedCase?.input_text"></h2>
+                        <div class="flex items-center gap-1.5 flex-wrap mt-2">
+                            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                                  :class="selectedCase?.case_type==='adversarial'?'bg-rose-50 text-rose-700':'bg-surface-100 text-surface-500'"
+                                  x-text="selectedCase?.case_type"></span>
+                            <span class="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-600" x-text="selectedCase?.expected_state"></span>
+                            <template x-if="selectedCase?.category">
+                                <span class="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-700" x-text="selectedCase.category"></span>
+                            </template>
+                            <template x-if="selectedCase?.weight && Number(selectedCase.weight) !== 1">
+                                <span class="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700" x-text="'×' + Number(selectedCase.weight).toFixed(1)"></span>
+                            </template>
+                            <template x-if="selectedCase?.expected_pattern">
+                                <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">regex</span>
+                            </template>
+                            <template x-if="redFlagsCount(selectedCase) > 0">
+                                <span class="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700" x-text="'⚑ ' + redFlagsCount(selectedCase)"></span>
+                            </template>
+                        </div>
+                    </div>
+                    <button @click="closeCaseDrawer()" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 shrink-0" aria-label="Fechar">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Corpo (scroll) -->
+            <div class="flex-1 overflow-y-auto scrollbar-thin divide-y divide-surface-100">
+                <!-- Pergunta / input -->
+                <section class="p-5">
+                    <div class="text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-1.5">Pergunta (input)</div>
+                    <p class="text-[12px] text-brand-900 whitespace-pre-wrap break-words" x-text="selectedCase?.input_text"></p>
+                </section>
+
+                <!-- Output esperado / match -->
+                <section class="p-5">
+                    <div class="text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-1.5">
+                        Critério de acerto — <span x-text="selectedCase?.expected_pattern ? 'regex (expected_pattern)' : 'similaridade (expected_output)'"></span>
+                    </div>
+                    <template x-if="selectedCase?.expected_pattern">
+                        <pre class="text-[11px] font-mono bg-surface-50 border border-surface-200 rounded-lg px-3 py-2 whitespace-pre-wrap break-all text-brand-900" x-text="selectedCase.expected_pattern"></pre>
+                    </template>
+                    <template x-if="!selectedCase?.expected_pattern">
+                        <p class="text-[12px] text-brand-900 whitespace-pre-wrap break-words"
+                           x-text="(selectedCase?.expected_output || '').trim() || '— sem output esperado (passa por estado + ausência de red flags) —'"></p>
+                    </template>
+                </section>
+
+                <!-- Red flags -->
+                <template x-if="redFlagsCount(selectedCase) > 0">
+                    <section class="p-5">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-rose-500 mb-1.5">Red flags (sentinelas)</div>
+                        <p class="text-[10px] text-surface-400 mb-2">O output que contiver QUALQUER uma destas falha o caso (match case-insensitive).</p>
+                        <div class="flex flex-wrap gap-1.5">
+                            <template x-for="f in parseRedFlags(selectedCase)" :key="f">
+                                <span class="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-700" x-text="f"></span>
+                            </template>
+                        </div>
+                    </section>
+                </template>
+
+                <!-- Classificação / metadados -->
+                <section class="p-5">
+                    <div class="text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-2">Classificação</div>
+                    <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px]">
+                        <div><dt class="text-surface-400">Tipo</dt><dd class="text-brand-900" x-text="selectedCase?.case_type || '—'"></dd></div>
+                        <div><dt class="text-surface-400">Estado esperado</dt><dd class="text-brand-900" x-text="selectedCase?.expected_state || '—'"></dd></div>
+                        <div><dt class="text-surface-400">Categoria</dt><dd class="text-brand-900" x-text="selectedCase?.category || '(sem categoria)'"></dd></div>
+                        <div><dt class="text-surface-400">Peso</dt><dd class="text-brand-900" x-text="Number(selectedCase?.weight ?? 1).toFixed(1)"></dd></div>
+                        <div><dt class="text-surface-400">Versão</dt><dd class="font-mono text-brand-900" x-text="selectedCase?.dataset_version || '—'"></dd></div>
+                        <div><dt class="text-surface-400">Canal</dt><dd class="text-brand-900" x-text="selectedCase?.channel || '—'"></dd></div>
+                        <div><dt class="text-surface-400">Jornada</dt><dd class="text-brand-900" x-text="selectedCase?.journey || '—'"></dd></div>
+                        <div><dt class="text-surface-400">Complexidade</dt><dd class="text-brand-900" x-text="selectedCase?.complexity || '—'"></dd></div>
+                        <div class="col-span-2"><dt class="text-surface-400">Criado em</dt><dd class="font-mono text-brand-900" x-text="(selectedCase?.created_at || '').replace('T',' ').substring(0,19) || '—'"></dd></div>
+                        <div class="col-span-2"><dt class="text-surface-400">ID</dt><dd class="font-mono text-[10px] text-surface-500 break-all" x-text="selectedCase?.id"></dd></div>
+                    </dl>
+                </section>
+            </div>
+        </aside>
+    </div>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -394,6 +495,8 @@
 function harnessPage(){return{
     goldCases:[],evalRuns:[],agents:[],releases:[],showGoldForm:false,showRunForm:false,running:false,
     expandedEval: null,
+    // Drawer master-detail do caso (padrão da plataforma — cf. catalog_inventory)
+    selectedCase: null, caseDrawerOpen: false,
     // Onda 5: comparação side-by-side
     compareForm: { a: '', b: '' },
     compareResult: null,
@@ -474,6 +577,8 @@ function harnessPage(){return{
         }
     },
     toggleEval(r){ this.expandedEval = (this.expandedEval === r.id) ? null : r.id; },
+    openCase(c){ this.selectedCase = c; this.caseDrawerOpen = true; },
+    closeCaseDrawer(){ this.caseDrawerOpen = false; },
     fmtDim(v){ return (v == null) ? '·' : Number(v).toFixed(1); },
     dimColor(v){
         if (v == null) return 'text-surface-400';

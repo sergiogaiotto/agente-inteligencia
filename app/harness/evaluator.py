@@ -139,6 +139,23 @@ def _coerce_score(s) -> float | None:
     return float(s) if isinstance(s, (int, float)) else None
 
 
+def _dim_regressed(baseline_val, current, max_pct: float) -> tuple[bool, float | None]:
+    """Avalia regressão de UMA dimensão: (regrediu?, queda_pct).
+
+    Queda % = (baseline - current) / max(baseline, 0.01) * 100 (positivo = piorou).
+    Retorna (False, None) quando não há base comparável.
+
+    ARMADILHA (corrigida): `baseline_val == 0.0` é uma base VÁLIDA, não ausência.
+    A versão antiga usava `if baseline_val and ...` — 0.0 é falsy em Python e a
+    dimensão era silenciosamente pulada (indistinguível de baseline ausente).
+    Usamos `is not None`.
+    """
+    if baseline_val is None or current is None:
+        return (False, None)
+    pct = ((float(baseline_val) - float(current)) / max(float(baseline_val), 0.01)) * 100
+    return (pct > max_pct, pct)
+
+
 # Estados de DECISÃO do FSM (o que a UI do harness oferece em expected_state).
 _DECISION_STATES = ("Recommend", "Refuse", "Escalate")
 
@@ -420,7 +437,15 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
 
     # ─── Regressão por dimensão (run_type=regression) ───
     if run_type == "regression":
-        baseline_runs = await eval_runs_repo.find_all(release_id=release_id, run_type="baseline", limit=1)
+        # Baseline de referência: mesmo release, MESMO dataset (gold_version) e
+        # CONCLUÍDO. Sem esses filtros, um baseline 'running'/abortado (avg_* NULL,
+        # accuracy=0) ou de outro dataset viraria referência e mascararia a
+        # regressão (falso 'approved'). find_all ordena created_at DESC → o
+        # baseline COMPLETO mais recente do mesmo dataset.
+        baseline_runs = await eval_runs_repo.find_all(
+            release_id=release_id, run_type="baseline",
+            status="completed", gold_version=gold_version, limit=1,
+        )
         if baseline_runs:
             b0 = baseline_runs[0]
             dim_pairs = [
@@ -430,11 +455,9 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
                 ("avg_tone", avg_tone, settings.harness_max_dim_regression_pct),
             ]
             for dim_name, current, max_pct in dim_pairs:
-                baseline_val = b0.get(dim_name)
-                if baseline_val and current is not None:
-                    pct = ((float(baseline_val) - float(current)) / max(float(baseline_val), 0.01)) * 100
-                    if pct > max_pct:
-                        gate_reasons.append(f"regression_{dim_name}={pct:.1f}% > {max_pct}%")
+                regressed, pct = _dim_regressed(b0.get(dim_name), current, max_pct)
+                if regressed:
+                    gate_reasons.append(f"regression_{dim_name}={pct:.1f}% > {max_pct}%")
 
     gate = "rejected" if gate_reasons else "approved"
     gate_reason_text = "; ".join(gate_reasons) if gate_reasons else None
@@ -443,6 +466,9 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
     await eval_runs_repo.update(eval_id, {
         "total_cases": total, "passed": passed, "failed": failed,
         "accuracy": round(accuracy, 4),
+        # accuracy_unweighted era calculada e retornada mas NUNCA persistida →
+        # a linha "Acurácia bruta" do Comparar Execuções vinha sempre "—/—/—".
+        "accuracy_unweighted": round(accuracy_unweighted, 4),
         "correct_refusal_rate": round(correct_refusal_rate, 4),
         "false_positive_rate": round(false_positive_rate, 4),
         "avg_latency_ms": round(avg_latency, 2),
