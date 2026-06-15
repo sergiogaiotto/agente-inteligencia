@@ -372,7 +372,14 @@
         </div>
 
         <!-- detail panel -->
+        <!-- @pointerdown.stop: o painel vive DENTRO do canvas (que tem
+             @pointerdown/@pointerup de pan). Sem o stop, clicar em qualquer
+             botão/link aqui borbulha pro onUp, que faz selected=null e remove o
+             conteúdo (x-if) ANTES do clique navegar → "Testar no Workspace" não
+             funcionava (o painel só fechava). Mesmo guard que o editor de
+             conexão já usa (:478). -->
         <div x-show="selected && !selected.synthetic" x-transition.opacity
+             @pointerdown.stop
              class="absolute top-0 right-0 h-full w-80 bg-white border-l border-surface-200 shadow-xl overflow-y-auto scrollbar-thin">
             <template x-if="selected && !selected.synthetic">
                 <div class="p-4">
