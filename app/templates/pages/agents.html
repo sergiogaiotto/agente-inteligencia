@@ -411,7 +411,7 @@
             <!-- Metadata -->
             <div class="rounded-lg bg-surface-50 border border-surface-100 p-3 space-y-1.5 text-[10px]">
                 <div class="flex justify-between"><span class="text-surface-400">ID</span><span class="font-mono text-surface-500 truncate max-w-[180px]" x-text="previewAgent?.id"></span></div>
-                <div class="flex justify-between"><span class="text-surface-400">Criado</span><span class="text-surface-500" x-text="previewAgent?.created_at?.replace('T',' ').substring(0,16) || '—'"></span></div>
+                <div class="flex justify-between"><span class="text-surface-400">Criado</span><span class="text-surface-500" x-text="tzDateTime(previewAgent?.created_at) || '—'"></span></div>
             </div>
         </div>
     </aside>
@@ -629,7 +629,11 @@ function agentsPage() {
         _relativeTime(iso) {
             if (!iso) return '—';
             try {
-                const then = new Date(iso).getTime();
+                // tzParse trata strings naive como UTC → diff correto (sem ele,
+                // new Date(naive) parseava como hora local e errava o offset).
+                const d = window.tzParse(iso);
+                if (!d) return iso;
+                const then = d.getTime();
                 const now = Date.now();
                 const secs = Math.max(0, Math.floor((now - then) / 1000));
                 if (secs < 60) return secs + 's atrás';
@@ -639,7 +643,7 @@ function agentsPage() {
                 if (hours < 24) return hours + 'h atrás';
                 const days = Math.floor(hours / 24);
                 if (days < 30) return days + 'd atrás';
-                return iso.replace('T', ' ').substring(0, 16);
+                return window.tzDateTime(iso);
             } catch { return iso; }
         },
 

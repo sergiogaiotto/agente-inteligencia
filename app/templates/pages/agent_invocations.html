@@ -52,7 +52,7 @@
                                 <span x-show="e.journey_id" x-text="'jornada: ' + e.journey_id"></span>
                             </div>
                         </div>
-                        <span class="text-[10px] text-surface-400 shrink-0" x-text="(e.started_at || e.created_at || '').replace('T',' ').substring(0,19)"></span>
+                        <span class="text-[10px] text-surface-400 shrink-0" x-text="tzDateTimeSec(e.started_at || e.created_at)"></span>
                         <svg class="w-3.5 h-3.5 text-surface-300 transition-transform shrink-0" :class="expandedId === e.id ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
                     </div>
 
@@ -69,8 +69,8 @@
                                 <!-- Meta -->
                                 <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 text-[10px]">
                                     <div><span class="text-surface-400 block">ID interação</span><span class="font-mono text-brand-900" x-text="e.id"></span></div>
-                                    <div><span class="text-surface-400 block">Iniciado</span><span class="text-brand-900" x-text="(e._detail.interaction.started_at||'').replace('T',' ').substring(0,19)"></span></div>
-                                    <div><span class="text-surface-400 block">Finalizado</span><span class="text-brand-900" x-text="(e._detail.interaction.ended_at||'—').replace('T',' ').substring(0,19)"></span></div>
+                                    <div><span class="text-surface-400 block">Iniciado</span><span class="text-brand-900" x-text="tzDateTimeSec(e._detail.interaction.started_at)"></span></div>
+                                    <div><span class="text-surface-400 block">Finalizado</span><span class="text-brand-900" x-text="tzDateTimeSec(e._detail.interaction.ended_at) || '—'"></span></div>
                                     <div><span class="text-surface-400 block">Trace</span>
                                         <template x-if="e._detail.tempo_link">
                                             <a :href="e._detail.tempo_link" target="_blank" class="text-brand-500 font-medium hover:underline">Abrir no Tempo →</a>
@@ -212,7 +212,7 @@
                                         </template>
                                         <template x-for="a in e._detail.audit_events" :key="a.id">
                                             <div class="flex items-center gap-2 text-[10px] py-1 border-b border-surface-50 last:border-b-0">
-                                                <span class="text-surface-400 shrink-0 w-32 font-mono" x-text="(a.created_at||'').substring(11,19)"></span>
+                                                <span class="text-surface-400 shrink-0 w-32 font-mono" x-text="tzTimeSec(a.created_at)"></span>
                                                 <span class="rounded-full bg-brand-100 px-1.5 py-0.5 text-[9px] font-mono text-brand-700 shrink-0" x-text="a.action"></span>
                                                 <span class="text-surface-500 truncate" x-text="a.actor || a.entity_id?.substring(0,16) || ''"></span>
                                             </div>

@@ -16,7 +16,7 @@
                 <div class="group relative border-b border-surface-50" :class="currentSessionId === s.id ? 'bg-brand-50 border-l-2 border-l-brand-500' : 'hover:bg-surface-50'">
                     <div x-show="renamingId !== s.id" @click="loadSession(s.id)" class="w-full text-left px-4 py-3 cursor-pointer">
                         <div class="text-[12px] font-medium text-brand-900 truncate pr-12" x-text="s.title || 'Nova sessão'"></div>
-                        <div class="text-[10px] text-surface-400 mt-0.5" x-text="s.created_at?.replace('T',' ').substring(0,16)"></div>
+                        <div class="text-[10px] text-surface-400 mt-0.5" x-text="tzDateTime(s.created_at)"></div>
                     </div>
                     <div x-show="renamingId !== s.id" class="absolute right-2 top-2.5 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button @click.stop="startRename(s)" class="p-1 rounded hover:bg-brand-100 text-surface-400 hover:text-brand-600"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg></button>
@@ -86,7 +86,7 @@
                         <div x-show="msg.role==='user'" x-text="msg.content"></div>
                         <!-- ══ FOOTER ══ -->
                         <div x-show="msg.role==='assistant' && !msg._systemNote" class="flex items-center gap-1 mt-2 pt-1.5 border-t border-surface-100">
-                            <span class="text-[10px] opacity-60 flex-1" x-text="msg.created_at?.replace('T',' ').substring(11,16)||''"></span>
+                            <span class="text-[10px] opacity-60 flex-1" x-text="tzTime(msg.created_at)"></span>
                             <!-- Format toggle button -->
                             <button x-show="isStructuredContent(msg.content)" @click="richViewMsgs[i]=!richViewMsgs[i]"
                                     class="p-1 rounded transition-colors" :class="richViewMsgs[i]?'bg-red-100 text-red-600 hover:bg-red-200':'hover:bg-surface-100 text-surface-300 hover:text-red-600'" :title="richViewMsgs[i]?'Ver original':'Visualizar formatado'">
@@ -95,7 +95,7 @@
                             <!-- Copy button -->
                             <button @click="copyMsg(extractText(msg.content))" class="p-1 rounded hover:bg-surface-100 text-surface-300 hover:text-brand-600" title="Copiar"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg></button>
                         </div>
-                        <div x-show="msg.role==='user'" class="mt-1.5 text-[10px] opacity-60" x-text="msg.created_at?.replace('T',' ').substring(11,16)||''"></div>
+                        <div x-show="msg.role==='user'" class="mt-1.5 text-[10px] opacity-60" x-text="tzTime(msg.created_at)"></div>
                     </div>
                     <template x-if="msg.role==='user'"><div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-200 text-[10px] font-bold text-surface-500 mt-1">EU</div></template>
                 </div>

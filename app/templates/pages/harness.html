@@ -184,7 +184,7 @@
                                 · skipped=<span x-text="r.dimension_breakdown?.skipped_cases ?? 0"></span>
                                 · refusal_rate=<span x-text="((r.correct_refusal_rate||0)*100).toFixed(0)+'%'"></span>
                                 · fp_rate=<span x-text="((r.false_positive_rate||0)*100).toFixed(0)+'%'"></span>
-                                · created=<span x-text="r.created_at?.replace('T',' ').substring(0,16) || '—'"></span>
+                                · created=<span x-text="tzDateTime(r.created_at) || '—'"></span>
                             </div>
                         </div>
                     </div>
@@ -481,7 +481,7 @@
                         <div><dt class="text-surface-400">Canal</dt><dd class="text-brand-900" x-text="selectedCase?.channel || '—'"></dd></div>
                         <div><dt class="text-surface-400">Jornada</dt><dd class="text-brand-900" x-text="selectedCase?.journey || '—'"></dd></div>
                         <div><dt class="text-surface-400">Complexidade</dt><dd class="text-brand-900" x-text="selectedCase?.complexity || '—'"></dd></div>
-                        <div class="col-span-2"><dt class="text-surface-400">Criado em</dt><dd class="font-mono text-brand-900" x-text="(selectedCase?.created_at || '').replace('T',' ').substring(0,19) || '—'"></dd></div>
+                        <div class="col-span-2"><dt class="text-surface-400">Criado em</dt><dd class="font-mono text-brand-900" x-text="tzDateTimeSec(selectedCase?.created_at) || '—'"></dd></div>
                         <div class="col-span-2"><dt class="text-surface-400">ID</dt><dd class="font-mono text-[10px] text-surface-500 break-all" x-text="selectedCase?.id"></dd></div>
                     </dl>
                 </section>
