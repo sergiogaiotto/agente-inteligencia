@@ -41,6 +41,44 @@
           };
         });
       })();
+
+      // ── Helpers de formatação de data/hora no fuso da plataforma ───────────
+      // Fonte ÚNICA p/ exibir timestamps. Use SEMPRE estes helpers em vez de
+      // fatiar a string ISO (ex.: created_at.replace('T',' ').substring(...)),
+      // que mostra UTC e ignora o fuso. Eles passam pelos toLocale* patcheados
+      // acima → respeitam window.PLATFORM_TZ. As datas no banco são UTC: strings
+      // "naive" (sem Z/offset) são tratadas como UTC. Formato sv-SE = ISO-like
+      // ("AAAA-MM-DD HH:MM"), preservando o visual antigo já no fuso correto.
+      window.tzParse = function (v) {
+        if (!v) return null;
+        if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+        var s = String(v).trim();
+        if (!s) return null;
+        s = s.replace(' ', 'T');
+        if (!/([zZ]|[+\-]\d{2}:?\d{2})$/.test(s)) s += 'Z'; // naive → UTC
+        var d = new Date(s);
+        return isNaN(d.getTime()) ? null : d;
+      };
+      window.tzDate = function (v) {                 // AAAA-MM-DD
+        var d = window.tzParse(v);
+        return d ? d.toLocaleDateString('sv-SE') : '';
+      };
+      window.tzTime = function (v) {                 // HH:MM
+        var d = window.tzParse(v);
+        return d ? d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' }) : '';
+      };
+      window.tzTimeSec = function (v) {              // HH:MM:SS
+        var d = window.tzParse(v);
+        return d ? d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+      };
+      window.tzDateTime = function (v) {             // AAAA-MM-DD HH:MM
+        var d = window.tzParse(v);
+        return d ? (d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })) : '';
+      };
+      window.tzDateTimeSec = function (v) {          // AAAA-MM-DD HH:MM:SS
+        var d = window.tzParse(v);
+        return d ? (d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })) : '';
+      };
     </script>
     <style>
         [x-cloak]{display:none!important}

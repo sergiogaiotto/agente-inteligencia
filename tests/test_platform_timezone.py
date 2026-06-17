@@ -59,3 +59,52 @@ def test_settings_ui_has_timezone_field():
     assert "config.timezone" in txt
     assert 'timezone: \'America/Sao_Paulo\'' in txt  # default no state
     assert '<option value="America/Sao_Paulo">' in txt
+
+
+# ── Helpers globais de formatação (fonte única; substituem o fatiar ISO) ──────
+PAGES_DIR = ROOT / "app" / "templates" / "pages"
+
+# Padrões que mostram UTC cru porque fatiam a string ISO em vez de passar pelos
+# toLocale* patcheados (o bug que o usuário reportou: chat mostrava 20:26 em vez
+# de 17:26 no GMT-3). NENHUM template de página pode voltar a usá-los.
+_ISO_SLICE_ANTIPATTERNS = (
+    "replace('T',' ')",
+    "replace('T', ' ')",
+    'replace("T"," ")',
+    'replace("T", " ")',
+    ".toISOString().substring",
+)
+
+
+def test_base_html_exposes_tz_helpers():
+    """base.html define os helpers globais de fuso usados por todas as páginas."""
+    txt = BASE.read_text(encoding="utf-8")
+    for fn in ("tzParse", "tzDate", "tzTime", "tzTimeSec", "tzDateTime", "tzDateTimeSec"):
+        assert f"window.{fn} =" in txt, f"helper window.{fn} ausente em base.html"
+    # tzParse trata string naive (sem Z/offset) como UTC — datas no banco são UTC.
+    assert "+= 'Z'" in txt or "+ 'Z'" in txt
+    # Formato ISO-like preservado via locale sueco (AAAA-MM-DD HH:MM).
+    assert "'sv-SE'" in txt
+
+
+def test_no_page_slices_iso_timestamps():
+    """Nenhuma página fatia a string ISO para exibir data/hora (bypassa o fuso).
+
+    Regressão do fix de timezone: chat/sessões/listas mostravam UTC porque
+    usavam created_at.replace('T',' ').substring(...) em vez de tzDateTime()/
+    tzTime(). Garante que a varredura foi completa e não reincide.
+    """
+    offenders = []
+    for path in PAGES_DIR.glob("*.html"):
+        txt = path.read_text(encoding="utf-8")
+        for pat in _ISO_SLICE_ANTIPATTERNS:
+            if pat in txt:
+                offenders.append(f"{path.name}: {pat}")
+    assert not offenders, "ISO-slice antipattern reintroduzido: " + "; ".join(offenders)
+
+
+def test_workspace_chat_uses_tz_helper():
+    """O sintoma reportado (timestamp do chat) usa o helper de fuso."""
+    txt = (PAGES_DIR / "workspace.html").read_text(encoding="utf-8")
+    assert "tzTime(msg.created_at)" in txt
+    assert "tzDateTime(s.created_at)" in txt

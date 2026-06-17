@@ -38,7 +38,7 @@
                         <button @click="promote(r.id,'production')" x-show="r.environment==='canary'" class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100">→ Production</button>
                     </div>
                 </div>
-                <div class="text-[11px] text-surface-400" x-text="'Criada: ' + (r.created_at?.replace('T',' ').substring(0,16)||'')"></div>
+                <div class="text-[11px] text-surface-400" x-text="'Criada: ' + tzDateTime(r.created_at)"></div>
             </div>
         </template>
     </div>

@@ -126,7 +126,7 @@
                                   x-text="i.state==='LogAndClose'?'✓':i.state==='Refuse'?'⚠':'…'"></span>
                             <div class="flex-1 min-w-0">
                                 <div class="text-[12px] font-medium text-brand-900 truncate" x-text="i.title || i.state + ' — ' + (i.channel||'api')"></div>
-                                <div class="text-[9px] text-surface-400" x-text="i.created_at?.replace('T',' ').substring(0,16)"></div>
+                                <div class="text-[9px] text-surface-400" x-text="tzDateTime(i.created_at)"></div>
                             </div>
                             <span class="rounded-full px-1.5 py-0.5 text-[8px] font-semibold shrink-0"
                                   :class="i.state==='LogAndClose'?'bg-emerald-50 text-emerald-600':i.state==='Refuse'?'bg-amber-50 text-amber-600':'bg-surface-100 text-surface-500'"
@@ -210,7 +210,7 @@
                             <div class="text-[9px] text-surface-400 mt-0.5">
                                 <span x-text="ev.module_label"></span>
                                 <span class="mx-1.5">·</span>
-                                <span x-text="ev.timestamp ? ev.timestamp.replace('T',' ').substring(0,16) : ''"></span>
+                                <span x-text="tzDateTime(ev.timestamp)"></span>
                             </div>
                         </div>
                         <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[8px] font-medium text-surface-500 shrink-0"

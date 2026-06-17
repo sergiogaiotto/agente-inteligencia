@@ -223,7 +223,7 @@
                             <div class="text-[9px] text-surface-400 font-mono pt-1">
                                 interaction_id=<span x-text="v.interaction_id || '—'"></span>
                                 · turn_id=<span x-text="v.turn_id || '—'"></span>
-                                · created=<span x-text="v.created_at?.replace('T',' ').substring(0,16) || '—'"></span>
+                                · created=<span x-text="tzDateTime(v.created_at) || '—'"></span>
                             </div>
                         </div>
                     </div>

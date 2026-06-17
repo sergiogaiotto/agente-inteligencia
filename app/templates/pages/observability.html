@@ -61,7 +61,7 @@
                             <div class="text-[12px] font-medium text-brand-900 truncate" x-text="e.title || e.id?.substring(0,8)"></div>
                             <div class="flex items-center gap-2 text-[9px] text-surface-400">
                                 <span x-text="e.channel || 'api'"></span>
-                                <span x-text="e.created_at?.replace('T',' ').substring(0,16)"></span>
+                                <span x-text="tzDateTime(e.created_at)"></span>
                                 <span class="rounded-full px-1.5 py-0.5 text-[8px] font-semibold"
                                       :class="e.state==='LogAndClose'?'bg-emerald-50 text-emerald-600':e.state==='Refuse'?'bg-amber-50 text-amber-600':'bg-surface-100 text-surface-500'"
                                       x-text="e.state"></span>
@@ -78,7 +78,7 @@
                                 <div><span class="text-[9px] text-surface-400 block">ID</span><span class="text-[10px] font-mono text-brand-900" x-text="e.id?.substring(0,12) + '…'"></span></div>
                                 <div><span class="text-[9px] text-surface-400 block">Agente</span><span class="text-[10px] font-medium text-brand-900" x-text="agentName(e.agent_id)"></span></div>
                                 <div><span class="text-[9px] text-surface-400 block">Jornada</span><span class="text-[10px] text-brand-900" x-text="e.journey_id || '—'"></span></div>
-                                <div><span class="text-[9px] text-surface-400 block">Início</span><span class="text-[10px] text-brand-900" x-text="e.created_at?.replace('T',' ').substring(0,19)"></span></div>
+                                <div><span class="text-[9px] text-surface-400 block">Início</span><span class="text-[10px] text-brand-900" x-text="tzDateTimeSec(e.created_at)"></span></div>
                             </div>
                             <!-- Turns -->
                             <div x-show="e._turns === undefined" class="text-[10px] text-surface-400 py-2">Carregando turnos...</div>
@@ -854,7 +854,7 @@ function observabilityPage() {
             buckets.forEach((b, i) => {
                 b.norm = b.count / maxCount;
                 const tBucket = new Date(tsMin + i * step);
-                b.label = tBucket.toISOString().substring(11, 19);
+                b.label = window.tzTimeSec(tBucket);
             });
             return buckets;
         },
@@ -888,11 +888,12 @@ function observabilityPage() {
 
         formatTs(ts) {
             if (!ts) return '—';
-            // ISO -> HH:MM:SS.mmm local time
-            const d = new Date(ts);
-            if (isNaN(d.getTime())) return ts.substring(11, 23);
+            // ISO -> HH:MM:SS.mmm no fuso da plataforma (tzTimeSec respeita
+            // PLATFORM_TZ); ms é invariante a fuso, então é só anexar.
+            const d = window.tzParse(ts);
+            if (!d) return ts;
             const pad = (n, w = 2) => String(n).padStart(w, '0');
-            return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + '.' + pad(d.getMilliseconds(), 3);
+            return window.tzTimeSec(d) + '.' + pad(d.getMilliseconds(), 3);
         },
 
         lineHeadline(l) {

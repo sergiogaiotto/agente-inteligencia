@@ -391,7 +391,7 @@
                                       :class="call.status_code >= 200 && call.status_code < 300 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'"
                                       x-text="call.status_code"></span>
                                 <span class="text-surface-400" x-text="call.latency_ms?.toFixed(0) + 'ms'"></span>
-                                <span class="text-surface-300 ml-auto" x-text="call.created_at?.replace('T',' ').substring(0,16)"></span>
+                                <span class="text-surface-300 ml-auto" x-text="tzDateTime(call.created_at)"></span>
                             </div>
                         </div>
                     </template>
