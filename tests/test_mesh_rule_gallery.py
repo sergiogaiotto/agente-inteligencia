@@ -28,12 +28,14 @@ def html() -> str:
 
 # ─── 1. Vocabulário da galeria ⊆ fonte única do engine (anti-drift) ──────────
 
-# Variáveis que os cards da Fatia 2 geram. Se a galeria oferecer um var que o
+# Variáveis que os cards da galeria geram. Se a galeria oferecer um var que o
 # runtime não monta, a regra falharia em silêncio (ChainableUndefined → falsy).
 GALLERY_VARS = {
     "output_lower", "input_lower", "text_all",      # card palavra-chave (Onde:)
     "has_attachments", "has_document", "has_image",  # card anexo
     "is_recommend", "is_refuse", "is_escalate", "final_state",  # card decisão
+    "contains_url", "contains_pdf", "contains_image",  # card conteúdo (Fatia 3)
+    "has_output", "output_length",                   # card tamanho (Fatia 3)
 }
 
 
@@ -67,8 +69,9 @@ def test_template_fetches_conditional_vars(html: str):
     assert "condVars: []" in html
 
 
-def test_template_has_three_intent_cards(html: str):
-    for intent in ("'keyword'", "'attachment'", "'decision'"):
+def test_template_has_five_intent_cards(html: str):
+    # núcleo (Fatia 2) + conteúdo/tamanho (Fatia 3)
+    for intent in ("'keyword'", "'attachment'", "'decision'", "'content'", "'size'"):
         assert f"selectIntent({intent})" in html, f"card de intenção {intent} ausente"
 
 
@@ -76,7 +79,33 @@ def test_gallery_compiles_to_editor_expr(html: str):
     """syncExpr() escreve a regra montada em editor.expr — buildConfig usa expr,
     então NÃO há mudança no modelo de execução (mesma config.expr de sempre)."""
     assert "syncExpr()" in html
-    assert "ed.expr = expr" in html
+    assert "ed.expr = this._compose(" in html
+    # buildConfig continua lendo editor.expr (runtime intacto)
+    assert "cfg.expr = ed.expr.trim()" in html
+
+
+def test_combine_clauses_with_and_or(html: str):
+    """Fatia 3: múltiplas condições combinadas por E/OU parentetizado."""
+    assert "addClause()" in html
+    assert "removeClause(" in html
+    assert "_needsParens(" in html         # protege precedência ao combinar
+    assert 'x-model="editor.join"' in html
+    assert 'value="and"' in html and 'value="or"' in html
+
+
+def test_content_and_size_cards_use_real_vars(html: str):
+    """Cards de conteúdo/tamanho geram vars que existem no engine."""
+    for v in ("contains_url", "contains_pdf", "contains_image"):
+        assert f'value="{v}"' in html
+    assert "not has_output" in html        # tamanho: vazia
+    assert "output_length < " in html and "output_length > " in html
+
+
+def test_did_you_mean_wired(html: str):
+    """did-you-mean (Levenshtein) ataca o typo que falha em silêncio."""
+    assert "exprWarnings()" in html
+    assert "fixVar(w)" in html
+    assert "_lev(" in html
     # buildConfig continua lendo editor.expr (runtime intacto)
     assert "cfg.expr = ed.expr.trim()" in html
 
