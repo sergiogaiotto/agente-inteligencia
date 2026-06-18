@@ -392,11 +392,25 @@ async def conditional_vars():
 
 @router.post("/connections/test-conditional")
 async def test_conditional(payload: dict):
-    """Avalia uma expressão Jinja boolean contra um output/final_state
-    de exemplo. Usado pelo simulador do wizard antes do operador salvar.
+    """Avalia uma expressão Jinja boolean contra um contexto de exemplo.
+    Usado pelo simulador do wizard antes do operador salvar.
 
-    Payload: {"expr": str, "output": str (opcional), "final_state": str (opcional)}
+    Payload: {
+        "expr": str,
+        "output": str (opcional)          — resposta simulada do upstream,
+        "final_state": str (opcional)     — Recommend/Refuse/Escalate/LogAndClose,
+        "input": str (opcional)           — pergunta original simulada do usuário,
+        "attachments": list (opcional)    — [{"name","type"}] de anexos simulados,
+        "session_text": str (opcional)    — perguntas recentes (memória de sessão)
+    }
     Returns: {"result": bool, "context": dict} OU {"error": str}
+
+    Por que aceitar input/attachments/final_state (2026-06-18): o simulador
+    antigo só passava `output` e fixava `final_state="Recommend"` no front, então
+    QUALQUER regra sobre a pergunta (`input_lower`), anexos (`has_document`) ou
+    decisão (`is_refuse`/`is_escalate`) simulava SEMPRE "não casa" mesmo correta —
+    fabricando a confusão que o simulador deveria remover. Agora o contexto de
+    teste casa o que `_build_conditional_context` monta em runtime.
 
     Política: fail-CLOSED — erro vira mensagem para o operador corrigir
     a expressão antes de salvar. Em runtime (`_should_skip_conditional`)
@@ -409,9 +423,13 @@ async def test_conditional(payload: dict):
 
     from app.agents.engine import _build_conditional_context, _eval_conditional
 
+    atts = payload.get("attachments")
     ctx = _build_conditional_context(
         output=payload.get("output", ""),
         final_state=payload.get("final_state", ""),
+        user_input=payload.get("input", ""),
+        attachments=atts if isinstance(atts, list) else [],
+        session_text=payload.get("session_text", ""),
     )
     try:
         result = _eval_conditional(expr, ctx)

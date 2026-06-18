@@ -162,3 +162,78 @@ class TestTestConditionalEndpoint:
         body = r.json()
         assert "error" in body
         assert "context" in body  # retorna context pro user debugar
+
+
+class TestTestConditionalExpandedContext:
+    """2026-06-18 — o simulador antigo só passava `output` e fixava
+    `final_state="Recommend"`, então regras sobre pergunta/anexos/decisão
+    SEMPRE simulavam "não casa" mesmo corretas. O endpoint agora aceita
+    input/attachments/final_state e casa o contexto de runtime."""
+
+    def test_input_lower_is_honored(self, mesh_client):
+        """Regra sobre a PERGUNTA do usuário (`input_lower`) casa quando o
+        endpoint recebe `input` — antes era impossível simular."""
+        r = mesh_client.post(
+            "/api/v1/mesh/connections/test-conditional",
+            json={"expr": "'rentab' in input_lower", "input": "como está a rentabilidade?"},
+        )
+        assert r.status_code == 200
+        assert r.json()["result"] is True
+
+    def test_input_absent_defaults_falsy(self, mesh_client):
+        """Sem `input`, a mesma regra não casa (input vazio → falsy)."""
+        r = mesh_client.post(
+            "/api/v1/mesh/connections/test-conditional",
+            json={"expr": "'rentab' in input_lower", "output": "qualquer coisa"},
+        )
+        assert r.json()["result"] is False
+
+    def test_has_document_from_attachments(self, mesh_client):
+        """Anexo sintético `.pdf` → `has_document` verdadeiro (mesma
+        classificação de runtime via _classify_attachment_kind)."""
+        r = mesh_client.post(
+            "/api/v1/mesh/connections/test-conditional",
+            json={"expr": "has_document", "attachments": [{"name": "exemplo.pdf", "type": "application/pdf"}]},
+        )
+        assert r.json()["result"] is True
+
+    def test_has_image_from_attachments(self, mesh_client):
+        r = mesh_client.post(
+            "/api/v1/mesh/connections/test-conditional",
+            json={"expr": "has_image and not has_document", "attachments": [{"name": "exemplo.png", "type": "image/png"}]},
+        )
+        assert r.json()["result"] is True
+
+    def test_no_attachments_means_no_document(self, mesh_client):
+        r = mesh_client.post(
+            "/api/v1/mesh/connections/test-conditional",
+            json={"expr": "has_document", "output": "texto", "attachments": []},
+        )
+        assert r.json()["result"] is False
+
+    def test_final_state_refuse_is_configurable(self, mesh_client):
+        """Decisão diferente de Recommend agora é simulável — `is_refuse`
+        casa quando final_state='Refuse' (antes o front fixava Recommend)."""
+        r = mesh_client.post(
+            "/api/v1/mesh/connections/test-conditional",
+            json={"expr": "is_refuse", "final_state": "Refuse"},
+        )
+        assert r.json()["result"] is True
+
+    def test_attachments_non_list_is_ignored(self, mesh_client):
+        """Payload defensivo: `attachments` não-lista não quebra o endpoint."""
+        r = mesh_client.post(
+            "/api/v1/mesh/connections/test-conditional",
+            json={"expr": "has_output", "output": "x", "attachments": "nope"},
+        )
+        assert r.status_code == 200
+        assert r.json()["result"] is True
+
+    def test_output_only_regression_unchanged(self, mesh_client):
+        """Regressão: chamada legada (só output/final_state) é byte-idêntica —
+        os novos campos são aditivos e default vazio."""
+        r = mesh_client.post(
+            "/api/v1/mesh/connections/test-conditional",
+            json={"expr": "is_recommend and 'imagem' in output_lower", "output": "tem imagem", "final_state": "Recommend"},
+        )
+        assert r.json()["result"] is True
