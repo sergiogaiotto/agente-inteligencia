@@ -1,9 +1,11 @@
 """Mesh + CAR — topologia e catálogo de roteadores §6."""
-import uuid, json
-from fastapi import APIRouter, HTTPException
+import uuid, json, logging
+from fastapi import APIRouter, HTTPException, Depends
 from app.models.schemas import MeshConnectionCreate, CAREntryCreate
 from app.core.database import mesh_repo, agents_repo, car_repo
+from app.core.auth import require_user
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/mesh", tags=["mesh"])
 
 # Tipos de conexão CANÔNICOS aceitos no mesh. Os 3 primeiros já apareciam na UI;
@@ -439,6 +441,57 @@ async def test_conditional(payload: dict):
             "context": ctx,
         }
     return {"result": bool(result), "context": ctx}
+
+
+@router.post("/connections/suggest-conditional")
+async def suggest_conditional(payload: dict, user: dict = Depends(require_user)):
+    """Tradutor NL→Jinja (Fatia 4): descrição em pt-BR → regra condicional.
+
+    Payload: {"description": str}
+    Returns: {"expr": str, "valid": bool, "used_vars": [...], "unknown_vars": [...], "error": str}
+
+    DNA "IA sugere → sistema PROVA": o LLM propõe uma expressão usando só as
+    variáveis canônicas e o backend RECONCILIA contra `CONDITIONAL_VARS_META`
+    (envolvendo em `{{ }}` antes de parsear — senão o guardrail vira selo
+    sempre-verde). NÃO persiste: o operador revisa e salva via /connections.
+    Auth obrigatória (custa chamada de LLM).
+    """
+    description = (payload.get("description") or "").strip()
+    if not description:
+        return {"error": "Descreva a regra em português (ex.: 'se mencionar pix ou anexar documento')."}
+
+    from app.agents.engine import (
+        CONDITIONAL_VARS_META, _eval_conditional, _build_conditional_context,
+    )
+    from app.agents.conditional_suggest import (
+        build_suggest_messages, extract_expression, validate_conditional_expression,
+    )
+    from app.llm_routing import resolve_llm_for_task
+    from app.routes.wizard import _wizard_llm_complete
+
+    provider, model = await resolve_llm_for_task("instruct")
+    messages = build_suggest_messages(description, CONDITIONAL_VARS_META)
+    try:
+        content, _, _ = await _wizard_llm_complete(
+            messages, provider, model, route="conditional_suggest", temperature=0,
+        )
+    except HTTPException:
+        raise  # 503 acionável (LLM inacessível) propaga
+    except Exception as e:
+        logger.error("suggest-conditional falhou", exc_info=True)
+        raise HTTPException(500, f"Erro ao gerar a regra: {e}")
+
+    expr = extract_expression(content)
+    canonical = {v["name"] for v in CONDITIONAL_VARS_META}
+    result = validate_conditional_expression(expr, canonical)
+    # Smoke de runtime: a regra válida tem que AVALIAR sem crash (sandbox,
+    # contexto vazio) — pega erro de tipo/método que o set-diff não vê.
+    if result["valid"]:
+        try:
+            _eval_conditional(expr, _build_conditional_context())
+        except Exception as e:
+            result = {**result, "valid": False, "error": f"A regra gerada não avalia: {e}"}
+    return {"expr": expr, "description": description, **result}
 
 
 # ═══════════════════════════════════════════════════════════════════
