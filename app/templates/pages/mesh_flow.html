@@ -515,9 +515,113 @@
                     <!-- condicional: expr + simulador -->
                     <template x-if="editor.type==='conditional'">
                         <div class="mb-4">
-                            <label class="block text-[11px] font-semibold text-surface-500 mb-1">Regra (expressão Jinja booleana)</label>
-                            <textarea x-model="editor.expr" rows="2" placeholder="ex: 'pix' in output_lower  ·  has_document"
-                                      class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] font-mono outline-none focus:border-brand-400 resize-none"></textarea>
+                            <!-- ══ Modo galeria: descreve a intenção, regra é montada pra você ══ -->
+                            <template x-if="editor.ruleMode==='gallery'">
+                                <div>
+                                    <label class="block text-[11px] font-semibold text-surface-500 mb-1.5">Quando esta conexão deve rodar?</label>
+                                    <div class="grid grid-cols-3 gap-1.5 mb-2">
+                                        <button type="button" @click="selectIntent('keyword')"
+                                                class="rounded-lg border px-2 py-2 flex flex-col items-center gap-1 text-[11px] transition-colors"
+                                                :class="editor.intent==='keyword' ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-600 hover:bg-surface-50'">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 5h18M3 12h12M3 19h18"/></svg>
+                                            <span>Palavra-chave</span>
+                                        </button>
+                                        <button type="button" @click="selectIntent('attachment')"
+                                                class="rounded-lg border px-2 py-2 flex flex-col items-center gap-1 text-[11px] transition-colors"
+                                                :class="editor.intent==='attachment' ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-600 hover:bg-surface-50'">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21 11.5l-8.5 8.5a5 5 0 01-7-7l8.5-8.5a3.5 3.5 0 015 5L9 17"/></svg>
+                                            <span>Tem anexo</span>
+                                        </button>
+                                        <button type="button" @click="selectIntent('decision')"
+                                                class="rounded-lg border px-2 py-2 flex flex-col items-center gap-1 text-[11px] transition-colors"
+                                                :class="editor.intent==='decision' ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-600 hover:bg-surface-50'">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M5 3v18M5 4h11l-2 4 2 4H5"/></svg>
+                                            <span>Decisão final</span>
+                                        </button>
+                                    </div>
+
+                                    <template x-if="editor.intent==='keyword'">
+                                        <div class="rounded-lg border border-surface-200 p-2.5 space-y-2">
+                                            <div class="flex flex-wrap gap-1 items-center">
+                                                <template x-for="(t,i) in editor.kwTerms" :key="i">
+                                                    <span class="inline-flex items-center gap-1 rounded-full bg-brand-50 text-brand-700 px-2 py-0.5 text-[11px]">
+                                                        <span x-text="t"></span>
+                                                        <button type="button" @click="removeKw(i)" class="text-brand-400 hover:text-brand-600 leading-none">&times;</button>
+                                                    </span>
+                                                </template>
+                                                <input x-model="editor.kwDraft" @keydown.enter.prevent="addKw()" @blur="addKw()"
+                                                       placeholder="palavra + Enter" class="flex-1 min-w-[110px] border-0 p-0 text-[11px] bg-transparent outline-none">
+                                            </div>
+                                            <div class="flex items-center gap-1.5 text-[11px] text-surface-500 flex-wrap">
+                                                <span>Onde:</span>
+                                                <select x-model="editor.kwWhere" @change="syncExpr()" class="rounded border border-surface-200 px-1.5 py-1 text-[11px]">
+                                                    <option value="output_lower">na resposta</option>
+                                                    <option value="input_lower">na pergunta</option>
+                                                    <option value="text_all">em qualquer lugar</option>
+                                                </select>
+                                                <span class="ml-1">Casar:</span>
+                                                <select x-model="editor.kwMode" @change="syncExpr()" class="rounded border border-surface-200 px-1.5 py-1 text-[11px]">
+                                                    <option value="any">qualquer uma</option>
+                                                    <option value="all">todas</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </template>
+
+                                    <template x-if="editor.intent==='attachment'">
+                                        <div class="rounded-lg border border-surface-200 p-2.5 flex items-center gap-1.5 text-[11px] text-surface-500 flex-wrap">
+                                            <span>Tipo de anexo:</span>
+                                            <select x-model="editor.attKind" @change="syncExpr()" class="rounded border border-surface-200 px-1.5 py-1 text-[11px]">
+                                                <option value="has_attachments">qualquer anexo</option>
+                                                <option value="has_document">documento (pdf, doc, planilha…)</option>
+                                                <option value="has_image">imagem</option>
+                                            </select>
+                                        </div>
+                                    </template>
+
+                                    <template x-if="editor.intent==='decision'">
+                                        <div class="rounded-lg border border-surface-200 p-2.5 flex items-center gap-1.5 text-[11px] text-surface-500 flex-wrap">
+                                            <span>A decisão do agente foi:</span>
+                                            <select x-model="editor.decision" @change="syncExpr()" class="rounded border border-surface-200 px-1.5 py-1 text-[11px]">
+                                                <option value="is_recommend">Recomendar</option>
+                                                <option value="is_refuse">Recusar</option>
+                                                <option value="is_escalate">Escalar</option>
+                                                <option value="final_state == 'LogAndClose'">Registrar e fechar</option>
+                                            </select>
+                                        </div>
+                                    </template>
+
+                                    <p class="text-[10.5px] text-surface-400 mt-1.5">Prefere escrever a regra? <button type="button" @click="switchToManual()" class="text-brand-600 hover:underline">editar à mão (Jinja)</button></p>
+                                </div>
+                            </template>
+
+                            <!-- ══ Modo manual: Jinja cru + painel de variáveis (consome /conditional-vars) ══ -->
+                            <template x-if="editor.ruleMode==='manual'">
+                                <div>
+                                    <label class="block text-[11px] font-semibold text-surface-500 mb-1">Regra (expressão Jinja booleana)</label>
+                                    <textarea x-model="editor.expr" @input="sim=null" rows="2" placeholder="ex: 'pix' in output_lower  ·  has_document"
+                                              class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] font-mono outline-none focus:border-brand-400 resize-none"></textarea>
+                                    <details class="mt-1.5">
+                                        <summary class="text-[10.5px] text-surface-500 cursor-pointer select-none">Variáveis disponíveis (clique para inserir)</summary>
+                                        <div class="mt-1.5 flex flex-wrap gap-1">
+                                            <template x-for="v in condVars" :key="v.name">
+                                                <button type="button" @click="insertVar(v.name)" :title="v.desc"
+                                                        class="rounded border border-surface-200 px-1.5 py-0.5 text-[10px] font-mono text-surface-600 hover:bg-surface-50" x-text="v.name"></button>
+                                            </template>
+                                        </div>
+                                    </details>
+                                    <p class="text-[10.5px] text-surface-400 mt-1.5"><button type="button" @click="backToGallery()" class="text-brand-600 hover:underline">voltar à galeria</button></p>
+                                </div>
+                            </template>
+
+                            <!-- Regra gerada (read-only) no modo galeria -->
+                            <template x-if="editor.ruleMode==='gallery' && (editor.expr||'').trim()">
+                                <div class="mt-2 rounded-lg bg-surface-50 border border-surface-100 px-3 py-2">
+                                    <p class="text-[10px] text-surface-400 mb-0.5">Regra gerada</p>
+                                    <code class="text-[11.5px] font-mono text-surface-700 break-all" x-text="editor.expr"></code>
+                                </div>
+                            </template>
+
                             <div class="mt-2 rounded-lg border border-surface-200 p-2.5 space-y-1.5">
                                 <p class="text-[10.5px] font-semibold text-surface-500">Contexto de teste</p>
                                 <input x-model="editor.sampleOut" placeholder="resposta (output) do agente anterior"
@@ -714,6 +818,7 @@ function meshFlowPage() {
         canvasW: 2000, canvasH: 1200,
         selected: null, loaded: false,
         hoverId: null, linking: null, linkTargetId: null, editor: null, sim: null, scopeSim: null, saving: false, fsm: null, agentDetail: null, replay: null, snap: false, groups: [], runModal: null, startMenu: null,
+        condVars: [],   // Galeria de Intenções (Fatia 2): vars condicionais do /conditional-vars (antes órfão)
         _drag: null, _pan: null, _saveTimer: null, _suppressClick: false,
 
         // Estúdio de Pipelines (PR1)
@@ -732,6 +837,10 @@ function meshFlowPage() {
             catch (e) { console.error('[flow] layout falhou', e); }
             try { const g = await api.get('/api/v1/mesh/groups'); this.groups = g.groups || []; }
             catch (e) { console.error('[flow] groups falhou', e); }
+            // Galeria de Intenções (Fatia 2): vocabulário de variáveis vindo do
+            // backend — fonte única (CONDITIONAL_VARS_META). Endpoint antes órfão.
+            try { const cv = await api.get('/api/v1/mesh/conditional-vars'); this.condVars = cv.vars || []; }
+            catch (e) { console.error('[flow] conditional-vars falhou', e); }
             await this.loadPipelines();
             this.build();
             this.loaded = true;
@@ -1365,7 +1474,8 @@ function meshFlowPage() {
             if (this.edges.some(e => e.source === srcId && e.target === tgtId && e.type !== 'start')) { showToast('Já existe uma conexão entre esses agentes', 'info'); return; }
             this.selected = null;
             this.sim = null; this.scopeSim = null;
-            this.editor = { mode: 'new', id: null, source: srcId, target: tgtId, type: 'sequential', expr: '', scopeMode: 'inherit', scopeTemplate: '', sampleOut: '', sampleInput: '', sampleFinalState: 'Recommend', sampleHasDoc: false, sampleHasImg: false };
+            this.editor = { mode: 'new', id: null, source: srcId, target: tgtId, type: 'sequential', expr: '', scopeMode: 'inherit', scopeTemplate: '', sampleOut: '', sampleInput: '', sampleFinalState: 'Recommend', sampleHasDoc: false, sampleHasImg: false,
+                ruleMode: 'gallery', intent: null, kwTerms: [], kwDraft: '', kwWhere: 'output_lower', kwMode: 'any', attKind: 'has_document', decision: 'is_recommend' };
         },
 
         editEdge(id) {
@@ -1380,6 +1490,11 @@ function meshFlowPage() {
                 mode: 'edit', id, source: e.source, target: e.target, type: e.type,
                 expr: cfg.expr || '', scopeMode: sc.mode || 'inherit', scopeTemplate: sc.template || '', sampleOut: '',
                 sampleInput: '', sampleFinalState: 'Recommend', sampleHasDoc: false, sampleHasImg: false,
+                // Regra existente abre no modo manual (nunca reinterpretamos/perdemos
+                // a expr salva); regra nova começa na galeria. Re-hidratar expr→cards
+                // é da Fatia 4.
+                ruleMode: (cfg.expr || '').trim() ? 'manual' : 'gallery',
+                intent: null, kwTerms: [], kwDraft: '', kwWhere: 'output_lower', kwMode: 'any', attKind: 'has_document', decision: 'is_recommend',
             };
         },
 
@@ -1440,6 +1555,51 @@ function meshFlowPage() {
                 });
             } catch (e) { this.sim = { error: e.message }; }
         },
+
+        // ══ Galeria de Intenções (Fatia 2) ══════════════════════════════
+        // O operador descreve a INTENÇÃO em pt-BR; a regra Jinja é montada
+        // pra ele e gravada em editor.expr (buildConfig usa expr — zero
+        // mudança de runtime). Escape hatch p/ Jinja cru sempre presente.
+        selectIntent(kind) { this.editor.intent = (this.editor.intent === kind ? null : kind); this.syncExpr(); },
+        _jinjaStr(s) { return "'" + String(s).toLowerCase().replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; },
+        addKw() {
+            const ed = this.editor;
+            const raw = (ed.kwDraft || '').trim();
+            if (!raw) return;
+            // aceita "a, b, c" colado de uma vez; lowercase casa output_lower/input_lower/text_all
+            raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean).forEach(t => {
+                if (!ed.kwTerms.includes(t)) ed.kwTerms.push(t);
+            });
+            ed.kwDraft = '';
+            this.syncExpr();
+        },
+        removeKw(i) { this.editor.kwTerms.splice(i, 1); this.syncExpr(); },
+        syncExpr() {
+            const ed = this.editor;
+            if (ed.ruleMode !== 'gallery') return;   // modo manual nunca é sobrescrito
+            let expr = '';
+            if (ed.intent === 'keyword') {
+                const terms = (ed.kwTerms || []).filter(Boolean);
+                if (terms.length) {
+                    const op = ed.kwMode === 'all' ? ' and ' : ' or ';
+                    expr = terms.map(t => `${this._jinjaStr(t)} in ${ed.kwWhere}`).join(op);
+                }
+            } else if (ed.intent === 'attachment') {
+                expr = ed.attKind;
+            } else if (ed.intent === 'decision') {
+                expr = ed.decision;
+            }
+            ed.expr = expr;
+            this.sim = null;
+        },
+        switchToManual() { this.editor.ruleMode = 'manual'; },   // expr compilada vira ponto de partida editável
+        backToGallery() { this.editor.ruleMode = 'gallery'; this.editor.intent = null; this.editor.expr = ''; this.sim = null; },
+        insertVar(name) {
+            const cur = this.editor.expr || '';
+            this.editor.expr = cur + (cur && !cur.endsWith(' ') ? ' ' : '') + name;
+            this.sim = null;
+        },
+
         async simulateScope() {
             try { this.scopeSim = await api.post('/api/v1/mesh/connections/test-context-scope', { mode: this.editor.scopeMode, template: this.editor.scopeTemplate || '', output: this.editor.sampleOut || '', final_state: 'Recommend' }); }
             catch (e) { this.scopeSim = { error: e.message }; }
