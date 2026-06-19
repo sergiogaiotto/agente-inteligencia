@@ -547,7 +547,7 @@
                     </div>
                 </div>
             </div>
-            <textarea x-model="form.raw_content" rows="24" placeholder="---&#10;id: urn:skill:dominio:tipo:slug&#10;version: 0.1.0&#10;kind: subagent&#10;owner: equipe&#10;stability: alpha&#10;---&#10;&#10;# Nome da Skill&#10;&#10;## Purpose&#10;..."
+            <textarea x-model="form.raw_content" data-testid="skill-raw" rows="24" placeholder="---&#10;id: urn:skill:dominio:tipo:slug&#10;version: 0.1.0&#10;kind: subagent&#10;owner: equipe&#10;stability: alpha&#10;---&#10;&#10;# Nome da Skill&#10;&#10;## Purpose&#10;..."
                       class="w-full rounded-xl border border-surface-200 bg-white px-4 py-3 text-[12px] font-mono text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition resize-none leading-relaxed"></textarea>
 
             <!-- ══════════ STATS: chars / tokens / custo estimado ══════════
@@ -610,7 +610,7 @@
             </p>
         </div>
         <div class="flex items-center justify-end pt-2">
-            <button @click="save()" :disabled="saving" class="rounded-xl bg-brand-500 px-6 py-2.5 text-[13px] font-semibold text-white shadow-sm hover:bg-brand-600 disabled:opacity-40 transition-all">
+            <button @click="save()" data-testid="skill-save" :disabled="saving" class="rounded-xl bg-brand-500 px-6 py-2.5 text-[13px] font-semibold text-white shadow-sm hover:bg-brand-600 disabled:opacity-40 transition-all">
                 <span x-text="saving ? 'Salvando...' : (isEdit ? 'Atualizar Skill' : 'Criar Skill')"></span>
             </button>
         </div>
