@@ -23,9 +23,14 @@ texto que muda. Ao mexer nesses elementos, mantenha o `data-testid`.
 Pré-requisitos (1x):
 
 ```bash
-docker compose up -d app                       # app na porta 7000
-python -m playwright install chromium          # browser headless
+# Suba o app com o rate-limit DESLIGADO — a suíte faz muitas requisições/min e
+# estouraria os 60/60s (rate-limit é ortogonal ao teste funcional). O default do
+# compose mantém rate-limit LIGADO; só a suíte E2E precisa relaxá-lo.
+RATE_LIMIT_ENABLED=false docker compose up -d app   # app na porta 7000
+python -m playwright install chromium               # browser headless
 ```
+
+> Para voltar ao comportamento normal (rate-limit ligado): `docker compose up -d app`.
 
 Se o banco já tem usuários, semeie o usuário de teste (só na 1ª vez):
 
