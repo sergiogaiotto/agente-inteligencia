@@ -129,7 +129,7 @@ class TestDynamicPlaceholder:
         assert ':placeholder="promptPlaceholderForKind()"' in html
 
     def test_placeholder_method_branches_by_kind(self, html):
-        # AOBD/AR têm dica específica; SA mantém o texto histórico.
-        assert "Estrutura de orquestração" in html
-        assert "Estrutura de roteamento" in html
+        # AOBD/AR têm dica específica (rótulos padronizados — só o nome); SA mantém o texto histórico.
+        assert "Estrutura do Maestro" in html
+        assert "Estrutura da Triagem" in html
         assert "Instruções detalhadas para o agente..." in html

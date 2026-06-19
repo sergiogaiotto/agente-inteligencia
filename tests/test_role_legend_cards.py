@@ -1,9 +1,9 @@
 """Legendas de papel (Dashboard + Observabilidade): cor canônica + nome pt-BR.
 
-Padrão (ver [[reference_ptbr_ui_glossary]]): Maestro (AOBD)=slate, Triagem (AR)=
-orange, Especialista (SA)=teal. Estes cards usam bolinhas ESTÁTICAS (não os
-ternários cobertos por test_ui_kind_color_standard), então têm guard próprio:
-o AR estava azul (bg-brand-400) e os cards mostravam só o código.
+Padrão (ver [[reference_ptbr_ui_glossary]]): Maestro=slate, Triagem=orange,
+Especialista=teal. Formato "só o nome" (PR #414): SEM o código (AOBD/AR/SA) no
+rótulo. Estes cards usam bolinhas ESTÁTICAS (não os ternários cobertos por
+test_ui_kind_color_standard), então têm guard próprio.
 """
 from __future__ import annotations
 
@@ -18,9 +18,11 @@ PAGES = ROOT / "app" / "templates" / "pages"
 @pytest.mark.parametrize("page", ["dashboard.html", "observability.html"])
 def test_role_labels_have_ptbr_names(page):
     txt = (PAGES / page).read_text(encoding="utf-8")
-    assert "Maestro (AOBD)" in txt
-    assert "Triagem (AR)" in txt
-    assert "Especialista (SA)" in txt
+    # formato "só o nome" — nome canônico sem código (AOBD/AR/SA)
+    assert ">Maestro<" in txt
+    assert ">Triagem<" in txt
+    assert ">Especialista<" in txt
+    assert "(AOBD)" not in txt and "(AR)" not in txt and "(SA)" not in txt
 
 
 @pytest.mark.parametrize("page", ["dashboard.html", "observability.html"])
