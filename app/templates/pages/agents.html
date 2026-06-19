@@ -48,7 +48,7 @@
                     <!-- Info -->
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-1.5">
-                            <span class="text-[13px] font-semibold text-brand-900 truncate" x-text="agent.name"></span>
+                            <span class="text-[13px] font-semibold text-brand-900 truncate" data-testid="agent-row-name" x-text="agent.name"></span>
                             <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-400 shrink-0" x-text="'v' + (agent.version || '1.0.0')"></span>
                             <span class="h-1.5 w-1.5 rounded-full shrink-0" :class="agent.status==='active'?'bg-emerald-400':'bg-surface-300'"></span>
                             <!-- Pass-through badge in list -->

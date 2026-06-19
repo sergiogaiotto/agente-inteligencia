@@ -20,17 +20,17 @@
             </div>
             <div class="space-y-3">
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Usuário *</label>
-                <input x-model="form.username" placeholder="admin" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
+                <input x-model="form.username" data-testid="setup-username" placeholder="admin" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Nome de exibição</label>
                 <input x-model="form.display_name" placeholder="Administrador" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Email</label>
                 <input x-model="form.email" type="email" placeholder="admin@empresa.com" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Senha *</label>
-                <input x-model="form.password" type="password" placeholder="••••••••" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
+                <input x-model="form.password" data-testid="setup-password" type="password" placeholder="••••••••" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Confirmar Senha *</label>
-                <input x-model="confirmPwd" type="password" placeholder="••••••••" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
+                <input x-model="confirmPwd" data-testid="setup-confirm" type="password" placeholder="••••••••" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
                 <div x-show="error" class="rounded-lg bg-rose-50 px-3 py-2 text-[11px] text-rose-700" x-text="error"></div>
-                <button @click="setupRoot()" :disabled="loading" class="w-full rounded-lg bg-brand-500 py-2.5 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 transition-colors">
+                <button @click="setupRoot()" data-testid="setup-submit" :disabled="loading" class="w-full rounded-lg bg-brand-500 py-2.5 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 transition-colors">
                     <span x-text="loading ? 'Criando...' : 'Criar e Entrar'"></span>
                 </button>
             </div>
@@ -47,11 +47,11 @@
             </div>
             <div class="space-y-3">
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Usuário</label>
-                <input x-model="form.username" @keydown.enter="login()" placeholder="seu.usuario" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
+                <input x-model="form.username" data-testid="login-username" @keydown.enter="login()" placeholder="seu.usuario" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
                 <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Senha</label>
-                <input x-model="form.password" @keydown.enter="login()" type="password" placeholder="••••••••" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
-                <div x-show="error" class="rounded-lg bg-rose-50 px-3 py-2 text-[11px] text-rose-700" x-text="error"></div>
-                <button @click="login()" :disabled="loading" class="w-full rounded-lg bg-brand-500 py-2.5 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 transition-colors">
+                <input x-model="form.password" data-testid="login-password" @keydown.enter="login()" type="password" placeholder="••••••••" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400"></div>
+                <div x-show="error" data-testid="login-error" class="rounded-lg bg-rose-50 px-3 py-2 text-[11px] text-rose-700" x-text="error"></div>
+                <button @click="login()" data-testid="login-submit" :disabled="loading" class="w-full rounded-lg bg-brand-500 py-2.5 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 transition-colors">
                     <span x-text="loading ? 'Entrando...' : 'Entrar'"></span>
                 </button>
             </div>

@@ -1021,6 +1021,7 @@ function evidencePage() {
     return {
         sources: [],
         statsBy: {},  // {source_id: {chunks_count, tokens_total, last_chunk_at, ...}}
+        tabularPromoteOpen: false,  // estado do modal de promote (declarado p/ Alpine não dar ReferenceError no 1º render)
         editorOpen: false, editingId: null, saving: false,
         form: { name: '', description: '', source_type: 'manual', confidentiality_label: 'internal', kb_mode: 'hybrid' },
 

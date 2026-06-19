@@ -19,6 +19,8 @@ on:
   pull_request:
     branches:
       - main
+  # Gatilho manual para a camada E2E de interface (job test-e2e abaixo).
+  workflow_dispatch:
 
 # Cancela runs antigos quando novo commit chega no mesmo branch — economiza
 # minutos de CI e dá feedback rápido. Pra main mantém histórico (no-cancel).
@@ -54,10 +56,11 @@ jobs:
         # -x para falhar no primeiro erro (feedback rápido em PR review).
         # -q reduz output (CI logs limpos). --strict-markers já vem do
         # pytest.ini — pega marker typo (ex: @pytest.mark.integraion).
-        # -m "not integration" → roda só os mocked (rápido, sem deps externas).
-        # Integração com Postgres real vai no job test-integration abaixo.
+        # -m "not integration and not e2e" → só os mocked (rápido, sem deps).
+        # Integração (Postgres real) vai no job test-integration; E2E de
+        # interface (browser + app real) vai no job test-e2e (manual).
         run: |
-          python -m pytest tests/ -x -q -m "not integration"
+          python -m pytest tests/ -x -q -m "not integration and not e2e"
         env:
           # Suprime logs de arquivo durante testes — CI não tem volume
           # persistente e LOG_FILE_ENABLED=0 evita criar logs/*.log.
@@ -115,3 +118,85 @@ jobs:
           TEST_DATABASE_URL: postgresql://agente:agente@localhost:5432/agente_inteligencia_test
           LOG_FILE_ENABLED: "0"
           LOG_CONSOLE_ENABLED: "0"
+
+  test-e2e:
+    # Camada E2E de INTERFACE (Playwright dirige o app real num browser).
+    # MANUAL (workflow_dispatch) e NÃO-BLOQUEANTE (continue-on-error): subir o
+    # stack completo em CI é sensível a env/secrets; mantemos como gate opt-in
+    # para não travar merges. O caminho primário de E2E é local, contra
+    # `docker compose up` (ver docs/testes-e2e.md). Roda o subconjunto
+    # DETERMINÍSTICO (sem `slow`) — a jornada de invocar pipeline depende de LLM.
+    name: pytest (e2e — interface, manual)
+    if: github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: agente
+          POSTGRES_PASSWORD: agente
+          POSTGRES_DB: agente_inteligencia
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agente -d agente_inteligencia"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Start app (uvicorn em background)
+        run: |
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 7000 &
+          echo "Aguardando /api/health..."
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:7000/api/health >/dev/null 2>&1; then
+              echo "App de pé."; exit 0
+            fi
+            sleep 2
+          done
+          echo "App não subiu a tempo"; exit 1
+        env:
+          DATABASE_URL: postgresql://agente:agente@localhost:5432/agente_inteligencia
+          REDIS_URL: redis://localhost:6379/0
+          MAESTRO_SECRET_KEY: ci-e2e-secret-key-not-for-prod
+          APP_ENV: development
+          LOG_FILE_ENABLED: "0"
+          LOG_CONSOLE_ENABLED: "0"
+
+      - name: Run pytest (e2e — determinístico)
+        # Banco vazio → o suite cria o root pelo fluxo real de setup.
+        run: |
+          python -m pytest tests/e2e -v -m "e2e and not slow"
+        env:
+          E2E_BASE_URL: http://127.0.0.1:7000
+          E2E_USERNAME: e2e_admin
+          E2E_PASSWORD: e2e-pass-1234
