@@ -48,6 +48,27 @@ def get_active_embedding_dim() -> int:
     return 1536
 
 
+def embeddings_unavailable_detail() -> str:
+    """Mensagem (para o 503 de ingestão) FIEL ao provider de embeddings ativo.
+
+    Antes a mensagem era hardcoded "Azure", o que induzia ao erro quando o
+    provider real era qwen3 (ex.: endpoint do hub inacessível → o usuário ia
+    checar chaves Azure inexistentes). Aqui a mensagem reflete o provider de
+    `settings.embedding_provider` e aponta para a config certa.
+    """
+    provider = (getattr(get_settings(), "embedding_provider", "azure") or "azure").lower()
+    if provider == "qwen3":
+        return (
+            "Embeddings (provider 'qwen3') indisponível — o serviço de embeddings "
+            "configurado não respondeu. Verifique a URL e a conectividade do "
+            "endpoint (Configurações → qwen3_source / oss*_url) a partir do servidor."
+        )
+    return (
+        "Embeddings (provider 'azure') indisponível. Verifique "
+        "AZURE_OPENAI_API_KEY/ENDPOINT em Configurações."
+    )
+
+
 class _EmbedderProtocol(Protocol):
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]: ...
     async def aembed_query(self, text: str) -> list[float]: ...

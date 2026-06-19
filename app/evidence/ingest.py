@@ -6,7 +6,7 @@ de inserir os novos.
 
 Falhas tratadas com semantica clara:
 - source não existe → 404
-- Azure embeddings indisponível → 503 com mensagem específica
+- embeddings indisponível (Azure ou qwen3) → 503 com mensagem fiel ao provider
 - Qdrant offline mas Postgres OK → retorna `partial=true`; usuário pode rodar
   /reindex depois quando Qdrant voltar
 """
@@ -23,7 +23,7 @@ from app.core.config import get_settings
 from app.core.database import _get_pool, evidence_chunks_repo, knowledge_repo
 from app.core.otel import get_tracer
 from app.evidence.chunker import chunk_text
-from app.evidence.embedder import embed_texts
+from app.evidence.embedder import embed_texts, embeddings_unavailable_detail
 
 
 # Sentinel para identificar documentos legados (sem metadata.source_doc_id).
@@ -134,10 +134,8 @@ async def ingest_text(
         with _tracer.start_as_current_span("ingest.embed"):
             vectors = await embed_texts([c.text for c in chunks])
         if vectors is None:
-            raise IngestError(
-                "Azure OpenAI embeddings indisponível. Verifique AZURE_OPENAI_API_KEY/ENDPOINT.",
-                status_code=503,
-            )
+            # Mensagem fiel ao provider ativo (azure|qwen3) — ver embedder.py.
+            raise IngestError(embeddings_unavailable_detail(), status_code=503)
         if len(vectors) != len(chunks):
             raise IngestError(
                 f"Embeddings devolveu {len(vectors)} vetores para {len(chunks)} chunks.",
