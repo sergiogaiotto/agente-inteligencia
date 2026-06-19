@@ -224,7 +224,7 @@
                                           x-text="flag.label"></span>
                                 </template>
                                 <span x-show="disclosureSummary(item.disclosure).length === 0" class="text-surface-500 italic">Sem flags ativas declaradas</span>
-                                <span x-show="item.disclosure.data_residency" class="rounded-full bg-brand-100 text-brand-700 px-2 py-0.5" x-text="'Residency: ' + item.disclosure.data_residency"></span>
+                                <span x-show="item.disclosure?.data_residency" class="rounded-full bg-brand-100 text-brand-700 px-2 py-0.5" x-text="'Residency: ' + (item.disclosure?.data_residency || '')"></span>
                             </div>
                         </div>
 

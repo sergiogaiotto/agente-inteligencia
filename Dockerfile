@@ -62,6 +62,9 @@ RUN pip install --no-index --find-links=/wheels -r requirements.txt && rm -rf /w
 # Copia código do app
 COPY --chown=app:app app ./app
 
+# Scripts operacionais (ex.: seed do usuário E2E, rodado via `docker exec`).
+COPY --chown=app:app scripts ./scripts
+
 # Diretório de uploads / dados
 RUN mkdir -p ${APP_HOME}/data/uploads && chown -R app:app ${APP_HOME}/data
 

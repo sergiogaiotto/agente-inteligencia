@@ -21,7 +21,7 @@
         <div class="flex items-center gap-2 mb-8">
             <template x-for="(s, i) in steps" :key="i">
                 <div class="flex items-center gap-2">
-                    <button @click="step = i" class="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors"
+                    <button @click="step = i" :data-testid="'agent-step-' + i" class="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors"
                             :class="step === i ? 'bg-brand-500 text-white' : step > i ? 'bg-emerald-100 text-emerald-700' : 'bg-surface-100 text-surface-400'">
                         <span x-text="step > i ? '✓' : (i + 1)"></span>
                         <span x-text="s" class="hidden sm:inline"></span>
@@ -41,7 +41,7 @@
                 <label class="block text-[12px] font-semibold text-brand-900 mb-2">Que tipo de agente você quer criar?</label>
                 <div class="grid sm:grid-cols-3 gap-3">
                     <template x-for="card in layerCards" :key="card.kind">
-                        <button type="button" @click="form.kind = card.kind"
+                        <button type="button" @click="form.kind = card.kind" :data-testid="'agent-kind-' + card.kind"
                                 class="text-left rounded-xl border-2 p-3 transition-all hover:shadow-sm"
                                 :class="form.kind === card.kind ? 'border-brand-500 bg-brand-50/60 ring-2 ring-brand-100' : 'border-surface-200 bg-white hover:border-brand-200'">
                             <div class="flex items-center gap-2 mb-1.5">
@@ -60,7 +60,7 @@
             </div>
             <div>
                 <label class="block text-[12px] font-semibold text-brand-900 mb-1.5">Nome do Agente *</label>
-                <input x-model="form.name" type="text" placeholder="Ex: Agente de Análise de Dados"
+                <input x-model="form.name" data-testid="agent-name" type="text" placeholder="Ex: Agente de Análise de Dados"
                        class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition">
             </div>
             <div>
@@ -375,7 +375,7 @@
                         </button>
                     </div>
                 </div>
-                <textarea x-model="form.system_prompt" rows="12" :placeholder="promptPlaceholderForKind()"
+                <textarea x-model="form.system_prompt" data-testid="agent-system-prompt" rows="12" :placeholder="promptPlaceholderForKind()"
                           class="w-full rounded-lg border border-surface-200 bg-white px-3.5 py-2.5 text-[13px] font-mono text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition resize-none"></textarea>
                 <div class="flex items-center justify-between mt-1">
                     <span class="text-[10px] text-surface-400" x-text="(form.system_prompt||'').length + ' caracteres'"></span>
@@ -744,7 +744,7 @@
             <button @click="step = Math.max(0, step - 1)" x-show="step > 0" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] font-medium text-surface-500 hover:bg-surface-50 transition-colors">Voltar</button>
             <div x-show="step === 0"></div>
             <button x-show="step < steps.length - 1" @click="step++" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 transition-colors">Próximo</button>
-            <button x-show="step === steps.length - 1" @click="save()"
+            <button x-show="step === steps.length - 1" @click="save()" data-testid="agent-save"
                 :disabled="saving || preflight.report?.blocked"
                 :title="preflight.report?.blocked ? 'Corrija os erros do pre-flight antes de salvar' : ''"
                 class="rounded-lg bg-emerald-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
