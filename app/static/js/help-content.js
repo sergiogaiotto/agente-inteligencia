@@ -63,9 +63,9 @@ window.HELP_CONTENT = {
         body: `
           <p>Agentes não vivem soltos — eles fazem parte de uma <strong>rede em 3 camadas</strong>:</p>
           <ul>
-            <li><strong>Especialista / Subagente (SA)</strong> — o nível operacional. Executa uma tarefa específica (responder dúvida fiscal, classificar e-mail, gerar resumo). Cada Especialista cuida de um pedaço pequeno.</li>
-            <li><strong>Triagem / Roteador (AR)</strong> — recebe um pedido genérico e decide qual Especialista é o mais adequado. Pense num supervisor de fila.</li>
-            <li><strong>Maestro / Orquestrador (AOBD)</strong> — coordena múltiplas Triagens + Especialistas para tarefas compostas. Pense num gerente de projeto.</li>
+            <li><strong>Especialista</strong> — o nível operacional. Executa uma tarefa específica (responder dúvida fiscal, classificar e-mail, gerar resumo). Cada Especialista cuida de um pedaço pequeno.</li>
+            <li><strong>Triagem</strong> — recebe um pedido genérico e decide qual Especialista é o mais adequado. Pense num supervisor de fila.</li>
+            <li><strong>Maestro</strong> — coordena múltiplas Triagens + Especialistas para tarefas compostas. Pense num gerente de projeto.</li>
           </ul>
           <p>A maioria dos agentes que você cria serão <strong>Especialistas</strong>. Triagem e Maestro são usados quando há complexidade que justifique — não comece por eles.</p>
           <p>Cada invocação de agent passa por uma <strong>máquina de estados</strong> internamente: intake → policy check → execução → verificação → resposta. Isso garante que toda interação tem rastro de auditoria, métricas de custo, e (quando habilitado) verificação de evidência das respostas.</p>
@@ -96,9 +96,9 @@ window.HELP_CONTENT = {
           {
             name: 'Tipo (Camada)',
             required: true,
-            options: ['Subagente (SA)', 'Roteador (AR)', 'Orquestrador (AOBD)'],
-            default: 'Subagente (SA)',
-            body: 'Define o papel do agent na topologia. 95% dos casos = Subagente. Use Roteador quando há vários SAs especialistas e você quer decisão automática de qual usar. Orquestrador é para fluxos compostos com múltiplas etapas.'
+            options: ['Especialista', 'Triagem', 'Maestro'],
+            default: 'Especialista',
+            body: 'Define o papel do agent na topologia. 95% dos casos = Especialista. Use Triagem quando há vários Especialistas e você quer decisão automática de qual usar. Maestro é para fluxos compostos com múltiplas etapas.'
           },
           {
             name: 'Domínio',
@@ -155,19 +155,19 @@ window.HELP_CONTENT = {
         items: [
           {
             title: 'Atendimento automatizado — primeiro filtro',
-            body: 'Crie um Subagent "Triagem de chamados" que classifica abertura de tickets em categorias (técnico, comercial, financeiro). Tipo de tarefa = Classification, temperatura baixa, sem skill vinculada. Conecte na sua plataforma de atendimento via API.'
+            body: 'Crie um Especialista "Triagem de chamados" que classifica abertura de tickets em categorias (técnico, comercial, financeiro). Tipo de tarefa = Classification, temperatura baixa, sem skill vinculada. Conecte na sua plataforma de atendimento via API.'
           },
           {
             title: 'Analista que cita fontes',
-            body: 'Subagent "Consulta de Política" que responde dúvidas dos colaboradores sobre RH com base em documentos internos. Requer evidência ligado, RAG configurado (em /evidence), system prompt enfatizando "responda apenas com base nos documentos recuperados". Sem alucinação.'
+            body: 'Especialista "Consulta de Política" que responde dúvidas dos colaboradores sobre RH com base em documentos internos. Requer evidência ligado, RAG configurado (em /evidence), system prompt enfatizando "responda apenas com base nos documentos recuperados". Sem alucinação.'
           },
           {
             title: 'Composição via Recipe',
             body: 'Em vez de criar um agent gigante, crie 3 agents pequenos: "Extrator de NF", "Validador de CNPJ", "Resumo Final". Depois, no Catálogo, monte um Recipe que invoca os 3 em sequência (chain). Cada agent é simples, testável, reutilizável.'
           },
           {
-            title: 'Roteador inteligente',
-            body: 'Quando você tem 5+ Subagents especialistas (fiscal, jurídico, RH, TI, financeiro) e quer que o usuário faça uma pergunta única, crie um Router (AR) que recebe a pergunta, identifica o domínio, e delega ao SA certo.'
+            title: 'Triagem inteligente',
+            body: 'Quando você tem 5+ Especialistas (fiscal, jurídico, RH, TI, financeiro) e quer que o usuário faça uma pergunta única, crie uma Triagem que recebe a pergunta, identifica o domínio, e delega ao Especialista certo.'
           }
         ]
       },
@@ -180,7 +180,7 @@ window.HELP_CONTENT = {
             <li>Clique em <strong>Novo Agente</strong> no canto superior direito.</li>
             <li><strong>Nome:</strong> "Classificador de E-mail — Atendimento"</li>
             <li><strong>Descrição:</strong> "Analisa o texto de um e-mail e retorna a categoria — elogio, reclamação ou dúvida."</li>
-            <li><strong>Tipo (Camada):</strong> Subagente (SA).</li>
+            <li><strong>Tipo (Camada):</strong> Especialista.</li>
             <li><strong>Domínio:</strong> "atendimento".</li>
             <li><strong>Tipo de Tarefa:</strong> Classification (a plataforma vai escolher um modelo otimizado para classificação).</li>
             <li><strong>Temperatura:</strong> 0.2 (queremos respostas estáveis).</li>
@@ -253,7 +253,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>O Dashboard é o "raio-X" da plataforma. Ao entrar, você vê de uma vez quantos agentes estão ativos por camada (AOBD/AR/SA), quantas skills estão registradas, quantas interações foram processadas recentemente, releases em produção e o estado dos conectores de API.</p>
+          <p>O Dashboard é o "raio-X" da plataforma. Ao entrar, você vê de uma vez quantos agentes estão ativos por camada (Maestro/Triagem/Especialista), quantas skills estão registradas, quantas interações foram processadas recentemente, releases em produção e o estado dos conectores de API.</p>
           <p>É a primeira tela depois do login — pensada para que oncall, gerente e dev saibam <strong>em 5 segundos</strong> se algo precisa de atenção.</p>
         `
       },

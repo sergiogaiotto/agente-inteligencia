@@ -18,12 +18,12 @@ window.MODULE_GUIDE = [
   {
     id: 's4',
     section: '§4',
-    label: 'Topologia AOBD → AR → SA',
+    label: 'Topologia Maestro → Triagem → Especialista',
     fundamento: `<p>A plataforma organiza agents em três camadas com responsabilidades distintas — como uma empresa que tem gerente, supervisor e operador.</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
-  <li><b>AOBD — Maestro (Orquestrador)</b> — o "gerente". Recebe uma pergunta vinda do usuário, interpreta a intenção e decide qual fluxo executar. Consulta o CAR (§6) para escolher.</li>
-  <li><b>AR — Triagem (Roteador)</b> — o "supervisor". Decompõe um fluxo em etapas, controla dependências entre subagents, gerencia o DAG de execução.</li>
-  <li><b>SA — Especialista (Subagente)</b> — o "operador". Executa uma tarefa atômica: chama uma tool, gera uma resposta, classifica um item. Stateless por design.</li>
+  <li><b>Maestro</b> — o "gerente". Recebe uma pergunta vinda do usuário, interpreta a intenção e decide qual fluxo executar. Consulta o CAR (§6) para escolher.</li>
+  <li><b>Triagem</b> — o "supervisor". Decompõe um fluxo em etapas, controla dependências entre Especialistas, gerencia o DAG de execução.</li>
+  <li><b>Especialista</b> — o "operador". Executa uma tarefa atômica: chama uma tool, gera uma resposta, classifica um item. Stateless por design.</li>
 </ul>
 <p class="mt-2">Comunicação entre camadas é via <b>Protocolo A2A</b> (§7) — envelopes tipados e assinados, com rastreabilidade total.</p>
 <p class="mt-2"><b>Quando se importar com isso:</b> só quando tiver mais de 3-4 agents resolvendo coisas relacionadas. Para um agent isolado, ignorar — todo SA funciona sozinho.</p>`,
@@ -102,8 +102,8 @@ window.MODULE_GUIDE = [
   {
     id: 's6',
     section: '§6',
-    label: 'CAR — Catálogo de Roteadores',
-    fundamento: `<p>CAR é a "lista telefônica" que o AOBD consulta para descobrir qual Agent Roteador chamar quando recebe uma mensagem.</p>
+    label: 'CAR — Catálogo de Triagens',
+    fundamento: `<p>CAR é a "lista telefônica" que o Maestro consulta para descobrir qual Agent de Triagem chamar quando recebe uma mensagem.</p>
 <p class="mt-2">Diferente de um service registry tradicional (que indexa por endpoint), o CAR indexa por <b>intenção</b>: keywords + entidades reconhecidas + perfil do ator + jornada.</p>
 <p class="mt-2"><b>Matching híbrido</b>:</p>
 <ol class="list-decimal pl-4 mt-2 space-y-1.5">

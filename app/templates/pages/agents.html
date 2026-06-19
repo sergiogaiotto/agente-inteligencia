@@ -17,9 +17,9 @@
         <div class="flex items-center gap-2 mb-4 flex-wrap">
             <select x-model="filterKind" @change="load()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none">
                 <option value="">Todos tipos</option>
-                <option value="aobd">AOBD</option>
-                <option value="router">Router</option>
-                <option value="subagent">Subagent</option>
+                <option value="aobd">Maestro</option>
+                <option value="router">Triagem</option>
+                <option value="subagent">Especialista</option>
             </select>
             <select x-model="filterDomain" @change="filterByDomain()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none">
                 <option value="">Todos domínios</option>
@@ -55,7 +55,7 @@
                             <span x-show="isAgentPassthrough(agent)" class="rounded-full bg-amber-50 px-1.5 py-0.5 text-[8px] font-bold text-amber-600 shrink-0">PASS-THROUGH</span>
                         </div>
                         <div class="flex items-center gap-1.5 mt-0.5">
-                            <span class="text-[9px] font-bold uppercase" :class="agent.kind==='aobd'?'text-slate-700':agent.kind==='router'?'text-orange-500':'text-teal-500'" x-text="agent.kind==='aobd'?'AOBD':agent.kind==='router'?'AR':'SA'"></span>
+                            <span class="text-[9px] font-bold uppercase" :class="agent.kind==='aobd'?'text-slate-700':agent.kind==='router'?'text-orange-500':'text-teal-500'" x-text="agentKindLabel(agent.kind)"></span>
                             <span class="text-[9px] text-surface-400" x-text="agent.model"></span>
                             <span x-show="agent._skill_name" class="text-[9px] text-teal-500 truncate max-w-[120px]" x-text="agent._skill_name"></span>
                         </div>
@@ -122,7 +122,7 @@
             <div class="flex flex-wrap gap-1.5">
                 <span class="rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase"
                       :class="previewAgent?.kind==='aobd'?'bg-slate-100 text-slate-700':previewAgent?.kind==='router'?'bg-orange-50 text-orange-700':'bg-teal-50 text-teal-700'"
-                      x-text="previewAgent?.kind==='aobd'?'AOBD — Orquestrador':previewAgent?.kind==='router'?'AR — Roteador':'SA — Subagente'"></span>
+                      x-text="agentKindLabel(previewAgent?.kind)"></span>
                 <span class="flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-medium"
                       :class="previewAgent?.status==='active'?'bg-emerald-50 text-emerald-700':'bg-surface-100 text-surface-500'">
                     <span class="h-1.5 w-1.5 rounded-full" :class="previewAgent?.status==='active'?'bg-emerald-400':'bg-surface-300'"></span>

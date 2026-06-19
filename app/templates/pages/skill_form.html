@@ -196,7 +196,7 @@
                 <div class="text-[10px] font-semibold uppercase tracking-wider text-red-600 mb-1.5">Vamos gerar</div>
                 <div class="flex items-center gap-3 flex-wrap text-[11px] text-red-800">
                     <span class="inline-flex items-center gap-1">
-                        <span class="font-bold" x-text="wizardKind === 'subagent' ? 'Subagente' : (wizardKind === 'router' ? 'Roteador' : 'Orquestrador')"></span>
+                        <span class="font-bold" x-text="agentKindLabel(wizardKind)"></span>
                     </span>
                     <span x-show="wizardDomain" class="inline-flex items-center gap-1">
                         · domínio <code class="bg-white px-1 rounded" x-text="wizardDomain"></code>
@@ -239,9 +239,9 @@
 
             <div class="flex items-center gap-3 flex-wrap">
                 <select x-model="wizardKind" class="rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] outline-none">
-                    <option value="subagent">Subagente</option>
-                    <option value="router">Roteador</option>
-                    <option value="orchestrator">Orquestrador</option>
+                    <option value="subagent">Especialista</option>
+                    <option value="router">Triagem</option>
+                    <option value="orchestrator">Maestro</option>
                 </select>
                 <input x-model="wizardDomain" placeholder="Domínio (ex: dev)" class="rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] outline-none w-32">
                 <button @click="runWizardSkill()" :disabled="wizardLoading || !wizardPrompt.trim()"
