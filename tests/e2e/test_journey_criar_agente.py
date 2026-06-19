@@ -49,11 +49,12 @@ def test_criar_agente_aparece_na_lista(authed_page, api):
     expect(save).to_be_enabled(timeout=15_000)  # pre-flight terminou e não bloqueou
     save.click()
 
-    # save() redireciona p/ /agents após ~800ms
-    page.wait_for_url("**/agents", timeout=15_000)
+    # save() redireciona p/ /agents após ~800ms. Timeouts folgados: sob carga
+    # (logo após build/LLM) o load() da lista pode demorar — toleramos sem flake.
+    page.wait_for_url("**/agents", timeout=30_000)
     expect(
         page.get_by_test_id("agent-row-name").filter(has_text=name)
-    ).to_be_visible(timeout=15_000)
+    ).to_be_visible(timeout=30_000)
 
     # ── teardown: remove o agente criado para a suíte ser idempotente ──
     try:

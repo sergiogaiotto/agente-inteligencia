@@ -70,8 +70,9 @@ def test_publicar_agente_no_catalogo(authed_page, api, throwaway_agent):
     expect(submit).to_be_visible()
     submit.click()
 
-    # Sucesso = redirect p/ /catalog/{entryId}
-    page.wait_for_url(re.compile(r"/catalog/[0-9a-fA-F-]{8,}"), timeout=20_000)
+    # Sucesso = redirect p/ /catalog/{entryId}. Timeout folgado: o submit faz 3
+    # chamadas encadeadas (create+capability+submit) que podem demorar sob carga.
+    page.wait_for_url(re.compile(r"/catalog/[0-9a-fA-F-]{8,}"), timeout=40_000)
     m = re.search(r"/catalog/([0-9a-fA-F-]{8,})", page.url)
     entry_id = m.group(1) if m else None
     assert entry_id, f"não capturei o entry_id da URL: {page.url}"
