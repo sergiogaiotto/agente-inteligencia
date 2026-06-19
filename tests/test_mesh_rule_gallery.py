@@ -123,10 +123,11 @@ def test_decision_card_maps_to_shortcuts(html: str):
 
 
 def test_escape_hatch_present_both_directions(html: str):
-    """Galeria → manual e manual → galeria; power user nunca fica preso."""
+    """Galeria → manual e manual → galeria; power user nunca fica preso.
+    (Copy para leigo: o link agora é 'escrever à mão (avançado)'.)"""
     assert "switchToManual()" in html
     assert "backToGallery()" in html
-    assert "editar à mão" in html
+    assert "escrever à mão" in html
 
 
 def test_manual_mode_shows_vars_panel(html: str):
@@ -142,6 +143,7 @@ def test_existing_rule_opens_in_manual_mode(html: str):
 
 
 def test_regra_gerada_strip_is_readonly(html: str):
-    """A 'Regra gerada' é visível (educa Jinja) mas read-only no modo galeria."""
-    assert "Regra gerada" in html
+    """A regra montada é visível (read-only) no modo galeria.
+    (Copy para leigo: rótulo agora é 'Regra montada'.)"""
+    assert "Regra montada" in html
     assert 'x-text="editor.expr"' in html
