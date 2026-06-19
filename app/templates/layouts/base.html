@@ -433,6 +433,72 @@
                     <h1 class="text-[15px] font-semibold text-brand-900">{{ title }}</h1>
                 </div>
                 <div class="flex items-center gap-2">
+                    <!-- ══ Saúde dos modelos: informa o que será usado + alerta em problema ══ -->
+                    <div class="relative" x-data="modelHealth()" x-init="load()" data-testid="model-health">
+                        <button @click="open=!open" :title="summary"
+                                data-testid="model-health-chip"
+                                class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors"
+                                :class="!loaded ? 'bg-surface-100 text-surface-400' : (allOk ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-amber-50 text-amber-700 hover:bg-amber-100')">
+                            <span class="h-1.5 w-1.5 rounded-full shrink-0" :class="!loaded ? 'bg-surface-300' : (allOk ? 'bg-emerald-500' : 'bg-amber-500 pulse-dot')"></span>
+                            <span class="hidden md:inline">Modelos</span>
+                            <span x-show="loaded && downCount > 0" class="rounded-full bg-amber-500 text-white px-1 text-[9px] font-bold leading-none py-0.5" x-text="downCount"></span>
+                        </button>
+                        <div x-show="open" @click.away="open=false" x-transition style="display:none"
+                             data-testid="model-health-panel"
+                             class="absolute right-0 top-full mt-1 w-80 rounded-xl bg-white border border-surface-200 shadow-lg z-50 p-3 text-[11px]">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="font-semibold text-brand-900">Modelos em uso</span>
+                                <button @click="load(true)" :disabled="loading" class="text-[10px] text-brand-500 hover:text-brand-700 disabled:opacity-40" x-text="loading ? 'checando…' : 'Re-checar'"></button>
+                            </div>
+                            <div x-show="!allOk" class="rounded-lg bg-amber-50 text-amber-800 px-2 py-1.5 mb-2 leading-snug" x-text="summary"></div>
+                            <p class="text-[9px] uppercase tracking-wide text-surface-400 mb-1">Chat / roteamento</p>
+                            <template x-for="(info, role) in chat" :key="role">
+                                <div class="flex items-center justify-between gap-2 py-0.5">
+                                    <span class="text-surface-600 shrink-0" x-text="roleLabel(role)"></span>
+                                    <span class="flex items-center gap-1.5 font-mono text-[10px] min-w-0" :class="info.ok ? 'text-emerald-700' : 'text-rose-600'">
+                                        <span class="h-1.5 w-1.5 rounded-full shrink-0" :class="info.ok ? 'bg-emerald-500' : 'bg-rose-500'"></span>
+                                        <span class="truncate" x-text="info.provider + '/' + info.model"></span>
+                                    </span>
+                                </div>
+                            </template>
+                            <div class="flex items-center justify-between gap-2 py-0.5 mt-1.5 pt-1.5 border-t border-surface-100">
+                                <span class="text-surface-600 shrink-0">Embeddings</span>
+                                <span class="flex items-center gap-1.5 font-mono text-[10px] min-w-0" :class="emb.ok ? 'text-emerald-700' : 'text-rose-600'">
+                                    <span class="h-1.5 w-1.5 rounded-full shrink-0" :class="emb.ok ? 'bg-emerald-500' : 'bg-rose-500'"></span>
+                                    <span class="truncate" x-text="emb.effective || emb.configured || '—'"></span>
+                                    <span x-show="emb.fallback_active" class="text-amber-600 shrink-0" x-text="'(fallback de ' + emb.configured + ')'"></span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <script>
+                    function modelHealth() {
+                        const LABELS = { tool_calling:'Tool calling', reasoning:'Raciocínio', instruct:'Instruct', classification:'Classificação', skill_generation:'Geração de skill', multimodal_fallback:'Multimodal', embeddings:'Embeddings' };
+                        return {
+                            open:false, loaded:false, loading:false, allOk:true, anyFallback:false,
+                            chat:{}, emb:{}, downCount:0, summary:'',
+                            roleLabel(r){ return LABELS[r] || r; },
+                            async load(force){
+                                this.loading = true;
+                                try {
+                                    const r = await fetch('/api/v1/llm/health' + (force ? '?force=true' : ''));
+                                    const d = await r.json();
+                                    this.chat = d.chat || {}; this.emb = d.embeddings || {};
+                                    this.allOk = !!d.all_ok; this.anyFallback = !!d.any_fallback;
+                                    const down = Object.entries(this.chat).filter(([k,v]) => !v.ok).map(([k]) => k);
+                                    if (this.emb && this.emb.ok === false) down.push('embeddings');
+                                    this.downCount = down.length;
+                                    const parts = [];
+                                    if (down.length) parts.push(down.length + ' indisponível(is): ' + down.map(x => this.roleLabel(x)).join(', '));
+                                    if (this.emb && this.emb.fallback_active) parts.push('Embeddings via fallback: ' + this.emb.configured + '→' + this.emb.effective);
+                                    this.summary = parts.join(' · ') || 'Todos os modelos disponíveis.';
+                                    this.loaded = true;
+                                } catch(e) { this.summary = 'Falha ao checar modelos.'; this.loaded = true; }
+                                this.loading = false;
+                            },
+                        }
+                    }
+                    </script>
                     <!-- Guia Interativo dropdown -->
                     <div class="relative" x-data="{guideMenuOpen:false}">
                         <button @click="guideMenuOpen = !guideMenuOpen" id="tour-start-btn"
