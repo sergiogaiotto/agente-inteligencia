@@ -24,6 +24,29 @@ from app.core.database import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["platform"])
 
+
+# ═══════════════════════════════════════════════════════════════
+# Saúde dos modelos (chat/roteamento + embeddings) — alimenta o chip no header.
+# ═══════════════════════════════════════════════════════════════
+@router.get("/llm/health")
+async def llm_health(force: bool = False):
+    """O que será usado dali em diante + disponibilidade (probe de inferência).
+
+    Resolve o roteamento (task_type → provider/model) + o provider de embeddings
+    e sonda cada modelo distinto com uma chamada mínima. Cacheado (TTL) — passe
+    ``?force=true`` para re-sondar. Não levanta: erros viram status por modelo.
+    """
+    from app.core.model_health import get_model_health
+
+    try:
+        return await get_model_health(force=force)
+    except Exception as e:
+        logger.warning(f"llm_health falhou: {type(e).__name__}: {e}")
+        return {"all_ok": False, "any_fallback": False, "chat": {},
+                "embeddings": {"ok": False, "error": str(e)[:120]},
+                "error": "Falha ao apurar saúde dos modelos."}
+
+
 # ═══════════════════════════════════════════════════════════════
 # Auth MCP — suporte a API Key, OAuth2 Client Credentials e mTLS.
 #
