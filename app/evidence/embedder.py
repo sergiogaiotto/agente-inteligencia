@@ -20,32 +20,39 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-_embedder = None  # singleton
+_embedder = None            # embedder EFETIVO em cache (o provider que respondeu)
+_effective_provider = None  # nome do provider efetivo ('qwen3'|'azure')
+
+
+def _provider_dim(provider: str) -> int:
+    """Dimensão do embedding para um provider. Qwen3 com `qwen3_dimensions=0`
+    cai no default do modelo (1024, Qwen3-Embedding-0.6B); Azure
+    (text-embedding-3-small) é fixo em 1536."""
+    if (provider or "").lower() == "qwen3":
+        configured = int(getattr(get_settings(), "qwen3_dimensions", 0) or 0)
+        return configured or 1024
+    return 1536  # Azure (e qualquer provider desconhecido) cai aqui.
 
 
 def get_active_embedding_dim() -> int:
-    """Retorna a dimensão do embedder ATIVO conforme settings.
+    """Retorna a dimensão do embedder ATIVO.
 
-    Não faz HTTP — infere da config. Provider Qwen3 com `qwen3_dimensions=0`
-    cai no default do modelo (1024 para Qwen3-Embedding-0.6B). Provider Azure
-    (text-embedding-3-small) é fixo em 1536.
+    Segue o provider EFETIVO (`_effective_provider`) quando já resolvido — ou
+    seja, o que de fato respondeu, possivelmente via fallback de roteamento
+    (ex.: qwen3 inacessível → azure). Sem isso a coluna pgvector seria criada
+    com a dim do provider CONFIGURADO (qwen3=1024) enquanto os vetores reais
+    viriam do fallback (azure=1536), causando drift no upsert. Antes de resolver,
+    cai na dim do provider configurado em settings.
 
-    Mudanças em settings só refletem aqui se settings forem recarregados
-    (get_settings() faz cache). Em ambiente de produção com mudança via UI,
-    o handler de settings deve invalidar o cache + chamar reindex no backend
-    de vetor ativo (pgvector_store.ensure_table) pra reconciliar dimensão.
+    Não faz HTTP. Mudanças em settings só refletem após `apply_settings_to_env`
+    (invalida get_settings.cache + `_embedder`/`_effective_provider`).
 
-    Onda Q (2026-05-30): este helper vivia em qdrant_store.py historicamente.
-    Movido pra embedder.py porque é backend-AGNÓSTICO (só lê settings, não
-    depende de Qdrant nem pgvector). Esperado como home permanente.
+    Onda Q (2026-05-30): migrou de qdrant_store.py pra cá (backend-AGNÓSTICO).
     """
-    settings = get_settings()
-    provider = (getattr(settings, "embedding_provider", "azure") or "azure").lower()
-    if provider == "qwen3":
-        configured = int(getattr(settings, "qwen3_dimensions", 0) or 0)
-        return configured or 1024  # default Qwen3-Embedding-0.6B
-    # Azure text-embedding-3-small (e qualquer provider desconhecido cai aqui).
-    return 1536
+    provider = _effective_provider or (
+        getattr(get_settings(), "embedding_provider", "azure") or "azure"
+    ).lower()
+    return _provider_dim(provider)
 
 
 def embeddings_unavailable_detail() -> str:
@@ -56,17 +63,19 @@ def embeddings_unavailable_detail() -> str:
     checar chaves Azure inexistentes). Aqui a mensagem reflete o provider de
     `settings.embedding_provider` e aponta para a config certa.
     """
-    provider = (getattr(get_settings(), "embedding_provider", "azure") or "azure").lower()
+    chain = _embedding_chain()
+    provider = chain[0] if chain else "azure"
+    cadeia = " → ".join(chain) if len(chain) > 1 else provider
+    base = (
+        f"Embeddings indisponível — nenhum provider da cadeia de roteamento "
+        f"({cadeia}) respondeu."
+    )
     if provider == "qwen3":
         return (
-            "Embeddings (provider 'qwen3') indisponível — o serviço de embeddings "
-            "configurado não respondeu. Verifique a URL e a conectividade do "
-            "endpoint (Configurações → qwen3_source / oss*_url) a partir do servidor."
+            base + " Verifique a URL/conectividade do endpoint qwen3 (Configurações "
+            "→ qwen3_source / oss*_url) e, para o fallback, AZURE_OPENAI_API_KEY/ENDPOINT."
         )
-    return (
-        "Embeddings (provider 'azure') indisponível. Verifique "
-        "AZURE_OPENAI_API_KEY/ENDPOINT em Configurações."
-    )
+    return base + " Verifique AZURE_OPENAI_API_KEY/ENDPOINT em Configurações."
 
 
 class _EmbedderProtocol(Protocol):
@@ -225,7 +234,11 @@ def _build_qwen3_embedder():
 
 
 def _build_embedder():
-    """Constroi o embedder ativo baseado em settings.embedding_provider."""
+    """Constroi o embedder do provider CONFIGURADO (sem fallback).
+
+    Mantido por compat (testes + chamada direta). O runtime usa
+    `_embed_with_fallback`, que roteia pela cadeia primário→fallback.
+    """
     settings = get_settings()
     provider = (settings.embedding_provider or "azure").lower()
     if provider == "qwen3":
@@ -234,37 +247,131 @@ def _build_embedder():
 
 
 def _get_embedder():
+    """Compat: embedder do provider configurado, cacheado. NÃO faz fallback —
+    use embed_texts/embed_query para o roteamento resiliente."""
     global _embedder
     if _embedder is None:
         _embedder = _build_embedder()
     return _embedder
 
 
-async def embed_texts(texts: list[str]) -> Optional[list[list[float]]]:
-    """Gera embeddings em batch. Retorna None se embedder indisponível.
+# ── Roteamento com fallback (paridade com a cadeia de resiliência do LLM) ──
 
-    Em caso de erro de API (rate-limit, timeout), retorna None depois de logar —
-    caller (ingest) reporta 503 e usuário re-tenta.
+_BUILDERS = {
+    "qwen3": _build_qwen3_embedder,
+    "azure": _build_azure_embedder,
+}
+
+
+def _embedding_chain() -> list[str]:
+    """Ordem de tentativa: provider configurado, depois o fallback alcançável.
+
+    Fallback default = 'azure' (provider primário, tipicamente acessível); se o
+    configurado já é azure, tenta 'qwen3'. Operador pode fixar via
+    settings.embedding_fallback_provider.
     """
+    s = get_settings()
+    primary = (getattr(s, "embedding_provider", "azure") or "azure").lower()
+    fb = (getattr(s, "embedding_fallback_provider", "") or "").lower()
+    if not fb:
+        fb = "azure" if primary != "azure" else "qwen3"
+    chain = [primary]
+    if fb and fb != primary:
+        chain.append(fb)
+    return chain
+
+
+async def _embed_call(emb, mode: str, payload):
+    return await (
+        emb.aembed_documents(payload) if mode == "documents" else emb.aembed_query(payload)
+    )
+
+
+async def _embed_with_fallback(mode: str, payload):
+    """Roteia o embedding pela cadeia primário→fallback e cacheia o provider
+    EFETIVO (o 1º que responde). Chamadas seguintes vão direto nele. Retorna
+    None só se TODOS os providers da cadeia falharem.
+
+    Transparência: ao usar o fallback, loga `event=embedding.fallback` (sempre,
+    como a contingência de LLM — auditoria nunca é silenciada).
+    """
+    global _embedder, _effective_provider
+    # Caminho rápido: já temos um embedder efetivo resolvido.
+    if _embedder is not None and _effective_provider is not None:
+        try:
+            return await _embed_call(_embedder, mode, payload)
+        except Exception as e:
+            logger.warning(
+                f"embedder efetivo '{_effective_provider}' falhou "
+                f"({type(e).__name__}: {str(e)[:120]}); re-resolvendo a cadeia"
+            )
+            _embedder = None
+            _effective_provider = None
+
+    configured = (getattr(get_settings(), "embedding_provider", "azure") or "azure").lower()
+    last_err: Optional[Exception] = None
+    for prov in _embedding_chain():
+        builder = _BUILDERS.get(prov)
+        if builder is None:
+            continue
+        emb = builder()
+        if emb is None:
+            continue  # provider não configurado (ex.: Azure sem key) — tenta o próximo
+        try:
+            result = await _embed_call(emb, mode, payload)
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"embedding provider '{prov}' indisponível: "
+                f"{type(e).__name__}: {str(e)[:160]}"
+            )
+            continue
+        # Sucesso — cacheia o efetivo. Loga fallback quando difere do configurado.
+        if prov != configured:
+            logger.warning(
+                "embedding.fallback",
+                extra={
+                    "event": "embedding.fallback",
+                    "from": configured,
+                    "to": prov,
+                    "reason": (type(last_err).__name__ if last_err else "primary_unavailable"),
+                },
+            )
+        _embedder = emb
+        _effective_provider = prov
+        return result
+
+    logger.warning(
+        "embedding: todos os providers da cadeia falharam",
+        extra={
+            "event": "embedding.all_failed",
+            "chain": _embedding_chain(),
+            "last_error": (type(last_err).__name__ if last_err else None),
+        },
+    )
+    return None
+
+
+async def resolve_effective_provider() -> Optional[str]:
+    """Resolve (e cacheia) qual provider de embedding realmente responde,
+    sondando com um embed mínimo. Usado por fluxos que precisam da dimensão
+    ATIVA ANTES de embedar de verdade — ex.: reindex recria a coluna pgvector
+    com a dim do provider efetivo. No-op se já resolvido."""
+    global _effective_provider
+    if _effective_provider is not None:
+        return _effective_provider
+    await _embed_with_fallback("query", "ping")
+    return _effective_provider
+
+
+async def embed_texts(texts: list[str]) -> Optional[list[list[float]]]:
+    """Gera embeddings em batch (com roteamento/fallback). Retorna None só se
+    TODA a cadeia de providers falhar — aí o caller (ingest) reporta 503."""
     if not texts:
         return []
-    emb = _get_embedder()
-    if emb is None:
-        return None
-    try:
-        return await emb.aembed_documents(texts)
-    except Exception as e:
-        logger.warning(f"embed_texts falhou: {type(e).__name__}: {e}")
-        return None
+    return await _embed_with_fallback("documents", texts)
 
 
 async def embed_query(text: str) -> Optional[list[float]]:
-    """Embedding de uma query (single). Wraps aembed_query."""
-    emb = _get_embedder()
-    if emb is None:
-        return None
-    try:
-        return await emb.aembed_query(text)
-    except Exception as e:
-        logger.warning(f"embed_query falhou: {type(e).__name__}: {e}")
-        return None
+    """Embedding de uma query (single), com roteamento/fallback."""
+    return await _embed_with_fallback("query", text)
