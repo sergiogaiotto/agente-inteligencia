@@ -120,7 +120,7 @@
 
             <div class="space-y-2">
                 <template x-for="item in filteredEnriched" :key="item.id">
-                    <div class="rounded-xl border bg-white p-4"
+                    <div class="rounded-xl border bg-white p-4" data-testid="queue-row"
                          :class="selectedIds.has(item.id) ? 'border-brand-400 bg-brand-50/30' : 'border-surface-200'">
 
                         <!-- Header da submissão -->
@@ -230,7 +230,7 @@
 
                         <!-- Ações (só para review_status=pending) -->
                         <div x-show="item.review_status === 'pending'" class="flex justify-end gap-2 pt-2 border-t border-surface-100">
-                            <button @click="openDecide(item, 'approved')" class="px-3 py-1.5 text-[11px] rounded-lg bg-emerald-500 text-white font-semibold hover:bg-emerald-600">Aprovar</button>
+                            <button @click="openDecide(item, 'approved')" data-testid="queue-approve" class="px-3 py-1.5 text-[11px] rounded-lg bg-emerald-500 text-white font-semibold hover:bg-emerald-600">Aprovar</button>
                             <button @click="openDecide(item, 'changes_requested')" class="px-3 py-1.5 text-[11px] rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600">Pedir Mudanças</button>
                             <button @click="openDecide(item, 'rejected')" class="px-3 py-1.5 text-[11px] rounded-lg bg-rose-500 text-white font-semibold hover:bg-rose-600">Rejeitar</button>
                         </div>
@@ -267,7 +267,7 @@
                       class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[11px] outline-none focus:border-brand-400"></textarea>
             <div class="flex justify-end gap-2 mt-4">
                 <button @click="decideModalOpen = false" class="px-3 py-1.5 text-[12px] rounded-lg border border-surface-200 hover:bg-surface-50">Cancelar</button>
-                <button @click="submitDecision()" :disabled="decideSaving"
+                <button @click="submitDecision()" data-testid="queue-decide-confirm" :disabled="decideSaving"
                         class="px-3 py-1.5 text-[12px] rounded-lg text-white"
                         :class="decideAction === 'approved' ? 'bg-emerald-500 hover:bg-emerald-600' : decideAction === 'changes_requested' ? 'bg-amber-500 hover:bg-amber-600' : 'bg-rose-500 hover:bg-rose-600'">
                     <span x-text="decideSaving ? 'Salvando...' : 'Confirmar'"></span>

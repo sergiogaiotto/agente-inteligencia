@@ -189,6 +189,9 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           MAESTRO_SECRET_KEY: ci-e2e-secret-key-not-for-prod
           APP_ENV: development
+          # Rate-limit OFF na suíte E2E — ela faz muitas req/min e estouraria os
+          # 60/60s (rate-limit é ortogonal ao teste funcional).
+          RATE_LIMIT_ENABLED: "false"
           LOG_FILE_ENABLED: "0"
           LOG_CONSOLE_ENABLED: "0"
 

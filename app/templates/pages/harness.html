@@ -92,29 +92,29 @@
         <div class="rounded-xl border border-surface-200 bg-white">
             <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3.5">
                 <h2 class="text-[13px] font-semibold text-brand-900">Execuções de Avaliação</h2>
-                <button @click="showRunForm=!showRunForm" class="text-[12px] text-brand-500 font-medium hover:text-brand-700">+ Executar</button>
+                <button @click="showRunForm=!showRunForm" data-testid="harness-new-run" class="text-[12px] text-brand-500 font-medium hover:text-brand-700">+ Executar</button>
             </div>
             <div x-show="showRunForm" x-transition class="p-4 border-b border-surface-100 bg-surface-50 space-y-2">
-                <select x-model="runForm.agent_id" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                <select x-model="runForm.agent_id" data-testid="harness-agent" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                     <option value="">Selecione agente</option>
                     <template x-for="a in agents" :key="a.id"><option :value="a.id" x-text="a.name"></option></template>
                 </select>
-                <select x-model="runForm.release_id" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                <select x-model="runForm.release_id" data-testid="harness-release" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                     <option value="">Selecione release</option>
                     <template x-for="r in releases" :key="r.id"><option :value="r.id" x-text="r.name || r.id.substring(0,8)"></option></template>
                 </select>
                 <div class="flex gap-2">
-                    <select x-model="runForm.run_type" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                    <select x-model="runForm.run_type" data-testid="harness-runtype" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                         <option value="baseline">Baseline</option><option value="regression">Regressão</option>
                     </select>
-                    <button @click="executeHarness()" :disabled="running" class="rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50">
+                    <button @click="executeHarness()" data-testid="harness-run" :disabled="running" class="rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50">
                         <span x-text="running?'Executando...':'Executar Harness'"></span>
                     </button>
                 </div>
             </div>
             <div class="divide-y divide-surface-50 max-h-[55vh] overflow-y-auto scrollbar-thin">
                 <template x-for="r in evalRuns" :key="r.id">
-                    <div>
+                    <div data-testid="harness-run-row">
                         <div @click="toggleEval(r)" class="px-5 py-3 cursor-pointer hover:bg-surface-50/50">
                             <div class="flex items-center justify-between mb-1">
                                 <span class="text-[12px] font-medium text-brand-900" x-text="r.run_type + ' — ' + (r.gate_result||r.status)"></span>

@@ -35,6 +35,11 @@ services:
       # ativo, o app exporta traces para tempo:4317. Sem profile=full, OTLP exporter
       # falha em conectar mas app continua (graceful degradation em init_otel).
       OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      # Rate-limit: ON por padrão (comportamento de prod inalterado). Overridável
+      # para a suíte E2E, que faz muitas requisições/min e estouraria os 60/60s —
+      # rate-limit é ortogonal ao teste funcional. Ex.:
+      #   RATE_LIMIT_ENABLED=false docker compose up -d app
+      RATE_LIMIT_ENABLED: "${RATE_LIMIT_ENABLED:-true}"
     ports:
       # Bind em 127.0.0.1: app fica acessível só do host (debug local), NÃO da
       # internet pública. Em produção, Caddy é a única porta exposta (80/443).
