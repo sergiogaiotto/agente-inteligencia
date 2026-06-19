@@ -2277,7 +2277,12 @@ async def save_settings(data: SettingsSave):
     get_settings() + singleton do _embedder. Próximas chamadas de LLM/embedder
     leem credenciais novas SEM precisar restart do container.
     """
-    settings_dict = {k: str(v) for k, v in data.model_dump().items() if v is not None}
+    # PARTIAL update: só persiste os campos EXPLICITAMENTE enviados na request
+    # (exclude_unset). Sem isso, salvar a aba Plataforma — que envia só os campos
+    # dela — fazia os DEMAIS campos do SettingsSave caírem no default ("") e ZERAVAM
+    # segredos de outras abas (azure_key, azure_endpoint, URLs do gpt-oss,
+    # primary_provider/model…). Footgun real: mudar o fuso apagava a config de LLM.
+    settings_dict = {k: str(v) for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
     await settings_store.set_many(settings_dict)
     # Aplicar em runtime — inclui clear de lru_cache e reset do embedder.
     try:

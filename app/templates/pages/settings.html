@@ -6,7 +6,7 @@
     <!-- Tabs -->
     <div class="flex items-center gap-1 mb-6 flex-wrap">
         {% if user_role == 'root' %}
-        <button @click="tab='platform'" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
+        <button @click="tab='platform'" data-testid="settings-tab-platform" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='platform' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Plataforma</button>
         <button @click="tab='routing'; loadRouting()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='routing' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Roteamento LLM</button>
@@ -135,7 +135,7 @@
 
         <div class="flex items-center justify-between mb-4">
             <span class="text-[11px] text-surface-400" x-text="dirty ? 'Alterações não salvas' : (lastSaved ? 'Salvo em ' + lastSaved : '')"></span>
-            <button @click="savePlatform()" :disabled="saving"
+            <button @click="savePlatform()" data-testid="setting-save-platform" :disabled="saving"
                     class="inline-flex items-center gap-2 rounded-lg px-5 py-2 text-[13px] font-semibold text-white transition-all"
                     :class="dirty ? 'bg-brand-500 hover:bg-brand-600 shadow-md' : 'bg-surface-300'">
                 <svg x-show="!saving" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V7l-4-4z"/><path d="M17 3v4H7"/><path d="M7 14h10v7H7z"/></svg>
@@ -190,7 +190,7 @@
             </div>
             <div>
                 <label class="block text-[11px] font-semibold text-surface-500 mb-1">Fuso horário</label>
-                <select x-model="config.timezone" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none focus:border-red-400">
+                <select x-model="config.timezone" data-testid="setting-timezone" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none focus:border-red-400">
                     <option value="America/Sao_Paulo">Brasília — GMT-3 (America/Sao_Paulo)</option>
                     <option value="America/Manaus">Manaus — GMT-4 (America/Manaus)</option>
                     <option value="America/Rio_Branco">Rio Branco — GMT-5 (America/Rio_Branco)</option>
