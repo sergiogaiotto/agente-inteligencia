@@ -464,7 +464,13 @@ async def reindex_all(
     # Onda Q (2026-05-30): get_active_embedding_dim migrou de qdrant_store
     # pra embedder.py (backend-neutral, só lê settings). qdrant_store
     # removido — backend agora é sempre pgvector.
-    from app.evidence.embedder import get_active_embedding_dim
+    from app.evidence.embedder import get_active_embedding_dim, resolve_effective_provider
+
+    # Resolve o provider de embedding EFETIVO antes de recriar a coluna: se o
+    # configurado (ex.: qwen3) está inacessível, o roteamento cai no fallback
+    # (ex.: azure, dim 1536). Sem isso, recreate criaria a coluna com a dim do
+    # provider CONFIGURADO (1024) e o re-embed via fallback (1536) daria drift.
+    await resolve_effective_provider()
 
     vector_store = _get_vector_store()
     backend_name = "pgvector"  # Onda Q: backend único após remoção do Qdrant
