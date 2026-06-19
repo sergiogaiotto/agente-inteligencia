@@ -74,7 +74,7 @@
                     <div class="max-w-[75%] rounded-2xl px-4 py-3 text-[13px] leading-relaxed" :class="msg.role==='user'?'bg-brand-500 text-white rounded-br-md':(activeTraceIdx===i?'bg-white border-2 border-red-300 text-brand-900 rounded-bl-md shadow-md':'bg-white border border-surface-200 text-brand-900 rounded-bl-md shadow-sm')">
                         <template x-if="msg._agentName && msg.role==='assistant'">
                             <div class="flex items-center gap-2 mb-2 pb-1.5 border-b border-surface-100">
-                                <span class="rounded-full px-2 py-0.5 text-[9px] font-bold" :class="msg._agentKind==='aobd'?'bg-slate-100 text-slate-700':msg._agentKind==='router'?'bg-orange-50 text-orange-600':'bg-teal-50 text-teal-600'" x-text="msg._agentKind"></span>
+                                <span class="rounded-full px-2 py-0.5 text-[9px] font-bold" :class="msg._agentKind==='aobd'?'bg-slate-100 text-slate-700':msg._agentKind==='router'?'bg-orange-50 text-orange-600':'bg-teal-50 text-teal-600'" x-text="agentKindLabel(msg._agentKind)"></span>
                                 <span class="text-[11px] font-semibold text-brand-900" x-text="msg._agentName"></span>
                                 <span x-show="msg._duration" class="text-[9px] text-surface-400" x-text="msg._duration?.toFixed(0)+'ms'"></span>
                             </div>
@@ -2134,7 +2134,7 @@ function workspacePage() {
 <div class="space-y-2 text-[12px]">
   <div class="font-bold text-brand-900 text-[13px]">${this._esc(a.name||'Agente')}</div>
   <div class="flex flex-wrap gap-1.5 text-[10px]">
-    <span class="rounded-full px-2 py-0.5 font-semibold ${a.kind==='aobd'?'bg-slate-100 text-slate-700':a.kind==='router'?'bg-orange-50 text-orange-700':'bg-teal-50 text-teal-700'}">${this._esc(a.kind||'')}</span>
+    <span class="rounded-full px-2 py-0.5 font-semibold ${a.kind==='aobd'?'bg-slate-100 text-slate-700':a.kind==='router'?'bg-orange-50 text-orange-700':'bg-teal-50 text-teal-700'}">${this._esc(window.agentKindLabel(a.kind)||'')}</span>
     <span class="rounded-full bg-surface-100 px-2 py-0.5 text-surface-600 font-mono">${this._esc(a.model||'')}</span>
     <span class="rounded-full bg-surface-100 px-2 py-0.5 text-surface-600">v${this._esc(a.version||'?')}</span>
     <span class="rounded-full bg-${modeColor}-50 px-2 py-0.5 text-${modeColor}-700 font-semibold">mode: ${this._esc(mode)}</span>
@@ -2423,7 +2423,7 @@ function workspacePage() {
             const kind=ag?.kind||'subagent';
             const model=ag?.model||'—';
             const provider=ag?.llm_provider||'openai';
-            const kindMap={aobd:'AOBD — Orquestrador de Domínio',router:'AR — Roteador Adaptativo',subagent:'SA — Subagente Especialista'};
+            const kindMap={aobd:'Maestro',router:'Triagem',subagent:'Especialista'};
             let d=0;
 
             this._sched(()=>this._addLog('agent','🤖','Inicializando agente',`${name} (${kindMap[kind]||kind})`,'info'),d);d+=220;

@@ -488,7 +488,7 @@
                                                 <span class="text-[13px] font-semibold text-rose-700">(target deletada — <span class="font-mono text-[10px]" x-text="step.target_entry_id.substring(0,8)"></span>)</span>
                                             </template>
                                             <span x-show="step.target_kind" class="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase"
-                                                  :class="kindBadgeClass(step.target_kind)" x-text="step.target_kind"></span>
+                                                  :class="kindBadgeClass(step.target_kind)" x-text="agentKindLabel(step.target_kind)"></span>
                                             <span x-show="step.target_status" class="rounded-full px-1.5 py-0.5 text-[9px]"
                                                   :class="statusBadgeClass(step.target_status)" x-text="step.target_status"></span>
                                         </div>

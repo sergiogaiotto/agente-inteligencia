@@ -471,12 +471,8 @@ function publishWizard() {
         // se o agente é operacional (Subagente), router ou orquestrador. Skills
         // não têm camada (a badge é condicional no template).
         agentLayerLabel(kind) {
-            return ({
-                'subagent': 'SA',
-                'router': 'AR',
-                'aobd': 'AOBD',
-                'orchestrator': 'AOBD',
-            })[(kind || '').toLowerCase()] || (kind || '').toUpperCase();
+            // Fonte única (base.html): Maestro / Triagem / Especialista.
+            return window.agentKindLabel(kind);
         },
         agentLayerBadgeClass(kind) {
             return ({
@@ -488,10 +484,10 @@ function publishWizard() {
         },
         agentLayerTooltip(kind) {
             return ({
-                'subagent': 'Subagente — executa uma tarefa específica',
-                'router': 'Roteador — decide qual subagente atende cada pedido',
-                'aobd': 'Orquestrador — coordena múltiplos roteadores e subagentes',
-                'orchestrator': 'Orquestrador — coordena múltiplos roteadores e subagentes',
+                'subagent': 'Especialista — executa uma tarefa específica',
+                'router': 'Triagem — decide qual Especialista atende cada pedido',
+                'aobd': 'Maestro — coordena múltiplas Triagens e Especialistas',
+                'orchestrator': 'Maestro — coordena múltiplas Triagens e Especialistas',
             })[(kind || '').toLowerCase()] || '';
         },
 

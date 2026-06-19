@@ -79,6 +79,17 @@
         var d = window.tzParse(v);
         return d ? (d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })) : '';
       };
+
+      // ── Rótulo canônico de camada de agente (FONTE ÚNICA) ────────────────
+      // Mapeia o kind interno (aobd/orchestrator/router/subagent) para o nome
+      // visível ao usuário: Maestro / Triagem / Especialista. NUNCA muda o
+      // value=/chave/identificador — só o TEXTO exibido. Fallback: retorna o
+      // próprio kind (cobre kinds não-agente como pipeline/recipe/system/tool).
+      window.agentKindLabel = function (kind) {
+        var k = (kind == null ? '' : String(kind)).toLowerCase();
+        var map = { aobd: 'Maestro', orchestrator: 'Maestro', router: 'Triagem', subagent: 'Especialista' };
+        return Object.prototype.hasOwnProperty.call(map, k) ? map[k] : kind;
+      };
     </script>
     <style>
         [x-cloak]{display:none!important}

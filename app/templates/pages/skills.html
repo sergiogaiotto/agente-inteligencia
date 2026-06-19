@@ -17,9 +17,9 @@
         <div class="flex items-center gap-2 mb-4">
             <select x-model="filterKind" @change="applyFilters()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none">
                 <option value="">Todos tipos</option>
-                <option value="subagent">Subagent</option>
-                <option value="router">Router</option>
-                <option value="orchestrator">Orchestrator</option>
+                <option value="subagent">Especialista</option>
+                <option value="router">Triagem</option>
+                <option value="orchestrator">Maestro</option>
             </select>
             <select x-model="filterStability" @change="applyFilters()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none">
                 <option value="">Estabilidade</option>
@@ -48,7 +48,7 @@
                             <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-400 shrink-0" x-text="'v' + (skill.version || '0.1.0')"></span>
                         </div>
                         <div class="flex items-center gap-1.5 mt-0.5">
-                            <span x-show="skill.kind" class="text-[9px] font-bold uppercase" :class="skill.kind==='router'?'text-orange-500':skill.kind==='orchestrator'?'text-slate-700':'text-teal-500'" x-text="skill.kind"></span>
+                            <span x-show="skill.kind" class="text-[9px] font-bold uppercase" :class="skill.kind==='router'?'text-orange-500':skill.kind==='orchestrator'?'text-slate-700':'text-teal-500'" x-text="agentKindLabel(skill.kind)"></span>
                             <span x-show="skill.stability" class="text-[9px]"
                                   :class="skill.stability==='stable'?'text-emerald-500':skill.stability==='beta'?'text-amber-500':'text-surface-400'"
                                   x-text="skill.stability"></span>
@@ -101,7 +101,7 @@
         <div class="flex-1 overflow-y-auto scrollbar-thin p-5 space-y-4">
             <!-- Badges -->
             <div class="flex flex-wrap gap-1.5">
-                <span x-show="previewSkill?.kind" class="rounded-full bg-brand-50 px-2.5 py-0.5 text-[10px] font-bold text-brand-600" x-text="previewSkill?.kind"></span>
+                <span x-show="previewSkill?.kind" class="rounded-full bg-brand-50 px-2.5 py-0.5 text-[10px] font-bold text-brand-600" x-text="agentKindLabel(previewSkill?.kind)"></span>
                 <span x-show="previewSkill?.stability" class="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
                       :class="previewSkill?.stability==='stable'?'bg-emerald-50 text-emerald-700':previewSkill?.stability==='beta'?'bg-amber-50 text-amber-700':'bg-surface-100 text-surface-500'"
                       x-text="previewSkill?.stability"></span>
