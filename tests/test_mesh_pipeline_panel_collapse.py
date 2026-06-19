@@ -38,7 +38,17 @@ def test_new_keys_default_open(html: str):
     assert "include: true" in html
 
 
+def test_simulate_section_is_collapsible(html: str):
+    """Seção 'Simular com estes dados' (no modal de regra condicional) também
+    recolhe/expande, mesmo padrão."""
+    assert "toggleSection('simulate')" in html
+    assert 'x-show="sectionOpen.simulate"' in html
+    assert "sectionOpen.simulate ? 'rotate-90' : ''" in html
+    assert "simulate: true" in html
+
+
 def test_reuses_existing_toggle_and_chevron(html: str):
     # mesmo método e mesmo path de chevron das seções de status (sem reinventar)
     assert "toggleSection(key) {" in html or "toggleSection(key)" in html
-    assert html.count('d="M9 6l6 6-6 6"') >= 3  # status sections + members + include
+    # status (template) + members + include + simulate
+    assert html.count('d="M9 6l6 6-6 6"') >= 4
