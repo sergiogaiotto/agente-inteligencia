@@ -458,7 +458,7 @@
             </div>
             <div class="rounded-xl border border-surface-200 bg-white p-5 space-y-3">
                 <div class="flex justify-between"><span class="text-[12px] text-surface-400">Nome</span><span class="text-[13px] font-medium text-brand-900" x-text="form.name || '—'"></span></div>
-                <div class="flex justify-between"><span class="text-[12px] text-surface-400">Tipo</span><span class="text-[13px] font-medium text-brand-900" x-text="form.kind==='aobd'?'AOBD — Orquestrador':form.kind==='router'?'AR — Roteador':'SA — Subagente'"></span></div>
+                <div class="flex justify-between"><span class="text-[12px] text-surface-400">Tipo</span><span class="text-[13px] font-medium text-brand-900" x-text="agentKindLabel(form.kind)"></span></div>
                 <div class="flex justify-between"><span class="text-[12px] text-surface-400">Versão</span><span class="text-[13px] font-mono font-medium text-brand-900" x-text="'v' + (form.version || '1.0.0')"></span></div>
                 <div class="flex justify-between">
                     <span class="text-[12px] text-surface-400">Tipo de Tarefa</span>
@@ -1018,7 +1018,7 @@
                             <option :value="ag.name" label="agente"></option>
                         </template>
                     </datalist>
-                    <p class="mt-1 text-[10px] text-surface-400">Sugestões de <b>subagentes</b> (folhas que executam) ao digitar em "delegar a"; orquestrador/roteador entram com o checkbox acima (delegar a outra camada). Só agente vira roteamento no AI Mesh — texto livre também é aceito (ex.: citar uma skill na prosa, sem virar aresta).</p>
+                    <p class="mt-1 text-[10px] text-surface-400">Sugestões de <b>Especialistas</b> (folhas que executam) ao digitar em "delegar a"; Maestro/Triagem entram com o checkbox acima (delegar a outra camada). Só agente vira roteamento no AI Mesh — texto livre também é aceito (ex.: citar uma skill na prosa, sem virar aresta).</p>
                 </div>
                 <!-- Dry-run de roteamento (PR4): classifica cada alvo (agente real /
                      skill / texto livre) e oferece sincronizar os AGENTES reais com
@@ -1041,7 +1041,7 @@
                                           class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
                                           :class="_kindBadgeClass(chk.kind)"
                                           x-text="_kindLabel(chk.kind)"
-                                          :title="chk.kind === 'subagent' ? 'Subagente — executa a tarefa (folha do pipeline).' : ('Delega a outro ' + _kindLabel(chk.kind) + ' — camada de decisão extra: re-roteia em vez de responder.')"></span>
+                                          :title="chk.kind === 'subagent' ? 'Especialista — executa a tarefa (folha do pipeline).' : ('Delega a um ' + _kindLabel(chk.kind) + ' — camada de decisão extra: re-roteia em vez de responder.')"></span>
                                     <span x-show="chk.inactive"
                                           class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-red-100 text-red-700"
                                           title="Agente desativado — ative antes de rotear. A conexão pode ser criada, mas o pipeline não vai executá-lo.">inativo</span>
@@ -1634,18 +1634,18 @@ function agentForm(editId) {
                  + '## Restrições (guardrails)\n- <o que NÃO fazer>';
         },
         scaffoldLabelForKind() {
-            if (this.form.kind === 'aobd') return 'Estrutura de orquestração';
-            if (this.form.kind === 'router') return 'Estrutura de roteamento';
+            if (this.form.kind === 'aobd') return 'Estrutura do Maestro';
+            if (this.form.kind === 'router') return 'Estrutura da Triagem';
             return 'Estrutura';
         },
         scaffoldHintForKind() {
-            if (this.form.kind === 'aobd') return 'Insere um esqueleto de orquestração (missão, roteamento, fallback, regra de ouro)';
-            if (this.form.kind === 'router') return 'Insere um esqueleto de classificação/roteamento (triagem, categorias, ambíguos)';
-            return 'Insere um esqueleto de subagente (objetivo, entradas, passos, saída, guardrails)';
+            if (this.form.kind === 'aobd') return 'Insere um esqueleto de Maestro (missão, delegação, fallback, regra de ouro)';
+            if (this.form.kind === 'router') return 'Insere um esqueleto de Triagem (categorias, para onde encaminhar, ambíguos)';
+            return 'Insere um esqueleto de Especialista (objetivo, entradas, passos, saída, guardrails)';
         },
         promptPlaceholderForKind() {
-            if (this.form.kind === 'aobd') return 'Missão de orquestração: o que coordenar, quando delegar e a quem. Dica: clique em "Estrutura de orquestração".';
-            if (this.form.kind === 'router') return 'Critérios de triagem: categorias e para onde encaminhar cada uma. Dica: clique em "Estrutura de roteamento".';
+            if (this.form.kind === 'aobd') return 'Missão do Maestro: o que coordenar, quando delegar e a quem. Dica: clique em "Estrutura do Maestro".';
+            if (this.form.kind === 'router') return 'Critérios de triagem: categorias e para onde encaminhar cada uma. Dica: clique em "Estrutura da Triagem".';
             return 'Instruções detalhadas para o agente...';
         },
         applyScaffold() {
@@ -2020,8 +2020,8 @@ function agentForm(editId) {
         },
         _kindLabel(kind) {
             // Rótulo curto da camada pro selo da Verificação de roteamento.
-            const k = (kind || 'subagent');
-            return k === 'aobd' ? 'orquestrador' : (k === 'router' ? 'roteador' : 'subagente');
+            // Fonte única (base.html): Maestro / Triagem / Especialista.
+            return window.agentKindLabel(kind || 'subagent');
         },
         _kindBadgeClass(kind) {
             // Cores por camada (sem roxo — paleta vermelho/branco do projeto):
@@ -2365,7 +2365,7 @@ function agentForm(editId) {
         },
         refineLabelForKind() {
             if (this.form.kind === 'aobd') return 'IA, refine missão';
-            if (this.form.kind === 'router') return 'IA, refine roteamento';
+            if (this.form.kind === 'router') return 'IA, refine triagem';
             return 'IA, refine';
         },
         refineHintForKind() {

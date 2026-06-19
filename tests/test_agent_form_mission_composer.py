@@ -429,7 +429,8 @@ class TestConditionalExprMorphology:
         assert "assunto agente agentes subagente especialista assistente'" in html
 
     def test_kind_label_maps_three_layers(self, html):
-        assert "k === 'aobd' ? 'orquestrador' : (k === 'router' ? 'roteador' : 'subagente')" in html
+        # delega à fonte única (base.html) → Maestro/Triagem/Especialista
+        assert "return window.agentKindLabel(kind || 'subagent');" in html
 
     def test_kind_badge_colors_no_purple(self, html):
         # orquestrador=âmbar, roteador=índigo, subagente=neutro (sem roxo)
