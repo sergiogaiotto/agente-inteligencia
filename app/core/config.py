@@ -490,10 +490,12 @@ async def apply_settings_to_env() -> int:
     # Invalida cache pra próxima chamada de get_settings() rebuild com novas envs
     get_settings.cache_clear()
 
-    # Invalida singleton do embedder (instância já existente está com creds antigas)
+    # Invalida singleton do embedder + provider efetivo (instância existente
+    # está com creds/provider antigos; o efetivo é re-resolvido no próximo embed).
     try:
         from app.evidence import embedder as _emb
         _emb._embedder = None
+        _emb._effective_provider = None
     except Exception:
         pass
 
