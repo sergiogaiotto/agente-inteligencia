@@ -13,7 +13,7 @@
 window.MODULE_GUIDE = [
 
   // ═════════════════════════════════════════════════════════════════
-  // §4 — Topologia AOBD → AR → SA
+  // §4 — Topologia Maestro → Triagem → Especialista
   // ═════════════════════════════════════════════════════════════════
   {
     id: 's4',
@@ -21,35 +21,35 @@ window.MODULE_GUIDE = [
     label: 'Topologia Maestro → Triagem → Especialista',
     fundamento: `<p>A plataforma organiza agents em três camadas com responsabilidades distintas — como uma empresa que tem gerente, supervisor e operador.</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
-  <li><b>Maestro</b> — o "gerente". Recebe uma pergunta vinda do usuário, interpreta a intenção e decide qual fluxo executar. Consulta o CAR (§6) para escolher.</li>
-  <li><b>Triagem</b> — o "supervisor". Decompõe um fluxo em etapas, controla dependências entre Especialistas, gerencia o DAG de execução.</li>
-  <li><b>Especialista</b> — o "operador". Executa uma tarefa atômica: chama uma tool, gera uma resposta, classifica um item. Stateless por design.</li>
+  <li><b>Maestro</b> — o "gerente". Coordena várias etapas/agentes do início ao fim de um pedido composto. Decide quem faz o quê e em que ordem, mas NUNCA executa a tarefa final — sempre delega. No agente, é <code>kind=aobd</code>.</li>
+  <li><b>Triagem</b> — o "supervisor de fila". Lê o pedido, classifica a intenção e encaminha para o Especialista certo. Não resolve a tarefa — só roteia. No agente, é <code>kind=router</code>.</li>
+  <li><b>Especialista</b> — o "operador". Executa uma tarefa atômica: chama uma tool, gera uma resposta, classifica um item. Stateless por design. No agente, é <code>kind=subagent</code>.</li>
 </ul>
 <p class="mt-2">Comunicação entre camadas é via <b>Protocolo A2A</b> (§7) — envelopes tipados e assinados, com rastreabilidade total.</p>
-<p class="mt-2"><b>Quando se importar com isso:</b> só quando tiver mais de 3-4 agents resolvendo coisas relacionadas. Para um agent isolado, ignorar — todo SA funciona sozinho.</p>`,
+<p class="mt-2"><b>Quando se importar com isso:</b> só quando tiver mais de 3-4 agents resolvendo coisas relacionadas. Para um agent isolado, ignorar — todo Especialista funciona sozinho.</p>`,
     aplicacao: `<p>A separação em camadas paga conta quando você precisa de:</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
-  <li><b>Decisão dinâmica de rota</b> — usuário fez 1 pergunta, mas pode cair em 5 fluxos diferentes. Quem decide é o AOBD.</li>
-  <li><b>Reuso entre fluxos</b> — o mesmo SA "Validar CNPJ" serve para 3 ARs diferentes. Sem replicar lógica.</li>
-  <li><b>Auditoria por nível</b> — quando algo dá errado, você sabe se foi decisão ruim (AOBD), orquestração ruim (AR) ou execução ruim (SA).</li>
+  <li><b>Decisão dinâmica de rota</b> — o usuário fez 1 pergunta, mas pode cair em 5 fluxos diferentes. Quem decide é o Maestro.</li>
+  <li><b>Reuso entre fluxos</b> — o mesmo Especialista "Validar CNPJ" serve para 3 Triagens diferentes. Sem replicar lógica.</li>
+  <li><b>Auditoria por nível</b> — quando algo dá errado, você sabe se foi decisão ruim (Maestro), roteamento ruim (Triagem) ou execução ruim (Especialista).</li>
 </ul>
-<p class="mt-2"><b>Quando NÃO precisa:</b> agent que faz uma coisa só, invocado de um lugar só. Crie 1 SA e pronto — sem AOBD, sem AR. Topologia é remédio para complexidade, não vitamina.</p>`,
+<p class="mt-2"><b>Quando NÃO precisa:</b> agent que faz uma coisa só, invocado de um lugar só. Crie 1 Especialista e pronto — sem Maestro, sem Triagem. Topologia é remédio para complexidade, não vitamina.</p>`,
     ativar: `<p>Topologia é nativa da plataforma — sempre disponível. Para criar agents em cada camada:</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">curl -X POST /api/v1/agents \\
   -H "Content-Type: application/json" \\
   -d '{
-    "name":"AOBD Geral",
+    "name":"Maestro Geral",
     "kind":"aobd",
-    "llm_provider":"azure"
+    "task_type":"reasoning"
   }'</pre>
-<p class="mt-2">Valores possíveis para <code class="bg-surface-100 px-1 rounded">kind</code>: <code>aobd</code>, <code>router</code>, <code>subagent</code>. Default é <code>subagent</code>.</p>`,
+<p class="mt-2">Valores possíveis para <code class="bg-surface-100 px-1 rounded">kind</code> do agente: <code>aobd</code> (Maestro), <code>router</code> (Triagem), <code>subagent</code> (Especialista). Default é <code>subagent</code>. <b>Atenção:</b> na SKILL.md o Maestro é declarado como <code>kind: orchestrator</code> (não <code>aobd</code>) — são enums distintos para a mesma camada.</p>`,
     usar: `<p>Pelo navegador:</p>
 <ol class="list-decimal pl-4 mt-2 space-y-1">
-  <li>Crie um agent em cada camada em <a href="/agents" class="text-brand-500 underline">/agents</a>.</li>
-  <li>Em <a href="/mesh/flow" class="text-brand-500 underline">/mesh/flow</a> (Fluxograma de agentes), conecte AOBD → AR → SA arrastando os nós.</li>
+  <li>Crie um agent em cada camada em <a href="/agents" class="text-brand-500 underline">/agents</a> (escolha o card Maestro, Triagem ou Especialista).</li>
+  <li>Em <a href="/mesh/flow" class="text-brand-500 underline">/mesh/flow</a> (Fluxograma de agentes), conecte Maestro → Triagem → Especialista arrastando os nós.</li>
   <li>No <a href="/workspace" class="text-brand-500 underline">/workspace</a>, selecione o pipeline e envie uma mensagem — o trace mostra o trajeto pelas 3 camadas.</li>
 </ol>
-<p class="mt-2"><b>Dica de debugging:</b> se uma interação parece "pular" um agent, abra o trace em <a href="/observability" class="text-brand-500 underline">/observability</a> — provavelmente o agent está como pass-through (sem skill nem prompt customizado) e foi ignorado automaticamente para economizar LLM call.</p>`
+<p class="mt-2"><b>Dica de debugging:</b> se uma interação parece "pular" um agent, abra o trace em <a href="/observability" class="text-brand-500 underline">/observability</a> — provavelmente o agent está como pass-through (sem skill nem prompt customizado, prompt curto ou genérico) e foi ignorado automaticamente para economizar a chamada de LLM.</p>`
   },
 
   // ═════════════════════════════════════════════════════════════════
@@ -60,22 +60,25 @@ window.MODULE_GUIDE = [
     section: '§5',
     label: 'Parser SKILL.md',
     fundamento: `<p>SKILL.md é o <b>contrato declarativo</b> de um agent. Não é documentação opcional — é um artefato executável que a plataforma carrega em tempo de ativação e usa em pontos específicos da execução.</p>
-<p class="mt-2"><b>Anatomia mínima</b>:</p>
+<p class="mt-2"><b>Seções obrigatórias</b> (o parser reporta erro se faltarem):</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
   <li><b>Frontmatter YAML</b> — id, version (semver), kind, owner, stability</li>
   <li><b>Purpose</b> — uma frase: o que essa skill faz</li>
+  <li><b>Activation Criteria</b> — quando esta skill deve ser acionada</li>
+  <li><b>Inputs</b> — o que a skill espera receber</li>
   <li><b>Workflow</b> — passo-a-passo (vai pro system prompt)</li>
   <li><b>Tool Bindings</b> — tools que essa skill pode chamar (filtra o Permitted Toolset)</li>
   <li><b>Output Contract</b> — schema da resposta (Verifier valida)</li>
   <li><b>Failure Modes</b> — o que fazer quando algo der errado</li>
 </ul>
+<p class="mt-2">No frontmatter, <code>kind</code> aceita <code>orchestrator</code> (camada Maestro), <code>router</code> (Triagem) ou <code>subagent</code> (Especialista) — note que aqui o Maestro é <code>orchestrator</code>, diferente do agente, onde é <code>aobd</code>.</p>
 <p class="mt-2">Validação estrutural ocorre na criação. Hash SHA-256 garante imutabilidade da versão. Versão semver permite evoluir sem quebrar consumidores.</p>`,
     aplicacao: `<p>Defina uma skill uma vez, reaproveite em vários agents:</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
   <li><b>Comportamento previsível</b> — workflow declarado em vez de prompt solto no agent. Outros desenvolvedores entendem o que a skill faz sem rodar.</li>
-  <li><b>Permitted Toolset explícito</b> — só tools listadas em "Tool Bindings" ficam visíveis ao LLM. Mesmo que outras estejam registradas em /tools, o agent não tem como descobrir.</li>
+  <li><b>Permitted Toolset explícito</b> — só tools listadas em "Tool Bindings" ficam visíveis ao LLM. Mesmo que outras estejam registradas em /mcp, o agent não tem como descobrir.</li>
   <li><b>Failure modes documentados</b> — não é "se der pau, gera 500". É "se input inválido → retorne JSON de erro estruturado; se tool falhar → tente alternativa Y".</li>
-  <li><b>Execution Profile</b> — fast/standard/rigorous controla número de iterações de raciocínio e se há verificação de evidência.</li>
+  <li><b>Modo de execução</b> — <code>fast</code> / <code>standard</code> / <code>rigorous</code> controla número de iterações de raciocínio e se há verificação de evidência. Há ainda o modo <code>declarative</code>: a skill executa <code>## API Bindings</code> (HTTP) ou <code>## Data Tables</code> (consulta SQL parametrizada) <b>sem chamar o LLM</b> — determinístico e barato.</li>
 </ul>`,
     ativar: `<p>Parser é nativo — sempre ativo. Para criar uma skill via API:</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">curl -X POST /api/v1/skills \\
@@ -90,10 +93,10 @@ window.MODULE_GUIDE = [
   <li>Vá para <a href="/skills/new" class="text-brand-500 underline">/skills/new</a>.</li>
   <li>Clique no botão "Wizard" — a IA faz perguntas e gera o esqueleto da SKILL.md.</li>
   <li>Refine no editor de texto.</li>
-  <li>Aba <b>Preview / Validação</b> mostra a anatomia detectada + o Execution Profile inferido.</li>
+  <li>Aba <b>Preview / Validação</b> mostra a anatomia detectada + o modo de execução inferido (fast/standard/rigorous/declarative).</li>
   <li>Vincule a um agent em <a href="/agents" class="text-brand-500 underline">/agents</a> pelo campo "Skill Vinculada".</li>
 </ol>
-<p class="mt-2"><b>Pegadinha comum:</b> registrou uma tool em /tools mas o agent nunca chama? Verifique se ela está listada em "Tool Bindings" do SKILL.md. Tools fora dessa lista são invisíveis ao LLM.</p>`
+<p class="mt-2"><b>Pegadinha comum:</b> registrou uma tool em <a href="/mcp" class="text-brand-500 underline">/mcp</a> mas o agent nunca chama? Verifique se ela está listada em "Tool Bindings" do SKILL.md. Tools fora dessa lista são invisíveis ao LLM.</p>`
   },
 
   // ═════════════════════════════════════════════════════════════════
@@ -104,31 +107,33 @@ window.MODULE_GUIDE = [
     section: '§6',
     label: 'CAR — Catálogo de Triagens',
     fundamento: `<p>CAR é a "lista telefônica" que o Maestro consulta para descobrir qual Agent de Triagem chamar quando recebe uma mensagem.</p>
-<p class="mt-2">Diferente de um service registry tradicional (que indexa por endpoint), o CAR indexa por <b>intenção</b>: keywords + entidades reconhecidas + perfil do ator + jornada.</p>
-<p class="mt-2"><b>Matching híbrido</b>:</p>
+<p class="mt-2">Diferente de um service registry tradicional (que indexa por endpoint), o CAR indexa por <b>intenção</b>: cada entrada amarra um <code>skill_urn</code> a um <code>domain</code> e a uma lista de <code>activation_keywords</code> (palavras-gatilho).</p>
+<p class="mt-2"><b>Como o match acontece hoje</b> (estágio único, determinístico):</p>
 <ol class="list-decimal pl-4 mt-2 space-y-1.5">
-  <li><b>Filtro simbólico</b> — keywords e entidades. Rápido, determinístico, descarta o que claramente não bate.</li>
-  <li><b>Ranking vetorial</b> — sobre os candidatos sobreviventes. Captura paráfrase ("quero abrir um chamado" vs "preciso de ajuda").</li>
+  <li>Filtra as entradas <code>active</code> do mesmo <code>domain</code>.</li>
+  <li>Pontua cada entrada: <b>quantas</b> <code>activation_keywords</code> aparecem no texto da intenção, <b>somado</b> ao <code>success_rate</code> histórico da entrada.</li>
+  <li>Vence a de maior pontuação. Sem entradas no domínio, cai no primeiro Agent de Triagem (<code>kind: router</code>) ativo.</li>
 </ol>
-<p class="mt-2">Empates são quebrados por: <code>stability</code> &gt; <code>custo</code> &gt; <code>taxa de sucesso</code>.</p>`,
+<p class="mt-2"><b>Nota de fidelidade:</b> a tabela <code>car_entries</code> reserva colunas para evolução futura (<code>embedding_vector</code> para ranking semântico, <code>required_entities</code>, <code>actor_profile</code>, <code>jurisdiction</code>, <code>latency_p95</code>, <code>avg_cost</code>), mas o match atual usa só keywords + <code>success_rate</code>. Não há, hoje, ranking vetorial por paráfrase nem desempate automático por estabilidade/custo.</p>`,
     aplicacao: `<p>Use o CAR para:</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
-  <li><b>Roteamento dinâmico</b> — usuário envia uma mensagem, AOBD escolhe o AR certo sem você precisar codar a regra em IF/ELSE.</li>
-  <li><b>A/B de roteadores</b> — dois ARs cobrindo a mesma intenção; a plataforma mede e o melhor "vence".</li>
-  <li><b>Documentação viva</b> — listar as entradas do CAR mostra exatamente quais jornadas a plataforma cobre.</li>
+  <li><b>Roteamento por intenção</b> — em vez de codar IF/ELSE de roteamento, você registra entradas e deixa o Maestro escolher a Triagem pelas palavras-gatilho.</li>
+  <li><b>Documentação viva</b> — listar as entradas do CAR (<code>GET /api/v1/car</code>) mostra exatamente quais jornadas a plataforma cobre, por domínio.</li>
+  <li><b>Ajuste de cobertura</b> — uma Triagem nunca é escolhida? Amplie suas <code>activation_keywords</code> ou crie uma entrada nova para o domínio.</li>
 </ul>
-<p class="mt-2"><b>Não usa o CAR:</b> agent isolado invocado por outro sistema via API direto — não passa pelo AOBD, então não consulta o CAR.</p>`,
-    ativar: `<p>CAR é nativo e sempre ativo. Para adicionar uma entrada:</p>
+<p class="mt-2"><b>Não usa o CAR:</b> agent invocado direto por outro sistema via API (ex.: <code>POST /api/v1/pipelines/{id}/invoke</code> ou via Fluxograma selado) — esse caminho não passa pela escolha por intenção.</p>`,
+    ativar: `<p>CAR é nativo. Para adicionar uma entrada (só estes campos são aceitos pelo schema):</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">curl -X POST /api/v1/car \\
   -H "Content-Type: application/json" \\
   -d '{
     "skill_urn":"faq-cliente@1.0.0",
     "domain":"atendimento",
     "activation_keywords":["faq","duvida","pergunta"],
-    "actor_profile":"customer"
-  }'</pre>`,
-    usar: `<p>O CAR é consultado automaticamente pelo AOBD ao receber uma mensagem (matching semântico) — você gerencia entradas via API <code>/api/v1/car</code>.</p>
-<p class="mt-2"><b>Dica:</b> se um AR esperado nunca está sendo escolhido, abra o trace em /observability e procure pelo span <code>car.match</code> — ele mostra os candidatos avaliados e os scores. Se o seu nem aparece, falta entrada no CAR ou as keywords estão estreitas demais.</p>`
+    "required_entities":[]
+  }'</pre>
+<p class="mt-2">Listar: <code>GET /api/v1/car?domain=atendimento</code>. Remover: <code>DELETE /api/v1/car/{id}</code>. (Campos como <code>actor_profile</code> não são aceitos no POST — seriam ignorados.)</p>`,
+    usar: `<p>O CAR é gerenciado pela API <code>/api/v1/car</code> e serve de catálogo das jornadas que a plataforma reconhece por domínio.</p>
+<p class="mt-2"><b>Boa prática:</b> mantenha as <code>activation_keywords</code> específicas o bastante para não colidir entre domínios, mas largas o bastante para cobrir as variações reais de como o usuário pede a mesma coisa. Como a pontuação soma o <code>success_rate</code> da entrada, entradas que historicamente resolvem bem tendem a ser preferidas em empate de keywords.</p>`
   },
 
   // ═════════════════════════════════════════════════════════════════
@@ -138,28 +143,29 @@ window.MODULE_GUIDE = [
     id: 's7',
     section: '§7',
     label: 'Protocolo A2A / Envelope',
-    fundamento: `<p>Quando um agent fala com outro, não é via JSON solto na rede — é via <b>envelope A2A</b>, uma estrutura tipada que carrega contexto, identidade e orçamento.</p>
+    fundamento: `<p>Quando um agent fala com outro, a unidade de comunicação é o <b>envelope A2A</b>: uma estrutura tipada que carrega contexto, identidade e limites — não JSON solto na rede.</p>
 <p class="mt-2"><b>Campos principais</b>:</p>
 <ul class="list-disc pl-4 mt-2 space-y-1">
-  <li><code>envelope_id</code> (ULID), <code>trace_id</code>/<code>span_id</code> (W3C Trace Context)</li>
-  <li><code>IntentDescriptor</code> — a intenção do usuário, preservada em toda a cadeia (mesmo quando o LLM gera resposta de um SA fundo na pilha)</li>
-  <li><code>skill_ref</code> — qual skill a invocação está usando</li>
-  <li><code>budget</code> — limites de tokens, ms e USD que essa cadeia pode gastar</li>
+  <li><code>envelope_id</code> (UUID) + <code>trace_id</code>/<code>span_id</code>/<code>parent_span_id</code> (UUIDs de correlação)</li>
+  <li><code>IntentDescriptor</code> — a intenção do usuário (domínio, entidades, urgência, ator), preservada ao longo da cadeia</li>
+  <li><code>skill_ref</code>/<code>target_skill_urn</code> — qual skill a invocação usa</li>
+  <li><code>budget_remaining</code> — limites de <code>tokens</code>, <code>wall_ms</code> e <code>usd</code> (campos carregados no envelope)</li>
   <li><code>deadline</code> — quando a invocação caduca</li>
-  <li><b>Assinatura criptográfica</b> — agent receptor verifica integridade</li>
   <li><code>ContextDelta</code> — mutações append-only (cada agent adiciona, não sobrescreve)</li>
+  <li><b>Assinatura</b> — <code>sign()</code> é um digest de correlação; a assinatura forte <b>HMAC-SHA256</b> (<code>sign_hmac</code>/<code>verify_hmac</code>) é usada na <b>federação A2A</b> entre instâncias</li>
 </ul>`,
-    aplicacao: `<p>Envelopes brilham em:</p>
+    aplicacao: `<p>Onde o envelope brilha:</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
-  <li><b>Multi-agent debugging</b> — você consegue reconstruir exatamente o que cada agent recebeu e o que devolveu, sem juntar pedaços de logs.</li>
-  <li><b>Budget enforcement</b> — se a cadeia AOBD → AR → SA estourar o budget configurado, a próxima delegação é negada.</li>
-  <li><b>Auditoria forte</b> — assinaturas + hash garantem que ninguém alterou a comunicação após o fato.</li>
-</ul>`,
-    ativar: `<p>Envelope é gerado automaticamente em toda delegação inter-agente. Para inspecionar via API:</p>
-<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">GET /api/v1/envelopes?limit=20</pre>
-<p class="mt-2">Filtros disponíveis: <code>trace_id</code>, <code>agent_id</code>, janela de tempo.</p>`,
-    usar: `<p>Em <a href="/history" class="text-brand-500 underline">/history</a>, aba "Envelopes" — lista todas as comunicações entre agents com busca textual e filtros.</p>
-<p class="mt-2"><b>Caso de uso típico:</b> reclamação de cliente. Você pega o trace_id da interação em /history → filtra envelopes → lê a cadeia inteira. Cada delegação está lá, com input/output, modelo usado, tempo gasto.</p>`
+  <li><b>Federação cross-instância</b> — no egress, o envelope é assinado com HMAC por peer; no ingress, é verificado e protegido contra replay (nonce) antes de executar.</li>
+  <li><b>Contexto preservado</b> — o <code>IntentDescriptor</code> e o <code>ContextDelta</code> mantêm a intenção original e o acúmulo de contexto coerentes entre etapas (Maestro → Triagem → Especialista).</li>
+  <li><b>Correlação/auditoria</b> — <code>trace_id</code>/<code>span_id</code> permitem amarrar pedaços de uma mesma jornada.</li>
+</ul>
+<p class="mt-2"><b>Nota de fidelidade:</b> a assinatura HMAC e a verificação só estão ativas no caminho de <b>federação</b> (ver módulo Federação A2A); na delegação local intra-mesh não há, hoje, enforcement de <code>budget</code> nem assinatura por delegação.</p>`,
+    ativar: `<p>O envelope é a estrutura de transporte do protocolo A2A. Para listar envelopes persistidos:</p>
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">GET /api/v1/history?entity_type=envelopes&limit=20</pre>
+<p class="mt-2">A assinatura forte é exercitada no fluxo de <b>Federação A2A</b> (egress assina, ingress verifica). Não existe um endpoint <code>/api/v1/envelopes</code> dedicado.</p>`,
+    usar: `<p>Em <a href="/history" class="text-brand-500 underline">/history</a> a UI lista <b>Interações</b>, <b>Turnos</b> e <b>Auditoria</b>; cada turno mostra o <code>envelope_id</code> associado para você correlacionar a comunicação.</p>
+<p class="mt-2"><b>Caso de uso típico:</b> investigar uma jornada. Pegue o <code>trace_id</code>/<code>envelope_id</code> em /history e use a API (<code>/api/v1/history?entity_type=envelopes</code>) para inspecionar os envelopes persistidos. Para comunicação entre instâncias, o módulo Federação A2A é onde os envelopes assinados são produzidos e verificados.</p>`
   },
 
   // ═════════════════════════════════════════════════════════════════
@@ -169,39 +175,40 @@ window.MODULE_GUIDE = [
     id: 's95',
     section: '§9.5',
     label: 'Harness de Avaliação',
-    fundamento: `<p>Harness é o "CI/CD de qualidade" da plataforma. Antes de promover uma release para produção, ele roda a skill contra um conjunto de casos curados (Golden Dataset) e decide se passou ou não.</p>
-<p class="mt-2"><b>Métricas que o Harness produz</b>:</p>
+    fundamento: `<p>Harness é o "CI/CD de qualidade" da plataforma. Antes de promover uma release para produção, ele roda o agente contra um conjunto de casos curados (Golden Dataset) e decide, por um gate automático, se passou ou não.</p>
+<p class="mt-2"><b>Cada caso (gold_case) tem</b>:</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
-  <li><b>Acurácia ponderada</b> — média dos casos, com pesos (casos críticos contam mais)</li>
-  <li><b>Taxa de recusa correta</b> — casos adversariais que DEVEM ser recusados</li>
-  <li><b>Falso positivo</b> — casos que DEVERIAM passar mas foram recusados</li>
-  <li><b>Latência p50/p95</b> — distribuição de tempo de resposta</li>
-  <li><b>Custo em USD</b> — quanto custou rodar o conjunto inteiro</li>
+  <li><code>input_text</code> — a entrada enviada ao agente (campo obrigatório)</li>
+  <li><code>expected_output</code> — texto esperado (match por similaridade) OU <code>expected_pattern</code> (regex Python, tem prioridade)</li>
+  <li><code>expected_state</code> — a DECISÃO esperada: <code>Recommend</code>, <code>Refuse</code> ou <code>Escalate</code></li>
+  <li><code>case_type</code> — <code>normal</code> ou <code>adversarial</code> (adversariais alimentam a taxa de recusa correta)</li>
+  <li><code>category</code> (taxonomia), <code>weight</code> (0.1–10, peso na média ponderada), <code>red_flags</code> (strings que NUNCA podem aparecer — útil p/ vazamento de PII)</li>
 </ul>
-<p class="mt-2"><b>Cada caso suporta</b>: <code>category</code> (taxonomia), <code>weight</code> (peso 0.1–10), <code>expected_pattern</code> (regex Python), <code>red_flags</code> (strings que NUNCA podem aparecer — útil para detectar vazamento de PII).</p>
-<p class="mt-2">Gate automático: thresholds configuráveis. Acima → release aprovada. Abaixo → bloqueada.</p>`,
+<p class="mt-2"><b>Métricas que o gate avalia</b>: acurácia ponderada, taxa de recusa correta, falso positivo, latência média, e — quando o Verifier (§14.2) está ligado — média de factuality/completeness/tone, safety_violation_rate, contract_compliance_rate e hallucination_rate. Acima dos thresholds → aprovado; abaixo → reprovado, com o motivo registrado em <code>gate_reason</code>.</p>
+<p class="mt-2"><b>Pegadinha do decision-state:</b> o FSM (§15) colapsa a decisão no estado terminal <code>LogAndClose</code>, então o estado cru é sempre LogAndClose. O harness recupera a decisão real (Recommend/Refuse/Escalate) do <code>transition_log</code> antes de comparar com o <code>expected_state</code> — sem isso, todo caso reprovaria e a taxa de recusa zeraria.</p>`,
     aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
-  <li><b>Baseline antes de promover</b> — qualquer mudança em skill/modelo/prompt passa pelo harness primeiro.</li>
-  <li><b>Detecção de regressão silenciosa</b> — provider atualizou o modelo sem avisar? O harness pega antes de quebrar produção.</li>
-  <li><b>Comparação A/B objetiva</b> — 2 releases, mesmo Golden Dataset, números falam. Sem "achismo".</li>
-  <li><b>Detecção de leak</b> — <code>red_flags</code> com strings de PII ou segredos pega vazamento antes de chegar ao cliente.</li>
+  <li><b>Baseline antes de promover</b> — qualquer mudança em skill/modelo/prompt passa pelo harness primeiro (<code>run_type=baseline</code>).</li>
+  <li><b>Detecção de regressão</b> — <code>run_type=regression</code> compara contra o baseline COMPLETO mais recente do mesmo release e mesmo <code>gold_version</code>. Provider atualizou o modelo sem avisar? O harness pega antes de quebrar produção.</li>
+  <li><b>Comparação A/B objetiva</b> — duas execuções lado a lado via <code>GET /api/v1/eval-runs/compare?a=&b=</code>: deltas por métrica e por categoria, com os casos que mudaram de passou↔falhou (regressões primeiro).</li>
+  <li><b>Detecção de leak</b> — <code>red_flags</code> com PII/segredos pega vazamento antes de chegar ao cliente.</li>
 </ul>`,
     ativar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
   <li>Vá para <a href="/harness" class="text-brand-500 underline">/harness</a> → painel "Golden Dataset".</li>
-  <li>Adicione casos: input + expected_output (ou expected_pattern em regex) + red_flags.</li>
+  <li>Adicione casos: <code>input_text</code> + <code>expected_output</code> (ou <code>expected_pattern</code>) + <code>expected_state</code> + <code>case_type</code> + <code>red_flags</code>.</li>
   <li>Crie uma release em <a href="/releases" class="text-brand-500 underline">/releases</a>.</li>
-  <li>Execute o harness selecionando agent + release + tipo (baseline / regressão).</li>
-</ol>`,
+  <li>Execute o harness selecionando agente + release + tipo (<code>baseline</code> / <code>regression</code>).</li>
+</ol>
+<p class="mt-2">As métricas multi-dimensionais (factuality/completeness/tone/safety) só são produzidas quando <code>harness_use_verifier=true</code> E <code>verifier_v2_enabled=true</code> nas Configurações.</p>`,
     usar: `<p>Via API direto:</p>
-<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">POST /api/v1/harness/run
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">POST /api/v1/eval-runs/execute
 {
   "release_id":"...",
   "agent_id":"...",
-  "gold_version":"v1",
+  "gold_version":"latest",
   "run_type":"baseline"
 }</pre>
-<p class="mt-2">Resultado traz acurácia, breakdown por categoria, métricas e o gate (aprovado/reprovado).</p>
-<p class="mt-2"><b>Dica de calibração:</b> comece com Golden Dataset pequeno (10-20 casos cobrindo as jornadas principais + 5 adversariais). Refine os thresholds depois de 2-3 releases. Threshold alto demais e ninguém promove nada; baixo demais e bugs passam.</p>`
+<p class="mt-2">Resultado traz acurácia (ponderada e bruta), breakdown por categoria, métricas multi-dim e o gate (<code>approved</code>/<code>rejected</code> + <code>gate_reason</code>).</p>
+<p class="mt-2"><b>Dica de calibração:</b> comece com Golden Dataset pequeno (10-20 casos cobrindo as jornadas principais + 5 adversariais cobrindo Refuse/Escalate). Refine os thresholds depois de 2-3 releases. Threshold alto demais e ninguém promove nada; baixo demais e bugs passam.</p>`
   },
 
   // ═════════════════════════════════════════════════════════════════
@@ -214,15 +221,17 @@ window.MODULE_GUIDE = [
     fundamento: `<p>RAG (Retrieval-Augmented Generation) é a camada que <b>busca</b> documentos relevantes para alimentar o LLM com contexto factual.</p>
 <p class="mt-2"><b>Pipeline de busca</b>:</p>
 <ol class="list-decimal pl-4 mt-2 space-y-1.5">
-  <li><b>Retriever híbrido</b> — combina dois mundos: <b>BM25</b> (busca textual clássica via Postgres <code>tsvector</code> + GIN) + <b>vetorial</b> (busca semântica via vector store ativo — pgvector ou Qdrant — + embeddings).</li>
+  <li><b>Retriever híbrido</b> — combina dois mundos: <b>BM25</b> (busca textual clássica via Postgres <code>tsvector</code> 'portuguese' + GIN) + <b>vetorial</b> (busca semântica via <b>pgvector</b>, a extensão vetorial do próprio Postgres, alimentada por embeddings).</li>
   <li><b>Reciprocal Rank Fusion (k=60)</b> — funde os dois rankings em um só.</li>
   <li><b>Reranker LLM (opcional)</b> — reordena os top-K por relevância contextual, com justificativa.</li>
 </ol>
+<p class="mt-2"><b>Embeddings com fallback (v14.0.0):</b> o provider de embeddings tem uma cadeia de resiliência igual à do LLM. O primário é <code>qwen3</code> (open-weight, via hub interno — reusa URL/chave do OSS source); se o endpoint cair, a plataforma migra para <code>azure</code> (<code>text-embedding-3-small</code>) automaticamente e registra <code>event=embedding.fallback</code> no log (auditoria nunca é silenciada). <b>Atenção:</b> qwen3 gera vetores de 1024 dim e Azure de 1536 — a dimensão ativa segue o provider que de fato respondeu, não o configurado.</p>
 <p class="mt-2"><b>Importante:</b> RAG ≠ Verificação. O RAG entrega evidências; quem julga se a resposta usou-as bem é o <b>Verifier</b> (§14.2). Use os dois juntos.</p>`,
     aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
   <li><b>FAQs e bases regulatórias</b> — respostas com citação obrigatória (sem RAG, o LLM "inventa").</li>
   <li><b>Atendimento ao cliente</b> — buscar contratos, manuais, políticas para responder com precisão.</li>
   <li><b>Pipelines que precisam de grounding</b> — qualquer fluxo que não pode tolerar alucinação.</li>
+  <li><b>Tabelas (RAG-Tabela)</b> — a mesma base também aceita planilhas promovidas a tabela DuckDB para consulta SQL parametrizada. Detalhes na página <a href="/rag" class="text-brand-500 underline">/rag</a>.</li>
 </ul>
 <p class="mt-2"><b>Não usar:</b> tarefas puramente criativas (escrever um e-mail genérico, gerar slogan). RAG adiciona custo e latência sem benefício.</p>`,
     ativar: `<p>RAG é nativo. Toggle global: <code>RAG_V2_ENABLED=true</code> (default).</p>
@@ -234,7 +243,7 @@ SRC=$(curl -s -X POST /api/v1/knowledge-sources \\
 # 2. Ingerir texto (chunca + embeda + persiste)
 curl -X POST /api/v1/knowledge-sources/$SRC/ingest \\
   -d '{"text":"...","replace":true}'</pre>
-<p class="mt-2"><b>Pegadinha do embedder:</b> se você ingere com Azure embeddings e depois muda para Qwen3 nas configurações, as queries antigas não casam mais com os vetores. Re-ingira tudo ao trocar de embedder.</p>`,
+<p class="mt-2"><b>Pegadinha do embedder:</b> o embedder padrão é <code>qwen3</code> (1024 dim); o fallback é <code>azure</code> (1536 dim). Ao TROCAR de provider de embeddings, a dimensão do vetor muda — e as queries novas deixam de casar com os vetores antigos. Sempre <b>re-ingira (re-embede) tudo</b> ao trocar de embedder.</p>`,
     usar: `<p>Use direto no <a href="/workspace" class="text-brand-500 underline">/workspace</a>: ao mandar mensagem, o Retriever busca em todas as <code>knowledge_sources</code> com <code>authorized=1</code> automaticamente.</p>
 <p class="mt-2">Diagnóstico:</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">GET /api/v1/rag/health
@@ -328,7 +337,7 @@ ORDER BY created_at DESC LIMIT 10;</pre>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
   <li><b>Operação</b> — <code>agents</code>, <code>skills</code>, <code>agent_bindings</code>, <code>mesh_connections</code></li>
   <li><b>Execução</b> — <code>interactions</code>, <code>turns</code>, <code>envelopes</code>, <code>traces</code></li>
-  <li><b>Evidência</b> — <code>knowledge_sources</code>, <code>evidence_chunks</code>, <code>evidences</code> (BM25 nativo Postgres)</li>
+  <li><b>Evidência</b> — <code>knowledge_sources</code>, <code>evidence_chunks</code>, <code>evidences</code> (BM25 nativo Postgres). Os vetores do RAG residem no próprio Postgres via <b>pgvector</b> (extensão + índice HNSW) — backend único desde a Onda Q.</li>
   <li><b>Tools</b> — <code>tools</code>, <code>tool_calls</code></li>
   <li><b>Releases</b> — <code>releases</code>, <code>gold_cases</code>, <code>eval_runs</code>, <code>drift_events</code></li>
   <li><b>Auditoria</b> — <code>audit_log</code> (append-only)</li>
@@ -361,7 +370,7 @@ WHERE created_at &gt; now() - interval '1 day';</pre>
     id: 's17',
     section: '§17',
     label: 'Observabilidade Self-Hosted',
-    fundamento: `<p>Stack <b>OpenTelemetry → Tempo (traces) + Loki (logs) + Grafana (UI)</b>. Tudo self-hosted, sem dependência de SaaS.</p>
+    fundamento: `<p>Dois caminhos de observabilidade, independentes e ambos de primeira classe: o stack <b>OpenTelemetry → Tempo (traces) + Loki (logs) + Grafana (UI)</b>, totalmente self-hosted, e o <b>LangFuse</b> (SaaS ou self-hosted). Você escolhe um, o outro, ou os dois.</p>
 <p class="mt-2"><b>Auto-instrumentação</b>: FastAPI, asyncpg, httpx, redis, logging — toda chamada gera span automaticamente. Todo log carrega <code>trace_id</code> e <code>span_id</code> para correlação cruzada.</p>
 <p class="mt-2"><b>Spans manuais</b> nos pontos críticos:</p>
 <ul class="list-disc pl-4 mt-2 space-y-1">
@@ -382,7 +391,7 @@ OTEL_ENABLED=true
 # 2. Subir a stack completa
 docker compose --profile full up -d</pre>
 <p class="mt-2">Custo de infra: ~2.5 GB RAM adicional (Tempo 1G, Loki 1G, Grafana 512M).</p>
-<p class="mt-2"><b>Alternativa SaaS:</b> se preferir LangFuse em vez de stack OTEL, configure as credenciais em /settings → Plataforma → LangFuse.</p>`,
+<p class="mt-2"><b>Caminho LangFuse (alternativo ou complementar):</b> configure as credenciais em /settings → Plataforma → LangFuse. Não é "plano B" do OTEL — é um backend de tracing de primeira classe, que pode rodar sozinho ou junto.</p>`,
     usar: `<p>Acesse <b>http://localhost:3000</b> (login: admin/admin):</p>
 <ol class="list-decimal pl-4 mt-2 space-y-1">
   <li><b>Explore</b> → datasource Tempo → busca por <code>service.name=agente-inteligencia</code></li>
@@ -399,41 +408,41 @@ docker compose --profile full up -d</pre>
     id: 's18',
     section: '§18',
     label: 'Version Registry / Drift',
-    fundamento: `<p>Uma <b>release</b> é uma tupla imutável: <code>(modelo + prompt + índice + policy)</code>. Você não promove um artefato isolado — promove a tupla inteira.</p>
-<p class="mt-2"><b>Por que tupla?</b> Skill nova só funciona bem com o índice atualizado. Modelo novo só funciona bem com prompt ajustado. Promover artefato isolado = bug em produção.</p>
-<p class="mt-2"><b>Estágios de promoção</b>:</p>
+    fundamento: `<p>Uma <b>release</b> é um pacote imutável de configurações: <code>model_config + prompt_config + index_config + policy_config</code>. Você não promove um artefato isolado — promove a release inteira.</p>
+<p class="mt-2"><b>Por que o pacote todo?</b> Skill nova só funciona bem com o índice atualizado. Modelo novo só funciona bem com prompt ajustado. Promover artefato isolado = bug em produção.</p>
+<p class="mt-2"><b>Ambientes de promoção</b> (campo <code>environment</code>):</p>
 <ol class="list-decimal pl-4 mt-2 space-y-1">
   <li><b>staging</b> — visível só para devs/testers</li>
-  <li><b>canary</b> — 1-10% do tráfego em produção</li>
+  <li><b>canary</b> — fração do tráfego em produção</li>
   <li><b>production</b> — 100% do tráfego</li>
 </ol>
-<p class="mt-2"><b>Detecção de drift</b>:</p>
-<ul class="list-disc pl-4 mt-2 space-y-1">
-  <li><b>KS</b> (Kolmogorov-Smirnov) e <b>PSI</b> para drift de dados de entrada</li>
-  <li><b>CUSUM</b> para drift de comportamento (scores do Verifier caindo)</li>
-</ul>
-<p class="mt-2">Quando SLOs são violados, rollback é automático.</p>`,
+<p class="mt-2"><b>Drift hoje:</b> a plataforma persiste eventos em <code>drift_events</code> e os expõe para leitura. A forma operacional de pegar regressão entre versões é rodar o Harness (§9.5) em <code>run_type=regression</code>, que compara contra o baseline do mesmo release e dataset.</p>
+<p class="mt-2"><b>Roadmap:</b> detecção estatística automática (KS/PSI para dados, CUSUM para comportamento) e rollback automático por SLO ainda não estão implementados — por ora o monitoramento é por harness + inspeção dos drift_events.</p>`,
     aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
-  <li><b>Reprodutibilidade</b> — rodar uma interação histórica com a release da época dá resultado determinístico.</li>
-  <li><b>Rollback rápido</b> — 1 comando volta para a release anterior, sem precisar regenerar artefatos.</li>
-  <li><b>Quality gate integrado</b> — Harness (§9.5) decide a promoção. Sem aprovação manual escondendo regressão.</li>
+  <li><b>Reprodutibilidade</b> — a release congela o pacote de configuração usado.</li>
+  <li><b>Promoção controlada</b> — passe por canary antes de production.</li>
+  <li><b>Quality gate integrado</b> — Harness (§9.5) dá o sinal objetivo para promover, em vez de aprovação manual escondendo regressão.</li>
 </ul>`,
     ativar: `<p>Sempre ativo. Criar release:</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">POST /api/v1/releases
 {
-  "version":"v1.2.0",
-  "stage":"staging",
-  "model_ref":"azure/gpt-4o",
-  "prompt_hash":"..."
+  "name":"Atendimento v1.2",
+  "environment":"staging",
+  "model_config_data":"{}",
+  "prompt_config":"{}",
+  "index_config":"{}",
+  "policy_config":"{}"
 }</pre>`,
-    usar: `<p>Em <a href="/releases" class="text-brand-500 underline">/releases</a> você lista releases, promove entre estágios, e monitora drift events.</p>
+    usar: `<p>Em <a href="/releases" class="text-brand-500 underline">/releases</a> você lista releases, promove entre ambientes e consulta drift events.</p>
+<p class="mt-2">Promover (move <code>environment</code> e <code>status</code> e grava no <code>audit_log</code>):</p>
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">PUT /api/v1/releases/{id}/promote?target_env=canary</pre>
 <p class="mt-2"><b>Workflow recomendado:</b></p>
 <ol class="list-decimal pl-4 mt-2 space-y-1">
   <li>Cria release em staging</li>
-  <li>Roda harness para estabelecer baseline</li>
-  <li>Promove para canary (1% tráfego)</li>
-  <li>Observa por 24-48h — drift events e SLOs</li>
-  <li>Se tudo OK, promove para production (100%)</li>
+  <li>Roda harness (baseline) para estabelecer referência</li>
+  <li>Promove para canary</li>
+  <li>Observa drift_events e métricas; roda harness em regression</li>
+  <li>Se tudo OK, promove para production</li>
 </ol>
 <p class="mt-2"><b>Cuidado:</b> pular canary "porque é uma mudança pequena" é onde incidentes começam. Sempre passe por canary.</p>`
   },
@@ -450,7 +459,7 @@ docker compose --profile full up -d</pre>
   <li><b>LLM01 Prompt Injection</b> — guard com score 0..1. Bloqueia quando ≥ 0.7 (configurável).</li>
   <li><b>LLM04 Model DoS</b> — rate-limit em sliding window via Redis. Default 60 req/min por user.</li>
   <li><b>LLM06 PII Leakage</b> — DLP detecta e redacta CPF, CNPJ, e-mail, cartão antes da persistência em <code>audit_log</code> e <code>interactions</code>.</li>
-  <li><b>LLM10 Prompt Leak</b> — em traces e logs, o <code>system_prompt</code> aparece como hash + preview de 80 chars (não o texto completo).</li>
+  <li><b>LLM10 Prompt Leak</b> — em traces e logs, o <code>system_prompt</code> aparece como hash + preview de 60 chars (configurável via <code>prompt_leak_preview_chars</code>), não o texto completo.</li>
   <li><b>Auth</b> — senhas em bcrypt, secrets cifrados com <code>cryptography</code>, CSRF opcional (toggle).</li>
 </ul>`,
     aplicacao: `<p>Sempre ativo em produção. Você ajusta thresholds via <code>.env</code>:</p>
@@ -459,6 +468,7 @@ docker compose --profile full up -d</pre>
   <li><code>PROMPT_GUARD_BLOCK_THRESHOLD=0.7</code></li>
   <li><code>DLP_ENABLED=true</code></li>
   <li><code>PROMPT_LEAK_GUARD_ENABLED=true</code></li>
+  <li><code>PROMPT_LEAK_PREVIEW_CHARS=60</code></li>
 </ul>
 <p class="mt-2"><b>Quando ajustar:</b> ambiente de dev pode relaxar rate-limit; produção com dados regulados deve aumentar o threshold do prompt guard.</p>`,
     ativar: `<p>Tudo ativo no <code>docker compose</code> default — nada para ligar manualmente.</p>
@@ -588,6 +598,7 @@ docker compose up -d caddy</pre>`,
 curl -X POST /api/v1/pipelines/{id}/agents -d '{"agent_id":"..."}'</pre>`,
     usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
   <li>No <a href="/mesh/flow" class="text-brand-500 underline">Fluxograma</a>, crie um pipeline, arraste os agentes membros e defina o nó <b>Início</b>.</li>
+  <li>Conecte os agentes: <b>Sequencial</b> (um alimenta o outro), <b>Paralelo</b> (todos com o mesmo input), <b>Condicional</b> (roteamento 1-de-N por regra) e <b>Padrão/default</b> (o else, quando nenhuma regra casa). Para regras condicionais você não decora sintaxe: <b>descreva em português</b> (a IA traduz), <b>monte por cards</b> com E/OU, e <b>teste no Simulador</b> antes de salvar.</li>
   <li>Clique em <b>Publicar no Catálogo</b> (cria um rascunho de entry <code>kind=pipeline</code>); aprove e publique pela <a href="/catalog" class="text-brand-500 underline">página do Catálogo</a>.</li>
   <li>Invoque <code>POST /api/v1/pipelines/{id}/invoke</code> com <code>{"message":"..."}</code> — use o botão "cURL do invoke" no Fluxograma para copiar o comando pronto.</li>
 </ol>`
@@ -611,14 +622,15 @@ curl -X POST /api/v1/pipelines/{id}/agents -d '{"agent_id":"..."}'</pre>`,
   <li><b>Consumir de terceiro</b> — descubra capabilities de outra org e use no seu fluxo; o custo fica na origem.</li>
   <li><b>Mesh distribuído</b> — várias instâncias do Maestro colaborando sem expor o mesh interno.</li>
 </ul>`,
-    ativar: `<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]"># .env (obrigatório — sem isso, fail-closed)
-MAESTRO_SECRET_KEY=&lt;chave-forte&gt;
-FEDERATION_ENABLED=true</pre>
-<p class="mt-2">Depois configure provider/consumer na página <a href="/federation" class="text-brand-500 underline">/federation</a>.</p>`,
+    ativar: `<p>Só uma coisa vai no <code>.env</code> — a chave-mestra que protege os segredos de peer:</p>
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]"># .env — obrigatório (sem ela, fail-closed: a federação responde 503)
+MAESTRO_SECRET_KEY=&lt;chave-forte&gt;</pre>
+<p class="mt-2"><b>Ligar/desligar é um toggle de runtime</b> (não env var): vive em <code>platform_settings</code> (DB) e é alternado na página <a href="/federation" class="text-brand-500 underline">/federation</a> — perfil <b>root</b>. Por baixo, o botão chama <code>PUT /api/v1/federation/config</code> (grava <code>federation.enabled</code>). Vem <b>desligada por padrão</b>: enquanto OFF, até o manifesto responde 404 (instância invisível).</p>`,
     usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
-  <li>Em <a href="/federation" class="text-brand-500 underline">/federation</a>, escolha publicar uma capability (provider) ou registrar um peer (consumer).</li>
-  <li>Como consumer: registre o peer, rode <b>Sync</b> e invoque a capability remota.</li>
-  <li>Acompanhe o trace federado (W3C Trace Context) ponta-a-ponta.</li>
+  <li>Em <a href="/federation" class="text-brand-500 underline">/federation</a> (root), ligue a federação e defina o <b>workspace</b> (namespace dos seus URNs).</li>
+  <li><b>Provider</b> — publique um <b>pipeline</b> (published + visibilidade <code>company</code>); ele passa a aparecer no seu manifesto e fica invocável, selado ao snapshot.</li>
+  <li><b>Consumer</b> — registre o peer (o segredo cifrado aparece em plaintext só uma vez), rode <b>Sync</b> para espelhar as capabilities remotas e invoque a capability federada.</li>
+  <li>Cada chamada é <b>assinada (HMAC)</b>, protegida contra replay e <b>auditada</b> (registro do invoke com peer, URN-alvo e execução).</li>
 </ol>`
   },
 
@@ -642,5 +654,140 @@ FEDERATION_ENABLED=true</pre>
   <li>Escolha <b>Gerar e embutir</b> (1 clique cria a chave e cola no comando), <b>Chave existente</b> (cola a sua) ou <b>Placeholder</b>.</li>
   <li>Selecione o shell (Bash/PowerShell/CMD) e clique em <b>Copiar</b> — o comando leva o segredo real (mascarado na tela).</li>
 </ol>`
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // Catálogo / Marketplace — publicação, governança, trust e custo
+  // ═════════════════════════════════════════════════════════════════
+  {
+    id: 'catalog',
+    section: 'Catálogo',
+    label: 'Catálogo / Marketplace',
+    fundamento: `<p>O Catálogo é o <b>marketplace interno</b> de IA da empresa — pense num "Play Store corporativo". Registra de forma governada tudo que pode ser descoberto e invocado: agents, skills, recipes (composições declarativas), pipelines (grafos do Fluxograma) e plataformas externas aprovadas (ChatGPT, Cursor, Copilot).</p>
+<p class="mt-2">Cada item é uma <b>entry</b> com identidade própria (URN = tipo+nome+versão), dono, versão semver e uma <b>Divulgação de Capacidade</b> (a "etiqueta nutricional": o que faz com os dados).</p>
+<p class="mt-2"><b>Tipos</b> (<code class="bg-surface-100 px-1 rounded">kind</code>): <code>agent</code>, <code>skill</code>, <code>recipe</code>, <code>external_platform</code> e <code>pipeline</code>.</p>
+<p class="mt-2"><b>Lifecycle</b> de uma entry — como o trâmite de um documento que precisa de visto:</p>
+<ol class="list-decimal pl-4 mt-2 space-y-1">
+  <li><code>draft</code> — você está editando</li>
+  <li><code>submitted</code> — enviou para revisão Root</li>
+  <li><code>approved</code> — Root aprovou (já pode publicar)</li>
+  <li><code>published</code> — disponível para uso</li>
+  <li><code>deprecated</code> — marcado para sair (ainda invocável, com aviso)</li>
+  <li><code>archived</code> — fora de uso (terminal)</li>
+</ol>
+<p class="mt-2">Rejeitar ou pedir mudanças não cria status novo: a entry volta para <code>draft</code> para você corrigir e re-submeter.</p>`,
+    aplicacao: `<p>O Catálogo paga conta quando a IA deixa de ser experimento de uma pessoa e vira ativo da empresa:</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Descoberta com confiança</b> — quem consome vê a etiqueta nutricional ANTES de invocar (processa PII? chama API externa? qual soberania de dados?).</li>
+  <li><b>Governança num ponto único</b> — nada vira <code>published</code> sem passar pela Fila de Revisão Root. Pré-verificações automáticas viram insumo da decisão.</li>
+  <li><b>Trust REAL, não declarado</b> — confiabilidade, latência p95 e custo médio são calculados das execuções reais, não de uma promessa do autor.</li>
+  <li><b>Compliance pronto para auditoria</b> — o Inventário Regulatório responde "quais entries processam dados de saúde?" e exporta CSV para o DPO.</li>
+  <li><b>Chargeback</b> — Custo & Consumo mostra quanto cada área gasta em USD por invocação.</li>
+</ul>
+<p class="mt-2"><b>Quando NÃO precisa:</b> um agent solto que só você usa em teste — crie em <a href="/agents" class="text-brand-500 underline">/agents</a> e pronto. Catálogo é para o que circula entre pessoas/áreas.</p>`,
+    ativar: `<p>O Catálogo é nativo — sempre disponível. Para publicar, use o caminho certo conforme o tipo:</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Agent, skill, recipe ou plataforma externa</b>: wizard de 4 passos em <a href="/catalog/publish" class="text-brand-500 underline">/catalog/publish</a> (Artefato → Metadata → Divulgação → Revisão).</li>
+  <li><b>Pipeline</b>: publique direto do <a href="/mesh/flow" class="text-brand-500 underline">/mesh/flow</a> (Fluxograma) — o pipeline vira entry <code>kind=pipeline</code> em draft e segue o mesmo lifecycle.</li>
+</ul>
+<p class="mt-2">Por API, criar e submeter uma entry:</p>
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">curl -X POST /api/v1/catalog/entries \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"Analista Fiscal","kind":"agent","version":"1.0.0",
+       "artifact_type":"agent","artifact_id":"<id>","visibility":"company"}'
+# depois: PUT /api/v1/catalog/entries/{id}/capability  (divulgação)
+#         POST /api/v1/catalog/entries/{id}/submit       (vai para fila Root)</pre>`,
+    usar: `<p>Páginas do Catálogo (todas sob o menu Catálogo):</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><a href="/catalog" class="text-brand-500 underline">/catalog</a> — vitrine: navega e abre o detalhe de cada entry.</li>
+  <li><a href="/catalog/queue" class="text-brand-500 underline">/catalog/queue</a> — Fila de Revisão (só Root): aprova, rejeita ou pede mudanças.</li>
+  <li><a href="/catalog/inventory" class="text-brand-500 underline">/catalog/inventory</a> — Inventário Regulatório (só Root): filtros tristate por flag, export CSV.</li>
+  <li><a href="/catalog/stewardship" class="text-brand-500 underline">/catalog/stewardship</a> — Curadoria: entries por área responsável; flaga órfãs, paradas (30+ dias) e baixa confiabilidade.</li>
+  <li><a href="/catalog/cost" class="text-brand-500 underline">/catalog/cost</a> — Custo & Consumo: agrega por entry/consumer/área/dia + alertas de anomalia.</li>
+</ul>
+<p class="mt-2"><b>Trust real:</b> na página de detalhe da entry você vê confiabilidade (execuções completas ÷ finalizadas), latência p95 e custo médio — recalculados pelo motor a cada execução real (sandbox e execuções federadas NÃO contam, para não envenenar o número do dono).</p>
+<p class="mt-2"><b>Pegadinha comum:</b> publicou v1.2.0 e quer "corrigir" voltando para v1.1.0? Não dá — versão não regride. Suba a versão (v1.2.1). E recipe/pipeline sem steps/grafo não executa: a pré-verificação pega antes.</p>`
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // Plataforma Externa testável (DAST para IA)
+  // ═════════════════════════════════════════════════════════════════
+  {
+    id: 'external_platform',
+    section: 'Catálogo',
+    label: 'Plataforma Externa (testar + DAST)',
+    fundamento: `<p>Uma <b>Plataforma Externa</b> é uma IA de terceiro (um endpoint OpenAI-compatível, por exemplo) catalogada no Maestro como entry <code>kind='external_platform'</code> — para ser <b>governada como qualquer outro ativo</b>: descoberta, conexão, teste, prova e auditoria.</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Conexão selada</b> — base_url, modo (<code>openai_chat</code>/<code>http_ping</code>) e segredo cifrado. Toda chamada passa por guarda SSRF + cap de resposta.</li>
+  <li><b>Conformidade "DAST para IA"</b> — uma bateria de probes que confronta o comportamento observado com a <b>Divulgação de Capacidade</b> declarada e gera um <b>selo</b>: <code>conforme</code> / <code>parcial</code> / <code>divergente</code>.</li>
+</ul>
+<p class="mt-2">Pense num "exame de admissão": antes de deixar uma IA terceira entrar nos seus fluxos, você testa disponibilidade, latência, se a autenticação é mesmo exigida, resistência a prompt-injection/jailbreak, vazamento de system prompt e eco de PII.</p>`,
+    aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Homologar um fornecedor de IA</b> — rode a suíte de conformidade e use o selo como critério de aprovação.</li>
+  <li><b>Provar a capacidade</b> — dispare o probe configurado como execução sandbox e veja a resposta real do vendor (com custo atestado no seu billing).</li>
+  <li><b>Orquestrar híbrido</b> — encadeie a IA externa como <b>step de um recipe</b>, ao lado de agentes do seu mesh.</li>
+</ul>`,
+    ativar: `<p>Nativo do Catálogo. Crie uma entry <code>kind='external_platform'</code> e configure a conexão na página de detalhe da entry. Os checks heurísticos (injection/jailbreak/system-prompt) só se aplicam ao modo <code>openai_chat</code>.</p>
+<p class="mt-2">Atenção: cada check da suíte faz <b>1 chamada real</b> ao vendor — o custo entra no billing do cliente. Só owner/root disparam.</p>`,
+    usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
+  <li>No <a href="/catalog" class="text-brand-500 underline">Catálogo</a>, abra a entry da Plataforma Externa.</li>
+  <li><b>Descobrir</b> (cole a URL — detecta OpenAI-compatível ou instância Maestro) e <b>Conectar</b> (base_url + auth + segredo).</li>
+  <li><b>Testar conexão</b> e <b>Provar Capacidade</b> (execução sandbox).</li>
+  <li>Rode a <b>Conformidade (DAST)</b> e leia o selo + os checks (determinísticos vs heurísticos são marcados).</li>
+</ol>`
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // Ferramentas MCP (/mcp)
+  // ═════════════════════════════════════════════════════════════════
+  {
+    id: 'tools_mcp',
+    section: 'Integração',
+    label: 'Ferramentas MCP',
+    fundamento: `<p>Uma <b>ferramenta</b> é uma função externa que o agente invoca durante a conversa ("valida esse CPF", "consulta o ERP"). O Maestro fala com elas pelo <b>MCP (Model Context Protocol)</b>.</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Transportes</b> — <code>HTTP</code> (JSON-RPC, com suporte a MCP Streamable HTTP/SSE) e <code>stdio</code> (processo local: npx/node/python).</li>
+  <li><b>Descoberta</b> — o Maestro chama <code>tools/list</code> no servidor e guarda o schema real de cada ferramenta.</li>
+  <li><b>Per-tool (gated)</b> — com <code>MCP_PER_TOOL_ENABLED</code> ligado, cada ferramenta vira uma função própria com o schema real (o LLM chama <code>create_issue</code> direto, sem o intermediário <code>{operation, query}</code>).</li>
+</ul>
+<p class="mt-2">O <b>Permitted Toolset</b> é a interseção entre o que está registrado em /mcp e o que a skill declara em <code>## Tool Bindings</code>. Auth suportada: API Key, OAuth2 (client credentials) e mTLS — sempre cifrada em repouso.</p>`,
+    aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Dar superpoderes ao agente</b> — busca na web, leitura de docs, escrita em sistemas, consulta a bancos.</li>
+  <li><b>Schema preciso</b> — ferramentas de argumentos estruturados (GitHub, filesystem) funcionam bem no modo per-tool.</li>
+  <li><b>Auditoria</b> — toda chamada vai para <code>tool_calls</code> (args, resposta, latência, erro).</li>
+</ul>`,
+    ativar: `<p>Registre o servidor em <a href="/mcp" class="text-brand-500 underline">/mcp</a> e declare a ferramenta na skill (<code>## Tool Bindings</code>). O modo per-tool é um <b>toggle de Configurações</b> (<code>MCP_PER_TOOL_ENABLED</code>, default desligado) — sem ele, o caminho legado <code>{operation, query}</code> é idêntico ao de sempre.</p>`,
+    usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
+  <li>Em <a href="/mcp" class="text-brand-500 underline">/mcp</a>, cadastre o servidor MCP (HTTP ou stdio) e teste a conexão — a plataforma lista as ferramentas descobertas.</li>
+  <li>Na skill, liste a ferramenta em <b>Tool Bindings</b>; o agente passa a poder chamá-la.</li>
+  <li>Opcional: ligue o per-tool em Configurações para expor o schema real ao LLM.</li>
+</ol>`
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // Saúde dos Modelos (chip do header)
+  // ═════════════════════════════════════════════════════════════════
+  {
+    id: 'model_health',
+    section: 'Plataforma',
+    label: 'Saúde dos Modelos (chip do header)',
+    fundamento: `<p>O <b>chip de Saúde dos Modelos</b> fica no topo de toda tela e responde uma pergunta simples: <b>o que vai ser usado daqui pra frente, e está tudo de pé?</b></p>
+<p class="mt-2">Pense num painel de combustível do carro: ele não dirige por você, mas avisa antes de você ficar na mão. A cada papel de roteamento (Tool calling, Raciocínio, Instruct, Classificação, Geração de skill, Multimodal) e também para os <b>Embeddings</b>, a plataforma faz uma <b>sonda de inferência mínima</b> — completa 1 token no modelo de chat, ou embeda um texto curto — e reporta se respondeu, a latência e o erro quando falha.</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Verde</b> — tudo o que será usado (chat, roteamento e embeddings) respondeu.</li>
+  <li><b>Âmbar (com contador)</b> — algo merece atenção: um <b>fallback</b> ativo (ex.: embeddings caíram do provider configurado para o de contingência) OU algum modelo indisponível. O número mostra quantos estão fora.</li>
+</ul>
+<p class="mt-2">O chip tem só esses dois estados. Para ver o <b>vermelho</b>, abra o painel: cada linha (por papel + Embeddings) fica verde (ok) ou vermelha (indisponível). Modelos repetidos no roteamento são <b>deduplicados</b> (gpt-oss-120b sondado uma vez, não a cada papel), e as sondas rodam em paralelo com timeout curto (~8s) — um endpoint inacessível não trava o header.</p>`,
+    aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Antes de uma demo</b> — bata o olho no chip: se estiver âmbar, você descobre o problema antes do público.</li>
+  <li><b>Depois de mexer em Configurações</b> — trocou provider/modelo ou roteamento? O chip confirma que a nova escolha responde de fato.</li>
+  <li><b>Diagnóstico de "o agente está lento/estranho"</b> — âmbar por fallback de embeddings explica busca semântica degradada; uma linha vermelha em Tool calling explica agente que não chama ferramenta.</li>
+</ul>
+<p class="mt-2">O resultado é <b>cacheado por ~5 minutos</b> para não sondar a cada carga de página. O custo é baixíssimo: ~1 token por modelo de chat distinto + 1 embedding por ciclo de cache.</p>`,
+    ativar: `<p>Nada a ligar — o chip aparece automaticamente no header de todas as páginas.</p>
+<p class="mt-2">Para forçar uma nova sondagem (ignorando o cache), o endpoint aceita <code>?force=true</code>:</p>
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">curl 'http://localhost:7000/api/v1/llm/health?force=true' | jq</pre>`,
+    usar: `<p>Clique no chip para abrir o detalhamento por papel: provider/modelo resolvido, status e latência. A linha de <b>Embeddings</b> mostra <code>configured</code> (o que você escolheu) x <code>effective</code> (o que de fato respondeu) — quando diferem, o fallback está ativo.</p>
+<p class="mt-2">Endpoint por trás: <code>GET /api/v1/llm/health</code> (em <code>app/routes/dashboard.py</code>), implementado em <code>app/core/model_health.py</code>. O roteamento por papel vem de <b>Configurações → Roteamento LLM</b>; o provider de embeddings, de <b>Configurações → Plataforma → Embedding</b>.</p>`
   }
 ];

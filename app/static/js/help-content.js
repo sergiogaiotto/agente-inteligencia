@@ -137,10 +137,16 @@ window.HELP_CONTENT = {
             example: 'Você é um analista fiscal especializado em IRPF. Sua tarefa é..., siga sempre o formato..., nunca invente valores...'
           },
           {
-            name: 'Requer evidência',
+            name: 'Consultar bases de conhecimento (RAG / Tabelas)',
             required: false,
             default: 'ligado',
-            body: 'Quando ligado, o agent precisa basear cada afirmação factual em uma fonte recuperada do RAG (base de conhecimento) ou de uma ferramenta. Reduz alucinação. Desligue só quando o agent não precisa citar fontes (ex: gerador criativo).'
+            body: 'Quando ligado, o agent BUSCA nas bases vinculadas (RAG/Tabelas em /rag) antes de responder. Desligue para agents sem base própria — classificadores ou criativos. Atenção: este toggle controla o RETRIEVAL, não a recusa. A recusa por falta de evidência é a política global "Exigir evidências" em /settings.'
+          },
+          {
+            name: 'Permitir conhecimento geral do LLM',
+            required: false,
+            default: 'desligado',
+            body: 'Escape hatch do princípio grounded-by-default. Por padrão (desligado), o agent responde EXCLUSIVAMENTE com base em evidências (RAG/Tabelas, anexos, contexto de pipeline ou resultado de ferramentas) — sem nenhuma fonte, ele recusa em vez de inventar. Ative apenas para agents criativos/generalistas que PODEM usar o conhecimento paramétrico do modelo.'
           },
           {
             name: 'Aceita imagens / documentos',
@@ -159,7 +165,7 @@ window.HELP_CONTENT = {
           },
           {
             title: 'Analista que cita fontes',
-            body: 'Especialista "Consulta de Política" que responde dúvidas dos colaboradores sobre RH com base em documentos internos. Requer evidência ligado, RAG configurado (em /evidence), system prompt enfatizando "responda apenas com base nos documentos recuperados". Sem alucinação.'
+            body: 'Especialista "Consulta de Política" que responde dúvidas dos colaboradores sobre RH com base em documentos internos. Ative "Consultar bases de conhecimento (RAG/Tabelas)", configure a base em /rag, e escreva um system prompt enfatizando "responda apenas com base nos documentos recuperados". Com a política global "Exigir evidências" ligada (/settings) e sem "Permitir conhecimento geral", o agent recusa em vez de inventar.'
           },
           {
             title: 'Composição via Recipe',
@@ -327,12 +333,14 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { name: 'Frontmatter (YAML)', required: true, body: 'Cabeçalho YAML no topo. Precisa de id, version, kind (orchestrator/router/subagent), owner, stability (alpha/beta/stable/deprecated).', example: '---\\nid: skill-fiscal-irpf\\nversion: 1.2.0\\nkind: subagent\\nowner: equipe-fiscal\\nstability: stable\\n---' },
           { name: 'Purpose', required: true, body: 'Frase única declarando o que a skill faz. Aparece em listas e ajuda outros agents a encontrar a skill certa.' },
+          { name: 'Activation Criteria', required: true, body: 'Quando esta skill deve ser acionada (a "porta de entrada"). O parser exige esta seção — sem ela, a validação falha.' },
+          { name: 'Inputs', required: true, body: 'O que a skill espera receber. Seção obrigatória no parser. Quando declara o schema dos argumentos, ele tem prioridade sobre o que vem descoberto das tools.' },
           { name: 'Workflow', required: true, body: 'Passo-a-passo do raciocínio. Pode usar markdown rico — listas, código, headings. É o "corpo" da skill e alimenta o prompt.' },
-          { name: 'Tool Bindings', required: false, body: 'Lista de ferramentas (MCP servers) que essa skill pode invocar. Tools FORA dessa lista são invisíveis para o LLM, mesmo registradas no /tools.' },
-          { name: 'Output Contract', required: false, body: 'Schema esperado da resposta (JSON Schema ou descrição). O Verifier (§14.2) usa para validar antes de entregar. Falha precoce evita resposta ruim para o usuário.' },
+          { name: 'Tool Bindings', required: true, body: 'Lista de ferramentas (MCP servers) que essa skill pode invocar. Tools FORA dessa lista são invisíveis para o LLM, mesmo registradas no /mcp.' },
+          { name: 'Output Contract', required: true, body: 'Schema esperado da resposta (JSON Schema ou descrição). O Verifier (§14.2) usa para validar antes de entregar. Falha precoce evita resposta ruim para o usuário.' },
           { name: 'Guardrails', required: false, body: 'Regras de comportamento (não inventar números, sempre citar fonte, recusar X). Aparecem no system prompt e são checadas pelo Verifier.' },
-          { name: 'Failure Modes', required: false, body: 'O que fazer quando o input é ruim, falta dado ou tool falha. Documenta o "plano B" do agent.' },
-          { name: 'Execution Profile', required: false, default: 'auto-inferido', body: 'fast | standard | rigorous. Se omitido, o Maestro infere baseado em outros campos (presença de tools, contract, etc.).' },
+          { name: 'Failure Modes', required: true, body: 'O que fazer quando o input é ruim, falta dado ou tool falha. Documenta o "plano B" do agent.' },
+          { name: 'Execution Profile', required: false, default: 'auto-inferido', body: 'fast | standard | rigorous | declarative. Se omitido, o Maestro infere baseado em outros campos. O modo declarative roda ## API Bindings (HTTP) ou ## Data Tables (SQL parametrizado) sem chamar o LLM.' },
         ]
       },
       {
@@ -348,8 +356,9 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
-          { title: 'Tool não declarada = tool invisível', severity: 'warning', body: 'Se você registrou uma tool em /tools mas esqueceu de listar em "Tool Bindings" do SKILL.md, o LLM nunca vai chamar — porque ele nem sabe que existe. Permitted Toolset é interseção registro × declaração.' },
+          { title: 'Tool não declarada = tool invisível', severity: 'warning', body: 'Se você registrou uma tool em /mcp mas esqueceu de listar em "Tool Bindings" do SKILL.md, o LLM nunca vai chamar — porque ele nem sabe que existe. Permitted Toolset é interseção registro × declaração.' },
           { title: 'Execution Profile errado dispara custo', severity: 'warning', body: 'Skill simples marcada como "rigorous" faz 3+ chamadas LLM por interação. Se for uma skill de classificação trivial, vire "fast" e economize tokens.' },
+          { title: 'kind da SKILL ≠ kind do AGENTE', severity: 'info', body: 'No frontmatter da SKILL.md, a camada Maestro é declarada como kind: orchestrator. Mas o AGENTE (em /agents) usa kind: aobd para a mesma camada — o enum aceito pela API do agente é aobd | router | subagent. Não copie "orchestrator" para o agente: a validação rejeita. router (Triagem) e subagent (Especialista) são iguais nos dois.' },
           { title: 'Mudar version sem incrementar quebra agents', severity: 'danger', body: 'Editar uma skill estável (v1.0.0) sem mudar a version pode quebrar agents que esperavam o comportamento antigo. Incremente version sempre que mudar comportamento.' }
         ]
       }
@@ -446,14 +455,29 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'fundamentos',
         title: 'Fundamentos',
         body: `
-          <p>Três tipos de conexão entre agents:</p>
+          <p>Quatro tipos de conexão entre agents:</p>
           <ul>
-            <li><strong>Sequencial</strong> — A → B → C. Output de A vira input de B.</li>
-            <li><strong>Paralela (fan-out)</strong> — A → (B + C + D). Os 3 rodam ao mesmo tempo com o mesmo input.</li>
-            <li><strong>Condicional</strong> — A → B ou C dependendo do resultado de A.</li>
+            <li><strong>Sequencial</strong> — A → B → C. O output de A vira contexto de B.</li>
+            <li><strong>Paralela (fan-out)</strong> — A → (B + C + D). Os destinos rodam TODOS ao mesmo tempo com o mesmo input (não é escolha 1-de-N).</li>
+            <li><strong>Condicional</strong> — A → B só se uma regra casar. É o roteamento 1-de-N: o destino roda conforme a pergunta do usuário ou a resposta do upstream.</li>
+            <li><strong>Padrão (default)</strong> — o destino "else": roda quando NENHUMA regra condicional do fan-out casou. Combine um <code>default</code> com várias <code>conditional</code> para garantir que sempre haja um caminho.</li>
           </ul>
-          <p>Agents <strong>pass-through</strong> (sem skill vinculada e sem prompt customizado) são detectados e <strong>pulados</strong> automaticamente. Não desperdiça LLM call em nó que não faz nada.</p>
-          <p>Para roteamento inteligente (decidir QUAL agent chamar baseado em intenção do usuário), o AOBD consulta o <strong>CAR</strong> (Catálogo de Roteadores) — não usa o Mesh diretamente. Mesh é para fluxos definidos pelo dev; CAR é para escolha automática.</p>
+          <p>Cada conexão também escolhe <strong>quanto contexto passa adiante</strong>: <em>Herdar</em> (output inteiro, padrão), <em>Filtrar/scoped</em> (transforma o output antes de repassar — economiza tokens) ou <em>Isolar</em> (o próximo agent recebe só a pergunta original).</p>
+          <p>Agents <strong>pass-through</strong> (sem skill vinculada e sem prompt customizado) são detectados e <strong>pulados</strong> automaticamente. Não desperdiça chamada de LLM em nó que não faz nada.</p>
+          <p>Para roteamento automático (decidir QUAL agent chamar pela intenção do usuário), o <strong>Maestro</strong> consulta o <strong>CAR</strong> (Catálogo de Roteadores) — não usa o Mesh diretamente. Mesh é para fluxos que você desenha; CAR é para a escolha automática.</p>
+        `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Regras condicionais sem decorar sintaxe',
+        body: `
+          <p>Uma conexão <strong>condicional</strong> só dispara quando a regra casa. A regra é uma expressão (Jinja) sobre variáveis como <code>input_lower</code> (a pergunta), <code>output_lower</code> (a resposta do agent anterior), <code>has_document</code> (veio um anexo?) ou <code>is_refuse</code> (a decisão foi recusar?). Você não precisa decorar nada — há três caminhos para a MESMA regra:</p>
+          <ul>
+            <li><strong>Descreva em português</strong> — escreva "se mencionar pix ou anexar um documento" e a IA traduz para a expressão. O sistema PROVA: rejeita variável inexistente e testa se a regra avalia sem erro antes de oferecer.</li>
+            <li><strong>Monte por cards (Galeria)</strong> — escolha cartões prontos (palavra na pergunta, tipo de anexo, decisão tomada) e combine com <strong>E / OU</strong> e parênteses, sem escrever código.</li>
+            <li><strong>Teste no Simulador</strong> — antes de salvar, informe uma pergunta, uma resposta simulada, anexos e a decisão, e veja na hora se a regra <em>casa</em> ou <em>não casa</em>. O erro aparece para você corrigir (fail-closed), em vez de quebrar só na produção.</li>
+          </ul>
+          <p>A lista completa de variáveis disponíveis (com explicação em português) é a mesma que o construtor mostra ao lado do campo.</p>
         `
       },
       {
@@ -461,8 +485,8 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Casos de uso',
         items: [
           { title: 'Pipeline ETL com IA (publicável)', body: 'No Fluxograma: Agent 1 extrai dados de um e-mail → Agent 2 valida CNPJ via tool MCP → Agent 3 gera resumo executivo. Salve como pipeline, publique no Catálogo e invoque por uma chamada só: POST /api/v1/pipelines/{id}/invoke.' },
-          { title: 'Comparar múltiplos modelos', body: 'Fan-out: mesma pergunta para 3 agents idênticos exceto pelo modelo (gpt-4o, claude, sabia-4). Você vê 3 respostas em paralelo para comparar qualidade.' },
-          { title: 'Roteamento por idioma', body: 'Agent classificador detecta o idioma. Se PT → agent A. Se EN → agent B. Condicional baseado no resultado do classificador.' }
+          { title: 'Comparar múltiplos modelos', body: 'Fan-out: a mesma pergunta para três agents idênticos exceto pelo modelo (ex.: gpt-4o, claude e um modelo local). Você vê as respostas em paralelo para comparar qualidade.' },
+          { title: 'Roteamento por anexo, em português', body: 'Conexão condicional para o agent de documentos com a regra descrita como "quando o usuário anexar um documento" — a IA traduz para has_document. Adicione uma conexão default para o agent genérico cobrir o caso sem anexo.' }
         ]
       },
       {
@@ -470,7 +494,9 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Pegadinhas',
         items: [
           { title: 'Mesh / Pipeline ≠ CAR ≠ Recipe', severity: 'info', body: 'Fluxograma/Pipeline = fluxo desenhado visualmente (você define), publicável no Catálogo como kind=pipeline. CAR = catálogo para roteamento automático (o Maestro decide). Recipe = composição declarativa no Catálogo. Conceitos distintos.' },
-          { title: 'Pass-through sumiu da execução', severity: 'warning', body: 'Se um agent "desapareceu" do log, provavelmente está pass-through. Adicione skill ou prompt customizado para ativar.' }
+          { title: 'Sempre teste a regra no Simulador', severity: 'warning', body: 'O Simulador honra pergunta, anexos E a decisão (Recommend/Refuse/Escalate) — não só o texto da resposta. Uma regra sobre a pergunta (input_lower) ou sobre anexo (has_document) que parece errada pode estar certa: confirme no Simulador antes de salvar.' },
+          { title: 'Condicional sem default vira buraco', severity: 'warning', body: 'Num fan-out 1-de-N, se nenhuma regra condicional casar e não houver conexão default, nenhum destino roda. Adicione um destino default como rede de segurança.' },
+          { title: 'Pass-through sumiu da execução', severity: 'info', body: 'Se um agent "desapareceu" do log, provavelmente está pass-through (sem skill nem prompt). Adicione skill ou prompt customizado para ativar.' }
         ]
       }
     ],
@@ -482,22 +508,22 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   federation: {
     title: 'Federação A2A',
-    summary: 'Compartilhe agentes e pipelines entre organizações: o provider publica manifest + ingress assinado; o consumer puxa peers e invoca remoto de forma assinada e auditada.',
+    summary: 'Compartilhe pipelines entre organizações: o provider publica manifest + ingress assinado; o consumer puxa peers e invoca remoto de forma assinada e auditada.',
     sections: [
       {
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>Federação conecta dois ou mais Maestros (A2A — Agent-to-Agent). Uma organização <strong>provider</strong> expõe capacidades selecionadas; uma <strong>consumer</strong> as descobre e invoca remotamente — toda chamada é assinada e auditada (W3C Trace Context).</p>
-          <p>Vem <strong>desligada por padrão</strong> e falha fechada (fail-closed) sem <code>MAESTRO_SECRET_KEY</code> configurada.</p>
+          <p>Federação conecta dois ou mais Maestros (A2A — Agent-to-Agent). Uma organização <strong>provider</strong> expõe capacidades selecionadas; uma <strong>consumer</strong> as descobre e invoca remotamente — toda chamada é <strong>assinada (HMAC), protegida contra replay e auditada</strong>.</p>
+          <p>Vem <strong>desligada por padrão</strong> e falha fechada (fail-closed) sem <code>MAESTRO_SECRET_KEY</code> configurada. Ligar/desligar é um <strong>toggle de runtime</strong> (root) na página de federação — não uma variável de ambiente.</p>
         `
       },
       {
         kind: 'fundamentos',
         title: 'Fundamentos',
         body: `
-          <p><strong>Provider (egress de capacidade):</strong> publica um manifest em <code>/.well-known/maestro-federation.json</code> e expõe um ingress assinado <code>POST /federation/invoke</code> (verificação HMAC + proteção de replay + execução selada).</p>
-          <p><strong>Consumer (ingestão):</strong> registra peers (segredos cifrados), faz <code>sync</code> para puxar o manifest + entries remotas e invoca via <code>/federation/remote/{id}/invoke</code>. Uma guarda SSRF protege contra alvos internos.</p>
+          <p><strong>Provider (egress de capacidade):</strong> publica um manifest em <code>/.well-known/maestro-federation.json</code> e expõe um ingress assinado <code>POST /api/v1/federation/invoke</code> (verificação HMAC + proteção de replay + execução selada).</p>
+          <p><strong>Consumer (ingestão):</strong> registra peers (segredos cifrados), faz <code>sync</code> para puxar o manifest + entries remotas e invoca via <code>POST /api/v1/federation/remote/{entry_id}/invoke</code>. Uma guarda SSRF protege contra alvos internos.</p>
           <p>O custo da chamada remota é atestado pelo peer e limitado (clamp) na origem.</p>
         `
       },
@@ -505,8 +531,8 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'casos_de_uso',
         title: 'Casos de uso',
         items: [
-          { title: 'Disponibilizar um pipeline para um parceiro', body: 'Como provider, publique a capacidade e gere as credenciais. O parceiro registra você como peer e invoca o pipeline remotamente — assinado e auditado.' },
-          { title: 'Consumir um agente de outra org', body: 'Como consumer, registre o peer, rode o sync para descobrir as capabilities e invoque dentro do seu próprio fluxo. O custo é atestado pela origem.' }
+          { title: 'Disponibilizar um pipeline para um parceiro', body: 'Como provider, publique a capacidade (um pipeline published + visibilidade company) e gere as credenciais. O parceiro registra você como peer e invoca o pipeline remotamente — assinado e auditado.' },
+          { title: 'Consumir um pipeline de outra org', body: 'Como consumer, registre o peer, rode o sync para descobrir as capabilities e invoque dentro do seu próprio fluxo. O custo é atestado pela origem.' }
         ]
       },
       {
@@ -514,7 +540,8 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Pegadinhas',
         items: [
           { title: 'Desligada por padrão', severity: 'warning', body: 'Sem MAESTRO_SECRET_KEY, a federação falha fechada (nada entra nem sai). Configure a chave antes de registrar peers.' },
-          { title: 'Seal de execução é opt-in', severity: 'info', body: 'A execução federada é selada ao subgrafo declarado na capacidade — não vaza para o mesh global.' }
+          { title: 'Execução sempre selada ao snapshot', severity: 'info', body: 'No caminho federado, a execução fica presa ao subgrafo congelado da capacidade (snapshot em catalog_pipeline_defs) — nunca vaza para o mesh global. Pipeline sem snapshot selável não é executável por federação (retorna 422). Por isso só PIPELINES publicados com visibilidade company aparecem no manifest; agentes e recipes ficam de fora hoje.' },
+          { title: 'Ligar e gerir peers exige root', severity: 'warning', body: 'Ligar a federação, definir o workspace e registrar/rotacionar/revogar peers são ações de perfil root (GET/PUT /api/v1/federation/config e /api/v1/federation/peers). O segredo compartilhado do peer aparece em plaintext UMA única vez (na criação ou rotação) — compartilhe na hora; o banco só guarda cifrado.' }
         ]
       }
     ],
@@ -542,11 +569,12 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         body: `
           <p>Toda tool tem 3 componentes:</p>
           <ul>
-            <li><strong>MCP Server</strong> — endpoint que expõe operações tipadas (schema definido)</li>
-            <li><strong>Registro no Maestro</strong> — nome, descrição, endpoint, classificação de sensibilidade</li>
-            <li><strong>Declaração na skill</strong> — listada em "Tool Bindings" do SKILL.md</li>
+            <li><strong>MCP Server</strong> — endpoint que expõe operações tipadas. Pode ser <code>HTTP</code> (JSON-RPC, com suporte ao transporte MCP Streamable HTTP/SSE) ou <code>stdio</code> (processo local: npx, node, python).</li>
+            <li><strong>Registro no Maestro</strong> — nome, descrição, endpoint, classificação de sensibilidade e (opcional) credencial cifrada (API Key, OAuth2 ou mTLS).</li>
+            <li><strong>Declaração na skill</strong> — listada em "Tool Bindings" do SKILL.md.</li>
           </ul>
           <p>O <strong>Permitted Toolset</strong> é a interseção entre tools registradas E declaradas na skill. Tools de fora dessa interseção são invisíveis ao LLM — não tem como ele "descobrir" e chamar por engano.</p>
+          <p>A plataforma <strong>descobre</strong> as ferramentas reais do servidor (chamada MCP <code>tools/list</code>) e guarda o schema de cada uma. Com a flag <code>MCP_PER_TOOL_ENABLED</code> ligada (Configurações), cada ferramenta vira uma função própria com o schema REAL — o LLM chama direto (ex.: <code>create_issue</code>), sem o intermediário genérico <code>{operation, query}</code>.</p>
           <p>Toda chamada de tool gera registro em <code>tool_calls</code>: argumentos enviados, resposta, latência, erro. Auditoria total.</p>
         `
       },
@@ -558,7 +586,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           { name: 'Descrição', required: true, body: 'O que essa tool faz, em 1 frase. CRUCIAL — o LLM lê isso para decidir quando chamar. Seja específico.', example: 'Consulta CNPJ na Receita Federal e retorna razão social, situação cadastral e endereço.' },
           { name: 'Endpoint MCP Server', required: true, body: 'URL do servidor MCP. Pode ser stdio, sse ou http.' },
           { name: 'Classificação de sensibilidade', required: true, body: 'Nível de risco se o agent chama errado. low (consulta pública), medium (dado interno), high (dado pessoal/regulado).' },
-          { name: 'Schema de argumentos', required: true, body: 'JSON Schema dos parâmetros esperados. O Maestro valida antes de chamar — argumento errado nem sai do agent.' }
+          { name: 'Schema de argumentos', required: false, body: 'JSON Schema dos parâmetros. Normalmente DESCOBERTO do próprio servidor MCP (tools/list) — você não precisa digitar. Quando a skill declara ## Inputs, esse schema tem prioridade. O Maestro valida antes de chamar.' }
         ]
       },
       {
@@ -570,7 +598,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         ]
       }
     ],
-    related: ['skills', 'api_connectors', 'agents']
+    related: ['skills', 'api_connectors', 'catalog', 'agents']
   },
 
   // ═════════════════════════════════════════════════════════════════
@@ -611,7 +639,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           <p>Quando o agent precisa de uma informação textual, a plataforma combina <em>dois jeitos de buscar</em>:</p>
           <ul>
             <li><strong>BM25</strong> — busca clássica por palavras-chave (exatidão lexical). Se o user pergunta "qual o prazo de cobrança", encontra trechos com essas palavras exatas. Usa <code>tsvector</code> + índice GIN do Postgres.</li>
-            <li><strong>Vetorial</strong> — busca semântica (por significado). "prazo de pagamento" também acharia trechos sobre "cobrança" porque os vetores ficam próximos. Usa o vector store ativo (Qdrant ou pgvector) + embeddings (Azure ou Qwen3).</li>
+            <li><strong>Vetorial</strong> — busca semântica (por significado). "prazo de pagamento" também acharia trechos sobre "cobrança" porque os vetores ficam próximos. Usa <strong>pgvector</strong> (busca vetorial dentro do próprio Postgres) + embeddings (Qwen3 ou Azure). O provider de embeddings tem fallback automático: se o primário (Qwen3, via hub interno) cai, a plataforma migra para o Azure e registra o evento no log.</li>
           </ul>
           <p>Os dois rankings são fundidos via <strong>Reciprocal Rank Fusion</strong> (k=60) — uma fórmula que respeita o melhor dos dois sem ter que escolher. Opcional: um <strong>Reranker LLM</strong> faz uma re-ordenação final por relevância contextual. As top-N evidências vão para o LLM gerador montar a resposta.</p>
           <p>Pipeline RAG: <strong>ingestão</strong> (você sobe doc) → <strong>chunking</strong> (quebra em pedaços de ~500 tokens) → <strong>embedding</strong> (gera vetores) → <strong>indexação</strong> (BM25 + vector store) → consultável em tempo real.</p>
@@ -666,7 +694,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { title: 'Ingestão lenta = base grande', severity: 'info', body: 'Documentos grandes (>100 páginas) levam tempo para chunkar + embedar. Não cancele no meio. Acompanhe o progresso na barra.' },
           { title: 'RAG sem Verifier = sem rede de proteção', severity: 'warning', body: 'Se você ativa RAG mas não usa Verifier (§14.2), o agent pode citar trecho errado e ninguém percebe. Ative ambos juntos.' },
-          { title: 'Embedding model precisa ser consistente', severity: 'danger', body: 'Se você ingere com Azure embeddings e depois muda para Qwen3, as queries novas não casam com os vetores antigos. Re-ingira tudo ao trocar de embedder.' },
+          { title: 'Embedding model precisa ser consistente', severity: 'danger', body: 'O embedder padrão é Qwen3 (vetores de 1024 dimensões); o fallback é Azure (1536 dimensões). Ao TROCAR de provider de embeddings, a DIMENSÃO do vetor muda — e as queries novas deixam de casar com os vetores antigos da base. Sempre re-ingira (re-embede) tudo ao trocar de embedder. Obs.: o fallback automático Qwen3→Azure também troca a dimensão; a plataforma usa a dimensão do provider que de fato respondeu para não corromper o índice.' },
           { title: 'CSV/XLSX só como RAG = números viram texto pouco útil', severity: 'warning', body: 'Subir uma planilha SEM promover para tabela transforma os dados em chunks de texto. O agent vai citar trechos como "linha 47 tem valor 5000" — não consegue filtrar nem agregar nem comparar. SEMPRE promova planilhas estruturadas para tabela quando precisar de consulta numérica.' },
           { title: 'XLSX com título mergeado na linha 1 — auto-detect', severity: 'info', body: 'Se a linha 1 do XLSX tem só um título mergeado (ex: "TB_VENDAS" em A1:G1) e os headers reais estão na linha 2, a plataforma DETECTA automaticamente e usa a linha 2 como header. Você verá um aviso "↻ Auto-detect: linha 1 parecia título" no modal de promoção. Não precisa editar o arquivo.' },
           { title: 'XLSX multi-aba = N tabelas separadas', severity: 'info', body: 'Cada aba do XLSX vira UMA TABELA independente. O modal mostra todas as abas detectadas; você pode promover só uma, ou clicar "Promover todas as N abas" para criar uma tabela por aba. Cada uma fica referenciável pelo nome no editor de Skill.' },
@@ -722,7 +750,8 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Pegadinhas',
         items: [
           { title: 'Verifier desligado = página vazia', severity: 'info', body: 'Se VERIFIER_V2_ENABLED=false, nada vai aparecer aqui. Ative antes de esperar dados.' },
-          { title: 'Self-preference do juiz', severity: 'warning', body: 'Juiz e gerador do mesmo modelo (gpt-4o avaliando gpt-4o) tende a dar nota alta. Use um juiz diferente para reduzir esse viés.' }
+          { title: 'Self-preference do juiz', severity: 'warning', body: 'Juiz e gerador do mesmo modelo (gpt-4o avaliando gpt-4o) tende a dar nota alta. Use um juiz diferente para reduzir esse viés.' },
+          { title: 'Contrato com retry automático tem custo extra na falha', severity: 'info', body: 'Quando o ContractValidator marca a resposta como fora do output_contract, o Verifier re-chama o LLM 1x com os erros específicos para tentar corrigir o formato (ligado por padrão). Isso conserta violações triviais (vírgula sobrando, chave faltando) sem intervenção — ao custo de 1 chamada LLM extra apenas nas falhas. Desligue só em orçamento muito apertado.' }
         ]
       }
     ],
@@ -748,14 +777,24 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'fundamentos',
         title: 'Fundamentos',
         body: `
-          <p>API Connectors complementam o <strong>Tool Registry</strong> (/tools). A diferença:</p>
+          <p>API Connectors complementam o <strong>Tool Registry</strong> (/mcp). A diferença:</p>
           <ul>
-            <li><strong>/tools (MCP)</strong> — protocolo padronizado, schema tipado, agent chama via descrição declarada na skill.</li>
+            <li><strong>/mcp (MCP)</strong> — protocolo padronizado, schema tipado, agent chama via descrição declarada na skill.</li>
             <li><strong>/api-connectors (HTTP)</strong> — chamada HTTP direta, mais flexível, melhor para integrações ad-hoc ou testes.</li>
           </ul>
-          <p>Suporta 4 tipos de autenticação: <code>none</code>, <code>api_key</code> (header ou query), <code>bearer</code>, <code>basic</code>.</p>
-          <p>Health check periódico mostra se cada connector está vivo. Histórico de chamadas registra método, URL, status, latência e body — para auditoria.</p>
+          <p>Suporta <strong>5 tipos de autenticação</strong>: <code>none</code>, <code>api_key</code> (header ou query), <code>bearer</code>, <code>basic</code> e <code>cookie</code> (sessão). Para cookie há um helper "Gerar cookie via login" que faz o POST de login e extrai o token do <code>Set-Cookie</code> automaticamente. A API key fica <strong>cifrada em repouso</strong>.</p>
+          <p>O builder fala 5 formatos de corpo por endpoint (<code>json</code>, <code>form_urlencoded</code>, <code>multipart</code>, <code>text</code>, <code>xml</code>) e respeita <code>verify_ssl</code> por connector (desligável para APIs self-signed).</p>
+          <p>Health check periódico mostra se cada connector está vivo. Histórico de chamadas registra método, URL, status, latência e body — para auditoria (limpeza manual por retenção).</p>
         `
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Descoberta automática (IA, me ajude!)',
+        items: [
+          { title: 'Cole a URL e a plataforma lê o OpenAPI/Swagger', body: 'O botão "IA, me ajude!" tenta os caminhos comuns de openapi.json/swagger.json (e até parseia a página do Swagger UI/ReDoc) para propor nome, base_url, autenticação, health_path e a lista de endpoints. Você revisa e aplica — nada é salvo sem o seu OK.' },
+          { title: 'Descreva o endpoint em português e a IA preenche o form', body: 'No modal de novo endpoint, digite algo como "consultar CNPJ por número" e o modelo primário sugere método, path, categoria, descrição, sample_body e até valores de teste que retornam 200.' },
+          { title: 'API sem openapi.json disponível', body: 'Se a API não publica OpenAPI (comum em APIs públicas como ViaCEP/BrasilAPI), cole um comando cURL — a plataforma extrai base_url, auth e endpoint — ou cadastre manualmente em "+ Novo endpoint".' }
+        ]
       },
       {
         kind: 'campos',
@@ -763,7 +802,9 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { name: 'Nome', required: true, body: 'Nome legível. Aparece em listas e no builder.' },
           { name: 'Base URL', required: true, body: 'Raiz da API. Endpoints concatenam path relativo a essa base.', example: 'https://api.viacep.com.br' },
-          { name: 'Tipo de auth', required: true, options: ['none', 'api_key', 'bearer', 'basic'], body: 'Como o connector autentica. Determina os campos extras que aparecem.' },
+          { name: 'Tipo de auth', required: true, options: ['none', 'api_key', 'bearer', 'basic', 'cookie'], body: 'Como o connector autentica. Determina os campos extras que aparecem.' },
+          { name: 'verify_ssl', required: false, default: 'ligado', body: 'Validação do certificado TLS. Desligue (0) apenas para APIs internas com certificado self-signed — nunca para APIs públicas.' },
+          { name: 'body_type (por endpoint)', required: false, options: ['json', 'form_urlencoded', 'multipart', 'text', 'xml'], default: 'json', body: 'Formato do corpo da requisição. O builder ajusta o Content-Type automaticamente.' },
           { name: 'Endpoints', required: false, body: 'Lista de paths organizados em árvore por categoria. Cada endpoint tem método (GET/POST/...) + path + parâmetros.' }
         ]
       },
@@ -776,7 +817,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         ]
       }
     ],
-    related: ['tools', 'agents', 'workspace']
+    related: ['tools', 'catalog', 'agents', 'workspace']
   },
 
   // ═════════════════════════════════════════════════════════════════
@@ -784,13 +825,13 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   harness: {
     title: 'Harness',
-    summary: 'Motor de avaliação que roda a skill contra um Golden Dataset e decide se a release vai para produção ou não.',
+    summary: 'Motor de avaliação que roda o agente contra um Golden Dataset e decide, por um gate, se a release vai para produção.',
     sections: [
       {
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>Antes de promover uma release para produção, o Harness roda os <strong>Golden Cases</strong> (casos curados de teste) contra a versão candidata e produz um relatório: acurácia, latência, custo, falha em casos adversariais. Se passa nos thresholds, libera. Se não, bloqueia.</p>
+          <p>Antes de promover uma release, o Harness roda os <strong>gold cases</strong> (casos curados) contra a versão candidata e produz um relatório: acurácia, recusa correta, falso positivo, latência, custo e — com o Verifier ligado — factuality/completeness/tone/safety. Se passa nos thresholds, libera; se não, bloqueia (com o motivo em gate_reason).</p>
           <p>É o "CI/CD de qualidade" da plataforma. Sem isso, você está apostando que a mudança no prompt não quebrou nada.</p>
         `
       },
@@ -798,30 +839,32 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'fundamentos',
         title: 'Fundamentos',
         body: `
-          <p>Golden Dataset (§9.4) é <strong>versionado</strong>, <strong>estratificado por jornada</strong>, com proporção mínima de <strong>casos adversariais</strong>. Cada caso tem:</p>
+          <p>Golden Dataset (§9.4) é <strong>versionado</strong> e <strong>estratificado por jornada</strong>, com proporção de <strong>casos adversariais</strong>. Cada caso tem:</p>
           <ul>
-            <li><code>category</code> — taxonomia (ex: "consulta-irpf", "spam")</li>
-            <li><code>weight</code> — peso na média ponderada (casos críticos pesam mais)</li>
-            <li><code>expected_pattern</code> — regex que o output deve casar</li>
-            <li><code>red_flags</code> — strings que NÃO podem aparecer (falham o caso)</li>
+            <li><code>input_text</code> — a entrada enviada ao agente</li>
+            <li><code>expected_output</code> (similaridade) ou <code>expected_pattern</code> (regex, prioritário)</li>
+            <li><code>expected_state</code> — a DECISÃO esperada: Recommend, Refuse ou Escalate</li>
+            <li><code>case_type</code> — normal ou adversarial (adversariais alimentam a recusa correta)</li>
+            <li><code>category</code> (taxonomia), <code>weight</code> (peso na média ponderada), <code>red_flags</code> (strings que NÃO podem aparecer)</li>
           </ul>
-          <p>Gate automático: se acurácia ponderada ≥ threshold E adversarial recusa ≥ X E latência p95 ≤ Y → aprovado.</p>
+          <p>Gate automático: aprovado quando acurácia ponderada, recusa correta, factuality/completeness/tone, safety e contract-compliance ficam dentro dos thresholds, e falso positivo/alucinação abaixo do limite.</p>
         `
       },
       {
         kind: 'casos_de_uso',
         title: 'Casos de uso',
         items: [
-          { title: 'Antes de promover release', body: 'Você refinou um prompt. Roda o harness — em 5 min sabe se quebrou os casos críticos.' },
-          { title: 'Regressão semanal', body: 'Rotina automatizada roda o harness toda semana contra a versão de produção. Detecta degradação por mudança no modelo do provider (ex: provider atualizou silenciosamente).' },
-          { title: 'A/B de modelos', body: 'Mesma skill, 2 releases (modelo A vs B). Compara acurácia, latência, custo. Decisão informada por dados.' }
+          { title: 'Antes de promover release', body: 'Você refinou um prompt. Roda o harness (baseline) — em minutos sabe se quebrou os casos críticos.' },
+          { title: 'Regressão', body: 'run_type=regression compara contra o baseline mais recente do mesmo release e gold_version. Detecta degradação por mudança silenciosa no modelo do provider.' },
+          { title: 'A/B de modelos', body: 'Mesma skill, 2 execuções. Compara lado a lado via /eval-runs/compare (deltas por métrica e por categoria).' }
         ]
       },
       {
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
-          { title: 'Golden pequeno = teste fraco', severity: 'warning', body: 'Harness com 5 casos não diz quase nada. Comece com 20+ casos cobrindo as principais jornadas + 5+ adversariais.' },
+          { title: 'Decision-state colapsa em LogAndClose', severity: 'info', body: 'O FSM termina sempre em LogAndClose; a decisão real (Recommend/Refuse/Escalate) é recuperada do transition_log antes de casar com expected_state. Por isso o expected_state deve usar esses três valores, não LogAndClose.' },
+          { title: 'Golden pequeno = teste fraco', severity: 'warning', body: 'Harness com 5 casos não diz quase nada. Comece com 20+ casos cobrindo as principais jornadas + 5+ adversariais (cobrindo Refuse/Escalate).' },
           { title: 'Threshold alto demais = ninguém promove nada', severity: 'warning', body: 'Se você exige 95% e ninguém passa, vai promover manualmente — ignorando o gate. Calibre o threshold com dados de produção.' }
         ]
       }
@@ -834,13 +877,13 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   releases: {
     title: 'Releases',
-    summary: 'Versionamento atômico de configurações — promover, monitorar drift, fazer rollback.',
+    summary: 'Versionamento atômico de configurações — promover entre ambientes e monitorar drift.',
     sections: [
       {
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>Uma <strong>release</strong> é um pacote imutável de configurações: versão do modelo, versão da skill, versão do índice RAG, política de uso, tudo congelado num snapshot identificado.</p>
+          <p>Uma <strong>release</strong> é um pacote imutável de configurações: <code>model_config</code>, <code>prompt_config</code>, <code>index_config</code> e <code>policy_config</code>, congelados num snapshot identificado.</p>
           <p>Em vez de promover artefatos isolados (atualizei a skill mas o índice está velho?), você promove a release inteira. Garante consistência.</p>
         `
       },
@@ -848,13 +891,13 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'fundamentos',
         title: 'Fundamentos',
         body: `
-          <p>Estágios de promoção:</p>
+          <p>Ambientes de promoção (campo <code>environment</code>):</p>
           <ul>
             <li><strong>staging</strong> — visível só para devs/testers</li>
-            <li><strong>canary</strong> — 1-10% do tráfego em produção</li>
+            <li><strong>canary</strong> — fração do tráfego em produção</li>
             <li><strong>production</strong> — 100% do tráfego</li>
           </ul>
-          <p>Drift é monitorado contra baseline da release anterior (KS, PSI para dados; CUSUM para comportamento). Quando SLOs são violados, rollback é automático.</p>
+          <p>Promoção via <code>PUT /api/v1/releases/{id}/promote?target_env=...</code> (move environment + status e grava no audit_log). Drift é registrado em <code>drift_events</code>; a forma de pegar regressão entre versões hoje é rodar o Harness (§9.5) em <code>run_type=regression</code> contra o baseline do mesmo release e dataset. (Detecção estatística automática e rollback por SLO são roadmap, ainda não implementados.)</p>
         `
       },
       {
@@ -862,7 +905,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Pegadinhas',
         items: [
           { title: 'Direto para production = roleta russa', severity: 'danger', body: 'Pular canary economiza 10 minutos e pode custar horas de incidente. Sempre passe por canary.' },
-          { title: 'Drift sem baseline = drift cego', severity: 'warning', body: 'Primeira release não tem baseline para comparar. Estabeleça com 1-2 semanas de produção antes de comparar.' }
+          { title: 'Regressão precisa de baseline', severity: 'warning', body: 'O harness em regression só compara se existe um baseline COMPLETO do mesmo release e mesmo gold_version. Rode o baseline antes de promover.' }
         ]
       }
     ],
@@ -874,22 +917,26 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   observability: {
     title: 'Observabilidade',
-    summary: 'Traces, custos e performance — todas as métricas detalhadas em LangFuse ou stack OTEL.',
+    summary: 'Traces, custos e performance — exportados para o stack OTEL (Tempo/Loki/Grafana) ou para o LangFuse.',
     sections: [
       {
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>Camada de tracing-first. Cada interação propaga <strong>W3C Trace Context</strong>, gera spans por camada (AOBD → AR → SA), registra prompt efetivo, modelo usado, output, custo em tokens, latência por etapa.</p>
-          <p>Use para investigar incidentes em profundidade, comparar custo entre modelos, debug de latência.</p>
+          <p>Camada de tracing-first. Cada interação propaga <strong>W3C Trace Context</strong>, gera spans por camada (Maestro → Triagem → Especialista), registra prompt efetivo, modelo usado, output, custo em tokens e latência por etapa.</p>
+          <p>Use para investigar incidentes em profundidade, comparar custo entre modelos e fazer debug de latência.</p>
         `
       },
       {
         kind: 'fundamentos',
         title: 'Fundamentos',
         body: `
-          <p>Default: <strong>LangFuse</strong> (SaaS ou self-hosted). Cada interação gera um trace com spans hierárquicos. Dashboards canônicos: Domain Health, Skill Drift, Evidence Quality.</p>
-          <p>Para self-hosted puro, dá pra exportar via OpenTelemetry para Tempo/Jaeger.</p>
+          <p>Dois caminhos, independentes e ambos de primeira classe:</p>
+          <ul>
+            <li><strong>OpenTelemetry self-hosted</strong> — toggle <code>OTEL_ENABLED</code>; spans vão para Tempo (traces) e os logs para Loki, com Grafana como UI. Sobe com <code>docker compose --profile full</code>.</li>
+            <li><strong>LangFuse</strong> (SaaS ou self-hosted) — configure as credenciais em /settings → Plataforma → LangFuse. Cada interação vira um trace com spans hierárquicos.</li>
+          </ul>
+          <p>Spans manuais cobrem os pontos críticos (transições da FSM, etapas do RAG, reranker, ingestão, decisões de policy).</p>
         `
       },
       {
@@ -904,7 +951,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
-          { title: 'LangFuse não configurado = sem traces', severity: 'warning', body: 'Cole as credenciais em /settings antes de esperar dados.' }
+          { title: 'Sem backend configurado = sem traces', severity: 'warning', body: 'Ou ligue OTEL_ENABLED e suba o profile full (Tempo/Loki/Grafana), ou cole as credenciais do LangFuse em /settings — senão não há onde os traces caírem.' }
         ]
       }
     ],
@@ -916,13 +963,13 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   infra: {
     title: 'Infraestrutura',
-    summary: 'Estado dos componentes da plataforma — banco, cache, vetores, observabilidade — em uma tela só.',
+    summary: 'Estado dos componentes da plataforma — banco, cache, vetores (pgvector) e observabilidade — em uma tela só.',
     sections: [
       {
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>A Infraestrutura mostra a saúde dos serviços de baixo nível que a plataforma usa: PostgreSQL (dados e — quando backend=pgvector — também vetores), Redis (rate-limit + cache), vector store dedicado quando ativo (Qdrant, em rota de descomissionamento), e o stack de observabilidade quando ativo.</p>
+          <p>A Infraestrutura mostra a saúde dos serviços de baixo nível que a plataforma usa: PostgreSQL (dados E vetores do RAG, via pgvector), Redis (rate-limit + cache) e o stack de observabilidade quando ativo (Tempo, Loki, Grafana).</p>
           <p>É o lugar para investigar "por que está lento?" ou "por que essa página não carregou?" — antes de mergulhar em traces específicos no /observability.</p>
         `
       },
@@ -932,12 +979,12 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         body: `
           <p>Os componentes monitorados:</p>
           <ul>
-            <li><strong>PostgreSQL</strong> — backend único de persistência. Tudo passa por aqui: agents, skills, interactions, audit_log, catalog, etc. Quando <code>RAG_VECTOR_BACKEND=pgvector</code>, também guarda os vetores do RAG via extensão pgvector + HNSW. Se cair, a plataforma toda fica indisponível.</li>
+            <li><strong>PostgreSQL</strong> — backend único de persistência. Tudo passa por aqui: agents, skills, interactions, audit_log, catalog, etc. Também guarda os vetores do RAG via extensão <strong>pgvector</strong> + índice HNSW. Se cair, a plataforma toda fica indisponível.</li>
             <li><strong>Redis</strong> — usado para rate-limit (sliding window) e cache leve de routing. Falha = rate-limit desligado (failsafe open).</li>
-            <li><strong>Vector store</strong> — depende do backend ativo (<code>RAG_VECTOR_BACKEND</code>). pgvector (recomendado): vive dentro do Postgres, sem serviço extra. Qdrant (legado): serviço separado, será removido em uma onda futura. Falha do vector store = busca de evidência cai em BM25-only (degrada com graça).</li>
-            <li><strong>OpenTelemetry / LangFuse</strong> — exportação de traces. Quando configurado e ativo, traces aparecem em Tempo/Grafana ou LangFuse.</li>
+            <li><strong>Vetores (pgvector)</strong> — desde a Onda Q (2026-05-30), pgvector é o <strong>único</strong> backend e vive dentro do Postgres, sem serviço extra. (O Qdrant, usado antes, foi removido — não há mais escolha de backend.)</li>
+            <li><strong>OpenTelemetry / LangFuse</strong> — exportação de traces. Quando configurado e ativo, traces aparecem em Tempo/Grafana ou em LangFuse.</li>
           </ul>
-          <p>Status verificado em tempo real via probes leves (latência de query, ping, health endpoint). Quando algum componente está degradado, o card pisca em laranja/vermelho.</p>
+          <p>Status verificado em tempo real via probes leves (latência de query, ping, health endpoint). O card de Postgres inclui um check de <code>pgvector dim</code> (dimensão atual vs esperada pelo embedder ativo).</p>
         `
       },
       {
@@ -946,7 +993,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { title: 'Diagnóstico inicial de incidente', body: 'Site lento. Antes de pedir trace, vai em Infra: vê PostgreSQL com latência 2s/query. Foco vira tuning do banco, não da app.' },
           { title: 'Confirmar setup', body: 'Acabou de configurar OTEL? Abre Infra para confirmar que o exporter está conectado e enviando spans.' },
-          { title: 'Capacity planning', body: 'Acompanhar tamanho do banco, uso de Redis, contagem de vetores no vector store. Quando um deles passa do limite saudável, é hora de escalar.' }
+          { title: 'Capacity planning', body: 'Acompanhar tamanho do banco, uso de Redis e contagem de vetores no pgvector. Quando um deles passa do limite saudável, é hora de escalar.' }
         ]
       },
       {
@@ -954,7 +1001,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Pegadinhas',
         items: [
           { title: 'Componente "offline" pode ser config', severity: 'info', body: 'Se LangFuse aparece offline, primeiro checa se as credenciais estão preenchidas em /settings. "Offline" pode significar "nunca configurado".' },
-          { title: 'Vector store down ≠ plataforma down', severity: 'warning', body: 'Quando o vector store cai (ou está com dim divergente do embedder ativo), a plataforma continua funcionando mas o RAG perde a parte vetorial. Busca passa a ser BM25-only. Investigue antes que o cliente perceba qualidade pior — e considere rodar POST /api/v1/evidence/reindex para regenerar.' }
+          { title: 'Dimensão divergente ≠ plataforma down', severity: 'warning', body: 'Se você troca o embedder, a dimensão dos vetores no pgvector pode divergir da esperada — o card de pgvector dim acende e o RAG vetorial para de casar. A plataforma continua de pé (busca cai para BM25-only). Rode POST /api/v1/evidence/reindex para regenerar a collection com a dimensão correta.' }
         ]
       }
     ],
@@ -1031,11 +1078,12 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           { name: 'Plataforma > Modelo Primário', body: 'Provider + modelo padrão da plataforma — usado quando agent não declara task_type nem snapshot próprio. Definir aqui é mais limpo que editar cada agent.', example: 'gpt-oss-120b + openai/gpt-oss-120b' },
           { name: 'Plataforma > Azure OpenAI', body: 'API key, endpoint, api_version, deployments de chat e embeddings. Provider primário do projeto.', required: false },
           { name: 'Plataforma > Maritaca / Ollama / GPT-OSS', body: 'Outros providers OpenAI-compatible. Cada um com URL/key/model próprios. GPT-OSS suporta 2 sizes (20B/120B) com endpoints separados.' },
-          { name: 'Plataforma > Embedding', body: 'Selector Azure | Qwen3. Qwen3 reusa URL do OSS-20B ou OSS-120B (só muda path).' },
+          { name: 'Plataforma > Embedding', body: 'Selector Azure | Qwen3. Qwen3 reusa o scheme://host do OSS-20B ou OSS-120B (só muda o path) e suporta densidade Matryoshka (128..1536). Há uma CADEIA DE RESILIÊNCIA: se o provider configurado não responde, a plataforma cai para o fallback (azure quando o primário não é azure; qwen3 caso contrário; ou o que você fixar em embedding_fallback_provider). O chip de Saúde dos Modelos no header fica âmbar quando esse fallback está ativo.' },
           { name: 'Roteamento LLM', body: 'Mapa: tool_calling/reasoning/instruct/classification → provider/modelo. Define qual LLM cada "tipo de tarefa" usa. Configurar uma vez e todos os agents com task_type ficam alinhados.' },
           { name: 'System Prompts', body: 'Templates de system prompts reutilizáveis. Quando criar um agent, você pode escolher um template salvo em vez de escrever do zero.' },
           { name: 'Usuários', body: 'Gestão de contas (root only). Roles: root (admin total), comum (uso normal), admin (gestão sem credenciais).' },
-          { name: 'API Keys', body: 'Geração de chaves de API para acesso externo. Cada chave tem nome, escopo e data de expiração.' }
+          { name: 'API Keys', body: 'Geração de chaves de API para acesso externo. Cada chave tem nome, escopo e data de expiração.' },
+          { name: 'Header > Saúde dos Modelos (chip)', body: 'Chip no topo de toda tela que sonda os modelos em uso (1 token por modelo de chat + 1 embedding) e reporta o que será usado daqui pra frente. Verde = tudo responde; âmbar (com contador) = fallback ativo OU algum modelo indisponível. Abra o painel: cada linha por papel/Embeddings fica verde (ok) ou vermelha (indisponível). Cacheado ~5 min; force=true re-sonda. Endpoint GET /api/v1/llm/health.' }
         ]
       },
       {
@@ -1044,7 +1092,8 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { title: 'Mudar Roteamento muda todos os agents com task_type', severity: 'warning', body: 'Configuração em "Roteamento LLM" afeta todos os agents que usam aquele task_type. Não é específica de um agent. Mude com cuidado em produção.' },
           { title: 'Modelo Primário só vale para agents SEM task_type', severity: 'info', body: 'Se o agent declara task_type, o Roteamento ganha. Primário é só fallback para agents legacy ou sem declaração.' },
-          { title: 'API key pública é vazamento', severity: 'danger', body: 'Não cole API keys em código frontend, repositórios públicos, ou logs. Use o gerador em "API Keys" e proteja como senha.' }
+          { title: 'API key pública é vazamento', severity: 'danger', body: 'Não cole API keys em código frontend, repositórios públicos, ou logs. Use o gerador em "API Keys" e proteja como senha.' },
+          { title: 'Chip âmbar nem sempre é problema', severity: 'info', body: 'O chip de Saúde dos Modelos no header fica âmbar tanto para fallback ativo (tipicamente embeddings caindo para o provider de contingência) quanto para modelo indisponível — em ambos a plataforma pode continuar funcionando. Abra o painel e compare configured x effective na linha de Embeddings; linhas vermelhas indicam indisponibilidade real.' }
         ]
       }
     ],
@@ -1079,8 +1128,8 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
             <li><strong>deprecated</strong> — marcado para remoção</li>
             <li><strong>archived</strong> — fora de uso</li>
           </ol>
-          <p>Tipos (<code>kind</code>): <code>agent</code>, <code>skill</code>, <code>recipe</code> (composição declarativa), <code>external_platform</code> (ChatGPT/etc).</p>
-          <p><strong>Divulgação de Capacidade</strong> (etiqueta nutricional R6.3) é obrigatória: 12 flags + soberania de dados + retenção. Quem consome o agent sabe exatamente o que ele faz com os dados.</p>
+          <p>Tipos (<code>kind</code>): <code>agent</code>, <code>skill</code>, <code>recipe</code> (composição declarativa), <code>pipeline</code> (grafo publicado pelo Fluxograma) e <code>external_platform</code> (ChatGPT/etc).</p>
+          <p><strong>Divulgação de Capacidade</strong> (etiqueta nutricional R6.3) é obrigatória: flags de dados + soberania + retenção. Quem consome o agent sabe exatamente o que ele faz com os dados.</p>
         `
       },
       {
@@ -1365,7 +1414,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'fundamentos',
         title: 'Fundamentos',
         body: `
-          <p>Source de verdade: tabela <code>catalog_capability_disclosures</code> (1:1 com <code>catalog_entries</code>). Inventário lê só entries em status <code>published</code> ou <code>deprecated</code> — draft/archived não entram (não está em uso).</p>
+          <p>Source de verdade: tabela <code>catalog_capability_disclosure</code> (1:1 com <code>catalog_entries</code>). Por padrão lista entries de qualquer status; <code>status</code> é apenas um filtro opcional — use-o para focar em <code>published</code>/<code>deprecated</code>, que são as que estão de fato em uso.</p>
           <p><strong>Filtros tristate</strong>: cada flag tem 3 estados — "não filtra" (vazio), "marca como true", "marca como false". Permite drill-down combinatório (ex: processa_pii=true E soberania=BR).</p>
           <p>Filtros adicionais: kind (agent/skill/recipe/external_platform), status, residência (texto livre — BR/EU/US/global).</p>
         `
@@ -1412,12 +1461,13 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'fundamentos',
         title: 'Fundamentos',
         body: `
-          <p>Agrupa entries por <code>domain</code> declarado na entry. Para cada grupo, calcula 3 sinais visuais:</p>
+          <p>Agrupa entries por <code>steward_team</code> (área responsável declarada na entry). Para cada grupo, calcula 3 sinais visuais:</p>
           <ul>
-            <li><strong>Órfãs</strong>: <code>owner_user_id</code> aponta para usuário inativo (deletado ou sem login recente). Sinal de processo de offboarding mal-feito.</li>
+            <li><strong>Órfãs</strong>: <code>owner_user_id</code> aponta para usuário inativo (deletado ou sem login recente). Sinal de offboarding mal-feito.</li>
             <li><strong>Paradas</strong> (stale): published há 30+ dias sem registro de invocação em <code>catalog_recipe_executions</code> ou <code>interactions</code>. Pode estar obsoleta.</li>
-            <li><strong>Baixa confiabilidade</strong>: pontuação de confiança (calculada em segundo plano) abaixo do limiar. Olha rejeições, anomalias e drift.</li>
+            <li><strong>Baixa confiabilidade</strong>: <code>trust_reliability &lt; 0.5</code> (execuções completas ÷ finalizadas). Recalculado pelo motor a cada execução real.</li>
           </ul>
+          <p>Quem você vê: Root vê todos os times; um curador não-root vê apenas os <code>steward_team</code> presentes em <code>user.domains</code> (sem domínios = lista vazia, por design).</p>
           <p>Cards de stat no topo viram <strong>filtros clicáveis</strong> (toggle on/off) — útil para focar só no que precisa de atenção.</p>
         `
       },
@@ -1436,7 +1486,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { title: 'Sem domains = tela vazia', severity: 'warning', body: 'Usuário comum sem nenhum domínio cadastrado vê mensagem "associe-se a domínios". Não é bug — é design (steward sem domínio não tem o que stewardar).' },
           { title: 'Sandbox conta como uso', severity: 'info', body: 'Execuções sandbox (botão 🧪) entram no cálculo de "parada". Se um agent só roda em testes, ele não vai aparecer como stale mesmo que ninguém o use em produção.' },
-          { title: 'Pontuação de confiança atualiza em segundo plano', severity: 'info', body: 'A coluna "confiabilidade" pode demorar até 1 hora para refletir mudanças (rejeições, anomalias). Se acabou de aprovar a entry, espere o ciclo do job rodar.' }
+          { title: 'Confiabilidade vem de execuções reais', severity: 'info', body: 'A coluna "confiabilidade" é trust_reliability = execuções completed ÷ finished, recalculada pelo motor a cada execução real. Execuções sandbox e federadas NÃO contam (não envenenam o número do dono). Entry recém-publicada sem nenhuma execução real ainda aparece sem confiabilidade — rode-a para gerar sinal (sandbox não conta).' }
         ]
       }
     ],
@@ -1462,7 +1512,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           <p>Cada invocação de recipe (ou registro manual via API) grava uma row em <code>catalog_costs</code>: entry_id, consumer_user_id, consumer_department, cost_usd, tokens_used, latency_ms, invoked_at.</p>
           <p>Agregação em runtime por group_by (entry, consumer, department, day). Filtro por janela de data, entry, consumer, departamento.</p>
           <p>Scope automático: Root vê tudo; demais veem só o próprio consumo. Configurável via dropdown.</p>
-          <p><strong>Anomalias</strong> são detectadas em background: pico (hoje ≥ 3× média 7d) e limite global (hoje > $100). Banner vermelho aparece automaticamente quando há anomalia ativa.</p>
+          <p><strong>Anomalias</strong> são calculadas sob demanda quando você abre o painel (<code>GET /cost/anomalies</code>): pico (hoje ≥ 3× média dos últimos 7d, com baseline ≥ $1) e limite global (hoje > $100). Banner vermelho aparece quando há anomalia ativa.</p>
         `
       },
       {
