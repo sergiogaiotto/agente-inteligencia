@@ -5,15 +5,22 @@ lifecycle governado (rascunho|publicado|aposentado). As CONEXÕES continuam
 SÓ em mesh_connections — aqui só gerimos membership (exclusiva) e metadados.
 
 Runtime (execute_pipeline) NÃO muda no PR1 — status é metadado de governança;
-o gate de execução por status entra no PR2. Sem auth (igual às rotas de mesh,
-mesma área de UI); auditoria via audit_repo.
+o gate de execução por status entra no PR2. As rotas de CRUD/lifecycle ficam SEM
+auth (igual às rotas de mesh, mesma área de UI interna); auditoria via audit_repo.
+
+EXCEÇÃO — `POST /{pid}/invoke` é o CONTRATO EXTERNO (o que o modal de cURL expõe)
+e EXIGE autenticação (`Depends(require_user)`): cookie de sessão (UI) OU header
+`X-API-Key: ag_live_...` (integração). Sem isso, qualquer um na rede dispararia
+execuções que gastam tokens de LLM. Mesmo padrão do `POST /api/v1/workspace/chat`.
 """
 import uuid
 import json
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from app.core.auth import require_user
 
 from app.models.schemas import (
     PipelineCreate,
@@ -262,7 +269,12 @@ async def set_pipeline_entry(pid: str, data: PipelineEntrySet):
 
 
 @router.post("/{pid}/invoke")
-async def invoke_pipeline(pid: str, data: PipelineInvokeRequest):
+async def invoke_pipeline(
+    pid: str,
+    data: PipelineInvokeRequest,
+    request: Request,
+    user: dict = Depends(require_user),
+):
     """Invoca um pipeline pela ENTIDADE (contrato API-first SELADO — Trilha A PR-A2).
 
     Resolve a raiz + os membros do pipeline e executa via execute_pipeline
@@ -270,6 +282,10 @@ async def invoke_pipeline(pid: str, data: PipelineInvokeRequest):
     o mesh global. Mais estável que invocar o UUID do agente-raiz (que pode mudar
     ao recabear o mesh). `aposentado` → 409 (não roteável); rascunho/publicado rodam.
     Descoberta: GET /api/v1/pipelines (filtra ?status=publicado).
+
+    AUTH (contrato externo): exige cookie de sessão (UI) OU `X-API-Key: ag_live_...`
+    (integração). 401 sem credencial. Quando vem por chave, `request.state.api_key_id`
+    é registrado na auditoria pra distinguir a integração que disparou.
     """
     p = await _require(pid)
     if p.get("status") == "aposentado":
@@ -301,6 +317,7 @@ async def invoke_pipeline(pid: str, data: PipelineInvokeRequest):
     except Exception as e:
         raise HTTPException(500, f"Erro na execução do pipeline: {e}")
 
+    api_key_id = getattr(request.state, "api_key_id", None)
     await audit_repo.create({
         "entity_type": "pipeline",
         "entity_id": pid,
@@ -310,6 +327,9 @@ async def invoke_pipeline(pid: str, data: PipelineInvokeRequest):
             "member_count": len(members),
             "completed_agents": result.get("completed_agents", 0),
             "interaction_id": result.get("interaction_id"),
+            "actor_user_id": user.get("id"),
+            "via": "api_key" if api_key_id else "session",
+            "api_key_id": api_key_id,
         }, ensure_ascii=False),
     })
     return {

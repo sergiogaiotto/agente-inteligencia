@@ -22,9 +22,13 @@ def _async(value):
     return _fn
 
 
-def _client():
+def _client(authed=True):
     app = FastAPI()
     app.include_router(pl_routes.router)
+    if authed:
+        # invoke agora EXIGE auth (cookie OU X-API-Key). Nos testes de COMPORTAMENTO
+        # bypassamos a dependência; a auth em si é coberta por test_401_without_auth.
+        app.dependency_overrides[pl_routes.require_user] = lambda: {"id": "u-test", "role": "admin"}
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -33,6 +37,13 @@ def _pipe(status="publicado"):
 
 
 class TestInvokePipeline:
+    def test_401_without_auth(self):
+        # Contrato externo: sem cookie nem X-API-Key → 401 ANTES de qualquer
+        # execução (require_user curto-circuita sem tocar no banco quando não há
+        # credencial). Impede disparo anônimo que gastaria tokens de LLM.
+        r = _client(authed=False).post("/api/v1/pipelines/p1/invoke", json={"message": "oi"})
+        assert r.status_code == 401, r.text
+
     def test_409_when_aposentado(self, monkeypatch):
         monkeypatch.setattr(db.pipelines_repo, "find_by_id", _async(_pipe("aposentado")))
         r = _client().post("/api/v1/pipelines/p1/invoke", json={"message": "oi"})
