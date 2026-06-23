@@ -465,6 +465,7 @@ async def suggest_conditional(payload: dict, user: dict = Depends(require_user))
     )
     from app.agents.conditional_suggest import (
         build_suggest_messages, extract_expression, validate_conditional_expression,
+        repair_unquoted_literals,
     )
     from app.llm_routing import resolve_llm_for_task
     from app.routes.wizard import _wizard_llm_complete
@@ -483,6 +484,10 @@ async def suggest_conditional(payload: dict, user: dict = Depends(require_user))
 
     expr = extract_expression(content)
     canonical = {v["name"] for v in CONDITIONAL_VARS_META}
+    # Auto-conserta o erro comum do LLM: `pix in input_lower` → `'pix' in input_lower`
+    # (literal sem aspas). Sem isso o guardrail rejeitaria uma regra que o usuário
+    # claramente quis. Idempotente; literais já com aspas não mudam.
+    expr = repair_unquoted_literals(expr, canonical)
     result = validate_conditional_expression(expr, canonical)
     # Smoke de runtime: a regra válida tem que AVALIAR sem crash (sandbox,
     # contexto vazio) — pega erro de tipo/método que o set-diff não vê.

@@ -583,6 +583,31 @@ async def deprecate_entry(entry_id: str, user: dict = Depends(require_user)):
     return db_row_to_entry_dict(updated) if updated else {"message": "depreciada"}
 
 
+@router.post("/entries/{entry_id}/archive")
+async def archive_entry(entry_id: str, user: dict = Depends(require_user)):
+    """Owner (ou root) arquiva entry. deprecated → archived (ou draft → archived).
+
+    Fecha a lacuna de limpeza: o DELETE só aceita 'draft'/'archived', mas não
+    havia como ARQUIVAR uma entry 'deprecated' (a transição existe no lifecycle,
+    faltava o endpoint). Sem isso, uma entry publicada/depreciada ficava
+    irremovível. Após arquivar, a entry pode ser deletada.
+    """
+    entry = await catalog_entries_repo.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry não encontrada")
+    if not _can_mutate(user, entry):
+        raise HTTPException(403, "Apenas owner ou root podem arquivar")
+    await _require_status_transition(entry, "archived")
+
+    now = _naive_utc_now()
+    updated = await catalog_entries_repo.update(entry_id, {
+        "status": "archived",
+        "updated_at": now,
+    })
+    await _audit("archived", entry_id, user["id"], {"urn": entry.get("urn")})
+    return db_row_to_entry_dict(updated) if updated else {"message": "arquivada"}
+
+
 @router.get("/submissions/queue")
 async def submissions_queue(
     status: str = Query("pending"),

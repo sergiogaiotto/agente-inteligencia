@@ -22,7 +22,16 @@ _MIN_NAME_CHARS = 3
 
 
 def _check(name: str, passed: bool, message: str, severity: str = "error") -> dict:
-    return {"name": name, "passed": passed, "severity": severity, "message": message}
+    """`message` é o MOTIVO da falha. Quando o check PASSA, não faz sentido
+    exibir o texto de falha (ex.: um '1.0.0' válido mostrando "version '1.0.0'
+    não é semver"). Então: passou → "ok" (ou "n/a" se o caller sinalizou que o
+    check não se aplica); falhou → o motivo.
+    """
+    if passed:
+        shown = "n/a" if message == "n/a" else "ok"
+    else:
+        shown = message
+    return {"name": name, "passed": passed, "severity": severity, "message": shown}
 
 
 def run_prechecks(

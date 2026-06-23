@@ -225,3 +225,28 @@ class TestRecipeChecks:
             r = run_prechecks(e, disclosure={"entry_id": "e1"}, owner=_active_user())
             chk = _check_by_name(r, "recipe_has_steps")
             assert chk and chk["passed"]
+
+
+class TestCheckMessagesAreResultAware:
+    """C7 (achado E2E 2026-06-23): checks que PASSAM exibiam o texto de FALHA
+    (ex.: '1.0.0' válido mostrando "version '1.0.0' não é semver" com passed=true).
+    Agora: passou → "ok"/"n/a"; falhou → o motivo real."""
+
+    def test_passed_checks_never_show_failure_text(self):
+        r = run_prechecks(_entry(), disclosure={"entry_id": "e1"}, owner=_active_user())
+        assert r["passed"] is True
+        for c in r["checks"]:
+            assert c["passed"] is True
+            assert c["message"] in ("ok", "n/a"), f"{c['name']} passou mas mostra {c['message']!r}"
+        assert "não é semver" not in str(r["checks"])
+        assert "ausente" not in str(r["checks"])
+
+    def test_failed_check_still_shows_reason(self):
+        r = run_prechecks(_entry(version="v1"), disclosure={"entry_id": "e1"}, owner=_active_user())
+        vs = _check_by_name(r, "version_semver")
+        assert vs["passed"] is False and "não é semver" in vs["message"]
+
+    def test_missing_disclosure_shows_reason(self):
+        r = run_prechecks(_entry(), disclosure=None, owner=_active_user())
+        cap = _check_by_name(r, "capability_disclosure_present")
+        assert cap["passed"] is False and "ausente" in cap["message"]

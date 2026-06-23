@@ -55,6 +55,34 @@ class TestIsLlmUnreachable:
 
 
 # ═════════════════════════════════════════════════════════════════
+# _is_llm_auth_error — 401/credencial recusada (≠ inacessível)
+# ═════════════════════════════════════════════════════════════════
+class _AuthErr(Exception):
+    status_code = 401
+
+
+class TestIsLlmAuthError:
+    @pytest.mark.parametrize("exc", [
+        _AuthErr("denied"),
+        Exception("Error code: 401 - Incorrect API key provided: sk-proj-xxx"),
+        Exception("invalid_api_key"),
+        Exception("HTTP 401 Unauthorized"),
+        type("AuthenticationError", (Exception,), {})("bad key"),
+    ])
+    def test_detecta_401_e_credencial(self, exc):
+        assert wizard._is_llm_auth_error(exc) is True
+
+    @pytest.mark.parametrize("exc", [
+        httpx.ConnectError("All connection attempts failed"),
+        RuntimeError("URL não configurada"),
+        RuntimeError("sem credencial"),
+        Exception("falha genérica 500"),
+    ])
+    def test_rede_e_genericos_nao_sao_auth(self, exc):
+        assert wizard._is_llm_auth_error(exc) is False
+
+
+# ═════════════════════════════════════════════════════════════════
 # _wizard_unreachable_message — texto acionável
 # ═════════════════════════════════════════════════════════════════
 class TestUnreachableMessage:
@@ -69,6 +97,13 @@ class TestUnreachableMessage:
         msg = wizard._wizard_unreachable_message("azure", "")
         assert "azure" in msg
         assert "azure/" not in msg
+
+    def test_auth_message_inclui_provider_401_e_orientacao(self):
+        msg = wizard._wizard_auth_message("openai_public", "openai/gpt-4.1")
+        assert "openai_public/openai/gpt-4.1" in msg
+        assert "401" in msg
+        assert "API key" in msg
+        assert "Roteamento LLM" in msg
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -130,6 +165,12 @@ class _FakeProvider:
             raise httpx.ReadTimeout("slow")
         if kind == "url":
             raise RuntimeError("gpt-oss-20b: URL não configurada")
+        if kind == "auth":
+            # simula AuthenticationError do provider (401 — chave inválida)
+            raise Exception(
+                val or "Error code: 401 - {'error': {'message': "
+                "'Incorrect API key provided: sk-proj-xxx'}}"
+            )
         if kind == "runtime":
             raise RuntimeError(val or "erro genérico")
         if kind == "ok":
@@ -221,6 +262,41 @@ class TestWizardLlmComplete:
             await wizard._wizard_llm_complete(
                 _MSGS, "gpt-oss-20b", "openai/gpt-oss-20b", route="mentor"
             )
+
+    # ── C1b: 401/credencial recusada também cai no fallback hospedado ──
+    @pytest.mark.asyncio
+    async def test_primario_401_cai_no_fallback(self, monkeypatch):
+        # Cenário real do deploy: skill_generation com chave OpenAI inválida (401);
+        # antes virava 500. Agora cai no multimodal_fallback (azure) saudável.
+        _patch_routing(monkeypatch, "azure/gpt-4o")
+        _patch_providers(monkeypatch, {"openai_public": "auth", "azure": "ok:FB_AUTH"})
+        content, p, m = await wizard._wizard_llm_complete(
+            _MSGS, "openai_public", "openai/gpt-4.1", route="skill"
+        )
+        assert (content, p) == ("FB_AUTH", "azure")
+
+    @pytest.mark.asyncio
+    async def test_primario_e_fallback_401_viram_503_de_credencial(self, monkeypatch):
+        _patch_routing(monkeypatch, "azure/gpt-4o")
+        _patch_providers(monkeypatch, {"openai_public": "auth", "azure": "auth"})
+        with pytest.raises(wizard.HTTPException) as ei:
+            await wizard._wizard_llm_complete(
+                _MSGS, "openai_public", "openai/gpt-4.1", route="skill"
+            )
+        assert ei.value.status_code == 503
+        # mensagem de CREDENCIAL (não a de inacessível)
+        assert "401" in ei.value.detail and "credenc" in ei.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_primario_401_sem_fallback_vira_503_de_credencial(self, monkeypatch):
+        _patch_routing(monkeypatch, "")  # sem multimodal_fallback distinto
+        _patch_providers(monkeypatch, {"openai_public": "auth"})
+        with pytest.raises(wizard.HTTPException) as ei:
+            await wizard._wizard_llm_complete(
+                _MSGS, "openai_public", "openai/gpt-4.1", route="skill"
+            )
+        assert ei.value.status_code == 503
+        assert "credenc" in ei.value.detail.lower()
 
 
 # ═════════════════════════════════════════════════════════════════

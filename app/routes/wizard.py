@@ -138,6 +138,32 @@ def _is_llm_unreachable(exc: Exception) -> bool:
     return is_llm_unreachable(exc)
 
 
+def _is_llm_auth_error(exc: Exception) -> bool:
+    """Detecta erro de AUTENTICAÇÃO do provider (401 — chave inválida/expirada).
+
+    Distinto de "inacessível" (rede caiu): aqui o servidor RESPONDEU negando a
+    credencial. Justifica tentar o fallback hospedado tanto quanto o unreachable
+    — uma chave ruim em UM provider não deve derrubar o wizard se há outro
+    provider (multimodal_fallback) com credencial válida. Sem isso, um 401 vira
+    500 cru ("Erro no wizard: Error code: 401 — Incorrect API key").
+    """
+    sc = getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "response", None), "status_code", None
+    )
+    if sc == 401:
+        return True
+    name = type(exc).__name__.lower()
+    if "authenticationerror" in name or "permissiondenied" in name:
+        return True
+    s = str(exc).lower()
+    return (
+        "incorrect api key" in s
+        or "invalid_api_key" in s
+        or "invalid api key" in s
+        or ("401" in s and ("api key" in s or "unauthorized" in s or "authentication" in s))
+    )
+
+
 def _wizard_unreachable_message(provider: str, model: str) -> str:
     """Mensagem acionável quando o modelo (e o fallback) estão inacessíveis."""
     pm = f"{provider}/{model}" if model else (provider or "desconhecido")
@@ -147,6 +173,17 @@ def _wizard_unreachable_message(provider: str, model: str) -> str:
         "(GPT-OSS), conecte-se à VPN/rede corporativa. Como alternativa, "
         "ajuste o Roteamento LLM em Configurações para um provedor hospedado "
         "com credenciais (ex.: Azure/OpenAI)."
+    )
+
+
+def _wizard_auth_message(provider: str, model: str) -> str:
+    """Mensagem acionável quando a CREDENCIAL do modelo (e do fallback) é recusada."""
+    pm = f"{provider}/{model}" if model else (provider or "desconhecido")
+    return (
+        f"As credenciais do modelo de IA ({pm}) foram recusadas (401 — chave "
+        "inválida ou expirada). Atualize a API key desse provedor em "
+        "Configurações → Plataforma, ou aponte o papel de geração para um "
+        "provedor com credencial válida em Configurações → Roteamento LLM."
     )
 
 
@@ -203,7 +240,11 @@ async def _wizard_llm_complete(
         resp = await llm.generate(messages, **gen_kwargs)
         return resp["content"], provider, model
     except Exception as exc:
-        if not _is_llm_unreachable(exc):
+        # Tenta o fallback hospedado tanto em INACESSÍVEL (rede) quanto em
+        # AUTH (401 — chave ruim): um provider com credencial inválida não deve
+        # derrubar o wizard se o multimodal_fallback (azure) tem credencial OK.
+        primary_auth = _is_llm_auth_error(exc)
+        if not (_is_llm_unreachable(exc) or primary_auth):
             raise
         fb_provider, fb_model = await _wizard_hosted_fallback(provider)
         if fb_provider:
@@ -214,6 +255,7 @@ async def _wizard_llm_complete(
                     "wizard_route": route,
                     "failed_provider": provider,
                     "failed_model": model,
+                    "failed_reason": "auth" if primary_auth else "unreachable",
                     "fallback_provider": fb_provider,
                     "fallback_model": fb_model,
                 },
@@ -224,18 +266,21 @@ async def _wizard_llm_complete(
                 resp = await fb_llm.generate(messages, **gen_kwargs)
                 return resp["content"], fb_provider, fb_model
             except Exception as exc2:
-                if not _is_llm_unreachable(exc2):
+                if not (_is_llm_unreachable(exc2) or _is_llm_auth_error(exc2)):
                     raise
-                # fallback também inacessível → cai no 503 acionável abaixo
+                # fallback também falhou (rede/auth) → cai na mensagem acionável abaixo
         logger.warning(
-            "wizard.llm.unreachable",
+            "wizard.llm.unavailable",
             extra={
-                "event": "wizard.llm.unreachable",
+                "event": "wizard.llm.unavailable",
                 "wizard_route": route,
                 "provider": provider,
                 "model": model,
+                "reason": "auth" if primary_auth else "unreachable",
             },
         )
+        if primary_auth:
+            raise HTTPException(503, _wizard_auth_message(provider, model))
         raise HTTPException(503, _wizard_unreachable_message(provider, model))
 
 

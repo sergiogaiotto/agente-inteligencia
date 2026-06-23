@@ -941,6 +941,13 @@ async def put_llm_routing(data: LLMRoutingUpdate):
 @router.post("/eval-runs/execute")
 async def run_harness(data: RunEvalRequest):
     """Executa harness de avaliação contra dataset gold §9.5."""
+    # Valida que release E agente existem ANTES de rodar. Sem isso, ids
+    # inexistentes ainda geram um eval_run "lixo" (completed, accuracy 0.0)
+    # que não pode ser deletado (não há DELETE de eval_runs).
+    if not await releases_repo.find_by_id(data.release_id):
+        raise HTTPException(404, f"Release '{data.release_id}' não encontrada.")
+    if not await agents_repo.find_by_id(data.agent_id):
+        raise HTTPException(404, f"Agente '{data.agent_id}' não encontrado.")
     from app.harness.evaluator import run_evaluation
     try:
         result = await run_evaluation(data.release_id, data.agent_id, data.gold_version, data.run_type)
