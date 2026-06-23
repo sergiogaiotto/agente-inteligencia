@@ -124,26 +124,31 @@ _root.curlAuthStation = function () {
             } catch { this.curlAuth.existingKeys = []; }
         },
 
-        /* Chave "real" a usar no comando (pra cópia). null em embed antes de gerar. */
-        get curlAuthRealKey() {
+        /* Chave "real" a usar no comando (pra cópia). null em embed antes de gerar.
+           MÉTODO (não getter): a página compõe com `{ ...curlAuthStation() }`, e o
+           spread de objeto AVALIA getters uma vez e congela o valor — quebrando a
+           reatividade (shell/mensagem/chave parariam de atualizar a tela). Funções
+           sobrevivem ao spread por referência e reavaliam a cada render. */
+        curlAuthRealKey() {
             const a = this.curlAuth;
             if (a.mode === 'embed') return a.generatedKey || null;
             if (a.mode === 'existing') return a.pastedKey || (a.selectedPrefix ? a.selectedPrefix + '…' : null);
             return 'SUA_API_KEY';
         },
         /* Há um segredo de verdade embutido? (controla avisos + máscara) */
-        get curlAuthHasSecret() {
+        curlAuthHasSecret() {
             const a = this.curlAuth;
             return (a.mode === 'embed' && !!a.generatedKey) || (a.mode === 'existing' && !!a.pastedKey);
         },
-        /* Comando MOSTRADO na tela: mascara o segredo a menos que `reveal`. */
-        get curlAuthCommand() {
+        /* Comando MOSTRADO na tela: mascara o segredo a menos que `reveal`.
+           x-text="curlAuthCommand()" reavalia quando shell/mensagem/chave mudam. */
+        curlAuthCommand() {
             const a = this.curlAuth;
             let shownKey;
-            if (this.curlAuthHasSecret && !a.reveal) {
+            if (this.curlAuthHasSecret() && !a.reveal) {
                 shownKey = window.maskApiKey(a.mode === 'embed' ? a.generatedKey : a.pastedKey);
             } else {
-                shownKey = this.curlAuthRealKey || 'SUA_API_KEY';
+                shownKey = this.curlAuthRealKey() || 'SUA_API_KEY';
             }
             return window.buildInvokeCurl({ url: a.url, message: a.message, shell: a.shell, apiKey: shownKey, bodyKey: a.bodyKey });
         },
@@ -173,9 +178,9 @@ _root.curlAuthStation = function () {
         /* Copia o comando com o segredo REAL (não o mascarado da tela). */
         async copyCurlAuth() {
             const a = this.curlAuth;
-            const cmd = window.buildInvokeCurl({ url: a.url, message: a.message, shell: a.shell, apiKey: this.curlAuthRealKey, bodyKey: a.bodyKey });
+            const cmd = window.buildInvokeCurl({ url: a.url, message: a.message, shell: a.shell, apiKey: this.curlAuthRealKey(), bodyKey: a.bodyKey });
             if (await window.copyText(cmd)) {
-                if (this.curlAuthHasSecret) showToast('Comando copiado — contém um segredo, trate como senha', 'info');
+                if (this.curlAuthHasSecret()) showToast('Comando copiado — contém um segredo, trate como senha', 'info');
                 else showToast('cURL copiado (' + a.shell + ')', 'success');
             } else {
                 showToast('Não consegui copiar — selecione e Ctrl+C', 'error');
