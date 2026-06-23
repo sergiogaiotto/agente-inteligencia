@@ -2249,3 +2249,38 @@ class TestCleanupOrphanSubmissions:
         c = make_client({"id": "u1", "role": "comum"})
         r = c.post("/api/v1/catalog/admin/cleanup-orphan-submissions")
         assert r.status_code == 403
+
+
+# ─── POST /entries/{id}/archive (C3 — fecha a lacuna de limpeza) ───
+class TestArchive:
+    def test_owner_archives_deprecated(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "deprecated"
+        r = c.post(f"/api/v1/catalog/entries/{eid}/archive")
+        assert r.status_code == 200, r.text
+        assert fake_storage["entries"][eid]["status"] == "archived"
+
+    def test_can_archive_draft(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")  # draft → archived é permitido
+        r = c.post(f"/api/v1/catalog/entries/{eid}/archive")
+        assert r.status_code == 200
+        assert fake_storage["entries"][eid]["status"] == "archived"
+
+    def test_cant_archive_published_directly(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "published"  # published → deprecated só
+        r = c.post(f"/api/v1/catalog/entries/{eid}/archive")
+        assert r.status_code == 409
+
+    def test_archive_then_delete_closes_cleanup_gap(self, fake_storage):
+        # O ACHADO: published/deprecated era irremovível. Agora:
+        # deprecated → archive → DELETE funciona.
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "deprecated"
+        assert c.post(f"/api/v1/catalog/entries/{eid}/archive").status_code == 200
+        assert c.delete(f"/api/v1/catalog/entries/{eid}").status_code == 200
+        assert eid not in fake_storage["entries"]

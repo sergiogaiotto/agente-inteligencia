@@ -165,3 +165,32 @@ def test_template_wires_translator():
     assert 'x-model="editor.nlDesc"' in html
     # cai no modo manual ao usar (did-you-mean assiste se a IA escorregar)
     assert "this.editor.ruleMode = 'manual'" in html
+
+
+# ─── repair_unquoted_literals (C6, achado E2E 2026-06-23) ────────────────────
+from app.agents.conditional_suggest import repair_unquoted_literals
+
+
+class TestRepairUnquotedLiterals:
+    """A IA às vezes esquece as aspas do literal (`pix in input_lower` em vez de
+    `'pix' in input_lower`) → o guardrail rejeitaria uma regra que o usuário quis.
+    O reparo quota o literal antes de validar. Idempotente."""
+
+    def test_quotes_bare_literal(self):
+        assert repair_unquoted_literals("pix in input_lower", _canonical()) == "'pix' in input_lower"
+
+    def test_quotes_literal_keeps_canonical_var(self):
+        c = _canonical()
+        out = repair_unquoted_literals("pix in input_lower or has_document", c)
+        assert out == "'pix' in input_lower or has_document"
+
+    def test_idempotent_on_quoted(self):
+        c = _canonical()
+        expr = "'pix' in input_lower or 'ted' in output_lower"
+        assert repair_unquoted_literals(expr, c) == expr
+
+    def test_repaired_expression_now_validates(self):
+        c = _canonical()
+        repaired = repair_unquoted_literals("pix in input_lower or has_document", c)
+        res = validate_conditional_expression(repaired, c)
+        assert res["valid"] is True and not res["unknown_vars"]

@@ -62,6 +62,34 @@ def extract_expression(text: str) -> str:
     return s.strip()
 
 
+import re as _re
+
+# Variáveis de TEXTO onde `<literal> in <var>` faz sentido (busca de substring).
+_TEXT_TARGETS = ("input_lower", "output_lower", "text_all", "session_text", "input", "output")
+_JINJA_KEYWORDS = {"and", "or", "not", "in", "is", "true", "false", "none"}
+_REPAIR_RE = _re.compile(r"\b([A-Za-z_]\w*)\s+in\s+(" + "|".join(_TEXT_TARGETS) + r")\b")
+
+
+def repair_unquoted_literals(expr: str, canonical: set[str]) -> str:
+    """Auto-conserta o erro mais comum do LLM no tradutor: escrever
+    `pix in input_lower` (onde `pix` vira VARIÁVEL inexistente) em vez de
+    `'pix' in input_lower` (literal). Quando o operando à esquerda de
+    `in <var_de_texto>` NÃO é canônico nem keyword, ele só pode ter sido um
+    literal sem aspas → envolvemos em aspas. Idempotente: literais já com
+    aspas (`'pix' in ...`) não casam o padrão.
+    """
+    if not expr:
+        return expr
+
+    def _sub(m: "_re.Match") -> str:
+        word, tgt = m.group(1), m.group(2)
+        if word in canonical or word.lower() in _JINJA_KEYWORDS:
+            return m.group(0)  # variável legítima/keyword — não mexe
+        return f"'{word}' in {tgt}"
+
+    return _REPAIR_RE.sub(_sub, expr)
+
+
 def validate_conditional_expression(expr: str, canonical: set[str]) -> dict:
     """Reconcilia a expressão gerada contra o vocabulário canônico.
 
