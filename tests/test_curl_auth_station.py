@@ -50,6 +50,24 @@ def test_base_layout_loads_shared_module():
     assert "/static/js/curl_auth.js" in _read(TPL / "layouts" / "base.html")
 
 
+def test_reactive_accessors_are_methods_not_getters():
+    """REGRESSÃO: a página compõe com `{ ...curlAuthStation() }`, e o spread de
+    objeto AVALIA getters uma vez e CONGELA o valor — o exemplo na tela parava de
+    reagir ao seletor de shell (mostrava sempre Bash). Os acessores reativos
+    precisam ser MÉTODOS (sobrevivem ao spread por referência) e o partial precisa
+    chamá-los com `()`. Ver incidente do seletor Bash/PowerShell/CMD."""
+    js = _read(JS)
+    for accessor in ("curlAuthCommand", "curlAuthHasSecret", "curlAuthRealKey"):
+        assert f"get {accessor}(" not in js, (
+            f"{accessor} é getter — vira valor estático no spread e quebra a "
+            f"reatividade do shell/mensagem. Use método: {accessor}() {{ ... }}"
+        )
+        assert f"{accessor}()" in js, f"{accessor} deveria ser um método em curl_auth.js"
+    partial = _read(PARTIAL)
+    assert 'x-text="curlAuthCommand()"' in partial, "o partial deve chamar curlAuthCommand() (com parênteses)"
+    assert 'x-show="curlAuthHasSecret()"' in partial, "o partial deve chamar curlAuthHasSecret() (com parênteses)"
+
+
 def test_partial_has_three_modes_and_guardrails():
     src = _read(PARTIAL)
     assert "curlAuth.open" in src
@@ -161,4 +179,51 @@ console.log('OK');
     finally:
         Path(path).unlink(missing_ok=True)
     assert r.returncode == 0, f"builder JS falhou:\nSTDOUT={r.stdout}\nSTDERR={r.stderr}"
+    assert "OK" in r.stdout
+
+
+@pytest.mark.skipif(_NODE is None, reason="node não disponível pra checar a estação JS")
+def test_station_command_reacts_to_shell_after_spread_via_node():
+    """REGRESSÃO do bug do seletor de shell: compõe a estação como a página faz
+    (`{ ...curlAuthStation() }`), troca o shell e confere que o comando MOSTRADO
+    muda de fato (Bash `\\` → PowerShell backtick → CMD `^`). Antes do fix, o
+    spread congelava o getter e a tela ficava presa no Bash."""
+    mod = str(JS).replace("\\", "/")
+    harness = r'''
+global.window = global;
+require("__MOD__");
+function assert(c, m){ if(!c){ console.error('FAIL: '+m); process.exit(1); } }
+
+// compõe EXATAMENTE como o componente da página (spread + resto)
+const comp = { ...window.curlAuthStation(), _extra: 1 };
+assert(typeof comp.curlAuthCommand === 'function', 'curlAuthCommand precisa sobreviver ao spread como funcao');
+comp.curlAuth.url = 'http://x/api/v1/pipelines/abc/invoke';
+
+comp.curlAuth.shell = 'bash';
+const bash = comp.curlAuthCommand();
+comp.curlAuth.shell = 'powershell';
+const ps = comp.curlAuthCommand();
+comp.curlAuth.shell = 'cmd';
+const cmd = comp.curlAuthCommand();
+
+assert(bash !== ps && ps !== cmd && bash !== cmd, 'o comando nao muda entre shells (getter congelado pelo spread?)');
+assert(bash.split('\n')[0].endsWith(" \\"), 'bash deveria continuar com barra invertida');
+assert(ps.startsWith('curl.exe') && ps.split('\n')[0].endsWith(' `'), 'powershell deveria usar curl.exe + backtick');
+assert(cmd.split('\n')[0].endsWith(' ^') && cmd.includes('"http://x'), 'cmd deveria usar ^ e aspas duplas');
+
+// a mensagem digitada tambem precisa refletir (mesma classe de bug)
+comp.curlAuth.shell = 'bash';
+comp.curlAuth.message = 'pix urgente';
+assert(comp.curlAuthCommand().includes('"message":"pix urgente"'), 'mensagem nao reflete no comando');
+
+console.log('OK');
+'''.replace("__MOD__", mod)
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(harness)
+        path = f.name
+    try:
+        r = subprocess.run([_NODE, path], capture_output=True, text=True, timeout=30)
+    finally:
+        Path(path).unlink(missing_ok=True)
+    assert r.returncode == 0, f"estação JS falhou:\nSTDOUT={r.stdout}\nSTDERR={r.stderr}"
     assert "OK" in r.stdout
