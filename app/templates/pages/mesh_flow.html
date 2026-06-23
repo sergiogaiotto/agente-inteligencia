@@ -163,11 +163,12 @@
                     </div>
 
                     <!-- PR4: publicar no Catálogo (cria entry kind=pipeline em rascunho → lifecycle no Catálogo) -->
+                    <!-- C5: abre modal in-app (versão semver validada) em vez do prompt() nativo -->
                     <div x-show="selectedPipeline.status !== 'aposentado'">
-                        <button @click="publishToCatalog()" :disabled="publishingCatalog"
-                                class="w-full flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50">
+                        <button @click="openCatalogModal()" data-testid="pipeline-publish-open"
+                                class="w-full flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-600">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 3h7l11 11-7 7L3 10V3zm4 4h.01"/></svg>
-                            <span x-text="publishingCatalog ? 'Publicando…' : 'Publicar no Catálogo'"></span>
+                            <span>Publicar no Catálogo</span>
                         </button>
                         <p class="mt-1 text-[9.5px] text-surface-400 leading-snug">Cria uma publicação (rascunho) no Catálogo; aprove e publique por lá.</p>
                     </div>
@@ -860,6 +861,43 @@
         </template>
     </div>
 
+    <!-- C5 — Modal: publicar pipeline no Catálogo (versão semver validada in-app; antes era prompt() nativo) -->
+    <div x-show="catalogModal" x-transition.opacity @click.self="closeCatalogModal()" style="display:none"
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+        <template x-if="catalogModal">
+            <div class="w-full max-w-md rounded-2xl bg-white shadow-xl border border-surface-200" @click.stop>
+                <div class="flex items-center justify-between px-5 py-3 border-b border-surface-100">
+                    <h3 class="text-[14px] font-bold text-brand-900" x-text="'Publicar no Catálogo: ' + (selectedPipeline ? selectedPipeline.name : 'pipeline')"></h3>
+                    <button @click="closeCatalogModal()" class="text-surface-400 hover:text-surface-600" aria-label="Fechar">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <div class="px-5 py-4 space-y-3">
+                    <p class="text-[11px] text-surface-400 leading-relaxed">Cria uma publicação (<strong>rascunho</strong>) no Catálogo referenciando este pipeline. Depois aprove e publique pela página da entry.</p>
+                    <div>
+                        <label for="catalog-version" class="block text-[11px] font-semibold text-brand-900 mb-1">Versão da publicação</label>
+                        <input id="catalog-version" x-model="catalogModal.version" data-testid="pipeline-publish-version"
+                               @keydown.enter.prevent="publishToCatalog()" @keydown.escape.prevent="closeCatalogModal()"
+                               :disabled="catalogModal.busy" placeholder="1.0.0" autocomplete="off"
+                               class="w-full rounded-lg bg-surface-50 px-3 py-2 text-[13px] text-brand-900 outline-none border focus:border-brand-400"
+                               :class="catalogVersionValid ? 'border-surface-200' : 'border-amber-300'">
+                        <p class="mt-1 text-[10.5px]" :class="catalogVersionValid ? 'text-surface-400' : 'text-amber-700'"
+                           x-text="catalogVersionValid ? 'semver MAJOR.MINOR.PATCH ✓' : 'Use o formato semver MAJOR.MINOR.PATCH (ex.: 1.0.0).'"></p>
+                    </div>
+                    <div x-show="catalogModal.error" data-testid="pipeline-publish-error" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700" x-text="catalogModal.error"></div>
+                    <div class="flex justify-end gap-2">
+                        <button @click="closeCatalogModal()" class="rounded-lg px-3 py-2 text-[12px] text-surface-500 hover:bg-surface-50">Cancelar</button>
+                        <button @click="publishToCatalog()" data-testid="pipeline-publish-submit" :disabled="catalogModal.busy || !catalogVersionValid"
+                                class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50">
+                            <svg x-show="catalogModal.busy" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+                            <span x-text="catalogModal.busy ? 'Publicando…' : 'Publicar'"></span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+
     <!-- (#1) Menu de contexto do Início (botão direito): definir entrada + cURL -->
     <div x-show="startMenu" @click.away="closeStartMenu()" x-transition.opacity style="display:none"
          :style="startMenu ? ('position:fixed; left:' + startMenu.x + 'px; top:' + startMenu.y + 'px') : ''"
@@ -948,7 +986,7 @@ function meshFlowPage() {
         pipelines: [], selectedPipeline: null, membership: {}, pipePanel: true,
         sectionOpen: { rascunho: true, publicado: true, aposentado: false, members: true, include: true, simulate: true },
         renamingId: null, renameText: '',
-        publishingCatalog: false,
+        catalogModal: null,   // C5 — modal de publicação no Catálogo (versão semver)
         pipeFilter: { domain: '', kind: '', q: '' },
 
         get agentCount() { return this.nodes.filter(n => !n.synthetic).length; },
@@ -1423,11 +1461,32 @@ function meshFlowPage() {
         },
         // PR4 — publica o pipeline no Catálogo (cria entry kind=pipeline em rascunho;
         // o lifecycle submit/approve/publish acontece na página da entry).
+        // C5 — modal in-app no lugar do prompt() nativo (que era fácil de cancelar/
+        // deixar vazio e abortar em silêncio). A versão é validada (semver visível)
+        // antes do POST, espelhando o backend (make_urn / PipelinePublishRequest).
+        openCatalogModal() {
+            if (!this.selectedPipeline) return;
+            this.catalogModal = { version: '1.0.0', busy: false, error: null };
+            this.$nextTick(() => {
+                const el = document.querySelector('[data-testid="pipeline-publish-version"]');
+                if (el) { el.focus(); el.select(); }
+            });
+        },
+        closeCatalogModal() { this.catalogModal = null; },
+        // MAJOR.MINOR.PATCH numérico — mesma regra do backend (^[0-9]+\.[0-9]+\.[0-9]+$)
+        get catalogVersionValid() {
+            if (!this.catalogModal) return false;
+            return /^[0-9]+\.[0-9]+\.[0-9]+$/.test((this.catalogModal.version || '').trim());
+        },
         async publishToCatalog() {
-            if (!this.selectedPipeline || this.publishingCatalog) return;
-            const version = (prompt('Versão da publicação no Catálogo (semver MAJOR.MINOR.PATCH):', '1.0.0') || '').trim();
-            if (!version) return;
-            this.publishingCatalog = true;
+            if (!this.selectedPipeline || !this.catalogModal || this.catalogModal.busy) return;
+            const version = (this.catalogModal.version || '').trim();
+            if (!this.catalogVersionValid) {
+                this.catalogModal.error = 'Versão deve ser semver MAJOR.MINOR.PATCH (ex.: 1.0.0).';
+                return;
+            }
+            this.catalogModal.busy = true;
+            this.catalogModal.error = null;
             try {
                 const entry = await api.post('/api/v1/catalog/entries/from-pipeline', {
                     pipeline_id: this.selectedPipeline.id,
@@ -1435,10 +1494,11 @@ function meshFlowPage() {
                 });
                 showToast('Publicado no Catálogo (rascunho)');
                 if (entry && entry.id) window.location = '/catalog/' + entry.id;
+                else this.closeCatalogModal();
             } catch (e) {
-                showToast('Falha ao publicar no Catálogo: ' + e.message, 'error');
+                if (this.catalogModal) this.catalogModal.error = 'Falha ao publicar: ' + e.message;
             } finally {
-                this.publishingCatalog = false;
+                if (this.catalogModal) this.catalogModal.busy = false;
             }
         },
 
