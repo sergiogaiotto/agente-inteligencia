@@ -50,11 +50,10 @@ do Golden Dataset; rate-limit (60/min) atuando.
 
 ## ⏳ PENDENTE — CÓDIGO (próximo(s) PR)
 
-- [ ] **C5 (P2, UI) · Publicar pipeline no Catálogo usa `prompt()` nativo** para pedir a
-  versão → fácil cancelar/deixar vazio e **abortar em silêncio**.
-  **Ação:** trocar por um **modal in-app** (Alpine) com campo de versão + validação semver
-  visível, no botão "Publicar no Catálogo". Local: `app/templates/pages/mesh_flow.html`
-  (handler que chama `POST /api/v1/catalog/entries/from-pipeline`).
+- [x] ~~**C5 (P2, UI) · Publicar pipeline no Catálogo usa `prompt()` nativo**~~ →
+  ✅ **Feito no PR #428 (15.4.0).** Modal in-app (Alpine) em `mesh_flow.html` com campo
+  de versão + validação semver visível + erro do servidor inline; estado legado
+  `publishingCatalog` removido; teste de varredura trava a regressão.
 - [ ] **C8 (P2, investigar) · Agente "Pesquisar Internet" retorna `FONTE: Simulada`.** A
   busca web parece **simulada/canned** (não real via Tavily MCP).
   **Ação:** confirmar se o Tavily MCP está retornando dados reais ou se é modo demo; se for
@@ -68,6 +67,11 @@ do Golden Dataset; rate-limit (60/min) atuando.
   `qdrant_collection`** (o backend é pgvector desde a Onda Q).
   **Ação:** renomear para `pgvector_collection` (ou `vector_store`), com cuidado com
   consumidores que esperam a chave antiga (UI de `/infra`).
+- [ ] **C9 (P3, backend, pré-existente) · `from-pipeline` pode dar 422 se o nome do
+  pipeline não produz slug** (nome 100% não-ASCII/emoji → `slugify` vazio → `make_urn`
+  levanta → HTTP 422 "URN inválido"). Achado na revisão do C5; o erro **já aparece inline**
+  no modal, então não é silencioso. **Ação (opcional):** em `app/routes/catalog.py` (~L238-240),
+  cair num slug determinístico derivado do `pipeline_id` quando `slugify(name)` vier vazio.
 - [ ] **(P3, operacional) · Sem DELETE para `releases` e `eval_runs`** (só `gold-cases` tem).
   **Ação:** avaliar adicionar `DELETE /api/v1/releases/{id}` e `DELETE /api/v1/eval-runs/{id}`
   (ou um archive), para permitir limpeza — hoje uma release/eval de teste fica irremovível.
