@@ -871,6 +871,21 @@
                             <span x-text="runModal.busy ? 'Executando…' : 'Executar'"></span>
                         </button>
                     </div>
+
+                    <!-- Passo a passo AO VIVO (SSE): cada agente acende enquanto roda -->
+                    <div x-show="runModal.busy && (runModal.liveSteps||[]).length" data-testid="pipeline-run-live"
+                         class="rounded-lg border border-surface-100 bg-surface-50/70 p-3 space-y-1.5">
+                        <template x-for="(s, i) in runModal.liveSteps" :key="i">
+                            <div class="flex items-center gap-2 text-[12px]">
+                                <span class="flex-none w-4 text-center">
+                                    <svg x-show="s.status==='running'" class="w-3.5 h-3.5 animate-spin inline text-brand-500" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+                                    <span x-show="s.status!=='running'" :class="s.status==='error' ? 'text-rose-500' : (s.status==='done' ? 'text-emerald-600' : 'text-surface-400')" x-text="liveIcon(s.status)"></span>
+                                </span>
+                                <span class="font-medium text-brand-900 flex-none" x-text="s.name"></span>
+                                <span x-show="s.message" class="text-surface-500 italic truncate" x-text="'· ' + s.message"></span>
+                            </div>
+                        </template>
+                    </div>
                     <div x-show="runModal.error" data-testid="pipeline-run-error" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700" x-text="runModal.error"></div>
                     <template x-if="runModal.result">
                         <div class="space-y-3" data-testid="pipeline-run-result">
@@ -1287,7 +1302,7 @@ function meshFlowPage() {
         toggleReplay() { if (this.replay) { this.replay = null; } else { this.loadReplay(); } },
         // (b) executar o pipeline da lente — POST /pipelines/{id}/invoke (selado à
         // raiz+membros). Síncrono: mostra loading e o resultado no modal.
-        openRunModal() { if (!this.selectedPipeline) return; this.runModal = { input: '', busy: false, result: null, error: null, showTrail: false, attachments: [], uploading: false }; },
+        openRunModal() { if (!this.selectedPipeline) return; this.runModal = { input: '', busy: false, result: null, error: null, showTrail: false, attachments: [], uploading: false, liveSteps: [] }; },
         closeRunModal() { this.runModal = null; },
         // Upload de anexos: cada arquivo vai pro /workspace/upload (extrai texto /
         // guarda bytes); a resposta é guardada e enviada no invoke. O engine roteia.
@@ -1333,12 +1348,51 @@ function meshFlowPage() {
         },
         async runPipeline() {
             if (!this.runModal || !this.selectedPipeline || !this.runModal.input.trim() || this.runModal.busy) return;
-            this.runModal.busy = true; this.runModal.error = null; this.runModal.result = null;
+            this.runModal.busy = true; this.runModal.error = null; this.runModal.result = null; this.runModal.liveSteps = [];
             try {
-                this.runModal.result = await api.post('/api/v1/pipelines/' + this.selectedPipeline.id + '/invoke', { message: this.runModal.input.trim(), attachments: this.runModal.attachments || [] });
-            } catch (e) { this.runModal.error = e.message; }
-            finally { this.runModal.busy = false; }
+                // STREAMING (SSE): mostra o passo-a-passo ao vivo. Cada evento do engine
+                // (agent_start/done/skipped) atualiza a checklist; pipeline_done traz o result.
+                const resp = await fetch('/api/v1/pipelines/' + this.selectedPipeline.id + '/invoke/stream', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: this.runModal.input.trim(), attachments: this.runModal.attachments || [] }),
+                });
+                if (!resp.ok || !resp.body) throw new Error('stream falhou (' + resp.status + ')');
+                const reader = resp.body.getReader(), dec = new TextDecoder();
+                let buf = '';
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buf += dec.decode(value, { stream: true });
+                    let idx;
+                    while ((idx = buf.indexOf('\n\n')) >= 0) { this._handleRunEvent(buf.slice(0, idx)); buf = buf.slice(idx + 2); }
+                }
+            } catch (e) { if (this.runModal) this.runModal.error = e.message; }
+            finally { if (this.runModal) this.runModal.busy = false; }
         },
+        // Parser de um frame SSE ("event: <name>\ndata: <json>") → atualiza liveSteps/result.
+        _handleRunEvent(frame) {
+            if (!this.runModal || !frame || frame[0] === ':') return;  // heartbeat/comentário
+            let name = 'message', dataStr = '';
+            for (const line of frame.split('\n')) {
+                if (line.indexOf('event:') === 0) name = line.slice(6).trim();
+                else if (line.indexOf('data:') === 0) dataStr += line.slice(5).trim();
+            }
+            let ev = {}; try { ev = JSON.parse(dataStr || '{}'); } catch (_) { return; }
+            if (name === 'agent_start') {
+                this.runModal.liveSteps.push({ agent_id: ev.agent_id, name: ev.agent_name || '', status: 'running', message: ev.processing_message || '' });
+            } else if (name === 'agent_done' || name === 'agent_passthrough' || name === 'agent_skipped' || name === 'agent_error') {
+                const status = name === 'agent_error' ? 'error' : (name === 'agent_skipped' ? 'skipped' : (name === 'agent_passthrough' ? 'passthrough' : 'done'));
+                const st = [...this.runModal.liveSteps].reverse().find(s => s.agent_id === ev.agent_id && s.status === 'running');
+                if (st) st.status = status;
+                else this.runModal.liveSteps.push({ agent_id: ev.agent_id, name: ev.agent_name || '', status, message: ev.processing_message || '' });
+            } else if (name === 'pipeline_done') {
+                this.runModal.result = ev.result;
+            } else if (name === 'stream_error') {
+                this.runModal.error = ev.error;
+            }
+        },
+        liveIcon(status) { return status === 'done' ? '✓' : status === 'skipped' ? '⏭' : status === 'passthrough' ? '⚡' : status === 'error' ? '✗' : '•'; },
         // ── menu de contexto do Início (botão direito) ──
         onNodeContext(ev, n) {
             // só o "Início" da lente tem menu; agentes mantêm o menu padrão do browser
