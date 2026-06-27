@@ -28,10 +28,13 @@ var _root = (typeof window !== 'undefined') ? window : (typeof globalThis !== 'u
 /* Monta o cURL do invoke por SHELL: muda a continuação de linha e o escaping do
    body JSON. `bodyKey` permite trocar a chave do payload ('message' no invoke de
    agente/pipeline; 'input' no execute do Catálogo). `apiKey` ausente → placeholder. */
-_root.buildInvokeCurl = function ({ url, message, shell, apiKey, bodyKey } = {}) {
+_root.buildInvokeCurl = function ({ url, message, shell, apiKey, bodyKey, verbosity } = {}) {
     const key = apiKey || 'SUA_API_KEY';
     const obj = {};
     obj[bodyKey || 'message'] = message || '';
+    // Detalhe da resposta (só no invoke de pipeline; vazio = full). Vai no BODY pra
+    // ficar visível no snippet: {"message":"...","verbosity":"summary"}.
+    if (verbosity) obj.verbosity = verbosity;
     const json = JSON.stringify(obj);                 // {"message":"..."} ou {"input":"..."}
     if (shell === 'powershell') {
         // PowerShell: curl.exe (não o alias Invoke-WebRequest); continuação = backtick;
@@ -78,6 +81,13 @@ _root.CURL_AUTH_EXPIRY = [
     { v: '180', l: '180 dias' },
     { v: '0', l: 'Nunca' },
 ];
+/* Detalhe da resposta do invoke (só pipeline). '' = full/debug é o default do
+   backend p/ sessão; integrações (X-API-Key) já caem em 'summary' por padrão. */
+_root.CURL_AUTH_VERBOSITY = [
+    { v: '', l: 'Debug (tudo)' },
+    { v: 'summary', l: 'Deploy (resumo)' },
+    { v: 'minimal', l: 'Só resposta' },
+];
 
 /* Factory de estado Alpine. Espalhe no componente da página:
      function minhaPagina() { return { ...curlAuthStation(), ...resto }; }
@@ -86,10 +96,13 @@ _root.curlAuthStation = function () {
     return {
         CURL_AUTH_SHELLS: _root.CURL_AUTH_SHELLS,
         CURL_AUTH_EXPIRY: _root.CURL_AUTH_EXPIRY,
+        CURL_AUTH_VERBOSITY: _root.CURL_AUTH_VERBOSITY,
         curlAuth: {
             open: false,
             mode: 'embed',            // 'embed' | 'existing' | 'placeholder'
             shell: 'bash',
+            verbosity: '',            // '' = full (debug) | 'summary' | 'minimal'
+            showVerbosity: false,     // seletor visível? (só o invoke de pipeline liga)
             message: 'sua entrada aqui',
             url: '',                  // endpoint de invoke (setado pelo opener)
             title: 'cURL do invoke',
@@ -110,6 +123,7 @@ _root.curlAuthStation = function () {
                 ...this.curlAuth,
                 mode: 'embed', shell: 'bash', generatedKey: null, reveal: false,
                 selectedPrefix: '', pastedKey: '', expiry: '90', note: '',
+                verbosity: '', showVerbosity: false,
                 ...opts,
                 open: true,
             };
@@ -150,7 +164,7 @@ _root.curlAuthStation = function () {
             } else {
                 shownKey = this.curlAuthRealKey() || 'SUA_API_KEY';
             }
-            return window.buildInvokeCurl({ url: a.url, message: a.message, shell: a.shell, apiKey: shownKey, bodyKey: a.bodyKey });
+            return window.buildInvokeCurl({ url: a.url, message: a.message, shell: a.shell, apiKey: shownKey, bodyKey: a.bodyKey, verbosity: a.verbosity });
         },
 
         /* Modo recomendado: cria a chave AGORA (único instante do plaintext) e embute. */
@@ -178,7 +192,7 @@ _root.curlAuthStation = function () {
         /* Copia o comando com o segredo REAL (não o mascarado da tela). */
         async copyCurlAuth() {
             const a = this.curlAuth;
-            const cmd = window.buildInvokeCurl({ url: a.url, message: a.message, shell: a.shell, apiKey: this.curlAuthRealKey(), bodyKey: a.bodyKey });
+            const cmd = window.buildInvokeCurl({ url: a.url, message: a.message, shell: a.shell, apiKey: this.curlAuthRealKey(), bodyKey: a.bodyKey, verbosity: a.verbosity });
             if (await window.copyText(cmd)) {
                 if (this.curlAuthHasSecret()) showToast('Comando copiado — contém um segredo, trate como senha', 'info');
                 else showToast('cURL copiado (' + a.shell + ')', 'success');

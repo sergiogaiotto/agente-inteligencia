@@ -51,6 +51,7 @@ Tela **Configurações**. Persistido em `platform_settings`; aplicado no boot vi
 | Grounded-by-default (anti-alucinação) | `grounding_strict` / `GROUNDING_STRICT` | **true** | Agentes respondem só com evidência (anexo/RAG/tool); sem fundamento → recusa. Override por agente: `allow_general_knowledge=1`. |
 | MCP per-tool | `mcp_per_tool_enabled` / `MCP_PER_TOOL_ENABLED` | **false** | Cada tool MCP vira função própria com schema real (vs legado `{operation,query}`). Requer `discovered_tools`. Vale em runtime. |
 | Tier 2 — Text-to-SQL governado | `text_to_sql_enabled` / `TEXT_TO_SQL_ENABLED` | **false** | Liga "Perguntar à Tabela" (IA compila pergunta→consulta, humano cura). Requer catálogo de dados curado. |
+| Detalhe da resposta de invoke (API-key) | `api_invoke_default_verbosity` | `full`/`summary`/`minimal` · **summary** | Verbosidade default de `POST /pipelines/{id}/invoke` quando autenticado por **X-API-Key** (integração). `summary` = resposta + narrativa por etapa, sem trace/custo/SQL. Sessão/Workspace (cookie) é sempre `full`. Override por chamada: `?verbosity=` ou `{"verbosity":...}`. |
 
 ### 2.2 Modelo primário (fallback global)
 | Opção | Chave / env | Default | Efeito |

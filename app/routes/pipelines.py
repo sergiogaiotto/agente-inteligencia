@@ -18,7 +18,7 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.core.auth import require_user
 
@@ -35,12 +35,14 @@ from app.core.database import (
     pipeline_membership,
     agents_repo,
     audit_repo,
+    settings_store,
 )
 from app.agents.pipeline_lifecycle import (
     can_transition_pipeline,
     next_pipeline_states,
     PIPELINE_STATES,
 )
+from app.agents.result_view import resolve_verbosity, project_pipeline_result
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 
@@ -274,6 +276,10 @@ async def invoke_pipeline(
     data: PipelineInvokeRequest,
     request: Request,
     user: dict = Depends(require_user),
+    verbosity: Optional[str] = Query(
+        None, description="Detalhe da resposta: full | summary | minimal. "
+        "Sobrescreve o default por auth (sessão→full; X-API-Key→summary)."
+    ),
 ):
     """Invoca um pipeline pela ENTIDADE (contrato API-first SELADO — Trilha A PR-A2).
 
@@ -332,7 +338,7 @@ async def invoke_pipeline(
             "api_key_id": api_key_id,
         }, ensure_ascii=False),
     })
-    return {
+    payload = {
         "pipeline_id": pid,
         "status": result.get("status", "completed"),
         "output": result.get("output", ""),
@@ -343,3 +349,15 @@ async def invoke_pipeline(
         "pipeline_steps": result.get("pipeline_steps", []),
         "duration_ms": result.get("duration_ms"),
     }
+    # Verbosidade da resposta (projeção server-side; NÃO muda execução/custo).
+    # Precedência: query > body > default por auth. Sessão→full; X-API-Key→
+    # platform_settings.api_invoke_default_verbosity (semente 'summary').
+    explicit = verbosity or data.verbosity
+    # default por auth p/ integrações (X-API-Key). Lido SEMPRE que houver chave —
+    # assim até um explícito inválido (typo) cai no nível CONFIGURADO, nunca em
+    # 'full' (que vazaria o debug). Chamada de sessão não lê settings (fica 'full').
+    api_default = "summary"
+    if api_key_id:
+        api_default = await settings_store.get("api_invoke_default_verbosity", "summary")
+    effective = resolve_verbosity(explicit, is_api_key=bool(api_key_id), api_default=api_default)
+    return project_pipeline_result(payload, effective)
