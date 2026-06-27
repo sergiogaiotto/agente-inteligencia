@@ -846,13 +846,58 @@
                     </div>
                     <div x-show="runModal.error" data-testid="pipeline-run-error" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700" x-text="runModal.error"></div>
                     <template x-if="runModal.result">
-                        <div class="rounded-lg border border-surface-200 bg-surface-50 p-3 space-y-2" data-testid="pipeline-run-result">
+                        <div class="space-y-3" data-testid="pipeline-run-result">
                             <div class="flex items-center gap-2 text-[11px] text-surface-500 flex-wrap">
                                 <span class="rounded-full px-2 py-0.5 font-semibold" :class="runModal.result.status==='completed' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'" x-text="runModal.result.status"></span>
                                 <span x-text="(runModal.result.completed_agents||0) + '/' + (runModal.result.total_agents||0) + ' agentes'"></span>
                                 <span x-show="runModal.result.duration_ms" x-text="'· ' + Math.round(runModal.result.duration_ms) + ' ms'"></span>
                             </div>
-                            <pre class="whitespace-pre-wrap break-words text-[12px] text-surface-800 max-h-60 overflow-y-auto font-sans" x-text="runModal.result.output || '(sem saída)'"></pre>
+
+                            <!-- Resposta final (hero): se a saída é JSON → cartões rotulados; senão → prosa -->
+                            <div class="rounded-xl border border-brand-100 bg-gradient-to-b from-brand-50/40 to-white p-4 max-h-72 overflow-y-auto" data-testid="pipeline-run-answer">
+                                <template x-if="runOutputCards()">
+                                    <div class="space-y-2.5">
+                                        <template x-for="c in runOutputCards()" :key="c.label">
+                                            <div>
+                                                <div class="text-[10px] font-semibold uppercase tracking-wide text-brand-500 mb-0.5" x-text="c.label"></div>
+                                                <p class="text-[13px] text-surface-800 leading-relaxed whitespace-pre-wrap break-words" x-text="c.value"></p>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                                <template x-if="!runOutputCards()">
+                                    <p class="text-[13px] text-surface-800 leading-relaxed whitespace-pre-wrap break-words" x-text="runModal.result.output || '(sem saída)'"></p>
+                                </template>
+                            </div>
+
+                            <!-- Trilha por agente: "como cheguei aqui" (colapsável) -->
+                            <div x-show="(runModal.result.pipeline_steps||[]).length">
+                                <button @click="runModal.showTrail = !runModal.showTrail" type="button" data-testid="pipeline-run-trail-toggle"
+                                        class="flex items-center gap-1 text-[11px] font-medium text-surface-500 hover:text-surface-700">
+                                    <svg class="w-3 h-3 transition-transform" :class="runModal.showTrail ? 'rotate-90' : ''" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+                                    Como cheguei aqui · <span x-text="(runModal.result.pipeline_steps||[]).length + ' etapas'"></span>
+                                </button>
+                                <div x-show="runModal.showTrail" x-transition.opacity class="mt-2 space-y-1.5">
+                                    <template x-for="(s, i) in runModal.result.pipeline_steps" :key="i">
+                                        <div class="flex gap-2.5 rounded-lg border border-surface-100 bg-surface-50/70 p-2.5">
+                                            <div class="flex flex-col items-center pt-0.5">
+                                                <span class="text-[13px] leading-none" x-text="stepMeta(s).icon"></span>
+                                                <div x-show="i < runModal.result.pipeline_steps.length - 1" class="w-px flex-1 bg-surface-200 mt-1"></div>
+                                            </div>
+                                            <div class="flex-1 min-w-0">
+                                                <div class="flex items-center gap-1.5 flex-wrap">
+                                                    <span class="text-[12px] font-semibold text-brand-900" x-text="s.agent_name || ('Etapa ' + (i+1))"></span>
+                                                    <span class="rounded px-1.5 py-0.5 text-[9px] font-semibold" :class="stepMeta(s).cls" x-text="stepMeta(s).label"></span>
+                                                    <span x-show="s.duration_ms" class="text-[9.5px] text-surface-400 font-mono" x-text="Math.round(s.duration_ms) + ' ms'"></span>
+                                                </div>
+                                                <p x-show="s.status_message" class="text-[10.5px] text-surface-500 italic mt-0.5" x-text="'💬 ' + s.status_message"></p>
+                                                <p x-show="s.output" class="text-[11px] text-surface-700 mt-1 whitespace-pre-wrap break-words max-h-20 overflow-y-auto" x-text="s.output"></p>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+
                             <button @click="closeRunModal(); loadReplay()" class="text-[11px] font-medium text-brand-600 hover:text-brand-700">Ver o caminho no canvas (replay) →</button>
                         </div>
                     </template>
@@ -1215,8 +1260,35 @@ function meshFlowPage() {
         toggleReplay() { if (this.replay) { this.replay = null; } else { this.loadReplay(); } },
         // (b) executar o pipeline da lente — POST /pipelines/{id}/invoke (selado à
         // raiz+membros). Síncrono: mostra loading e o resultado no modal.
-        openRunModal() { if (!this.selectedPipeline) return; this.runModal = { input: '', busy: false, result: null, error: null }; },
+        openRunModal() { if (!this.selectedPipeline) return; this.runModal = { input: '', busy: false, result: null, error: null, showTrail: false }; },
         closeRunModal() { this.runModal = null; },
+        // Resultado elegante: se a saída final é um objeto JSON, vira cartões rotulados
+        // (ex.: {"interpretation":…,"conclusion":…}); senão null → cai no render de texto.
+        runOutputCards() {
+            const out = this.runModal && this.runModal.result ? this.runModal.result.output : '';
+            if (!out || typeof out !== 'string') return null;
+            const t = out.trim();
+            if (!(t.startsWith('{') && t.endsWith('}'))) return null;
+            try {
+                const o = JSON.parse(t);
+                if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+                const cards = Object.entries(o)
+                    .filter(([, v]) => v != null && typeof v !== 'object')
+                    .map(([k, v]) => ({ label: this._humanizeKey(k), value: String(v) }));
+                return cards.length ? cards : null;
+            } catch (_) { return null; }
+        },
+        _humanizeKey(k) { return String(k).replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); },
+        // Status humano por etapa da trilha (ícone + rótulo + cor).
+        stepMeta(s) {
+            const st = (s && s.status) || '', fs = (s && s.final_state) || '';
+            if (st === 'error') return { icon: '✗', label: 'erro', cls: 'bg-rose-50 text-rose-700' };
+            if (st.indexOf('skipped') === 0) return { icon: '⏭', label: 'pulou', cls: 'bg-surface-100 text-surface-500' };
+            if (st === 'passthrough') return { icon: '⚡', label: 'repassou', cls: 'bg-surface-100 text-surface-500' };
+            if (fs === 'Refuse') return { icon: '⚠', label: 'recusou', cls: 'bg-amber-50 text-amber-700' };
+            if (fs === 'Escalate') return { icon: '↑', label: 'escalou', cls: 'bg-amber-50 text-amber-700' };
+            return { icon: '✓', label: 'concluiu', cls: 'bg-emerald-50 text-emerald-700' };
+        },
         async runPipeline() {
             if (!this.runModal || !this.selectedPipeline || !this.runModal.input.trim() || this.runModal.busy) return;
             this.runModal.busy = true; this.runModal.error = null; this.runModal.result = null;
