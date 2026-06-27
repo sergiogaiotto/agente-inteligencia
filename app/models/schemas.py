@@ -42,11 +42,6 @@ class AgentCreate(BaseModel):
     # null = default do modelo. Só é enviado p/ providers da família OpenAI.
     reasoning_effort: Optional[str] = Field(default=None)
     accepts_images: Optional[bool] = False
-
-    @field_validator("reasoning_effort")
-    @classmethod
-    def _ve_reasoning_effort(cls, v):
-        return _norm_reasoning_effort(v)
     accepts_documents: Optional[bool] = False
     # Frase humana mostrada no execution_log quando o agente está processando
     # ("Orquestrando seu pedido", "Escolhendo o especialista", etc.). Limite curto
@@ -62,6 +57,11 @@ class AgentCreate(BaseModel):
         pattern=r"^[a-z]{2}(-[A-Z]{2})?$",
         description="BCP-47 tag (pt-BR, en-US, es-ES, ...) ou null pra herdar default global",
     )
+
+    @field_validator("reasoning_effort")
+    @classmethod
+    def _ve_reasoning_effort(cls, v):
+        return _norm_reasoning_effort(v)
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None

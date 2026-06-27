@@ -2408,7 +2408,7 @@ function agentForm(editId) {
                     require_evidence: !!this.form.require_evidence,
                     allow_general_knowledge: !!this.form.allow_general_knowledge,
                     temperature: Number(this.form.temperature) || 0.7,
-                    reasoning_effort: (this.form.reasoning_effort || '').trim() || null,
+                    reasoning_effort: this.form.task_type === 'reasoning' ? ((this.form.reasoning_effort || '').trim() || null) : null,
                     accepts_images: !!this.form.accepts_images,
                     accepts_documents: !!this.form.accepts_documents,
                     processing_message: (this.form.processing_message || '').trim() || null,

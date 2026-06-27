@@ -234,6 +234,12 @@ async def update_agent(agent_id: str, data: AgentUpdate):
     # para require_evidence por retrocompat.
     if data.require_evidence is not None and "require_evidence" not in upd:
         upd["require_evidence"] = data.require_evidence
+    # reasoning_effort é nullable e "limpável": se o cliente ENVIOU a chave (mesmo
+    # como null, ex. wizard "Padrão do modelo"), respeita o null pra LIMPAR o valor
+    # salvo. Sem isto, o filtro `if v is not None` acima dropava o null e o valor
+    # antigo persistia (footgun de null-drop em PUT — ver feedback de settings).
+    if "reasoning_effort" in data.model_fields_set:
+        upd["reasoning_effort"] = data.reasoning_effort
 
     # Pre-flight no payload mesclado (existing + upd) — cobre o estado
     # final que o agente terá após o update. Bloqueia erros antes de
