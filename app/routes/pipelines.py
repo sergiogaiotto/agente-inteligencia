@@ -309,6 +309,22 @@ async def invoke_pipeline(
     if not root:
         raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar.")
 
+    # Anexos: mapeia a saída do /workspace/upload pra forma que o engine consome.
+    # O dispatcher do execute_pipeline roteia cada anexo só aos agentes da cadeia
+    # que aceitam doc/imagem; os demais ignoram (sem poda cega aqui).
+    from pathlib import Path
+    from app.routes.workspace import UPLOAD_DIR
+    pipeline_attachments = [
+        {
+            "name": att.get("filename", ""),
+            "type": att.get("content_type", ""),
+            "size": att.get("size", 0),
+            "content": att.get("text_content", ""),
+            "abs_path": str(UPLOAD_DIR / Path(att.get("path", "") or "").name) if att.get("path") else "",
+        }
+        for att in (data.attachments or [])
+    ]
+
     from app.agents.engine import execute_pipeline
     try:
         result = await execute_pipeline(
@@ -316,6 +332,7 @@ async def invoke_pipeline(
             user_input=user_input,
             channel=data.channel or "api",
             session_id=data.session_id,
+            attachments=pipeline_attachments or None,
             allowed_agent_ids=members,  # SELA a execução ao subgrafo do pipeline
         )
     except ValueError as e:
