@@ -181,6 +181,9 @@ class PipelineInvokeRequest(BaseModel):
     input: Optional[str] = None  # alias amigável p/ message
     session_id: Optional[str] = None
     channel: Optional[str] = "api"
+    # Detalhe da resposta: full | summary | minimal. Ausente → default por auth
+    # (sessão→full; X-API-Key→platform_settings.api_invoke_default_verbosity).
+    verbosity: Optional[str] = None
 
 class KnowledgeSourceCreate(BaseModel):
     name: str; description: Optional[str] = None

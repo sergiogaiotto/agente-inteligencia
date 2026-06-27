@@ -3185,6 +3185,7 @@ async def execute_pipeline(
                 "agent_name": agent.get("name", ""),
                 "agent_kind": agent.get("kind", ""),
                 "agent_model": agent.get("model", ""),
+                "status_message": (agent.get("processing_message") or "").strip(),
                 "status": "passthrough",
                 "output": "",
                 "final_state": "PassThrough",
@@ -3295,6 +3296,7 @@ async def execute_pipeline(
                     "agent_name": _agent_nm,
                     "agent_kind": agent.get("kind", ""),
                     "agent_model": agent.get("model", ""),
+                    "status_message": (agent.get("processing_message") or "").strip(),
                     "status": "skipped_conditional",
                     "skip_reason": skip_reason,
                     "output": upstream_output,
@@ -3339,6 +3341,7 @@ async def execute_pipeline(
                     "agent_name": agent.get("name", ""),
                     "agent_kind": agent.get("kind", ""),
                     "agent_model": agent.get("model", ""),
+                    "status_message": (agent.get("processing_message") or "").strip(),
                     "status": "skipped_default",
                     "output": upstream_output,
                     "final_state": "SkippedDefault",
@@ -3493,6 +3496,9 @@ async def execute_pipeline(
                 "agent_name": agent.get("name",""),
                 "agent_kind": agent.get("kind",""),
                 "agent_model": agent.get("model",""),
+                # Narrativa humanizada (💬) exposta por step p/ a projeção 'summary'
+                # da resposta de invoke — antes só vivia dentro de trace.execution_log.
+                "status_message": (agent.get("processing_message") or "").strip(),
                 "status": "completed",
                 "output": result.get("output",""),
                 "final_state": result.get("final_state",""),
