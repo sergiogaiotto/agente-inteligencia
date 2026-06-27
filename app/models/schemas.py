@@ -1,6 +1,15 @@
 """Schemas Pydantic — todas entidades da especificação."""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Any
+
+
+def _norm_reasoning_effort(v):
+    """Normaliza reasoning_effort: vazio → None; valida low|medium|high."""
+    v = (v or "").strip().lower() or None
+    if v and v not in ("low", "medium", "high"):
+        raise ValueError("reasoning_effort deve ser low|medium|high ou null")
+    return v
+
 
 class AgentCreate(BaseModel):
     name: str = Field(..., min_length=2)
@@ -29,7 +38,15 @@ class AgentCreate(BaseModel):
     # Ver app/agents/engine.py (_build_grounding_directive + _grounding_guard).
     allow_general_knowledge: Optional[bool] = False
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
+    # Esforço de raciocínio (low|medium|high) p/ modelos de reasoning (gpt-oss, o1/o3).
+    # null = default do modelo. Só é enviado p/ providers da família OpenAI.
+    reasoning_effort: Optional[str] = Field(default=None)
     accepts_images: Optional[bool] = False
+
+    @field_validator("reasoning_effort")
+    @classmethod
+    def _ve_reasoning_effort(cls, v):
+        return _norm_reasoning_effort(v)
     accepts_documents: Optional[bool] = False
     # Frase humana mostrada no execution_log quando o agente está processando
     # ("Orquestrando seu pedido", "Escolhendo o especialista", etc.). Limite curto
@@ -60,6 +77,7 @@ class AgentUpdate(BaseModel):
     require_evidence: Optional[bool] = None
     allow_general_knowledge: Optional[bool] = None
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    reasoning_effort: Optional[str] = Field(default=None)
     accepts_images: Optional[bool] = None
     accepts_documents: Optional[bool] = None
     processing_message: Optional[str] = Field(default=None, max_length=140)
@@ -67,6 +85,11 @@ class AgentUpdate(BaseModel):
         default=None,
         pattern=r"^[a-z]{2}(-[A-Z]{2})?$",
     )
+
+    @field_validator("reasoning_effort")
+    @classmethod
+    def _ve_reasoning_effort(cls, v):
+        return _norm_reasoning_effort(v)
 
 
 class PreflightCheckResult(BaseModel):
