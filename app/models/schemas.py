@@ -207,6 +207,10 @@ class PipelineInvokeRequest(BaseModel):
     # Detalhe da resposta: full | summary | minimal. Ausente → default por auth
     # (sessão→full; X-API-Key→platform_settings.api_invoke_default_verbosity).
     verbosity: Optional[str] = None
+    # Anexos (saída do POST /workspace/upload: {filename, content_type, size,
+    # text_content, path}). O engine roteia cada um aos agentes que aceitam
+    # doc/imagem (dispatcher) — agentes que não aceitam ignoram.
+    attachments: Optional[list] = None
 
 class KnowledgeSourceCreate(BaseModel):
     name: str; description: Optional[str] = None
