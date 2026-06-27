@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -41,8 +41,15 @@ async def create_api_key(data: APIKeyCreate, request: Request, user: dict = Depe
     expires_at = None
     if data.expires_at:
         try:
-            # Aceita ISO com ou sem timezone
-            expires_at = datetime.fromisoformat(data.expires_at.replace("Z", "+00:00"))
+            # Aceita ISO com ou sem timezone. A coluna expires_at é TIMESTAMP SEM tz
+            # (naive) — asyncpg recusa um datetime aware ("can't subtract offset-naive
+            # and offset-aware datetimes"). O modal manda '...Z' (aware), então
+            # convertemos pra UTC e tiramos o tzinfo. Armazenamento é UTC naive (igual
+            # ao resto do app); verify_api_key compara com datetime.utcnow() (naive).
+            dt = datetime.fromisoformat(data.expires_at.replace("Z", "+00:00"))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            expires_at = dt
         except Exception:
             raise HTTPException(400, "expires_at inválido (use ISO 8601: 2026-12-31T23:59:59Z)")
 
