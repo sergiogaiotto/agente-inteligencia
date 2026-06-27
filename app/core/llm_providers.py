@@ -35,12 +35,13 @@ def _openai_chat_kwargs(temperature, model, reasoning_effort) -> dict:
     - ``reasoning_effort`` (low|medium|high) → vai via ``model_kwargs`` e vira campo
       top-level no body OpenAI-compatible (gpt-oss e reasoning models da OpenAI).
       Só quando setado; ausente = comportamento de hoje (default do modelo).
-    - ``temperature``: OMITIDA p/ modelos reasoning-only (o1/o3...) que só aceitam o
-      default — evita HTTP 400. Demais modelos recebem normalmente.
+    - ``temperature``: modelos reasoning-only (o1/o3/o4) SÓ aceitam temperature=1 e
+      dão HTTP 400 com outro valor. OMITIR o kwarg NÃO resolve — ChatOpenAI/
+      AzureChatOpenAI têm default 0.7 e mandam temperature no body de qualquer jeito
+      (e p/ Azure o validador interno do langchain nem dispara, pois o modelo chega
+      via azure_deployment). Por isso FORÇAMOS temperature=1.0 nesses casos.
     """
-    kw = {}
-    if not _is_reasoning_only_model(model):
-        kw["temperature"] = temperature
+    kw = {"temperature": 1.0 if _is_reasoning_only_model(model) else temperature}
     if reasoning_effort:
         kw["model_kwargs"] = {"reasoning_effort": reasoning_effort}
     return kw
