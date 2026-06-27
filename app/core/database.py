@@ -922,6 +922,10 @@ _IDEMPOTENT_MIGRATIONS = [
     # garantindo que LLM responde no idioma escolhido mesmo quando evidências
     # vêm em outro idioma (caso típico: busca Tavily inglês → resposta pt-BR).
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS response_language TEXT",
+    # reasoning_effort: esforço de raciocínio (low|medium|high) p/ modelos de
+    # reasoning (gpt-oss, o1/o3). NULL = default do modelo. Só enviado aos
+    # providers da família OpenAI (ver app/core/llm_providers.py).
+    "ALTER TABLE agents ADD COLUMN IF NOT EXISTS reasoning_effort TEXT",
     # Golden Dataset enriquecido — taxonomia, peso ponderado, match flexível, sentinelas
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS category TEXT",
     "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS weight REAL DEFAULT 1.0",

@@ -695,6 +695,7 @@ class DeepAgentHarness:
             agent_config.get("llm_provider", "openai"),
             model=agent_config.get("model"),
             temperature=_temp,
+            reasoning_effort=(agent_config.get("reasoning_effort") or None),
         )
         self.mcp_tools = mcp_tools or []
         self.openai_tools = []

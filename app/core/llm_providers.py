@@ -12,11 +12,38 @@ Histórico:
 """
 
 import logging
+import re
 import httpx
 from abc import ABC, abstractmethod
 from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from app.core.config import get_settings
+
+
+# Modelos de reasoning da OpenAI (o1/o3/o4...) REJEITAM temperature != 1 (HTTP 400).
+# Para esses, omitimos temperature do request. gpt-oss-* e gpt-4o NÃO casam (aceitam temp).
+_REASONING_ONLY_RE = re.compile(r"^(o1|o3|o4)(\b|-|$)", re.IGNORECASE)
+
+
+def _is_reasoning_only_model(model) -> bool:
+    return bool(model and _REASONING_ONLY_RE.match(str(model).strip()))
+
+
+def _openai_chat_kwargs(temperature, model, reasoning_effort) -> dict:
+    """kwargs compartilhados p/ ChatOpenAI/AzureChatOpenAI (toda a família OpenAI):
+
+    - ``reasoning_effort`` (low|medium|high) → vai via ``model_kwargs`` e vira campo
+      top-level no body OpenAI-compatible (gpt-oss e reasoning models da OpenAI).
+      Só quando setado; ausente = comportamento de hoje (default do modelo).
+    - ``temperature``: OMITIDA p/ modelos reasoning-only (o1/o3...) que só aceitam o
+      default — evita HTTP 400. Demais modelos recebem normalmente.
+    """
+    kw = {}
+    if not _is_reasoning_only_model(model):
+        kw["temperature"] = temperature
+    if reasoning_effort:
+        kw["model_kwargs"] = {"reasoning_effort": reasoning_effort}
+    return kw
 
 logger = logging.getLogger(__name__)
 
@@ -126,11 +153,12 @@ class AzureOpenAIProvider(LLMProvider):
 
     supports_structured_output = True
 
-    def __init__(self, model: str | None = None, temperature: float = 0.7):
+    def __init__(self, model: str | None = None, temperature: float = 0.7, reasoning_effort: str | None = None):
         settings = get_settings()
         self.deployment = model or settings.azure_openai_chat_deployment
         self.model = self.deployment
         self.temperature = temperature
+        self.reasoning_effort = reasoning_effort
         self.endpoint = settings.azure_openai_endpoint
         self.api_key = settings.azure_openai_api_key
         self.api_version = settings.azure_openai_api_version
@@ -142,7 +170,7 @@ class AzureOpenAIProvider(LLMProvider):
             azure_deployment=self.deployment,
             api_version=self.api_version,
             api_key=self.api_key,
-            temperature=self.temperature,
+            **_openai_chat_kwargs(self.temperature, self.model, self.reasoning_effort),
         )
 
     def get_langchain_llm(self):
@@ -276,11 +304,12 @@ class GPTOSSProvider(LLMProvider):
 
     supports_structured_output = True
 
-    def __init__(self, size: str = "120b", model: str | None = None, temperature: float = 0.7):
+    def __init__(self, size: str = "120b", model: str | None = None, temperature: float = 0.7, reasoning_effort: str | None = None):
         if size not in ("20b", "120b"):
             raise ValueError(f"GPTOSSProvider size deve ser '20b' ou '120b' (got: {size!r})")
         settings = get_settings()
         self.size = size
+        self.reasoning_effort = reasoning_effort
         if size == "20b":
             self.api_url = (settings.oss20b_url or "").rstrip("/")
             self.api_key = settings.oss20b_api_key or "not-needed"
@@ -299,8 +328,8 @@ class GPTOSSProvider(LLMProvider):
             model=self.model,
             api_key=self.api_key,
             base_url=self.api_url,
-            temperature=self.temperature,
             timeout=self.timeout,
+            **_openai_chat_kwargs(self.temperature, self.model, self.reasoning_effort),
         )
 
     async def generate(self, messages: list[dict], **kwargs) -> dict:
@@ -416,10 +445,11 @@ class OpenAIPublicProvider(LLMProvider):
 
     supports_structured_output = True
 
-    def __init__(self, model: str | None = None, temperature: float = 0.7):
+    def __init__(self, model: str | None = None, temperature: float = 0.7, reasoning_effort: str | None = None):
         settings = get_settings()
         self.model = model or settings.openai_public_model
         self.temperature = temperature
+        self.reasoning_effort = reasoning_effort
         self.base_url = settings.openai_public_base_url
         self.api_key = settings.openai_public_api_key
         if not self.api_key:
@@ -429,7 +459,7 @@ class OpenAIPublicProvider(LLMProvider):
             model=self.model,
             api_key=self.api_key,
             base_url=self.base_url,
-            temperature=self.temperature,
+            **_openai_chat_kwargs(self.temperature, self.model, self.reasoning_effort),
         )
 
     def get_langchain_llm(self):
@@ -454,6 +484,13 @@ def get_provider(provider_name: str = "azure", **kwargs) -> LLMProvider:
     'openai_public' (PR #194) chama api.openai.com diretamente — usado quando
     operador quer comparar latência/qualidade do GPT-4o público vs Azure.
     """
+    # reasoning_effort só é aceito pela família OpenAI (Azure/OpenAI público/gpt-oss).
+    # Para os demais (maritaca/ollama) NÃO repassamos — evita TypeError de kwarg
+    # inesperado no construtor que não conhece o parâmetro.
+    reasoning_effort = kwargs.pop("reasoning_effort", None)
+    if reasoning_effort and provider_name in ("azure", "openai", "openai_public", "gpt-oss-20b", "gpt-oss-120b"):
+        kwargs["reasoning_effort"] = reasoning_effort
+
     providers = {
         "azure": AzureOpenAIProvider,
         "openai": AzureOpenAIProvider,  # alias histórico
