@@ -378,3 +378,90 @@ async def invoke_pipeline(
         api_default = await settings_store.get("api_invoke_default_verbosity", "summary")
     effective = resolve_verbosity(explicit, is_api_key=bool(api_key_id), api_default=api_default)
     return project_pipeline_result(payload, effective)
+
+
+@router.post("/{pid}/invoke/stream")
+async def invoke_pipeline_stream(
+    pid: str,
+    data: PipelineInvokeRequest,
+    request: Request,
+    user: dict = Depends(require_user),
+):
+    """Streaming (SSE) do invoke SELADO — emite 1 evento por transição em tempo real
+    (pipeline_start, agent_start/done/skipped/error, pipeline_done com o result, end).
+
+    Mesmo selo (raiz+membros via allowed_agent_ids) e auth do /invoke; o frontend
+    consome via fetch+ReadableStream e mostra o passo-a-passo ao vivo. Espelha o
+    padrão do POST /workspace/chat/stream (queue + progress_callback + StreamingResponse).
+    """
+    import asyncio
+    from pathlib import Path
+    from fastapi.responses import StreamingResponse
+    from app.routes.workspace import UPLOAD_DIR
+
+    p = await _require(pid)
+    if p.get("status") == "aposentado":
+        raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
+    user_input = (data.message or data.input or "").strip()
+    if not user_input:
+        raise HTTPException(400, "Informe 'message' (ou 'input').")
+
+    from app.catalog.pipeline_defs import _build_subgraph
+    sub = await _build_subgraph(pid)
+    root = sub.get("root_agent_id")
+    members = {n.get("id") for n in sub.get("nodes", []) if n.get("id")}
+    if not root:
+        raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar.")
+
+    pipeline_attachments = [
+        {
+            "name": att.get("filename", ""),
+            "type": att.get("content_type", ""),
+            "size": att.get("size", 0),
+            "content": att.get("text_content", ""),
+            "abs_path": str(UPLOAD_DIR / Path(att.get("path", "") or "").name) if att.get("path") else "",
+        }
+        for att in (data.attachments or [])
+    ]
+
+    queue: asyncio.Queue = asyncio.Queue()
+    _DONE = object()
+
+    async def _cb(event: dict) -> None:
+        await queue.put(event)
+
+    async def _run():
+        from app.agents.engine import execute_pipeline
+        try:
+            await execute_pipeline(
+                entry_agent_id=root,
+                user_input=user_input,
+                channel=data.channel or "api",
+                session_id=data.session_id,
+                attachments=pipeline_attachments or None,
+                allowed_agent_ids=members,  # SELA ao subgrafo do pipeline
+                progress_callback=_cb,
+            )
+        except Exception as e:
+            await queue.put({"type": "stream_error", "error": str(e)[:300]})
+        finally:
+            await queue.put(_DONE)
+
+    asyncio.create_task(_run())
+
+    async def _event_gen():
+        yield ":ok\n\n"  # heartbeat: força proxies a flushar os headers antes do 1º evento
+        while True:
+            item = await queue.get()
+            if item is _DONE:
+                yield "event: end\ndata: {}\n\n"
+                break
+            payload = json.dumps(item, ensure_ascii=False, default=str)
+            name = item.get("type", "message") if isinstance(item, dict) else "message"
+            yield f"event: {name}\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        _event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
