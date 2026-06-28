@@ -668,7 +668,7 @@ MAESTRO_SECRET_KEY=&lt;chave-forte&gt;</pre>
     aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
   <li><b>Validar antes de codar</b> — confira JSON, status e headers reais sem escrever o cliente.</li>
   <li><b>Código pronto</b> — snippet em curl/Python/httpx/JS/axios/Go/PHP/Ruby/C#/Java, em <i>sync</i> ou <i>streaming</i> (consumir o SSE).</li>
-  <li><b>Auditar</b> — histórico por usuário restaura a execução inteira ao clicar (sem re-rodar).</li>
+  <li><b>Auditar</b> — histórico por usuário restaura a execução ao clicar, sem re-rodar (inteira quando o detalhe foi salvo).</li>
   <li><b>A/B</b> — compare 2 pipelines (ou 2 níveis de detalhe) lado a lado, com deltas de tempo/custo/tamanho.</li>
 </ul>`,
     ativar: `<p>Nativo. <b>AI Mesh → Playground</b>. Precisa de um pipeline roteável (criado/publicado no <a href="/mesh/flow" class="text-brand-500 underline">Fluxo de agentes</a>) e de uma chave de API (gerada na própria tela).</p>`,
@@ -676,7 +676,7 @@ MAESTRO_SECRET_KEY=&lt;chave-forte&gt;</pre>
   <li>Clique em <b>Gerar chave de API</b> (embutida e mascarada na tela).</li>
   <li>Escolha o <b>Destino</b>, escreva a mensagem e o nível de detalhe; clique em <b>Executar como integração</b>.</li>
   <li>Veja <b>Resposta/Tempo/Trace/HTTP</b>; em <b>Código</b>, copie o snippet na sua linguagem (o curl escolhe Bash/PowerShell/CMD).</li>
-  <li>Clique numa linha do <b>Histórico</b> pra restaurar a execução inteira; marque <b>Comparar A/B</b> pra ver dois lado a lado.</li>
+  <li>Clique numa linha do <b>Histórico</b> pra restaurar a execução (inteira quando o detalhe foi salvo); marque <b>Comparar A/B</b> pra ver dois lado a lado.</li>
 </ol>`
   },
 

@@ -537,7 +537,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { title: 'Validar a integração antes de codar', body: 'Gere uma chave, rode o pipeline pela tela e confirme o JSON, o status e os headers que o seu app vai tratar — tudo antes de escrever o cliente.' },
           { title: 'Pegar o código pronto', body: 'Aba Código → escolha a linguagem do seu app e copie o snippet com a chave embutida. Tem a variante streaming (consumir o SSE) pra mostrar o progresso ao vivo.' },
-          { title: 'Auditar um teste anterior', body: 'O Histórico é por usuário e sobrevive a reload/troca de máquina. Clique numa linha e a execução INTEIRA volta (Resposta/Tempo/Trace/HTTP) — sem re-rodar.' },
+          { title: 'Auditar um teste anterior', body: 'O Histórico é por usuário e sobrevive a reload/troca de máquina. Clique numa linha e a execução volta inteira (Resposta/Tempo/Trace/HTTP) — sem re-rodar — quando o detalhe foi salvo; execuções antigas ou muito grandes restauram só a requisição.' },
           { title: 'Comparar A/B', body: 'Marque "Comparar dois lado a lado" e rode 2 pipelines (ou o mesmo em 2 níveis de detalhe) com a mesma entrada — vê as duas respostas e os deltas de tempo/custo/tamanho.' }
         ]
       },
