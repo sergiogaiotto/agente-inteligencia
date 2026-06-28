@@ -24,6 +24,25 @@ def test_pagina_registrada_e_no_nav():
     assert "'/mesh/playground': 'mesh'" in base          # mapa de seção
 
 
+def test_base_html_divs_balanceadas():
+    """Regressão: ao adicionar o link Playground no nav, um </div> a mais fechou o
+    submenu cedo e ESCONDEU o resto da sidebar (Ferramentas, Configurações…).
+    Trava o balanceamento de <div> no layout base — varredura pega isso, teste de
+    presença de string não pegou."""
+    import re
+    base = BASE.read_text(encoding="utf-8")
+    opens = len(re.findall(r"<div(?:\s|>)", base))
+    closes = len(re.findall(r"</div>", base))
+    assert opens == closes, f"<div> desbalanceado em base.html: {opens} abrem vs {closes} fecham"
+
+
+def test_nav_nao_engole_itens_apos_ai_mesh():
+    base = BASE.read_text(encoding="utf-8")
+    # Playground vem ANTES de Ferramentas/Configurações, que PRECISAM continuar no nav.
+    assert base.index('href="/mesh/playground"') < base.index("Ferramentas")
+    assert 'href="/mcp"' in base and 'href="/settings"' in base
+
+
 def test_console_roda_como_integracao():
     src = PG.read_text(encoding="utf-8")
     assert "playgroundPage()" in src
