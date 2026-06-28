@@ -21,7 +21,9 @@ def test_pagina_registrada_e_no_nav():
     assert hasattr(fe, "pg_mesh_playground")
     base = BASE.read_text(encoding="utf-8")
     assert 'href="/mesh/playground"' in base           # link no submenu AI Mesh
-    assert "'/mesh/playground': 'mesh'" in base          # mapa de seção
+    # _pagePathMap (mapa rota→key da Ajuda): playground tem ajuda PRÓPRIA (era 'mesh',
+    # mostrava a ajuda do Fluxo — corrigido ao adicionar o entry/botão "?" do Playground).
+    assert "'/mesh/playground': 'playground'" in base
 
 
 def test_bloco_ai_mesh_fecha_certo():

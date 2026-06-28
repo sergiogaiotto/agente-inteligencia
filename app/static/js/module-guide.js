@@ -121,7 +121,7 @@ window.MODULE_GUIDE = [
   <li><b>Documentação viva</b> — listar as entradas do CAR (<code>GET /api/v1/car</code>) mostra exatamente quais jornadas a plataforma cobre, por domínio.</li>
   <li><b>Ajuste de cobertura</b> — uma Triagem nunca é escolhida? Amplie suas <code>activation_keywords</code> ou crie uma entrada nova para o domínio.</li>
 </ul>
-<p class="mt-2"><b>Não usa o CAR:</b> agent invocado direto por outro sistema via API (ex.: <code>POST /api/v1/pipelines/{id}/invoke</code> ou via Fluxograma selado) — esse caminho não passa pela escolha por intenção.</p>`,
+<p class="mt-2"><b>Não usa o CAR:</b> agent invocado direto por outro sistema via API (ex.: <code>POST /api/v1/pipelines/{id}/invoke</code> ou via Fluxo de agentes selado) — esse caminho não passa pela escolha por intenção.</p>`,
     ativar: `<p>CAR é nativo. Para adicionar uma entrada (só estes campos são aceitos pelo schema):</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">curl -X POST /api/v1/car \\
   -H "Content-Type: application/json" \\
@@ -590,17 +590,17 @@ docker compose up -d caddy</pre>`,
   <li><b>Governança</b> — publique no Catálogo como <code>kind=pipeline</code>, passe por revisão Root e ganhe métricas de confiabilidade/custo reais.</li>
   <li><b>Reuso</b> — o mesmo pipeline publicado é invocável por Workspace, API e (com federação) por outras orgs.</li>
 </ul>`,
-    ativar: `<p>Nativo da plataforma. No Fluxograma, painel "Pipelines" → "Novo". Por API:</p>
+    ativar: `<p>Nativo da plataforma. No Fluxo de agentes, painel "Pipelines" → "Novo". Por API:</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">curl -X POST /api/v1/pipelines \\
   -H "Content-Type: application/json" \\
   -d '{"name":"Análise de crédito","domain":"credito"}'
 # adicionar membros:
 curl -X POST /api/v1/pipelines/{id}/agents -d '{"agent_id":"..."}'</pre>`,
     usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
-  <li>No <a href="/mesh/flow" class="text-brand-500 underline">Fluxograma</a>, crie um pipeline, arraste os agentes membros e defina o nó <b>Início</b>.</li>
+  <li>No <a href="/mesh/flow" class="text-brand-500 underline">Fluxo de agentes</a>, crie um pipeline, arraste os agentes membros e defina o nó <b>Início</b>.</li>
   <li>Conecte os agentes: <b>Sequencial</b> (um alimenta o outro), <b>Paralelo</b> (todos com o mesmo input), <b>Condicional</b> (roteamento 1-de-N por regra) e <b>Padrão/default</b> (o else, quando nenhuma regra casa). Para regras condicionais você não decora sintaxe: <b>descreva em português</b> (a IA traduz), <b>monte por cards</b> com E/OU, e <b>teste no Simulador</b> antes de salvar.</li>
   <li>Clique em <b>Publicar no Catálogo</b> (cria um rascunho de entry <code>kind=pipeline</code>); aprove e publique pela <a href="/catalog" class="text-brand-500 underline">página do Catálogo</a>.</li>
-  <li>Invoque <code>POST /api/v1/pipelines/{id}/invoke</code> com <code>{"message":"..."}</code> — use o botão "cURL do invoke" no Fluxograma para copiar o comando pronto.</li>
+  <li>Invoque <code>POST /api/v1/pipelines/{id}/invoke</code> com <code>{"message":"..."}</code> — use o botão "cURL do invoke" no Fluxo de agentes para copiar o comando pronto.</li>
 </ol>`
   },
 
@@ -650,9 +650,33 @@ MAESTRO_SECRET_KEY=&lt;chave-forte&gt;</pre>
 </ul>`,
     ativar: `<p>Nativo. As chaves vivem em Configurações → API Keys; a estação reusa o mesmo endpoint <code>POST /api/v1/api-keys</code>.</p>`,
     usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
-  <li>No <a href="/mesh/flow" class="text-brand-500 underline">Fluxograma</a>, abra o menu do nó <b>Início</b> → "cURL do invoke".</li>
+  <li>No <a href="/mesh/flow" class="text-brand-500 underline">Fluxo de agentes</a>, abra o menu do nó <b>Início</b> → "cURL do invoke".</li>
   <li>Escolha <b>Gerar e embutir</b> (1 clique cria a chave e cola no comando), <b>Chave existente</b> (cola a sua) ou <b>Placeholder</b>.</li>
   <li>Selecione o shell (Bash/PowerShell/CMD) e clique em <b>Copiar</b> — o comando leva o segredo real (mascarado na tela).</li>
+</ol>`
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // Playground — console de API (testar o pipeline como o app veria)
+  // ═════════════════════════════════════════════════════════════════
+  {
+    id: 'playground',
+    section: 'Integração',
+    label: 'Playground (console de API)',
+    fundamento: `<p>O Playground é o <b>console de API</b> do AI Mesh — testa um pipeline <b>como o seu app veria</b>: roda o endpoint real (<code>/invoke/stream</code>) via <code>X-API-Key</code>, sem cookie, com a resposta <b>projetada por verbosidade</b> (Debug/Deploy/Só resposta).</p>
+<p class="mt-2">Fidelidade total: o que aparece na tela é o que a integração receberia em produção.</p>`,
+    aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Validar antes de codar</b> — confira JSON, status e headers reais sem escrever o cliente.</li>
+  <li><b>Código pronto</b> — snippet em curl/Python/httpx/JS/axios/Go/PHP/Ruby/C#/Java, em <i>sync</i> ou <i>streaming</i> (consumir o SSE).</li>
+  <li><b>Auditar</b> — histórico por usuário restaura a execução ao clicar, sem re-rodar (inteira quando o detalhe foi salvo).</li>
+  <li><b>A/B</b> — compare 2 pipelines (ou 2 níveis de detalhe) lado a lado, com deltas de tempo/custo/tamanho.</li>
+</ul>`,
+    ativar: `<p>Nativo. <b>AI Mesh → Playground</b>. Precisa de um pipeline roteável (criado/publicado no <a href="/mesh/flow" class="text-brand-500 underline">Fluxo de agentes</a>) e de uma chave de API (gerada na própria tela).</p>`,
+    usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
+  <li>Clique em <b>Gerar chave de API</b> (embutida e mascarada na tela).</li>
+  <li>Escolha o <b>Destino</b>, escreva a mensagem e o nível de detalhe; clique em <b>Executar como integração</b>.</li>
+  <li>Veja <b>Resposta/Tempo/Trace/HTTP</b>; em <b>Código</b>, copie o snippet na sua linguagem (o curl escolhe Bash/PowerShell/CMD).</li>
+  <li>Clique numa linha do <b>Histórico</b> pra restaurar a execução (inteira quando o detalhe foi salvo); marque <b>Comparar A/B</b> pra ver dois lado a lado.</li>
 </ol>`
   },
 
@@ -663,7 +687,7 @@ MAESTRO_SECRET_KEY=&lt;chave-forte&gt;</pre>
     id: 'catalog',
     section: 'Catálogo',
     label: 'Catálogo / Marketplace',
-    fundamento: `<p>O Catálogo é o <b>marketplace interno</b> de IA da empresa — pense num "Play Store corporativo". Registra de forma governada tudo que pode ser descoberto e invocado: agents, skills, recipes (composições declarativas), pipelines (grafos do Fluxograma) e plataformas externas aprovadas (ChatGPT, Cursor, Copilot).</p>
+    fundamento: `<p>O Catálogo é o <b>marketplace interno</b> de IA da empresa — pense num "Play Store corporativo". Registra de forma governada tudo que pode ser descoberto e invocado: agents, skills, recipes (composições declarativas), pipelines (grafos do Fluxo de agentes) e plataformas externas aprovadas (ChatGPT, Cursor, Copilot).</p>
 <p class="mt-2">Cada item é uma <b>entry</b> com identidade própria (URN = tipo+nome+versão), dono, versão semver e uma <b>Divulgação de Capacidade</b> (a "etiqueta nutricional": o que faz com os dados).</p>
 <p class="mt-2"><b>Tipos</b> (<code class="bg-surface-100 px-1 rounded">kind</code>): <code>agent</code>, <code>skill</code>, <code>recipe</code>, <code>external_platform</code> e <code>pipeline</code>.</p>
 <p class="mt-2"><b>Lifecycle</b> de uma entry — como o trâmite de um documento que precisa de visto:</p>
@@ -688,7 +712,7 @@ MAESTRO_SECRET_KEY=&lt;chave-forte&gt;</pre>
     ativar: `<p>O Catálogo é nativo — sempre disponível. Para publicar, use o caminho certo conforme o tipo:</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
   <li><b>Agent, skill, recipe ou plataforma externa</b>: wizard de 4 passos em <a href="/catalog/publish" class="text-brand-500 underline">/catalog/publish</a> (Artefato → Metadata → Divulgação → Revisão).</li>
-  <li><b>Pipeline</b>: publique direto do <a href="/mesh/flow" class="text-brand-500 underline">/mesh/flow</a> (Fluxograma) — o pipeline vira entry <code>kind=pipeline</code> em draft e segue o mesmo lifecycle.</li>
+  <li><b>Pipeline</b>: publique direto do <a href="/mesh/flow" class="text-brand-500 underline">/mesh/flow</a> (Fluxo de agentes) — o pipeline vira entry <code>kind=pipeline</code> em draft e segue o mesmo lifecycle.</li>
 </ul>
 <p class="mt-2">Por API, criar e submeter uma entry:</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">curl -X POST /api/v1/catalog/entries \\

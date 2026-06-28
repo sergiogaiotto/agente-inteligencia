@@ -106,7 +106,7 @@
             <!-- Histórico da sessão (persiste no navegador) -->
             <div x-show="history.length" class="pt-3 border-t border-surface-100" data-testid="pg-history">
                 <div class="flex items-center justify-between mb-1.5">
-                    <span class="text-[11px] font-semibold text-surface-500" title="Suas execuções salvas no servidor (por usuário). Clique numa linha para restaurar a execução INTEIRA — Resposta, Tempo, Trace, HTTP e Código — sem re-rodar. Sobrevive a reload e troca de máquina.">Histórico</span>
+                    <span class="text-[11px] font-semibold text-surface-500" title="Suas execuções salvas no servidor (por usuário). Clique numa linha para restaurar a execução — Resposta, Tempo, Trace, HTTP e Código — sem re-rodar (inteira quando o detalhe foi salvo; execuções antigas/grandes restauram só a requisição). Sobrevive a reload e troca de máquina.">Histórico</span>
                     <button @click="clearHistory()" type="button" class="text-[10px] text-surface-400 hover:text-rose-500">limpar</button>
                 </div>
                 <div class="space-y-1 max-h-56 overflow-y-auto">

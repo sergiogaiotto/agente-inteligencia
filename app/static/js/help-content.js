@@ -441,7 +441,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   mesh: {
     title: 'AI Mesh — Fluxo de agentes',
-    summary: 'Editor visual único da rede de agents (o Fluxograma): quem chama quem, em que ordem e sob qual condição. Também é onde você monta pipelines e os publica no Catálogo.',
+    summary: 'Editor visual único da rede de agents (o Fluxo de agentes): quem chama quem, em que ordem e sob qual condição. Também é onde você monta pipelines e os publica no Catálogo.',
     sections: [
       {
         kind: 'concept',
@@ -484,7 +484,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'casos_de_uso',
         title: 'Casos de uso',
         items: [
-          { title: 'Pipeline ETL com IA (publicável)', body: 'No Fluxograma: Agent 1 extrai dados de um e-mail → Agent 2 valida CNPJ via tool MCP → Agent 3 gera resumo executivo. Salve como pipeline, publique no Catálogo e invoque por uma chamada só: POST /api/v1/pipelines/{id}/invoke.' },
+          { title: 'Pipeline ETL com IA (publicável)', body: 'No Fluxo de agentes: Agent 1 extrai dados de um e-mail → Agent 2 valida CNPJ via tool MCP → Agent 3 gera resumo executivo. Salve como pipeline, publique no Catálogo e invoque por uma chamada só: POST /api/v1/pipelines/{id}/invoke.' },
           { title: 'Comparar múltiplos modelos', body: 'Fan-out: a mesma pergunta para três agents idênticos exceto pelo modelo (ex.: gpt-4o, claude e um modelo local). Você vê as respostas em paralelo para comparar qualidade.' },
           { title: 'Roteamento por anexo, em português', body: 'Conexão condicional para o agent de documentos com a regra descrita como "quando o usuário anexar um documento" — a IA traduz para has_document. Adicione uma conexão default para o agent genérico cobrir o caso sem anexo.' }
         ]
@@ -493,7 +493,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
-          { title: 'Mesh / Pipeline ≠ CAR ≠ Recipe', severity: 'info', body: 'Fluxograma/Pipeline = fluxo desenhado visualmente (você define), publicável no Catálogo como kind=pipeline. CAR = catálogo para roteamento automático (o Maestro decide). Recipe = composição declarativa no Catálogo. Conceitos distintos.' },
+          { title: 'Mesh / Pipeline ≠ CAR ≠ Recipe', severity: 'info', body: 'Fluxo de agentes/Pipeline = fluxo desenhado visualmente (você define), publicável no Catálogo como kind=pipeline. CAR = catálogo para roteamento automático (o Maestro decide). Recipe = composição declarativa no Catálogo. Conceitos distintos.' },
           { title: 'Sempre teste a regra no Simulador', severity: 'warning', body: 'O Simulador honra pergunta, anexos E a decisão (Recommend/Refuse/Escalate) — não só o texto da resposta. Uma regra sobre a pergunta (input_lower) ou sobre anexo (has_document) que parece errada pode estar certa: confirme no Simulador antes de salvar.' },
           { title: 'Condicional sem default vira buraco', severity: 'warning', body: 'Num fan-out 1-de-N, se nenhuma regra condicional casar e não houver conexão default, nenhum destino roda. Adicione um destino default como rede de segurança.' },
           { title: 'Pass-through sumiu da execução', severity: 'info', body: 'Se um agent "desapareceu" do log, provavelmente está pass-through (sem skill nem prompt). Adicione skill ou prompt customizado para ativar.' }
@@ -501,6 +501,70 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
       }
     ],
     related: ['agents', 'catalog', 'workspace']
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // /mesh/playground — Playground (console de API)
+  // ═════════════════════════════════════════════════════════════════
+  playground: {
+    title: 'Playground',
+    summary: 'O console de API do AI Mesh: teste um pipeline COMO o seu app veria — endpoint real via chave de API, resposta projetada, passo-a-passo ao vivo e o código pronto pra colar.',
+    sections: [
+      {
+        kind: 'concept',
+        title: 'O que é',
+        body: `
+          <p>O Playground é o "AI Studio" da plataforma — você escolhe um pipeline, manda uma mensagem e roda o <strong>endpoint real</strong> (<code>POST /api/v1/pipelines/{id}/invoke/stream</code>) via <code>X-API-Key</code>, <em>sem o cookie de sessão</em>. Ou seja: você vê <strong>exatamente</strong> o que o seu app receberia em produção.</p>
+          <p>É onde você valida a integração antes de escrever uma linha de código — e de onde sai o snippet pronto na linguagem do seu app.</p>
+        `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Fundamentos',
+        body: `
+          <p><strong>Fidelidade:</strong> o console omite o cookie (<code>credentials:'omit'</code>) e autentica por <code>X-API-Key</code> — o servidor te trata como integração externa e <strong>projeta a resposta por verbosidade</strong>, igual o app veria.</p>
+          <ul>
+            <li><strong>Debug</strong> (full) — tudo: trace, custo, tokens, SQL renderado. Para auditar.</li>
+            <li><strong>Deploy</strong> (summary) — resposta + narrativa por etapa, sem tripa interna. É o <em>default</em> de integração.</li>
+            <li><strong>Só resposta</strong> (minimal) — só a saída final + status.</li>
+          </ul>
+          <p>Cinco abas no resultado: <strong>Resposta</strong> (JSON vira cartões), <strong>Tempo</strong> (waterfall por agente), <strong>Trace</strong> (FSM, evidências, SQL — só em Debug), <strong>HTTP</strong> (status, headers, rate-limit e o mapa de erros do contrato) e <strong>Código</strong> (curl, Python, httpx, JS, axios, Go, PHP, Ruby, C#, Java — em modo <em>sync</em> ou <em>streaming</em>; o curl ainda escolhe a notação Bash/PowerShell/CMD).</p>
+        `
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Casos de uso',
+        items: [
+          { title: 'Validar a integração antes de codar', body: 'Gere uma chave, rode o pipeline pela tela e confirme o JSON, o status e os headers que o seu app vai tratar — tudo antes de escrever o cliente.' },
+          { title: 'Pegar o código pronto', body: 'Aba Código → escolha a linguagem do seu app e copie o snippet com a chave embutida. Tem a variante streaming (consumir o SSE) pra mostrar o progresso ao vivo.' },
+          { title: 'Auditar um teste anterior', body: 'O Histórico é por usuário e sobrevive a reload/troca de máquina. Clique numa linha e a execução volta inteira (Resposta/Tempo/Trace/HTTP) — sem re-rodar — quando o detalhe foi salvo; execuções antigas ou muito grandes restauram só a requisição.' },
+          { title: 'Comparar A/B', body: 'Marque "Comparar dois lado a lado" e rode 2 pipelines (ou o mesmo em 2 níveis de detalhe) com a mesma entrada — vê as duas respostas e os deltas de tempo/custo/tamanho.' }
+        ]
+      },
+      {
+        kind: 'exemplo',
+        title: 'Exemplo prático',
+        body: `
+          <ol>
+            <li>Abra <code>/mesh/playground</code> e clique em <strong>Gerar chave de API</strong> (a chave é embutida no console, mascarada).</li>
+            <li>Em <strong>Destino</strong>, escolha um pipeline roteável; escreva a mensagem que o app enviaria.</li>
+            <li>Deixe o detalhe em <strong>Deploy</strong> (como a integração veria) e clique em <strong>Executar como integração</strong>.</li>
+            <li>Veja a <strong>Resposta</strong> em cartões e o passo-a-passo ao vivo; abra <strong>HTTP</strong> pra conferir o status e o rate-limit.</li>
+            <li>Vá em <strong>Código</strong>, escolha a sua linguagem e copie o snippet pronto.</li>
+          </ol>
+        `
+      },
+      {
+        kind: 'pegadinhas',
+        title: 'Pegadinhas',
+        items: [
+          { title: 'Precisa de chave de API', severity: 'info', body: 'O console roda como integração (X-API-Key, sem cookie). Sem uma chave gerada, o Executar avisa — clique em "Gerar chave de API" primeiro.' },
+          { title: 'Trace e custo só em Debug', severity: 'info', body: 'Em Deploy/Só resposta o servidor não devolve a tripa interna (trace, SQL, custo). Rode em Debug para auditar — é o mesmo da resposta real por verbosidade.' },
+          { title: 'Comparar = 2× custo de LLM', severity: 'warning', body: 'O modo A/B faz DUAS execuções reais (sem projeção falsa). É fiel, mas gasta o dobro — use quando o objetivo for justamente comparar.' }
+        ]
+      }
+    ],
+    related: ['mesh', 'workspace', 'catalog']
   },
 
   // ═════════════════════════════════════════════════════════════════
@@ -1128,7 +1192,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
             <li><strong>deprecated</strong> — marcado para remoção</li>
             <li><strong>archived</strong> — fora de uso</li>
           </ol>
-          <p>Tipos (<code>kind</code>): <code>agent</code>, <code>skill</code>, <code>recipe</code> (composição declarativa), <code>pipeline</code> (grafo publicado pelo Fluxograma) e <code>external_platform</code> (ChatGPT/etc).</p>
+          <p>Tipos (<code>kind</code>): <code>agent</code>, <code>skill</code>, <code>recipe</code> (composição declarativa), <code>pipeline</code> (grafo publicado pelo Fluxo de agentes) e <code>external_platform</code> (ChatGPT/etc).</p>
           <p><strong>Divulgação de Capacidade</strong> (etiqueta nutricional R6.3) é obrigatória: flags de dados + soberania + retenção. Quem consome o agent sabe exatamente o que ele faz com os dados.</p>
         `
       },
