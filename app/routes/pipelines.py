@@ -386,6 +386,9 @@ async def invoke_pipeline_stream(
     data: PipelineInvokeRequest,
     request: Request,
     user: dict = Depends(require_user),
+    verbosity: Optional[str] = Query(
+        None, description="full | summary | minimal — projeta o pipeline_done final."
+    ),
 ):
     """Streaming (SSE) do invoke SELADO — emite 1 evento por transição em tempo real
     (pipeline_start, agent_start/done/skipped/error, pipeline_done com o result, end).
@@ -424,10 +427,34 @@ async def invoke_pipeline_stream(
         for att in (data.attachments or [])
     ]
 
+    # Verbosidade: o pipeline_done final é PROJETADO igual ao /invoke sync (sessão→full;
+    # X-API-Key→summary), pra que a console "ver como integração" não minta. Os eventos
+    # intermediários (agent_*) são sempre crus (são o passo-a-passo, não o contrato).
+    api_key_id = getattr(request.state, "api_key_id", None)
+    explicit = verbosity or data.verbosity
+    api_default = "summary"
+    if api_key_id:
+        api_default = await settings_store.get("api_invoke_default_verbosity", "summary")
+    effective = resolve_verbosity(explicit, is_api_key=bool(api_key_id), api_default=api_default)
+
     queue: asyncio.Queue = asyncio.Queue()
     _DONE = object()
 
     async def _cb(event: dict) -> None:
+        if isinstance(event, dict) and event.get("type") == "pipeline_done" and event.get("result"):
+            res = event["result"]
+            payload = {
+                "pipeline_id": pid,
+                "status": res.get("status", "completed"),
+                "output": res.get("output", ""),
+                "final_state": res.get("final_state"),
+                "interaction_id": res.get("interaction_id"),
+                "total_agents": res.get("total_agents", 0),
+                "completed_agents": res.get("completed_agents", 0),
+                "pipeline_steps": res.get("pipeline_steps", []),
+                "duration_ms": res.get("duration_ms"),
+            }
+            event = {**event, "result": project_pipeline_result(payload, effective)}
         await queue.put(event)
 
     async def _run():

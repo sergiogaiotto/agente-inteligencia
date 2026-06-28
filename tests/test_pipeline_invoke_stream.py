@@ -64,6 +64,29 @@ def test_stream_emite_eventos_sse_ao_vivo(monkeypatch):
     assert captured["progress_callback"] is not None
 
 
+def test_stream_projeta_pipeline_done_por_verbosidade(monkeypatch):
+    # o pipeline_done final HONRA verbosidade (igual ao /invoke) — senão a console
+    # "ver como integração" mentiria. Aqui verbosity=minimal → result enxuto.
+    async def fake_exec(**k):
+        cb = k.get("progress_callback")
+        if cb:
+            await cb({"type": "pipeline_done", "result": {
+                "output": "x", "status": "completed", "interaction_id": "i",
+                "total_agents": 1, "completed_agents": 1,
+                "pipeline_steps": [{"agent_name": "A", "status": "completed", "trace": {"sql_rendered": "SELECT 1"}}],
+            }})
+        return {}
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(engine, "execute_pipeline", fake_exec)
+
+    r = _client().post("/api/v1/pipelines/p1/invoke/stream?verbosity=minimal", json={"message": "oi"})
+    body = r.text
+    assert "event: pipeline_done" in body
+    assert '"verbosity": "minimal"' in body          # projetado
+    assert "pipeline_steps" not in body              # minimal não traz steps
+    assert "sql_rendered" not in body                # nem o trace interno
+
+
 def test_stream_400_sem_mensagem(monkeypatch):
     _stub_pipeline(monkeypatch)
     r = _client().post("/api/v1/pipelines/p1/invoke/stream", json={"message": "   "})

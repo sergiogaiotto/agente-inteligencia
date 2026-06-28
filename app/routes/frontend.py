@@ -21,6 +21,7 @@ PAGES = {
     "/catalog/cost": {"template":"pages/catalog_cost.html","title":"Custo & Consumo","section":"catalog_cost"},
     "/workspace": {"template":"pages/workspace.html","title":"Workspace","section":"workspace"},
     "/mesh/flow": {"template":"pages/mesh_flow.html","title":"Fluxograma de agentes","section":"mesh"},
+    "/mesh/playground": {"template":"pages/mesh_playground.html","title":"Playground","section":"mesh"},
     "/mcp": {"template":"pages/tools.html","title":"MCP","section":"tools"},
     "/rag": {"template":"pages/evidence.html","title":"RAG — Base de Conhecimento","section":"evidence"},
     "/harness": {"template":"pages/harness.html","title":"Avaliação","section":"harness"},
@@ -121,6 +122,8 @@ async def pg_mesh(r: Request):
     return RedirectResponse("/mesh/flow", status_code=308)
 @router.get("/mesh/flow", response_class=HTMLResponse)
 async def pg_mesh_flow(r: Request): return await _render(r, "/mesh/flow")
+@router.get("/mesh/playground", response_class=HTMLResponse)
+async def pg_mesh_playground(r: Request): return await _render(r, "/mesh/playground")
 @router.get("/mcp", response_class=HTMLResponse)
 async def pg_mcp(r: Request): return await _render(r, "/mcp")
 @router.get("/rag", response_class=HTMLResponse)
