@@ -71,6 +71,32 @@
                 <span x-text="running ? 'Executando…' : 'Executar como integração'"></span>
             </button>
             <p class="text-[10px] text-surface-400 -mt-2 leading-snug">Roda o endpoint real <span class="font-mono">/invoke/stream</span> via <span class="font-mono">X-API-Key</span> (sem cookie) — fidelidade total ao que o app recebe.</p>
+
+            <!-- Histórico da sessão (persiste no navegador) -->
+            <div x-show="history.length" class="pt-3 border-t border-surface-100" data-testid="pg-history">
+                <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-[11px] font-semibold text-surface-500" title="Suas execuções nesta máquina — clique para restaurar a requisição; salvo no localStorage.">Histórico</span>
+                    <button @click="clearHistory()" type="button" class="text-[10px] text-surface-400 hover:text-rose-500">limpar</button>
+                </div>
+                <div class="space-y-1 max-h-56 overflow-y-auto">
+                    <template x-for="h in history" :key="h.id">
+                        <div @click="restore(h)" role="button" tabindex="0" class="cursor-pointer rounded-lg border border-surface-100 hover:border-brand-200 hover:bg-surface-50 px-2.5 py-1.5">
+                            <div class="flex items-center gap-1.5 text-[11px]">
+                                <span class="font-mono rounded px-1 py-0.5 text-[9px] flex-none" :class="h.status==='completed' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'" x-text="h.status==='completed' ? 'ok' : (h.status || 'erro')"></span>
+                                <span class="flex-1 truncate text-surface-700" x-text="h.message"></span>
+                                <span class="text-[9px] text-surface-400 font-mono flex-none" x-text="h.when"></span>
+                            </div>
+                            <div class="flex items-center gap-2 text-[9.5px] text-surface-400 mt-0.5">
+                                <span class="truncate" x-text="h.pipelineName"></span>
+                                <span class="flex-none" x-text="h.verbLabel"></span>
+                                <span x-show="h.sizeKb" class="flex-none font-mono" x-text="h.sizeKb + ' KB'"></span>
+                                <span x-show="h.totalMs" class="flex-none font-mono" x-text="fmtMs(h.totalMs)"></span>
+                                <span class="ml-auto flex-none text-brand-500 hover:text-brand-700" @click.stop="restore(h); run()">re-rodar →</span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
         </div>
 
         <!-- DIREITA: resposta / código -->
@@ -263,7 +289,7 @@ function playgroundPage() {
         verbosity: 'summary', tab: 'resp', lang: 'curl',
         running: false, liveSteps: [], result: null, error: null, sizeKb: null,
         timings: [], _t0: 0, expanded: {},
-        http: null, errTests: {},
+        http: null, errTests: {}, history: [],
         ERRORS: [
             { code: 401, when: 'chave de API ausente ou inválida', body: '{"detail":"Autenticação necessária (cookie ou X-API-Key)."}', test: true },
             { code: 400, when: 'mensagem (entrada) vazia', body: '{"detail":"Informe \'message\' (ou \'input\')."}', test: true },
@@ -275,10 +301,12 @@ function playgroundPage() {
 
         async init() {
             this.curlAuth.keyNameHint = 'Playground';
+            this._loadHistory();
             try { const d = await api.get('/api/v1/pipelines'); this.pipelines = (d.pipelines || []).filter(p => p.status !== 'aposentado'); if (this.pipelines.length) this.selectedId = this.pipelines[0].id; }
             catch (e) { showToast('Falha ao carregar pipelines: ' + e.message, 'error'); }
         },
         get apiKey() { return this.curlAuth.generatedKey || ''; },
+        get selectedName() { const p = this.pipelines.find(x => x.id === this.selectedId); return p ? p.name : ''; },
         get verbLabel() { const v = this.VERB.find(x => x.v === this.verbosity); return v ? v.l.toLowerCase() : this.verbosity; },
         get invokeUrl() { return window.location.origin + '/api/v1/pipelines/' + (this.selectedId || '{pipeline_id}') + '/invoke'; },
         get bodyObj() { return { message: this.message, verbosity: this.verbosity }; },
@@ -325,9 +353,27 @@ function playgroundPage() {
                 const reader = resp.body.getReader(), dec = new TextDecoder();
                 let buf = '';
                 while (true) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let i; while ((i = buf.indexOf('\n\n')) >= 0) { this._ev(buf.slice(0, i)); buf = buf.slice(i + 2); } }
+                if (this.result && !this.error) this._pushHistory();
             } catch (e) { this.error = e.message; }
             finally { this.running = false; }
         },
+        // ── Histórico / REPL (persiste no localStorage) ──
+        _pushHistory() {
+            const e = {
+                id: Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+                when: new Date().toLocaleTimeString().slice(0, 5),
+                pipelineId: this.selectedId, pipelineName: this.selectedName,
+                message: this.message.trim(), verbosity: this.verbosity, verbLabel: this.verbLabel,
+                status: (this.result && this.result.status) || '', sizeKb: this.sizeKb, totalMs: Math.round(this.totalMs),
+            };
+            this.history.unshift(e);
+            if (this.history.length > 20) this.history = this.history.slice(0, 20);
+            this._saveHistory();
+        },
+        restore(h) { this.selectedId = h.pipelineId; this.message = h.message; this.verbosity = h.verbosity; },
+        clearHistory() { this.history = []; this._saveHistory(); },
+        _saveHistory() { try { localStorage.setItem('pg_history', JSON.stringify(this.history)); } catch (_) {} },
+        _loadHistory() { try { this.history = JSON.parse(localStorage.getItem('pg_history') || '[]'); } catch (_) { this.history = []; } },
         _ev(frame) {
             if (!frame || frame[0] === ':') return;
             let name = 'message', dataStr = '';
