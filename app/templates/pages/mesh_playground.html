@@ -310,6 +310,14 @@
                     <button @click="codeMode='sync'" type="button" :class="codeMode==='sync' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="Espera a resposta inteira (/invoke)">sync</button>
                     <button @click="codeMode='streaming'" type="button" :class="codeMode==='streaming' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="Consome o /invoke/stream (SSE) — progresso ao vivo, agente a agente">streaming</button>
                 </div>
+                <!-- notação do shell (só no curl): a sintaxe muda por shell (continuação de
+                     linha + aspas/escape). No PowerShell `curl` é alias → usamos curl.exe. -->
+                <div x-show="lang === 'curl'" class="flex flex-wrap items-center gap-1.5 text-[11px]" data-testid="pg-curl-shell">
+                    <span class="text-surface-400">Notação:</span>
+                    <button @click="curlShell='bash'" type="button" :class="curlShell==='bash' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="\\ p/ continuar a linha, corpo em aspas simples">Bash (Linux/macOS)</button>
+                    <button @click="curlShell='powershell'" type="button" :class="curlShell==='powershell' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="crase p/ continuar a linha; curl.exe (no PS, curl é alias de Invoke-WebRequest)">PowerShell</button>
+                    <button @click="curlShell='cmd'" type="button" :class="curlShell==='cmd' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="^ p/ continuar a linha, corpo em aspas duplas com \&quot; escapado">CMD (Windows)</button>
+                </div>
                 <pre class="rounded-lg bg-brand-900 text-surface-50 p-3 text-[11.5px] overflow-x-auto whitespace-pre" data-testid="pg-code" x-text="snippet()"></pre>
                 <p class="text-[10px] text-surface-400">Reflete a requisição atual (<span x-text="codeMode==='streaming' ? 'streaming · SSE' : 'sync'"></span>). <span x-show="!apiKey">Gere uma chave pra embutir o segredo.</span></p>
             </div>
@@ -388,7 +396,7 @@ function playgroundPage() {
             { k: 'php', l: 'PHP' }, { k: 'ruby', l: 'Ruby' }, { k: 'csharp', l: 'C#' }, { k: 'java', l: 'Java' },
         ],
         pipelines: [], selectedId: '', message: 'o que temos aqui?',
-        verbosity: 'summary', tab: 'resp', lang: 'curl', codeMode: 'sync',
+        verbosity: 'summary', tab: 'resp', lang: 'curl', codeMode: 'sync', curlShell: 'bash',
         running: false, liveSteps: [], result: null, error: null, sizeKb: null, respBytes: 0,
         timings: [], _t0: 0, expanded: {},
         http: null, errTests: {}, history: [],
@@ -688,6 +696,7 @@ function playgroundPage() {
         _shq(s) { return s.replace(/'/g, "'\\''"); },
         _dq(s) { return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"'); },
         _sq(s) { return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'"); },
+        _psq(s) { return s.replace(/'/g, "''"); },  // PowerShell: aspas simples dobram '
         snippet() {
             const s = this._reqSpec();
             switch (this.lang) {
@@ -703,20 +712,24 @@ function playgroundPage() {
                 default: return this._cgCurl(s);
             }
         },
+        // curl em 3 notações (curlShell): bash (\ + '…'), powershell (curl.exe + ` + '…',
+        // ' dobrado), cmd (^ + "…", " escapado p/ \"). No PowerShell `curl` é alias de
+        // Invoke-WebRequest → curl.exe invoca o curl REAL (bundled no Windows 10+).
         _cgCurl(s) {
-            const b = this._shq(s.body);
-            return (s.stream ? [
-                `curl -N -X POST '${s.url}' \\`,
-                `  -H 'Content-Type: application/json' \\`,
-                `  -H 'X-API-Key: ${s.key}' \\`,
-                `  -H 'Accept: text/event-stream' \\`,
-                `  -d '${b}'`,
-            ] : [
-                `curl -X POST '${s.url}' \\`,
-                `  -H 'Content-Type: application/json' \\`,
-                `  -H 'X-API-Key: ${s.key}' \\`,
-                `  -d '${b}'`,
-            ]).join('\n');
+            const sh = this.curlShell || 'bash';
+            const cmd = sh === 'powershell' ? 'curl.exe' : 'curl';
+            const cont = sh === 'powershell' ? ' `' : (sh === 'cmd' ? ' ^' : ' \\');  // ` = crase (PS)
+            const q = sh === 'cmd' ? '"' : "'";
+            const b = sh === 'cmd' ? this._dq(s.body) : (sh === 'powershell' ? this._psq(s.body) : this._shq(s.body));
+            const flag = s.stream ? '-N ' : '';
+            const lines = [
+                `${cmd} ${flag}-X POST ${q}${s.url}${q}`,
+                `  -H ${q}Content-Type: application/json${q}`,
+                `  -H ${q}X-API-Key: ${s.key}${q}`,
+            ];
+            if (s.stream) lines.push(`  -H ${q}Accept: text/event-stream${q}`);
+            lines.push(`  -d ${q}${b}${q}`);
+            return lines.map((l, i) => i < lines.length - 1 ? l + cont : l).join('\n');
         },
         _cgPy(s) {
             const d = this._pyDict(this.bodyObj);

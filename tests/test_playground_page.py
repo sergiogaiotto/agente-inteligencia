@@ -68,7 +68,7 @@ def test_console_tem_codegen_3_linguagens():
     # curl + Python (requests) + JS (fetch)
     assert "import requests" in src
     assert "await fetch(" in src
-    assert "curl -X POST" in src
+    assert "-X POST" in src   # curl (montado por shell em _cgCurl)
     # abas de linguagem
     assert "LANGS:" in src
 
@@ -93,10 +93,27 @@ def test_codegen_multi_sdk_e_streaming():
     assert "codeMode" in src and 'data-testid="pg-code-mode"' in src
     assert "/invoke/stream" in src                        # endpoint de streaming no spec
     assert "text/event-stream" in src                     # header Accept nos snippets de stream
-    assert "curl -N -X POST" in src                       # curl streaming
+    assert "'-N '" in src                                 # flag de streaming do curl
     assert "getReader()" in src                           # JS fetch stream
     assert "iter_lines" in src                            # Python stream
     assert "BodyHandlers.ofLines" in src                  # Java stream
+
+
+def test_curl_tem_opcoes_de_notacao_por_shell():
+    """Quando curl é escolhido, aparecem as opções de NOTAÇÃO (Bash/PowerShell/CMD).
+    A sintaxe do curl muda por shell: continuação de linha + aspas/escape. No
+    PowerShell `curl` é alias de Invoke-WebRequest → o snippet usa `curl.exe`."""
+    src = PG.read_text(encoding="utf-8")
+    # estado + toggle visível só no curl
+    assert "curlShell" in src
+    assert 'data-testid="pg-curl-shell"' in src
+    assert 'x-show="lang === \'curl\'"' in src
+    # os três alvos
+    assert "Bash (Linux/macOS)" in src and "PowerShell" in src and "CMD (Windows)" in src
+    assert "curlShell='bash'" in src and "curlShell='powershell'" in src and "curlShell='cmd'" in src
+    # mecânica por shell: curl.exe (PS) + escaping próprio (_psq dobra a aspa simples)
+    assert "curl.exe" in src
+    assert "_psq(" in src and "s.replace(/'/g, \"''\")" in src
 
 
 def test_console_tem_abas_tempo_e_trace():
