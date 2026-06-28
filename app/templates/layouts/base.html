@@ -324,10 +324,11 @@
                             <button @click.prevent.stop="openHelp('workspace')" type="button" class="help-btn absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[9px] font-bold hover:bg-brand-100" title="Ajuda desta página">?</button>
                         </div>
                         <div class="relative">
-                            <a href="/mesh/playground" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if request.url.path == '/mesh/playground' %}active{% endif %}">
+                            <a href="/mesh/playground" id="tour-nav-playground" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if request.url.path == '/mesh/playground' %}active{% endif %}">
                                 <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082M9.75 3.104a24.301 24.301 0 014.5 0M9.75 3.104v.276m4.5-.276v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"/></svg>
                                 <span>Playground</span>
                             </a>
+                            <button @click.prevent.stop="openHelp('playground')" type="button" class="help-btn absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[9px] font-bold hover:bg-brand-100" title="Ajuda desta página">?</button>
                         </div>
                     </div>
                 </div>
@@ -1015,6 +1016,7 @@
                 {el:'tour-nav-catalog-cost', title:'Custo & Consumo', description:'Quanto cada agent, pipeline e skill custou em USD, por quem, em que dia, em qual modelo. Base para chargeback interno. Anomalias (pico, limite global) aparecem como alerta automático.'},
                 {el:'tour-nav-workspace', title:'Workspace', description:'O "chat" da plataforma — onde você invoca um agent e vê a resposta ao vivo com cada etapa da execução: recuperação de evidência, raciocínio, verificação. É a tela mais usada no dia-a-dia.'},
                 {el:'tour-nav-mesh', title:'AI Mesh — Fluxo de agentes', description:'Editor visual ÚNICO do AI Mesh: desenhe pipelines (sequenciais A→B→C, paralelos/fan-out ou condicionais), edite agentes, organize em pipelines, gerencie o ciclo de vida e publique no Catálogo. Agents pass-through são ignorados automaticamente. Invoque um pipeline via POST /api/v1/pipelines/{id}/invoke.'},
+                {el:'tour-nav-playground', title:'Playground', description:'O console de API do AI Mesh: teste um pipeline COMO o seu app veria — roda o endpoint real via chave de API (sem cookie), com a resposta projetada por verbosidade, passo-a-passo ao vivo (streaming), abas Tempo/Trace/HTTP e o código pronto (curl/Python/Go/…). O histórico por usuário restaura a execução inteira ao clicar, e o modo A/B compara dois lado a lado.'},
                 {el:'tour-nav-tools', title:'Ferramentas (MCP)', description:'Catálogo de ferramentas externas que os agents podem chamar — consultar ERP, validar CPF/CNPJ, ler banco de dados. Falamos com tools via protocolo MCP padronizado.'},
                 {el:'tour-nav-evidence', title:'Bases de Conhecimento', description:'Onde você cadastra os documentos que o agent vai consultar para responder com fonte: manuais, regulamentos, FAQs. Busca híbrida BM25 + vetorial. Sem isso, o LLM "inventa" do treinamento.'},
                 {el:'tour-nav-api-connectors', title:'API Connectors', description:'Registre APIs externas (CRM, ERP, e-mail, etc.) para que os agents invoquem via HTTP. Builder visual para testar antes, histórico de chamadas, health check periódico.'},
@@ -1119,7 +1121,7 @@
                 '/agents': 'agents',
                 '/skills': 'skills',
                 '/workspace': 'workspace',
-                '/mesh/flow': 'mesh', '/mesh/playground': 'mesh',
+                '/mesh/flow': 'mesh', '/mesh/playground': 'playground',
                 '/mcp': 'tools',
                 '/rag': 'evidence',
                 '/api-connectors': 'api_connectors', '/api_connectors': 'api_connectors',
