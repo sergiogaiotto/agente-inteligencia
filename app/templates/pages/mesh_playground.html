@@ -1,0 +1,243 @@
+{% extends "layouts/base.html" %}
+
+{% block content %}
+<div x-data="playgroundPage()" x-init="init()" class="-m-4 lg:-m-6 min-h-[calc(100vh-3.5rem)]">
+
+    <!-- toolbar -->
+    <div class="flex items-center justify-between gap-3 px-4 lg:px-6 py-3 border-b border-surface-200 bg-white/80">
+        <div class="min-w-0">
+            <h1 class="text-[15px] font-bold text-brand-900 flex items-center gap-2">
+                <svg class="w-4 h-4 text-brand-500" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M9.75 3.1v5.7a2.25 2.25 0 01-.66 1.6L5 14.5m4.75-11.4a24 24 0 014.5 0m0 0v5.7c0 .6.24 1.17.66 1.6L19.8 15.3m-14.8-.8l-1.07 1.07c-1.23 1.23-.65 3.32 1.07 3.61A48 48 0 0012 21c2.77 0 5.49-.24 8.13-.69 1.72-.29 2.3-2.38 1.07-3.61L19.8 15.3"/></svg>
+                Playground
+            </h1>
+            <p class="text-[11px] text-surface-400 leading-snug">Teste o pipeline <strong>como o seu app veria</strong> — endpoint real, via chave de API, com a resposta projetada e o código pronto.</p>
+        </div>
+        <!-- chave -->
+        <div class="flex items-center gap-2 flex-none">
+            <template x-if="!apiKey">
+                <button @click="genKey()" :disabled="curlAuth.creating" type="button"
+                        class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-[12px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.03 5.91c-.56-.1-1.16.03-1.56.43L10.5 17.25H9v1.5H7.5v1.5H4.5a1.5 1.5 0 01-1.5-1.5v-2.38a1.5 1.5 0 01.44-1.06l5.66-5.66c.4-.4.53-1 .43-1.56A6 6 0 1121.75 8.25z"/></svg>
+                    <span x-text="curlAuth.creating ? 'Gerando…' : 'Gerar chave de API'"></span>
+                </button>
+            </template>
+            <template x-if="apiKey">
+                <span class="inline-flex items-center gap-1.5 rounded-lg bg-surface-100 px-2.5 py-1.5 text-[11px] font-mono text-surface-600" data-testid="pg-key">
+                    <svg class="w-3 h-3 text-surface-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 0h10.5a2.25 2.25 0 012.25 2.25v6a2.25 2.25 0 01-2.25 2.25H6.75a2.25 2.25 0 01-2.25-2.25v-6a2.25 2.25 0 012.25-2.25z"/></svg>
+                    <span x-text="window.maskApiKey(apiKey)"></span>
+                </span>
+            </template>
+        </div>
+    </div>
+
+    <!-- lado a lado -->
+    <div class="grid lg:grid-cols-2 gap-0">
+
+        <!-- ESQUERDA: builder -->
+        <div class="p-4 lg:p-6 space-y-4 border-r border-surface-200">
+            <div>
+                <label class="block text-[11px] font-semibold text-surface-500 mb-1.5">Destino</label>
+                <select x-model="selectedId" @change="result=null; liveSteps=[]" data-testid="pg-pipeline"
+                        class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[13px] text-brand-900 outline-none focus:border-brand-400">
+                    <template x-for="p in pipelines" :key="p.id">
+                        <option :value="p.id" x-text="p.name + ' (' + (p.agent_count||0) + ' agentes)'"></option>
+                    </template>
+                </select>
+                <p x-show="!pipelines.length" class="text-[11px] text-surface-400 mt-1">Nenhum pipeline roteável. Crie/publique um no Fluxograma.</p>
+            </div>
+
+            <div>
+                <label class="block text-[11px] font-semibold text-surface-500 mb-1.5">Mensagem (entrada)</label>
+                <textarea x-model="message" rows="3" data-testid="pg-message" placeholder="o que o seu app envia…"
+                          class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[13px] text-brand-900 outline-none focus:border-brand-400 resize-y"></textarea>
+            </div>
+
+            <div>
+                <label class="block text-[11px] font-semibold text-surface-500 mb-1.5">Detalhe da resposta</label>
+                <div class="flex gap-1 text-[11px]">
+                    <template x-for="v in VERB" :key="v.v">
+                        <button @click="verbosity = v.v" type="button"
+                                :class="verbosity === v.v ? 'bg-brand-100 text-brand-700 border-brand-300' : 'bg-surface-50 text-surface-500 border-surface-200 hover:bg-surface-100'"
+                                class="rounded-md border px-2.5 py-1 font-medium transition-colors" x-text="v.l"></button>
+                    </template>
+                </div>
+                <p class="text-[10px] text-surface-400 mt-1.5 leading-snug">Integrações (X-API-Key) vêm em <strong>Deploy</strong> por padrão — resposta + narrativa, sem trace/custo/SQL.</p>
+            </div>
+
+            <button @click="run()" data-testid="pg-run" :disabled="running || !selectedId || !message.trim()"
+                    class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+                <svg x-show="!running" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.25 5.65v12.7c0 .61.66 1 1.18.69l10.5-6.35a.8.8 0 000-1.38L6.43 4.96A.8.8 0 005.25 5.65z"/></svg>
+                <svg x-show="running" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+                <span x-text="running ? 'Executando…' : 'Executar como integração'"></span>
+            </button>
+            <p class="text-[10px] text-surface-400 -mt-2 leading-snug">Roda o endpoint real <span class="font-mono">/invoke/stream</span> via <span class="font-mono">X-API-Key</span> (sem cookie) — fidelidade total ao que o app recebe.</p>
+        </div>
+
+        <!-- DIREITA: resposta / código -->
+        <div class="p-4 lg:p-6">
+            <div class="flex items-center gap-1 mb-3">
+                <button @click="tab='resp'" type="button" :class="tab==='resp' ? 'bg-surface-100 text-brand-900 font-semibold' : 'text-surface-500'" class="rounded-md px-3 py-1.5 text-[12px]">Resposta</button>
+                <button @click="tab='code'" type="button" :class="tab==='code' ? 'bg-surface-100 text-brand-900 font-semibold' : 'text-surface-500'" class="rounded-md px-3 py-1.5 text-[12px]">Código</button>
+                <span x-show="sizeKb" class="ml-auto text-[10.5px] font-mono text-surface-400" x-text="sizeKb + ' KB'"></span>
+            </div>
+
+            <!-- RESPOSTA -->
+            <div x-show="tab==='resp'" class="space-y-3">
+                <!-- passo a passo ao vivo -->
+                <div x-show="running && liveSteps.length" data-testid="pg-live" class="rounded-lg border border-surface-100 bg-surface-50/70 p-3 space-y-1.5">
+                    <template x-for="(s, i) in liveSteps" :key="i">
+                        <div class="flex items-center gap-2 text-[12px]">
+                            <span class="flex-none w-4 text-center">
+                                <svg x-show="s.status==='running'" class="w-3.5 h-3.5 animate-spin inline text-brand-500" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+                                <span x-show="s.status!=='running'" :class="s.status==='error' ? 'text-rose-500' : (s.status==='done' ? 'text-emerald-600' : 'text-surface-400')" x-text="liveIcon(s.status)"></span>
+                            </span>
+                            <span class="font-medium text-brand-900 flex-none" x-text="s.name"></span>
+                            <span x-show="s.message" class="text-surface-500 italic truncate" x-text="'· ' + s.message"></span>
+                        </div>
+                    </template>
+                </div>
+
+                <div x-show="error" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700" x-text="error"></div>
+
+                <template x-if="result">
+                    <div class="space-y-3" data-testid="pg-result">
+                        <div class="rounded-xl border border-brand-100 bg-brand-50/30 p-4 max-h-72 overflow-y-auto">
+                            <template x-if="outCards()">
+                                <div class="space-y-2.5">
+                                    <template x-for="c in outCards()" :key="c.label">
+                                        <div>
+                                            <div class="text-[10px] font-semibold uppercase tracking-wide text-brand-500 mb-0.5" x-text="c.label"></div>
+                                            <p class="text-[13px] text-surface-800 leading-relaxed whitespace-pre-wrap break-words" x-text="c.value"></p>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                            <template x-if="!outCards()">
+                                <p class="text-[13px] text-surface-800 leading-relaxed whitespace-pre-wrap break-words" x-text="result.output || '(sem saída)'"></p>
+                            </template>
+                        </div>
+                        <p class="text-[10px] text-surface-400 leading-snug">↑ é exatamente o JSON que o seu app recebe via <span class="font-mono">X-API-Key</span> (<span x-text="verbLabel"></span>).</p>
+                        <div x-show="(result.steps||result.pipeline_steps||[]).length" class="flex flex-wrap gap-1.5">
+                            <template x-for="(s, i) in (result.steps || result.pipeline_steps || [])" :key="i">
+                                <span class="inline-flex items-center gap-1 rounded-md bg-surface-100 px-1.5 py-0.5 text-[10px]" :class="stepCls(s)">
+                                    <span x-text="stepMeta(s).icon"></span><span x-text="s.agent_name"></span>
+                                </span>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <p x-show="!result && !running && !error" class="text-[12px] text-surface-400">Clique em <strong>Executar como integração</strong> para ver a resposta real do endpoint.</p>
+            </div>
+
+            <!-- CÓDIGO -->
+            <div x-show="tab==='code'" class="space-y-2">
+                <div class="flex items-center gap-1">
+                    <template x-for="l in LANGS" :key="l.k">
+                        <button @click="lang=l.k" type="button" :class="lang===l.k ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2.5 py-1 text-[12px]" x-text="l.l"></button>
+                    </template>
+                    <button @click="copyCode()" type="button" class="ml-auto inline-flex items-center gap-1 text-[11px] text-brand-600 hover:text-brand-700">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M15.75 17.25v3.38c0 .62-.5 1.12-1.13 1.12h-9.75A1.13 1.13 0 013.75 20.63V7.88c0-.62.5-1.13 1.13-1.13H6.75a9 9 0 011.5.12m7.5 10.38h3.38c.62 0 1.12-.5 1.12-1.13V11.25c0-4.46-3.24-8.16-7.5-8.88a9 9 0 00-1.5-.12H9.38c-.62 0-1.13.5-1.13 1.13v3.5"/></svg>
+                        Copiar
+                    </button>
+                </div>
+                <pre class="rounded-lg bg-brand-900 text-surface-50 p-3 text-[11.5px] overflow-x-auto whitespace-pre" data-testid="pg-code" x-text="snippet()"></pre>
+                <p class="text-[10px] text-surface-400">Reflete a requisição atual. <span x-show="!apiKey">Gere uma chave pra embutir o segredo.</span></p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function playgroundPage() {
+    return {
+        ...curlAuthStation(),
+        VERB: [{ v: 'full', l: 'Debug' }, { v: 'summary', l: 'Deploy' }, { v: 'minimal', l: 'Só resposta' }],
+        LANGS: [{ k: 'curl', l: 'curl' }, { k: 'py', l: 'Python' }, { k: 'js', l: 'JavaScript' }],
+        pipelines: [], selectedId: '', message: 'o que temos aqui?',
+        verbosity: 'summary', tab: 'resp', lang: 'curl',
+        running: false, liveSteps: [], result: null, error: null, sizeKb: null,
+
+        async init() {
+            this.curlAuth.keyNameHint = 'Playground';
+            try { const d = await api.get('/api/v1/pipelines'); this.pipelines = (d.pipelines || []).filter(p => p.status !== 'aposentado'); if (this.pipelines.length) this.selectedId = this.pipelines[0].id; }
+            catch (e) { showToast('Falha ao carregar pipelines: ' + e.message, 'error'); }
+        },
+        get apiKey() { return this.curlAuth.generatedKey || ''; },
+        get verbLabel() { const v = this.VERB.find(x => x.v === this.verbosity); return v ? v.l.toLowerCase() : this.verbosity; },
+        get invokeUrl() { return window.location.origin + '/api/v1/pipelines/' + (this.selectedId || '{pipeline_id}') + '/invoke'; },
+        get bodyObj() { return { message: this.message, verbosity: this.verbosity }; },
+
+        async genKey() { await this.generateAndEmbed(); },
+
+        async run() {
+            if (!this.selectedId || !this.message.trim() || this.running) return;
+            if (!this.apiKey) { showToast('Gere uma chave de API primeiro', 'info'); return; }
+            this.running = true; this.error = null; this.result = null; this.liveSteps = []; this.sizeKb = null; this.tab = 'resp';
+            try {
+                // credentials:'omit' OMITE o cookie → o servidor te trata como integração
+                // externa (X-API-Key) e projeta a resposta igual o app receberia.
+                const resp = await fetch(window.location.origin + '/api/v1/pipelines/' + this.selectedId + '/invoke/stream', {
+                    method: 'POST', credentials: 'omit',
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
+                    body: JSON.stringify({ message: this.message.trim(), verbosity: this.verbosity }),
+                });
+                if (!resp.ok || !resp.body) throw new Error('falhou (' + resp.status + ')');
+                const reader = resp.body.getReader(), dec = new TextDecoder();
+                let buf = '';
+                while (true) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let i; while ((i = buf.indexOf('\n\n')) >= 0) { this._ev(buf.slice(0, i)); buf = buf.slice(i + 2); } }
+            } catch (e) { this.error = e.message; }
+            finally { this.running = false; }
+        },
+        _ev(frame) {
+            if (!frame || frame[0] === ':') return;
+            let name = 'message', dataStr = '';
+            for (const line of frame.split('\n')) { if (line.indexOf('event:') === 0) name = line.slice(6).trim(); else if (line.indexOf('data:') === 0) dataStr += line.slice(5).trim(); }
+            let ev = {}; try { ev = JSON.parse(dataStr || '{}'); } catch (_) { return; }
+            if (name === 'agent_start') { this.liveSteps.push({ agent_id: ev.agent_id, name: ev.agent_name || '', status: 'running', message: ev.processing_message || '' }); }
+            else if (['agent_done', 'agent_passthrough', 'agent_skipped', 'agent_error'].includes(name)) {
+                const status = name === 'agent_error' ? 'error' : (name === 'agent_skipped' ? 'skipped' : (name === 'agent_passthrough' ? 'passthrough' : 'done'));
+                const st = [...this.liveSteps].reverse().find(s => s.agent_id === ev.agent_id && s.status === 'running');
+                if (st) st.status = status; else this.liveSteps.push({ agent_id: ev.agent_id, name: ev.agent_name || '', status, message: ev.processing_message || '' });
+            }
+            else if (name === 'pipeline_done') { this.result = ev.result; this.sizeKb = (JSON.stringify(ev.result || {}).length / 1024).toFixed(1); }
+            else if (name === 'stream_error') { this.error = ev.error; }
+        },
+        // resposta elegante (igual ao Fluxograma): JSON → cartões; texto → prosa.
+        outCards() {
+            const out = this.result ? this.result.output : '';
+            if (!out || typeof out !== 'string') return null;
+            const t = out.trim(); if (!(t.startsWith('{') && t.endsWith('}'))) return null;
+            try { const o = JSON.parse(t); if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+                const cs = Object.entries(o).filter(([, v]) => v != null && typeof v !== 'object').map(([k, v]) => ({ label: String(k).replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), value: String(v) }));
+                return cs.length ? cs : null;
+            } catch (_) { return null; }
+        },
+        stepMeta(s) {
+            const st = (s && s.status) || '', fs = (s && s.final_state) || '';
+            if (st === 'error') return { icon: '✗' }; if (st.indexOf('skipped') === 0) return { icon: '⏭' };
+            if (st === 'passthrough') return { icon: '⚡' }; if (fs === 'Refuse') return { icon: '⚠' };
+            return { icon: '✓' };
+        },
+        stepCls(s) { const st = (s && s.status) || '', fs = (s && s.final_state) || ''; if (st === 'error') return 'text-rose-600'; if ((s && s.final_state) === 'Refuse') return 'text-amber-700'; if (st === 'completed' || st === 'done') return 'text-emerald-700'; return 'text-surface-500'; },
+        liveIcon(status) { return status === 'done' ? '✓' : status === 'skipped' ? '⏭' : status === 'passthrough' ? '⚡' : status === 'error' ? '✗' : '•'; },
+
+        // ── codegen ──
+        snippet() {
+            const url = this.invokeUrl, key = this.apiKey || 'SUA_API_KEY';
+            const body = JSON.stringify(this.bodyObj);
+            if (this.lang === 'py') {
+                return 'import requests\n\nr = requests.post(\n    "' + url + '",\n    headers={"X-API-Key": "' + key + '"},\n    json=' + this._pyDict(this.bodyObj) + ',\n)\nprint(r.json())';
+            }
+            if (this.lang === 'js') {
+                return 'const r = await fetch("' + url + '", {\n  method: "POST",\n  headers: { "Content-Type": "application/json", "X-API-Key": "' + key + '" },\n  body: JSON.stringify(' + body + '),\n});\nconsole.log(await r.json());';
+            }
+            const b = body.replace(/'/g, "'\\''");
+            return "curl -X POST '" + url + "' \\\n  -H 'Content-Type: application/json' \\\n  -H 'X-API-Key: " + key + "' \\\n  -d '" + b + "'";
+        },
+        _pyDict(o) { return '{' + Object.entries(o).map(([k, v]) => '"' + k + '": ' + JSON.stringify(v)).join(', ') + '}'; },
+        async copyCode() { if (await window.copyText(this.snippet())) showToast(this.apiKey ? 'Código copiado — contém um segredo' : 'Código copiado', this.apiKey ? 'info' : 'success'); },
+    };
+}
+</script>
+{% endblock %}
