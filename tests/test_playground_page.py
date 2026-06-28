@@ -135,6 +135,12 @@ def test_console_tem_aba_http_e_mapa_de_erros():
     for c in ("401", "400", "404", "409", "422", "429"):
         assert c in src
     assert "testError(e.code)" in src
+    # Regressão (bug do "testar" que nunca disparava): o :disabled do botão precisa
+    # ser um BOOLEAN estrito. `errTests[e.code] && errTests[e.code].loading` retorna
+    # `undefined` quando não há entrada — e o Alpine 3 renderiza um valor `undefined`
+    # de atributo booleano como PRESENTE (botão fica disabled p/ sempre, clique no-op).
+    # O `!!(...)` força false no estado ocioso. Confirmado em browser real (Playwright).
+    assert "!!(errTests[e.code] && errTests[e.code].loading)" in src
 
 
 def test_console_tem_historico_repl():

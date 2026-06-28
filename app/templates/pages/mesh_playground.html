@@ -279,7 +279,7 @@
                                 <div class="flex items-center gap-2">
                                     <span class="font-mono font-semibold rounded px-1.5 py-0.5 bg-rose-50 text-rose-700" x-text="e.code"></span>
                                     <span class="text-surface-700 flex-1" x-text="e.when"></span>
-                                    <button x-show="e.test && selectedId && apiKey" @click="testError(e.code)" :disabled="errTests[e.code] && errTests[e.code].loading" type="button" class="text-brand-600 hover:text-brand-700 text-[10.5px] flex-none">testar →</button>
+                                    <button x-show="e.test && selectedId && apiKey" @click="testError(e.code)" :disabled="!!(errTests[e.code] && errTests[e.code].loading)" type="button" class="text-brand-600 hover:text-brand-700 text-[10.5px] flex-none">testar →</button>
                                 </div>
                                 <div class="font-mono text-[10px] text-surface-400 mt-1 break-all" x-text="e.body"></div>
                                 <div x-show="errTests[e.code] && !errTests[e.code].loading" class="mt-1.5 rounded bg-surface-50 px-2 py-1 text-[10.5px] font-mono break-all" :class="(errTests[e.code] && String(errTests[e.code].status) === String(e.code)) ? 'text-emerald-700' : 'text-surface-600'">
