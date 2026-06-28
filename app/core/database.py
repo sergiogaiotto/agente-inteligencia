@@ -884,9 +884,10 @@ CREATE INDEX IF NOT EXISTS idx_federation_nonces_seen_at ON federation_nonces(se
 
 -- Playground (console de API) — histórico de execuções POR USUÁRIO no servidor
 -- (Feature 1). Antes vivia só em localStorage (por-navegador); agora sobrevive a
--- troca de máquina e fica auditável. Tudo ESCALAR (sem JSONB): guarda só o CARTÃO
--- que a UI mostra (pipeline, mensagem, verbosidade, status, tamanho, duração),
--- NUNCA a resposta inteira (que pode ser sensível). created_at é NAIVE — a rota
+-- troca de máquina e fica auditável. Esta tabela guarda só o CARTÃO escalar que a UI
+-- LISTA (pipeline, mensagem, verbosidade, status, tamanho, duração). A resposta inteira
+-- (que pode ser sensível) NÃO vive aqui — fica opt-in na tabela irmã
+-- playground_run_threads (abaixo), carregada sob demanda. created_at é NAIVE — a rota
 -- grava datetime.utcnow() (coluna TIMESTAMP recusa datetime aware via asyncpg).
 CREATE TABLE IF NOT EXISTS playground_runs (
     id TEXT PRIMARY KEY,
@@ -901,6 +902,18 @@ CREATE TABLE IF NOT EXISTS playground_runs (
     created_at TIMESTAMP DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_playground_runs_user ON playground_runs(user_id, created_at DESC);
+
+-- Thread COMPLETA de uma execução do Playground (resposta + tempo + http), p/
+-- RESTAURAR todos os painéis ao clicar no histórico (sem re-rodar). Tabela SEPARADA
+-- de propósito: o payload pode ser grande (Debug traz trace/SQL/custo), então fica
+-- FORA do SELECT * da listagem (carregado só sob demanda via GET /runs/{id}). PK = id
+-- da run (FK CASCADE: apagar/poda da run leva a thread junto). thread_json é TEXT com
+-- json.dumps (evita o footgun asyncpg+JSONB no Repository genérico).
+CREATE TABLE IF NOT EXISTS playground_run_threads (
+    id TEXT PRIMARY KEY REFERENCES playground_runs(id) ON DELETE CASCADE,
+    thread_json TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -1438,6 +1451,7 @@ pipelines_repo = Repository("pipelines")
 # cifrados; helpers de registro/rotação/verificação em app/catalog/federation_peers.py.
 federation_peers_repo = Repository("federation_peers")
 playground_runs_repo = Repository("playground_runs")  # Feature 1 — histórico do Playground por usuário
+playground_threads_repo = Repository("playground_run_threads")  # thread completa p/ restaurar painéis
 
 
 # ═══════════════════════════════════════════════════════════════

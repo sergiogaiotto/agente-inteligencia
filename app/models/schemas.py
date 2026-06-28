@@ -213,10 +213,12 @@ class PipelineInvokeRequest(BaseModel):
     attachments: Optional[list] = None
 
 class PlaygroundRunCreate(BaseModel):
-    """Uma execução do Playground a persistir no histórico do usuário (Feature 1).
+    """Uma execução do Playground a persistir no histórico do usuário.
 
-    Tudo ESCALAR e opcional — é o cartão que a UI mostra, não o payload da resposta.
-    A rota escopa ao user autenticado e trunca a mensagem defensivamente.
+    Campos escalares = o CARTÃO que a UI lista. ``thread`` (opcional) carrega o payload
+    COMPLETO ({result, timings, http}) p/ restaurar os painéis ao clicar — gravado à
+    parte (``playground_run_threads``), com guarda de tamanho. A rota escopa ao user
+    autenticado e trunca a mensagem defensivamente.
     """
     pipeline_id: Optional[str] = None
     pipeline_name: Optional[str] = None
@@ -225,6 +227,10 @@ class PlaygroundRunCreate(BaseModel):
     status: Optional[str] = None
     size_bytes: Optional[int] = None
     duration_ms: Optional[int] = None
+    # Thread COMPLETA da execução ({result, timings, http}) p/ restaurar os painéis
+    # ao clicar no histórico. Guardada em tabela separada (TEXT/json.dumps) com guarda
+    # de tamanho na rota. Opcional — sem ela, o clique só restaura a requisição.
+    thread: Optional[dict] = None
 
 class KnowledgeSourceCreate(BaseModel):
     name: str; description: Optional[str] = None

@@ -106,7 +106,7 @@
             <!-- Histórico da sessão (persiste no navegador) -->
             <div x-show="history.length" class="pt-3 border-t border-surface-100" data-testid="pg-history">
                 <div class="flex items-center justify-between mb-1.5">
-                    <span class="text-[11px] font-semibold text-surface-500" title="Suas execuções salvas no servidor (por usuário) — clique para restaurar a requisição. Sobrevive a reload e troca de máquina.">Histórico</span>
+                    <span class="text-[11px] font-semibold text-surface-500" title="Suas execuções salvas no servidor (por usuário). Clique numa linha para restaurar a execução INTEIRA — Resposta, Tempo, Trace, HTTP e Código — sem re-rodar. Sobrevive a reload e troca de máquina.">Histórico</span>
                     <button @click="clearHistory()" type="button" class="text-[10px] text-surface-400 hover:text-rose-500">limpar</button>
                 </div>
                 <div class="space-y-1 max-h-56 overflow-y-auto">
@@ -123,7 +123,7 @@
                                 <span class="flex-none" x-text="h.verbLabel"></span>
                                 <span x-show="h.sizeKb" class="flex-none font-mono" x-text="h.sizeKb + ' KB'"></span>
                                 <span x-show="h.totalMs" class="flex-none font-mono" x-text="fmtMs(h.totalMs)"></span>
-                                <span class="ml-auto flex-none text-brand-500 hover:text-brand-700" @click.stop="restore(h); run()">re-rodar →</span>
+                                <span class="ml-auto flex-none text-brand-500 hover:text-brand-700" @click.stop="_applyRequest(h); run()">re-rodar →</span>
                             </div>
                         </div>
                     </template>
@@ -545,6 +545,9 @@ function playgroundPage() {
                 message: this.message.trim(), verbosity: this.verbosity, verbLabel: this.verbLabel,
                 status: (this.result && this.result.status) || '', sizeKb: this.sizeKb, totalMs: Math.round(this.totalMs),
                 sizeBytes: this.respBytes || (this.sizeKb ? Math.round(Number(this.sizeKb) * 1024) : null),
+                // thread completa p/ restaurar os painéis ao clicar (memória nesta sessão;
+                // o servidor guarda em playground_run_threads, lida sob demanda na restore).
+                thread: { result: this.result, timings: this.timings, http: this.http },
             };
             this.history.unshift(e);
             if (this.history.length > 20) this.history = this.history.slice(0, 20);
@@ -559,7 +562,7 @@ function playgroundPage() {
                 const r = await api.post('/api/v1/playground/runs', {
                     pipeline_id: e.pipelineId, pipeline_name: e.pipelineName,
                     message: e.message, verbosity: e.verbosity, status: e.status,
-                    size_bytes: e.sizeBytes, duration_ms: e.totalMs,
+                    size_bytes: e.sizeBytes, duration_ms: e.totalMs, thread: e.thread,
                 });
                 if (!r || !r.id) return;
                 const it = this.history.find(x => x.key === e.key);
@@ -567,7 +570,30 @@ function playgroundPage() {
                 else { try { await api.del('/api/v1/playground/runs/' + r.id); } catch (_) {} } // removida mid-flight → mata o órfão
             } catch (_) { /* offline: segue só no localStorage */ }
         },
-        restore(h) { this.selectedId = h.pipelineId; this.message = h.message; this.verbosity = h.verbosity; },
+        // Só a requisição (destino/mensagem/detalhe) — usado pelo "re-rodar".
+        _applyRequest(h) { this.selectedId = h.pipelineId; this.message = h.message; this.verbosity = h.verbosity; },
+        // Clicar numa linha RESTAURA a thread inteira (Resposta/Tempo/Trace/HTTP/Código)
+        // sem re-rodar: usa a thread em memória (run desta sessão) OU busca no servidor
+        // (GET /runs/{id}). Sem thread (execução antiga/grande) → só a requisição volta.
+        async restore(h) {
+            this._applyRequest(h);
+            // sai do modo comparar (A/B esconde os painéis single) p/ ver o restaurado.
+            this.compareMode = false; this.tab = 'resp';
+            let thread = h.thread;
+            if (!thread && h.id && h.id.indexOf('local-') !== 0) {
+                try { const d = await api.get('/api/v1/playground/runs/' + h.id); thread = d && d.thread; } catch (_) {}
+            }
+            if (thread && thread.result) {
+                this.running = false; this.error = null; this.liveSteps = []; this.expanded = {};
+                this.result = thread.result;
+                this.timings = thread.timings || [];
+                this.http = thread.http || null;
+                this.sizeKb = h.sizeKb;
+                this.respBytes = h.sizeBytes || 0;
+            } else {
+                showToast('Sem detalhes salvos desta execução — rode de novo para ver Resposta/Tempo/Trace.', 'info');
+            }
+        },
         // Apaga UMA linha (servidor + local, sempre por `key`). Best-effort no servidor;
         // id ainda 'local-' (POST pendente) → o órfão é morto pelo re-check do _persistRun.
         async removeRun(h) {
@@ -579,7 +605,9 @@ function playgroundPage() {
             this.history = []; this._saveHistory();
             try { await api.del('/api/v1/playground/runs'); } catch (_) { /* offline: já limpou local */ }
         },
-        _saveHistory() { try { localStorage.setItem('pg_history', JSON.stringify(this.history)); } catch (_) {} },
+        // localStorage é só cache LEVE de cartões — a thread (grande) fica em memória +
+        // servidor, NUNCA no localStorage (evita estourar a cota de ~5MB).
+        _saveHistory() { try { localStorage.setItem('pg_history', JSON.stringify(this.history.map(({ thread, ...c }) => c))); } catch (_) {} },
         // Carrega do servidor (fonte da verdade) e espelha no cache; offline → cai no cache.
         async _loadHistory() {
             try {
