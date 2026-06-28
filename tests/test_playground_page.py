@@ -55,6 +55,32 @@ def test_console_tem_codegen_3_linguagens():
     assert "LANGS:" in src
 
 
+def test_console_tem_abas_tempo_e_trace():
+    src = PG.read_text(encoding="utf-8")
+    # abas novas
+    assert 'data-testid="pg-tab-tempo"' in src and 'data-testid="pg-tab-trace"' in src
+    assert 'data-testid="pg-tempo"' in src and 'data-testid="pg-trace"' in src
+    # Tempo: waterfall do timing do stream + totais
+    assert "get waterfall()" in src and "performance.now()" in src
+    assert "get totalCost()" in src
+    # Trace: lê o trace da resposta FULL (custo/sql/evidência) — só Debug
+    assert "get traceItems()" in src
+    assert "sql_rendered" in src and "evidence_score" in src
+    # custo/SQL só em Debug (fullSteps = pipeline_steps, presente só no full)
+    assert "get fullSteps()" in src
+    assert "só aparece em <strong>Debug</strong>" in src
+
+
+def test_trace_recolhe_expande_com_tooltips():
+    src = PG.read_text(encoding="utf-8")
+    # recolher/expandir por agente
+    assert "expanded[i] = !expanded[i]" in src
+    assert 'x-show="expanded[i]"' in src
+    # tooltips de avaliação (title=) nos termos que precisam de explicação
+    assert "Pontuação de evidência" in src
+    assert "máquina de decisão" in src
+
+
 def test_layout_lado_a_lado():
     src = PG.read_text(encoding="utf-8")
     assert "lg:grid-cols-2" in src   # builder | resposta lado a lado
