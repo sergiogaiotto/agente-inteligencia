@@ -437,17 +437,17 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   },
 
   // ═════════════════════════════════════════════════════════════════
-  // /mesh — AI Mesh (Fluxograma de agentes + Estúdio de Pipelines)
+  // /mesh — AI Mesh (Fluxo de agentes + Estúdio de Pipelines)
   // ═════════════════════════════════════════════════════════════════
   mesh: {
-    title: 'AI Mesh — Fluxograma de agentes',
+    title: 'AI Mesh — Fluxo de agentes',
     summary: 'Editor visual único da rede de agents (o Fluxograma): quem chama quem, em que ordem e sob qual condição. Também é onde você monta pipelines e os publica no Catálogo.',
     sections: [
       {
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>O AI Mesh é a "rede" de agents. O <strong>Fluxograma de agentes</strong> (<code>/mesh/flow</code>) é o editor ÚNICO dessa rede — a antiga página "Topologia de conexões" foi aposentada. Quando uma tarefa precisa passar por mais de um agent (extrair → validar → resumir), aqui é onde você desenha o fluxo visualmente.</p>
+          <p>O AI Mesh é a "rede" de agents. O <strong>Fluxo de agentes</strong> (<code>/mesh/flow</code>) é o editor ÚNICO dessa rede — a antiga página "Topologia de conexões" foi aposentada. Quando uma tarefa precisa passar por mais de um agent (extrair → validar → resumir), aqui é onde você desenha o fluxo visualmente.</p>
           <p>Cada nó é um agent. Cada aresta é uma chamada. Você também agrupa nós em <strong>pipelines</strong> (entidade de 1ª classe, com ciclo de vida) e os publica no Catálogo como <code>kind=pipeline</code> — invocáveis selados via <code>POST /api/v1/pipelines/{id}/invoke</code>.</p>
         `
       },

@@ -312,7 +312,7 @@
                         <div class="relative" id="tour-nav-fluxograma">
                             <a href="/mesh/flow" class="nav-item flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium {% if request.url.path == '/mesh/flow' %}active{% endif %}">
                                 <svg class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="5.5" cy="6" r="2"/><circle cx="5.5" cy="18" r="2"/><circle cx="18.5" cy="12" r="2"/><path d="M7.5 6.8l9 4.2m-9 6.2l9-4.2"/></svg>
-                                <span>Fluxograma de agentes</span>
+                                <span>Fluxo de agentes</span>
                             </a>
                             <button @click.prevent.stop="openHelp('mesh')" type="button" class="help-btn absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[9px] font-bold hover:bg-brand-100" title="Ajuda desta página">?</button>
                         </div>
@@ -1014,7 +1014,7 @@
                 {el:'tour-nav-catalog-stewardship', title:'Curadoria', description:'Painel para curador de área — você vê os agents e pipelines do seu domínio (fiscal, RH, jurídico…) e identifica órfãos, parados ou pouco confiáveis. Aberto a quem tem domains, não só Root.', optional: true},
                 {el:'tour-nav-catalog-cost', title:'Custo & Consumo', description:'Quanto cada agent, pipeline e skill custou em USD, por quem, em que dia, em qual modelo. Base para chargeback interno. Anomalias (pico, limite global) aparecem como alerta automático.'},
                 {el:'tour-nav-workspace', title:'Workspace', description:'O "chat" da plataforma — onde você invoca um agent e vê a resposta ao vivo com cada etapa da execução: recuperação de evidência, raciocínio, verificação. É a tela mais usada no dia-a-dia.'},
-                {el:'tour-nav-mesh', title:'AI Mesh — Fluxograma de agentes', description:'Editor visual ÚNICO do AI Mesh: desenhe pipelines (sequenciais A→B→C, paralelos/fan-out ou condicionais), edite agentes, organize em pipelines, gerencie o ciclo de vida e publique no Catálogo. Agents pass-through são ignorados automaticamente. Invoque um pipeline via POST /api/v1/pipelines/{id}/invoke.'},
+                {el:'tour-nav-mesh', title:'AI Mesh — Fluxo de agentes', description:'Editor visual ÚNICO do AI Mesh: desenhe pipelines (sequenciais A→B→C, paralelos/fan-out ou condicionais), edite agentes, organize em pipelines, gerencie o ciclo de vida e publique no Catálogo. Agents pass-through são ignorados automaticamente. Invoque um pipeline via POST /api/v1/pipelines/{id}/invoke.'},
                 {el:'tour-nav-tools', title:'Ferramentas (MCP)', description:'Catálogo de ferramentas externas que os agents podem chamar — consultar ERP, validar CPF/CNPJ, ler banco de dados. Falamos com tools via protocolo MCP padronizado.'},
                 {el:'tour-nav-evidence', title:'Bases de Conhecimento', description:'Onde você cadastra os documentos que o agent vai consultar para responder com fonte: manuais, regulamentos, FAQs. Busca híbrida BM25 + vetorial. Sem isso, o LLM "inventa" do treinamento.'},
                 {el:'tour-nav-api-connectors', title:'API Connectors', description:'Registre APIs externas (CRM, ERP, e-mail, etc.) para que os agents invoquem via HTTP. Builder visual para testar antes, histórico de chamadas, health check periódico.'},

@@ -46,7 +46,7 @@ window.MODULE_GUIDE = [
     usar: `<p>Pelo navegador:</p>
 <ol class="list-decimal pl-4 mt-2 space-y-1">
   <li>Crie um agent em cada camada em <a href="/agents" class="text-brand-500 underline">/agents</a> (escolha o card Maestro, Triagem ou Especialista).</li>
-  <li>Em <a href="/mesh/flow" class="text-brand-500 underline">/mesh/flow</a> (Fluxograma de agentes), conecte Maestro → Triagem → Especialista arrastando os nós.</li>
+  <li>Em <a href="/mesh/flow" class="text-brand-500 underline">/mesh/flow</a> (Fluxo de agentes), conecte Maestro → Triagem → Especialista arrastando os nós.</li>
   <li>No <a href="/workspace" class="text-brand-500 underline">/workspace</a>, selecione o pipeline e envie uma mensagem — o trace mostra o trajeto pelas 3 camadas.</li>
 </ol>
 <p class="mt-2"><b>Dica de debugging:</b> se uma interação parece "pular" um agent, abra o trace em <a href="/observability" class="text-brand-500 underline">/observability</a> — provavelmente o agent está como pass-through (sem skill nem prompt customizado, prompt curto ou genérico) e foi ignorado automaticamente para economizar a chamada de LLM.</p>`
@@ -583,7 +583,7 @@ docker compose up -d caddy</pre>`,
   <li><b>Ciclo de vida</b> — só <code>aposentado</code> bloqueia a invocação (na entrada); rascunho e publicado rodam.</li>
   <li><b>Invocável selado</b> — <code>POST /api/v1/pipelines/{id}/invoke</code> roda só dentro do subgrafo do pipeline.</li>
 </ul>
-<p class="mt-2">O <b>Fluxograma de agentes</b> é o editor único — a antiga página "Topologia de conexões" foi aposentada.</p>`,
+<p class="mt-2">O <b>Fluxo de agentes</b> é o editor único — a antiga página "Topologia de conexões" foi aposentada.</p>`,
     aplicacao: `<p>Use pipelines quando um fluxo de vários agentes precisa virar uma unidade — versionada, publicável e invocável por um endpoint só.</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
   <li><b>Produto interno</b> — empacote "Análise de crédito" (triagem → especialistas → consolidação) e exponha como 1 chamada.</li>

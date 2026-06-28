@@ -20,7 +20,7 @@ PAGES = {
     "/catalog/stewardship": {"template":"pages/catalog_stewardship.html","title":"Curadoria","section":"catalog_stewardship"},
     "/catalog/cost": {"template":"pages/catalog_cost.html","title":"Custo & Consumo","section":"catalog_cost"},
     "/workspace": {"template":"pages/workspace.html","title":"Workspace","section":"workspace"},
-    "/mesh/flow": {"template":"pages/mesh_flow.html","title":"Fluxograma de agentes","section":"mesh"},
+    "/mesh/flow": {"template":"pages/mesh_flow.html","title":"Fluxo de agentes","section":"mesh"},
     "/mesh/playground": {"template":"pages/mesh_playground.html","title":"Playground","section":"mesh"},
     "/mcp": {"template":"pages/tools.html","title":"MCP","section":"tools"},
     "/rag": {"template":"pages/evidence.html","title":"RAG — Base de Conhecimento","section":"evidence"},
@@ -116,7 +116,7 @@ async def pg_workspace(r: Request): return await _render(r, "/workspace")
 @router.get("/mesh")
 async def pg_mesh(r: Request):
     # Trilha B / PR-B2: a página "Topologia de conexões" foi aposentada — o
-    # Fluxograma de agentes é o editor único do mesh. /mesh redireciona p/ ele
+    # Fluxo de agentes é o editor único do mesh. /mesh redireciona p/ ele
     # (bookmarks/links antigos continuam funcionando). A TABELA mesh_connections
     # e os endpoints /api/v1/mesh/* permanecem (fonte do grafo executável).
     return RedirectResponse("/mesh/flow", status_code=308)
