@@ -884,9 +884,10 @@ CREATE INDEX IF NOT EXISTS idx_federation_nonces_seen_at ON federation_nonces(se
 
 -- Playground (console de API) — histórico de execuções POR USUÁRIO no servidor
 -- (Feature 1). Antes vivia só em localStorage (por-navegador); agora sobrevive a
--- troca de máquina e fica auditável. Tudo ESCALAR (sem JSONB): guarda só o CARTÃO
--- que a UI mostra (pipeline, mensagem, verbosidade, status, tamanho, duração),
--- NUNCA a resposta inteira (que pode ser sensível). created_at é NAIVE — a rota
+-- troca de máquina e fica auditável. Esta tabela guarda só o CARTÃO escalar que a UI
+-- LISTA (pipeline, mensagem, verbosidade, status, tamanho, duração). A resposta inteira
+-- (que pode ser sensível) NÃO vive aqui — fica opt-in na tabela irmã
+-- playground_run_threads (abaixo), carregada sob demanda. created_at é NAIVE — a rota
 -- grava datetime.utcnow() (coluna TIMESTAMP recusa datetime aware via asyncpg).
 CREATE TABLE IF NOT EXISTS playground_runs (
     id TEXT PRIMARY KEY,

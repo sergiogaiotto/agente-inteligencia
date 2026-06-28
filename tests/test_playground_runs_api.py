@@ -199,7 +199,7 @@ def test_post_run_grava_thread_quando_cabe(monkeypatch):
     r = _client().post("/api/v1/playground/runs", json={"message": "m", "thread": thread})
     assert r.status_code == 201, r.text
     assert r.json()["has_thread"] is True
-    assert tcap.get("id")  # mesma id da run (FK)
+    assert tcap["id"] == r.json()["id"], "thread usa a MESMA id da run (FK)"
     assert json.loads(tcap["thread_json"])["result"]["output"] == "oi"
 
 
@@ -218,6 +218,20 @@ def test_post_run_thread_grande_so_grava_cartao(monkeypatch):
     assert r.status_code == 201, r.text
     assert r.json()["has_thread"] is False
     assert called["t"] is False
+
+
+def test_post_run_thread_insert_falha_degrada_para_cartao(monkeypatch):
+    """Falha ao gravar a thread NÃO derruba o POST (o cartão já foi salvo) — degrada
+    p/ has_thread=False, igual ao estouro de tamanho (achado da revisão)."""
+    _stub_card_repos(monkeypatch)
+
+    async def boom(row):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(db.playground_threads_repo, "create", boom)
+    r = _client().post("/api/v1/playground/runs", json={"message": "m", "thread": {"result": {"output": "x"}}})
+    assert r.status_code == 201, r.text
+    assert r.json()["has_thread"] is False
 
 
 def test_get_run_retorna_cartao_e_thread(monkeypatch):

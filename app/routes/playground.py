@@ -26,6 +26,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime
 
@@ -35,6 +36,7 @@ from app.core.auth import require_user
 from app.core.database import playground_runs_repo, playground_threads_repo
 from app.models.schemas import PlaygroundRunCreate
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/playground", tags=["playground"])
 
 #: histórico mantido por usuário (folga sobre o cap de 20 do localStorage).
@@ -104,12 +106,21 @@ async def create_run(data: PlaygroundRunCreate, user: dict = Depends(require_use
         except Exception:
             blob = None
         if blob and len(blob.encode("utf-8")) <= _MAX_THREAD_BYTES:
-            await playground_threads_repo.create({
-                "id": run_id,
-                "thread_json": blob,
-                "created_at": datetime.utcnow(),
-            })
-            stored_thread = True
+            # Best-effort: falha ao gravar a thread NÃO derruba o POST (o cartão já
+            # foi salvo) — degrada p/ has_thread=False, igual ao estouro de tamanho.
+            try:
+                await playground_threads_repo.create({
+                    "id": run_id,
+                    "thread_json": blob,
+                    "created_at": datetime.utcnow(),
+                })
+                stored_thread = True
+            except Exception as e:
+                logger.warning(
+                    "playground.thread.persist_failed",
+                    extra={"event": "playground.thread.persist_failed", "run_id": run_id,
+                           "error_type": type(e).__name__, "error": str(e)[:200]},
+                )
 
     await _prune(user["id"])
     out = _serialize(row)

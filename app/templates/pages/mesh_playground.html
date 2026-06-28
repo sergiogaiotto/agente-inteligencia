@@ -577,7 +577,8 @@ function playgroundPage() {
         // (GET /runs/{id}). Sem thread (execução antiga/grande) → só a requisição volta.
         async restore(h) {
             this._applyRequest(h);
-            this.tab = 'resp';
+            // sai do modo comparar (A/B esconde os painéis single) p/ ver o restaurado.
+            this.compareMode = false; this.tab = 'resp';
             let thread = h.thread;
             if (!thread && h.id && h.id.indexOf('local-') !== 0) {
                 try { const d = await api.get('/api/v1/playground/runs/' + h.id); thread = d && d.thread; } catch (_) {}

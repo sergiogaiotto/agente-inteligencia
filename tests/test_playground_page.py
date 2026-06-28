@@ -207,6 +207,8 @@ def test_historico_restaura_thread_completa():
     assert "_applyRequest(h); run()" in src
     # localStorage segue LEVE: a thread (grande) é removida antes de serializar
     assert "this.history.map(({ thread, ...c }) => c)" in src
+    # restore sai do modo comparar (senão escreveria nos painéis escondidos por !compareMode)
+    assert "this.compareMode = false; this.tab = 'resp'" in src
 
 
 def test_compara_dois_pipelines_lado_a_lado():
