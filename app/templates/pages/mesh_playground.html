@@ -295,7 +295,7 @@
 
             <!-- CÓDIGO -->
             <div x-show="tab==='code' && !compareMode" class="space-y-2">
-                <div class="flex items-center gap-1">
+                <div class="flex flex-wrap items-center gap-1">
                     <template x-for="l in LANGS" :key="l.k">
                         <button @click="lang=l.k" type="button" :class="lang===l.k ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2.5 py-1 text-[12px]" x-text="l.l"></button>
                     </template>
@@ -304,8 +304,14 @@
                         Copiar
                     </button>
                 </div>
+                <!-- sync | streaming: o snippet de streaming consome o SSE de /invoke/stream -->
+                <div class="flex items-center gap-1.5 text-[11px]" data-testid="pg-code-mode">
+                    <span class="text-surface-400">Modo:</span>
+                    <button @click="codeMode='sync'" type="button" :class="codeMode==='sync' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="Espera a resposta inteira (/invoke)">sync</button>
+                    <button @click="codeMode='streaming'" type="button" :class="codeMode==='streaming' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="Consome o /invoke/stream (SSE) — progresso ao vivo, agente a agente">streaming</button>
+                </div>
                 <pre class="rounded-lg bg-brand-900 text-surface-50 p-3 text-[11.5px] overflow-x-auto whitespace-pre" data-testid="pg-code" x-text="snippet()"></pre>
-                <p class="text-[10px] text-surface-400">Reflete a requisição atual. <span x-show="!apiKey">Gere uma chave pra embutir o segredo.</span></p>
+                <p class="text-[10px] text-surface-400">Reflete a requisição atual (<span x-text="codeMode==='streaming' ? 'streaming · SSE' : 'sync'"></span>). <span x-show="!apiKey">Gere uma chave pra embutir o segredo.</span></p>
             </div>
 
             <!-- COMPARAR A/B (F2): 2 execuções reais lado a lado + deltas B vs A -->
@@ -376,9 +382,13 @@ function playgroundPage() {
     return {
         ...curlAuthStation(),
         VERB: [{ v: 'full', l: 'Debug' }, { v: 'summary', l: 'Deploy' }, { v: 'minimal', l: 'Só resposta' }],
-        LANGS: [{ k: 'curl', l: 'curl' }, { k: 'py', l: 'Python' }, { k: 'js', l: 'JavaScript' }],
+        LANGS: [
+            { k: 'curl', l: 'curl' }, { k: 'py', l: 'Python' }, { k: 'py-httpx', l: 'httpx' },
+            { k: 'js', l: 'JavaScript' }, { k: 'node-axios', l: 'axios' }, { k: 'go', l: 'Go' },
+            { k: 'php', l: 'PHP' }, { k: 'ruby', l: 'Ruby' }, { k: 'csharp', l: 'C#' }, { k: 'java', l: 'Java' },
+        ],
         pipelines: [], selectedId: '', message: 'o que temos aqui?',
-        verbosity: 'summary', tab: 'resp', lang: 'curl',
+        verbosity: 'summary', tab: 'resp', lang: 'curl', codeMode: 'sync',
         running: false, liveSteps: [], result: null, error: null, sizeKb: null, respBytes: 0,
         timings: [], _t0: 0, expanded: {},
         http: null, errTests: {}, history: [],
@@ -404,7 +414,6 @@ function playgroundPage() {
         get apiKey() { return this.curlAuth.generatedKey || ''; },
         get selectedName() { const p = this.pipelines.find(x => x.id === this.selectedId); return p ? p.name : ''; },
         get verbLabel() { const v = this.VERB.find(x => x.v === this.verbosity); return v ? v.l.toLowerCase() : this.verbosity; },
-        get invokeUrl() { return window.location.origin + '/api/v1/pipelines/' + (this.selectedId || '{pipeline_id}') + '/invoke'; },
         get bodyObj() { return { message: this.message, verbosity: this.verbosity }; },
 
         async genKey() { await this.generateAndEmbed(); },
@@ -666,18 +675,306 @@ function playgroundPage() {
         },
         fmtMs(ms) { ms = Math.round(ms || 0); return ms >= 1000 ? (ms / 1000).toFixed(1) + ' s' : ms + ' ms'; },
 
-        // ── codegen ──
+        // ── codegen ──  spec único {url,key,body,stream} + 1 formatador por linguagem.
+        // codeMode 'sync' aponta p/ /invoke; 'streaming' p/ /invoke/stream (consumo de
+        // SSE idiomático por linguagem) — o endpoint de streaming é o nosso diferencial.
+        _reqSpec() {
+            const stream = this.codeMode === 'streaming';
+            const url = window.location.origin + '/api/v1/pipelines/' + (this.selectedId || '{pipeline_id}') + (stream ? '/invoke/stream' : '/invoke');
+            return { url, key: this.apiKey || 'SUA_API_KEY', body: JSON.stringify(this.bodyObj), stream };
+        },
+        // escaping por contexto de string do HOST: shell ('…'), double-quoted ("…"),
+        // single-quoted ('…'). O body é o JSON.stringify(bodyObj).
+        _shq(s) { return s.replace(/'/g, "'\\''"); },
+        _dq(s) { return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"'); },
+        _sq(s) { return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'"); },
         snippet() {
-            const url = this.invokeUrl, key = this.apiKey || 'SUA_API_KEY';
-            const body = JSON.stringify(this.bodyObj);
-            if (this.lang === 'py') {
-                return 'import requests\n\nr = requests.post(\n    "' + url + '",\n    headers={"X-API-Key": "' + key + '"},\n    json=' + this._pyDict(this.bodyObj) + ',\n)\nprint(r.json())';
+            const s = this._reqSpec();
+            switch (this.lang) {
+                case 'py': return this._cgPy(s);
+                case 'py-httpx': return this._cgHttpx(s);
+                case 'js': return this._cgJs(s);
+                case 'node-axios': return this._cgAxios(s);
+                case 'go': return this._cgGo(s);
+                case 'php': return this._cgPhp(s);
+                case 'ruby': return this._cgRuby(s);
+                case 'csharp': return this._cgCsharp(s);
+                case 'java': return this._cgJava(s);
+                default: return this._cgCurl(s);
             }
-            if (this.lang === 'js') {
-                return 'const r = await fetch("' + url + '", {\n  method: "POST",\n  headers: { "Content-Type": "application/json", "X-API-Key": "' + key + '" },\n  body: JSON.stringify(' + body + '),\n});\nconsole.log(await r.json());';
-            }
-            const b = body.replace(/'/g, "'\\''");
-            return "curl -X POST '" + url + "' \\\n  -H 'Content-Type: application/json' \\\n  -H 'X-API-Key: " + key + "' \\\n  -d '" + b + "'";
+        },
+        _cgCurl(s) {
+            const b = this._shq(s.body);
+            return (s.stream ? [
+                `curl -N -X POST '${s.url}' \\`,
+                `  -H 'Content-Type: application/json' \\`,
+                `  -H 'X-API-Key: ${s.key}' \\`,
+                `  -H 'Accept: text/event-stream' \\`,
+                `  -d '${b}'`,
+            ] : [
+                `curl -X POST '${s.url}' \\`,
+                `  -H 'Content-Type: application/json' \\`,
+                `  -H 'X-API-Key: ${s.key}' \\`,
+                `  -d '${b}'`,
+            ]).join('\n');
+        },
+        _cgPy(s) {
+            const d = this._pyDict(this.bodyObj);
+            return (s.stream ? [
+                'import requests', '',
+                'with requests.post(',
+                `    "${s.url}",`,
+                `    headers={"X-API-Key": "${s.key}", "Accept": "text/event-stream"},`,
+                `    json=${d},`,
+                '    stream=True,',
+                ') as r:',
+                '    for line in r.iter_lines(decode_unicode=True):',
+                '        if line.startswith("data:"):',
+                '            print(line[5:].strip())',
+            ] : [
+                'import requests', '',
+                'r = requests.post(',
+                `    "${s.url}",`,
+                `    headers={"X-API-Key": "${s.key}"},`,
+                `    json=${d},`,
+                ')',
+                'print(r.json())',
+            ]).join('\n');
+        },
+        _cgHttpx(s) {
+            const d = this._pyDict(this.bodyObj);
+            return (s.stream ? [
+                'import httpx', '',
+                'with httpx.stream(',
+                '    "POST",',
+                `    "${s.url}",`,
+                `    headers={"X-API-Key": "${s.key}", "Accept": "text/event-stream"},`,
+                `    json=${d},`,
+                ') as r:',
+                '    for line in r.iter_lines():',
+                '        if line.startswith("data:"):',
+                '            print(line[5:].strip())',
+            ] : [
+                'import httpx', '',
+                'r = httpx.post(',
+                `    "${s.url}",`,
+                `    headers={"X-API-Key": "${s.key}"},`,
+                `    json=${d},`,
+                ')',
+                'print(r.json())',
+            ]).join('\n');
+        },
+        _cgJs(s) {
+            return (s.stream ? [
+                `const r = await fetch("${s.url}", {`,
+                '  method: "POST",',
+                `  headers: { "Content-Type": "application/json", "X-API-Key": "${s.key}", "Accept": "text/event-stream" },`,
+                `  body: JSON.stringify(${s.body}),`,
+                '});',
+                'const reader = r.body.getReader(), dec = new TextDecoder();',
+                'let buf = "";',
+                'while (true) {',
+                '  const { done, value } = await reader.read();',
+                '  if (done) break;',
+                '  buf += dec.decode(value, { stream: true });',
+                '  let i;',
+                '  while ((i = buf.indexOf("\\n\\n")) >= 0) {',
+                '    const frame = buf.slice(0, i); buf = buf.slice(i + 2);',
+                '    for (const line of frame.split("\\n")) if (line.startsWith("data:")) console.log(line.slice(5).trim());',
+                '  }',
+                '}',
+            ] : [
+                `const r = await fetch("${s.url}", {`,
+                '  method: "POST",',
+                `  headers: { "Content-Type": "application/json", "X-API-Key": "${s.key}" },`,
+                `  body: JSON.stringify(${s.body}),`,
+                '});',
+                'console.log(await r.json());',
+            ]).join('\n');
+        },
+        _cgAxios(s) {
+            return (s.stream ? [
+                'const axios = require("axios");', '',
+                `const r = await axios.post("${s.url}", ${s.body}, {`,
+                `  headers: { "X-API-Key": "${s.key}", "Accept": "text/event-stream" },`,
+                '  responseType: "stream",',
+                '});',
+                'r.data.on("data", (chunk) => {',
+                '  for (const line of chunk.toString().split("\\n"))',
+                '    if (line.startsWith("data:")) console.log(line.slice(5).trim());',
+                '});',
+            ] : [
+                'const axios = require("axios");', '',
+                `const { data } = await axios.post("${s.url}", ${s.body}, {`,
+                `  headers: { "X-API-Key": "${s.key}" },`,
+                '});',
+                'console.log(data);',
+            ]).join('\n');
+        },
+        _cgGo(s) {
+            const b = this._dq(s.body);
+            return (s.stream ? [
+                'package main', '',
+                'import (',
+                '    "bufio"', '    "bytes"', '    "fmt"', '    "net/http"', '    "strings"',
+                ')', '',
+                'func main() {',
+                `    body := []byte("${b}")`,
+                `    req, _ := http.NewRequest("POST", "${s.url}", bytes.NewBuffer(body))`,
+                '    req.Header.Set("Content-Type", "application/json")',
+                `    req.Header.Set("X-API-Key", "${s.key}")`,
+                '    req.Header.Set("Accept", "text/event-stream")',
+                '    resp, _ := http.DefaultClient.Do(req)',
+                '    defer resp.Body.Close()',
+                '    sc := bufio.NewScanner(resp.Body)',
+                '    for sc.Scan() {',
+                '        line := sc.Text()',
+                '        if strings.HasPrefix(line, "data:") {',
+                '            fmt.Println(strings.TrimSpace(line[5:]))',
+                '        }',
+                '    }',
+                '}',
+            ] : [
+                'package main', '',
+                'import (',
+                '    "bytes"', '    "fmt"', '    "io"', '    "net/http"',
+                ')', '',
+                'func main() {',
+                `    body := []byte("${b}")`,
+                `    req, _ := http.NewRequest("POST", "${s.url}", bytes.NewBuffer(body))`,
+                '    req.Header.Set("Content-Type", "application/json")',
+                `    req.Header.Set("X-API-Key", "${s.key}")`,
+                '    resp, _ := http.DefaultClient.Do(req)',
+                '    defer resp.Body.Close()',
+                '    out, _ := io.ReadAll(resp.Body)',
+                '    fmt.Println(string(out))',
+                '}',
+            ]).join('\n');
+        },
+        _cgPhp(s) {
+            const b = this._sq(s.body);
+            return (s.stream ? [
+                '<?php',
+                `$ch = curl_init("${s.url}");`,
+                'curl_setopt($ch, CURLOPT_POST, true);',
+                'curl_setopt($ch, CURLOPT_HTTPHEADER, [',
+                '    "Content-Type: application/json",',
+                `    "X-API-Key: ${s.key}",`,
+                '    "Accept: text/event-stream",',
+                ']);',
+                `curl_setopt($ch, CURLOPT_POSTFIELDS, '${b}');`,
+                'curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $chunk) {',
+                '    foreach (explode("\\n", $chunk) as $line) {',
+                '        if (strpos($line, "data:") === 0) echo trim(substr($line, 5)) . "\\n";',
+                '    }',
+                '    return strlen($chunk);',
+                '});',
+                'curl_exec($ch);',
+                'curl_close($ch);',
+            ] : [
+                '<?php',
+                `$ch = curl_init("${s.url}");`,
+                'curl_setopt($ch, CURLOPT_POST, true);',
+                'curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);',
+                'curl_setopt($ch, CURLOPT_HTTPHEADER, [',
+                '    "Content-Type: application/json",',
+                `    "X-API-Key: ${s.key}",`,
+                ']);',
+                `curl_setopt($ch, CURLOPT_POSTFIELDS, '${b}');`,
+                'echo curl_exec($ch);',
+                'curl_close($ch);',
+            ]).join('\n');
+        },
+        _cgRuby(s) {
+            const b = this._sq(s.body);
+            return (s.stream ? [
+                'require "net/http"', 'require "uri"', '',
+                `uri = URI("${s.url}")`,
+                'Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") do |http|',
+                '  req = Net::HTTP::Post.new(uri)',
+                '  req["Content-Type"] = "application/json"',
+                `  req["X-API-Key"] = "${s.key}"`,
+                '  req["Accept"] = "text/event-stream"',
+                `  req.body = '${b}'`,
+                '  http.request(req) do |res|',
+                '    res.read_body do |chunk|',
+                '      chunk.each_line do |line|',
+                '        puts line[5..].strip if line.start_with?("data:")',
+                '      end',
+                '    end',
+                '  end',
+                'end',
+            ] : [
+                'require "net/http"', 'require "uri"', '',
+                `uri = URI("${s.url}")`,
+                'http = Net::HTTP.new(uri.host, uri.port)',
+                'http.use_ssl = uri.scheme == "https"',
+                'req = Net::HTTP::Post.new(uri)',
+                'req["Content-Type"] = "application/json"',
+                `req["X-API-Key"] = "${s.key}"`,
+                `req.body = '${b}'`,
+                'res = http.request(req)',
+                'puts res.body',
+            ]).join('\n');
+        },
+        _cgCsharp(s) {
+            const b = this._dq(s.body);
+            return (s.stream ? [
+                'using System;', 'using System.IO;', 'using System.Net.Http;', 'using System.Text;', '',
+                'using var client = new HttpClient();',
+                `var req = new HttpRequestMessage(HttpMethod.Post, "${s.url}");`,
+                `req.Headers.Add("X-API-Key", "${s.key}");`,
+                'req.Headers.Add("Accept", "text/event-stream");',
+                `req.Content = new StringContent("${b}", Encoding.UTF8, "application/json");`,
+                'var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);',
+                'using var stream = await resp.Content.ReadAsStreamAsync();',
+                'using var reader = new StreamReader(stream);',
+                'string line;',
+                'while ((line = await reader.ReadLineAsync()) != null)',
+                '    if (line.StartsWith("data:"))',
+                '        Console.WriteLine(line.Substring(5).Trim());',
+            ] : [
+                'using System;', 'using System.Net.Http;', 'using System.Text;', '',
+                'using var client = new HttpClient();',
+                `var req = new HttpRequestMessage(HttpMethod.Post, "${s.url}");`,
+                `req.Headers.Add("X-API-Key", "${s.key}");`,
+                `req.Content = new StringContent("${b}", Encoding.UTF8, "application/json");`,
+                'var resp = await client.SendAsync(req);',
+                'Console.WriteLine(await resp.Content.ReadAsStringAsync());',
+            ]).join('\n');
+        },
+        _cgJava(s) {
+            const b = this._dq(s.body);
+            return (s.stream ? [
+                'import java.net.URI;',
+                'import java.net.http.HttpClient;',
+                'import java.net.http.HttpRequest;',
+                'import java.net.http.HttpResponse;', '',
+                'var client = HttpClient.newHttpClient();',
+                `var req = HttpRequest.newBuilder(URI.create("${s.url}"))`,
+                '    .header("Content-Type", "application/json")',
+                `    .header("X-API-Key", "${s.key}")`,
+                '    .header("Accept", "text/event-stream")',
+                `    .POST(HttpRequest.BodyPublishers.ofString("${b}"))`,
+                '    .build();',
+                'client.send(req, HttpResponse.BodyHandlers.ofLines())',
+                '    .body()',
+                '    .filter(l -> l.startsWith("data:"))',
+                '    .forEach(l -> System.out.println(l.substring(5).trim()));',
+            ] : [
+                'import java.net.URI;',
+                'import java.net.http.HttpClient;',
+                'import java.net.http.HttpRequest;',
+                'import java.net.http.HttpResponse;', '',
+                'var client = HttpClient.newHttpClient();',
+                `var req = HttpRequest.newBuilder(URI.create("${s.url}"))`,
+                '    .header("Content-Type", "application/json")',
+                `    .header("X-API-Key", "${s.key}")`,
+                `    .POST(HttpRequest.BodyPublishers.ofString("${b}"))`,
+                '    .build();',
+                'var resp = client.send(req, HttpResponse.BodyHandlers.ofString());',
+                'System.out.println(resp.body());',
+            ]).join('\n');
         },
         _pyDict(o) { return '{' + Object.entries(o).map(([k, v]) => '"' + k + '": ' + JSON.stringify(v)).join(', ') + '}'; },
         async copyCode() { if (await window.copyText(this.snippet())) showToast(this.apiKey ? 'Código copiado — contém um segredo' : 'Código copiado', this.apiKey ? 'info' : 'success'); },
