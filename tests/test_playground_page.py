@@ -24,6 +24,24 @@ def test_pagina_registrada_e_no_nav():
     assert "'/mesh/playground': 'mesh'" in base          # mapa de seção
 
 
+def test_bloco_ai_mesh_fecha_certo():
+    """Regressão: contagem TOTAL de <div> balanceada NÃO pega mis-nesting. O bloco
+    do AI Mesh (tour-nav-mesh) tinha um </div> a mais que fechava o submenu cedo e
+    escondia o resto da sidebar SÓ na página do Playground. Trava o balanço do BLOCO.
+    (perdido 2x no squash-drop do #436 — por isso o teste do bloco, não só o total.)"""
+    import re
+    base = BASE.read_text(encoding="utf-8")
+    a = base.rfind("<div", 0, base.index('id="tour-nav-mesh"'))
+    b = base.rfind("<div", 0, base.index('id="tour-nav-tools"'))
+    block = base[a:b]
+    opens = len(re.findall(r"<div(?:\s|>)", block))
+    closes = len(re.findall(r"</div>", block))
+    assert opens == closes, f"bloco AI Mesh desbalanceado: {opens} abrem vs {closes} fecham (fecha o nav cedo)"
+    # e os itens DEPOIS do AI Mesh continuam no nav
+    assert base.index('href="/mesh/playground"') < base.index("Ferramentas")
+    assert 'href="/mcp"' in base and 'href="/settings"' in base
+
+
 def test_console_roda_como_integracao():
     src = PG.read_text(encoding="utf-8")
     assert "playgroundPage()" in src
