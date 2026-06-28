@@ -54,7 +54,7 @@
             <div x-show="apiEndpointsFlat.length > 0">
                 <div class="flex items-center justify-between mb-1.5">
                     <label class="block text-[11px] font-semibold text-red-800">Vincular API (endpoint) — modo declarativo</label>
-                    <a href="/api_connectors" target="_blank" class="text-[10px] text-red-500 hover:text-red-700">Gerenciar →</a>
+                    <a href="/api-connectors" target="_blank" class="text-[10px] text-red-500 hover:text-red-700">Gerenciar →</a>
                 </div>
                 <div class="flex flex-wrap gap-1.5">
                     <template x-for="item in apiEndpointsFlat" :key="item.key">
@@ -70,7 +70,7 @@
             </div>
             <div x-show="apiEndpointsFlat.length === 0 && mcpTools.length > 0" class="rounded-lg border border-dashed border-red-200 bg-red-50/50 px-3 py-2 text-[10px] text-red-600">
                 Nenhum endpoint de API cadastrado.
-                <a href="/api_connectors" target="_blank" class="font-semibold underline hover:text-red-800">Cadastrar em API Connectors →</a>
+                <a href="/api-connectors" target="_blank" class="font-semibold underline hover:text-red-800">Cadastrar em API Connectors →</a>
             </div>
 
             <!-- Wave Wizard UX: Fontes RAG (knowledge_sources) — paridade com o Editor. -->
@@ -374,7 +374,7 @@
                                         Cadastre um connector com endpoints em <strong>API Connectors</strong> para usar este recurso.
                                     </div>
                                 </div>
-                                <a href="/api_connectors" target="_blank"
+                                <a href="/api-connectors" target="_blank"
                                    class="block w-full text-center rounded-lg bg-red-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-red-700">
                                     Ir para API Connectors →
                                 </a>
