@@ -165,6 +165,11 @@ def test_compara_dois_pipelines_lado_a_lado():
     # botão despacha por modo; disponibilidade via canRun
     assert "compareMode ? runCompare() : run()" in src
     assert "get canRun()" in src
+    # guarda contra comparar A com A (gasta 2× LLM por um delta de ruído)
+    assert "this.pipelineB !== this.selectedId" in src
+    assert "get compareDegenerate()" in src and 'data-testid="pg-compare-degenerate"' in src
+    # badge do slot mostra o rótulo amigável (Deploy/Debug/Só resposta), não a chave crua
+    assert "vName(slot.verbosity)" in src
 
 
 def test_layout_lado_a_lado():

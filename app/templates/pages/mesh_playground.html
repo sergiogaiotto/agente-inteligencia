@@ -90,6 +90,7 @@
                             </template>
                         </div>
                     </div>
+                    <p x-show="compareDegenerate" class="text-[9.5px] text-amber-700 leading-snug font-medium" data-testid="pg-compare-degenerate">B é igual a A — a comparação seria trivial. Escolha outro destino/detalhe.</p>
                     <p class="text-[9.5px] text-amber-700 leading-snug">⚠ 2 execuções reais = <strong>2× custo de LLM</strong>.</p>
                 </div>
             </div>
@@ -324,7 +325,7 @@
                             <div class="flex items-center gap-2 text-[11px]">
                                 <span class="font-mono rounded px-1.5 py-0.5 bg-brand-100 text-brand-700 flex-none" x-text="idx === 0 ? 'A' : 'B'"></span>
                                 <span class="font-medium text-brand-900 truncate" x-text="(slot && slot.pipelineName) || '—'"></span>
-                                <span x-show="slot && slot.verbosity" class="ml-auto rounded bg-surface-100 text-surface-500 px-1.5 py-0.5 flex-none" x-text="slot && slot.verbosity"></span>
+                                <span x-show="slot && slot.verbosity" class="ml-auto rounded bg-surface-100 text-surface-500 px-1.5 py-0.5 flex-none" x-text="slot && vName(slot.verbosity)"></span>
                             </div>
                             <div x-show="slot && slot.running" class="flex items-center gap-2 text-[11px] text-surface-400">
                                 <svg class="w-3.5 h-3.5 animate-spin text-brand-500" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
@@ -426,12 +427,24 @@ function playgroundPage() {
             } catch (e) { this.errTests[code] = { status: 'erro', detail: e.message }; }
         },
 
-        // Pode disparar? (single: precisa do destino A; compare 2-pipelines: + destino B)
+        // Pode disparar? (single: precisa do destino A; compare: B ≠ A — comparar
+        // algo consigo mesmo gastaria 2× LLM por um delta de ruído).
         get canRun() {
             if (!this.message.trim() || this.running || !this.selectedId) return false;
-            if (this.compareMode && this.compareKind === 'pipelines' && !this.pipelineB) return false;
+            if (this.compareMode) {
+                if (this.compareKind === 'pipelines') return !!this.pipelineB && this.pipelineB !== this.selectedId;
+                return this.verbosityB !== this.verbosity;
+            }
             return true;
         },
+        // B == A (mesmo destino OU mesmo detalhe) → comparação trivial; avisa na UI.
+        get compareDegenerate() {
+            if (!this.compareMode) return false;
+            return this.compareKind === 'pipelines'
+                ? (!!this.pipelineB && this.pipelineB === this.selectedId)
+                : (this.verbosityB === this.verbosity);
+        },
+        vName(v) { const x = this.VERB.find(o => o.v === v); return x ? x.l : (v || ''); },
         _newSlot() { return { running: false, error: null, result: null, liveSteps: [], sizeKb: null, respBytes: 0, timings: [], _t0: 0, http: null, pipelineId: '', pipelineName: '', verbosity: '' }; },
 
         async run() {
