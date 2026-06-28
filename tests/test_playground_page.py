@@ -81,6 +81,18 @@ def test_trace_recolhe_expande_com_tooltips():
     assert "máquina de decisão" in src
 
 
+def test_console_tem_aba_http_e_mapa_de_erros():
+    src = PG.read_text(encoding="utf-8")
+    assert 'data-testid="pg-tab-http"' in src and 'data-testid="pg-http"' in src
+    # status + rate-limit lidos dos headers REAIS da resposta
+    assert "X-RateLimit-Remaining" in src and "this.http = {" in src
+    # mapa de erros: 401/400/404 simuláveis + 409/422/429 na referência
+    assert "ERRORS:" in src and "async testError(code)" in src
+    for c in ("401", "400", "404", "409", "422", "429"):
+        assert c in src
+    assert "testError(e.code)" in src
+
+
 def test_layout_lado_a_lado():
     src = PG.read_text(encoding="utf-8")
     assert "lg:grid-cols-2" in src   # builder | resposta lado a lado
