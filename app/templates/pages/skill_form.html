@@ -243,7 +243,12 @@
                     <option value="router">Triagem</option>
                     <option value="orchestrator">Maestro</option>
                 </select>
-                <input x-model="wizardDomain" placeholder="Domínio (ex: dev)" class="rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] outline-none w-32">
+                <input x-model="wizardDomain" list="wizard-domain-list" placeholder="Domínio (escolha ou digite)"
+                       title="Escolha um domínio existente na lista ou digite um novo" data-testid="wizard-domain"
+                       class="rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] outline-none w-44">
+                <datalist id="wizard-domain-list">
+                    <template x-for="d in wizardDomains" :key="d.id"><option :value="d.name"></option></template>
+                </datalist>
                 <button @click="runWizardSkill()" :disabled="wizardLoading || !wizardPrompt.trim()"
                         class="inline-flex items-center gap-2 rounded-xl bg-red-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-red-600 disabled:opacity-40 transition-all">
                     <svg x-show="wizardLoading" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
@@ -1098,7 +1103,7 @@ function skillForm(editId) {
         isEdit: !!editId,
         saving: false, tab: 'editor',
         showWizard: false, wizardPrompt: '', wizardLoading: false,
-        wizardKind: 'subagent', wizardDomain: '',
+        wizardKind: 'subagent', wizardDomain: '', wizardDomains: [],
         // Wave Wizard Routing: removido wizardProvider/wizardModel.
         // task_type='reasoning' fixo pra esta rota; provider+model vêm
         // do /api/v1/dashboard/llm-routing (configurado em Settings).
@@ -1921,6 +1926,8 @@ ${outMap}`;
 
         async load() {
             try { this.mcpTools = (await api.get('/api/v1/tools')).tools || []; } catch {}
+            // domínios existentes p/ o combobox do wizard (escolher da lista OU digitar novo)
+            try { this.wizardDomains = (await api.get('/api/v1/domains')).domains || []; } catch {}
             await this._reloadApiConnectors();
             // Onda 6 Wave 2b: carrega knowledge_sources p/ multi-select RAG.
             // Eager load (não esperar usuário abrir o dropdown) — payload é leve.
