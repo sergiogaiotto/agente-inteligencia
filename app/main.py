@@ -19,6 +19,7 @@ from app.routes.catalog import router as catalog_router
 from app.routes.data_tables import router as data_tables_router
 from app.routes.logs_admin import router as logs_admin_router
 from app.routes.db_health import router as db_health_router
+from app.routes.playground import router as playground_router
 
 BASE_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
@@ -130,6 +131,7 @@ app.include_router(catalog_router)
 app.include_router(data_tables_router)
 app.include_router(logs_admin_router)
 app.include_router(db_health_router)
+app.include_router(playground_router)
 
 @app.get("/api/health")
 async def health():

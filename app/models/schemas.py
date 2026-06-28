@@ -212,6 +212,20 @@ class PipelineInvokeRequest(BaseModel):
     # doc/imagem (dispatcher) — agentes que não aceitam ignoram.
     attachments: Optional[list] = None
 
+class PlaygroundRunCreate(BaseModel):
+    """Uma execução do Playground a persistir no histórico do usuário (Feature 1).
+
+    Tudo ESCALAR e opcional — é o cartão que a UI mostra, não o payload da resposta.
+    A rota escopa ao user autenticado e trunca a mensagem defensivamente.
+    """
+    pipeline_id: Optional[str] = None
+    pipeline_name: Optional[str] = None
+    message: Optional[str] = None
+    verbosity: Optional[str] = None
+    status: Optional[str] = None
+    size_bytes: Optional[int] = None
+    duration_ms: Optional[int] = None
+
 class KnowledgeSourceCreate(BaseModel):
     name: str; description: Optional[str] = None
     source_type: Optional[str] = "manual"

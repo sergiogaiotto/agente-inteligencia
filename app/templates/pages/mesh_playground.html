@@ -75,7 +75,7 @@
             <!-- Histórico da sessão (persiste no navegador) -->
             <div x-show="history.length" class="pt-3 border-t border-surface-100" data-testid="pg-history">
                 <div class="flex items-center justify-between mb-1.5">
-                    <span class="text-[11px] font-semibold text-surface-500" title="Suas execuções nesta máquina — clique para restaurar a requisição; salvo no localStorage.">Histórico</span>
+                    <span class="text-[11px] font-semibold text-surface-500" title="Suas execuções salvas no servidor (por usuário) — clique para restaurar a requisição. Sobrevive a reload e troca de máquina.">Histórico</span>
                     <button @click="clearHistory()" type="button" class="text-[10px] text-surface-400 hover:text-rose-500">limpar</button>
                 </div>
                 <div class="space-y-1 max-h-56 overflow-y-auto">
@@ -85,6 +85,7 @@
                                 <span class="font-mono rounded px-1 py-0.5 text-[9px] flex-none" :class="h.status==='completed' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'" x-text="h.status==='completed' ? 'ok' : (h.status || 'erro')"></span>
                                 <span class="flex-1 truncate text-surface-700" x-text="h.message"></span>
                                 <span class="text-[9px] text-surface-400 font-mono flex-none" x-text="h.when"></span>
+                                <button @click.stop="removeRun(h)" type="button" title="Remover do histórico" class="flex-none text-surface-300 hover:text-rose-500 text-[12px] leading-none px-0.5">×</button>
                             </div>
                             <div class="flex items-center gap-2 text-[9.5px] text-surface-400 mt-0.5">
                                 <span class="truncate" x-text="h.pipelineName"></span>
@@ -287,7 +288,7 @@ function playgroundPage() {
         LANGS: [{ k: 'curl', l: 'curl' }, { k: 'py', l: 'Python' }, { k: 'js', l: 'JavaScript' }],
         pipelines: [], selectedId: '', message: 'o que temos aqui?',
         verbosity: 'summary', tab: 'resp', lang: 'curl',
-        running: false, liveSteps: [], result: null, error: null, sizeKb: null,
+        running: false, liveSteps: [], result: null, error: null, sizeKb: null, respBytes: 0,
         timings: [], _t0: 0, expanded: {},
         http: null, errTests: {}, history: [],
         ERRORS: [
@@ -357,23 +358,73 @@ function playgroundPage() {
             } catch (e) { this.error = e.message; }
             finally { this.running = false; }
         },
-        // ── Histórico / REPL (persiste no localStorage) ──
+        // ── Histórico / REPL ──  PERSISTIDO no servidor (por-usuário, sobrevive a
+        // troca de máquina); localStorage segue como CACHE OFFLINE. Otimista: a UI
+        // pinta a linha na hora, o POST grava em background e casa o id real depois.
         _pushHistory() {
             const e = {
-                id: Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+                id: 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
                 when: new Date().toLocaleTimeString().slice(0, 5),
                 pipelineId: this.selectedId, pipelineName: this.selectedName,
                 message: this.message.trim(), verbosity: this.verbosity, verbLabel: this.verbLabel,
                 status: (this.result && this.result.status) || '', sizeKb: this.sizeKb, totalMs: Math.round(this.totalMs),
+                sizeBytes: this.respBytes || (this.sizeKb ? Math.round(Number(this.sizeKb) * 1024) : null),
             };
             this.history.unshift(e);
             if (this.history.length > 20) this.history = this.history.slice(0, 20);
             this._saveHistory();
+            this._persistRun(e);
+        },
+        // Grava no servidor (POST). A UI já mostrou `e` (otimista); aqui só trocamos
+        // o id local pelo id real, pra o "×" apagar a linha certa. Falha → fica no cache.
+        async _persistRun(e) {
+            try {
+                const r = await api.post('/api/v1/playground/runs', {
+                    pipeline_id: e.pipelineId, pipeline_name: e.pipelineName,
+                    message: e.message, verbosity: e.verbosity, status: e.status,
+                    size_bytes: e.sizeBytes, duration_ms: e.totalMs,
+                });
+                const it = this.history.find(x => x.id === e.id);
+                if (it && r && r.id) { it.id = r.id; this._saveHistory(); }
+            } catch (_) { /* offline: segue só no localStorage */ }
         },
         restore(h) { this.selectedId = h.pipelineId; this.message = h.message; this.verbosity = h.verbosity; },
-        clearHistory() { this.history = []; this._saveHistory(); },
+        // Apaga UMA linha (servidor + local). Best-effort no servidor — id ainda
+        // 'local-' (POST pendente/falho) só remove do cache.
+        async removeRun(h) {
+            if (h.id && h.id.indexOf('local-') !== 0) { try { await api.del('/api/v1/playground/runs/' + h.id); } catch (_) {} }
+            this.history = this.history.filter(x => x.id !== h.id);
+            this._saveHistory();
+        },
+        async clearHistory() {
+            this.history = []; this._saveHistory();
+            try { await api.del('/api/v1/playground/runs'); } catch (_) { /* offline: já limpou local */ }
+        },
         _saveHistory() { try { localStorage.setItem('pg_history', JSON.stringify(this.history)); } catch (_) {} },
-        _loadHistory() { try { this.history = JSON.parse(localStorage.getItem('pg_history') || '[]'); } catch (_) { this.history = []; } },
+        // Carrega do servidor (fonte da verdade) e espelha no cache; offline → cai no cache.
+        async _loadHistory() {
+            try {
+                const d = await api.get('/api/v1/playground/runs?limit=20');
+                this.history = (d.runs || []).map(r => this._mapRun(r));
+                this._saveHistory();
+            } catch (_) {
+                try { this.history = JSON.parse(localStorage.getItem('pg_history') || '[]'); } catch (__) { this.history = []; }
+            }
+        },
+        // Linha do servidor → entrada do histórico (mesma forma do push otimista).
+        _mapRun(r) {
+            const v = this.VERB.find(x => x.v === r.verbosity);
+            return {
+                id: r.id,
+                when: (window.tzTime ? window.tzTime(r.created_at) : '') || '',
+                pipelineId: r.pipeline_id, pipelineName: r.pipeline_name,
+                message: r.message, verbosity: r.verbosity,
+                verbLabel: v ? v.l.toLowerCase() : (r.verbosity || ''),
+                status: r.status,
+                sizeKb: (r.size_bytes != null ? (r.size_bytes / 1024).toFixed(1) : null),
+                totalMs: r.duration_ms || 0, sizeBytes: r.size_bytes,
+            };
+        },
         _ev(frame) {
             if (!frame || frame[0] === ':') return;
             let name = 'message', dataStr = '';
@@ -390,7 +441,7 @@ function playgroundPage() {
                 const tm = [...this.timings].reverse().find(t => t.agent_id === ev.agent_id && t.end === null);
                 if (tm) { tm.end = performance.now() - this._t0; tm.status = status; }
             }
-            else if (name === 'pipeline_done') { this.result = ev.result; this.sizeKb = (JSON.stringify(ev.result || {}).length / 1024).toFixed(1); }
+            else if (name === 'pipeline_done') { this.result = ev.result; this.respBytes = JSON.stringify(ev.result || {}).length; this.sizeKb = (this.respBytes / 1024).toFixed(1); }
             else if (name === 'stream_error') { this.error = ev.error; }
         },
         // resposta elegante (igual ao Fluxograma): JSON → cartões; texto → prosa.
