@@ -901,6 +901,18 @@ CREATE TABLE IF NOT EXISTS playground_runs (
     created_at TIMESTAMP DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_playground_runs_user ON playground_runs(user_id, created_at DESC);
+
+-- Thread COMPLETA de uma execução do Playground (resposta + tempo + http), p/
+-- RESTAURAR todos os painéis ao clicar no histórico (sem re-rodar). Tabela SEPARADA
+-- de propósito: o payload pode ser grande (Debug traz trace/SQL/custo), então fica
+-- FORA do SELECT * da listagem (carregado só sob demanda via GET /runs/{id}). PK = id
+-- da run (FK CASCADE: apagar/poda da run leva a thread junto). thread_json é TEXT com
+-- json.dumps (evita o footgun asyncpg+JSONB no Repository genérico).
+CREATE TABLE IF NOT EXISTS playground_run_threads (
+    id TEXT PRIMARY KEY REFERENCES playground_runs(id) ON DELETE CASCADE,
+    thread_json TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -1438,6 +1450,7 @@ pipelines_repo = Repository("pipelines")
 # cifrados; helpers de registro/rotação/verificação em app/catalog/federation_peers.py.
 federation_peers_repo = Repository("federation_peers")
 playground_runs_repo = Repository("playground_runs")  # Feature 1 — histórico do Playground por usuário
+playground_threads_repo = Repository("playground_run_threads")  # thread completa p/ restaurar painéis
 
 
 # ═══════════════════════════════════════════════════════════════

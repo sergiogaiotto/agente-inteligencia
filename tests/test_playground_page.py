@@ -191,6 +191,24 @@ def test_historico_persiste_no_servidor():
     assert ':key="h.key"' in src
 
 
+def test_historico_restaura_thread_completa():
+    """Clicar numa linha restaura a EXECUÇÃO inteira (Resposta/Tempo/Trace/HTTP) sem
+    re-rodar: thread em memória (sessão) ou GET /runs/{id} (servidor/outra máquina)."""
+    src = PG.read_text(encoding="utf-8")
+    # a thread (result+timings+http) é empurrada no push e enviada no POST
+    assert "thread: { result: this.result, timings: this.timings, http: this.http }" in src
+    assert "duration_ms: e.totalMs, thread: e.thread" in src
+    # restore: usa a thread em memória OU busca no servidor; reidrata os painéis
+    assert "async restore(h)" in src
+    assert "api.get('/api/v1/playground/runs/' + h.id)" in src
+    assert "this.result = thread.result" in src and "this.timings = thread.timings" in src and "this.http = thread.http" in src
+    # "re-rodar" só aplica a requisição (não busca a thread); restore != re-rodar
+    assert "_applyRequest(h)" in src
+    assert "_applyRequest(h); run()" in src
+    # localStorage segue LEVE: a thread (grande) é removida antes de serializar
+    assert "this.history.map(({ thread, ...c }) => c)" in src
+
+
 def test_compara_dois_pipelines_lado_a_lado():
     """Feature 2: comparar A/B — mesma entrada, 2 execuções reais lado a lado,
     com deltas (tempo/custo/tamanho/igualdade). Reusa o /invoke/stream (sem backend)."""

@@ -6,6 +6,7 @@ servidor, escopado ao user autenticado. Testa: gravação escopada + created_at 
 
 Padrão da casa: TestClient + dependency_overrides[require_user] + repo mockado (sem DB).
 """
+import json
 from datetime import datetime
 
 from fastapi import FastAPI
@@ -173,3 +174,86 @@ def test_clear_runs_apaga_todas_do_user(monkeypatch):
     r = _client().delete("/api/v1/playground/runs")
     assert r.status_code == 200, r.text
     assert r.json()["deleted"] == 2 and set(dels) == {"r1", "r2"}
+
+
+# ── Thread completa (restaurar painéis ao clicar) ───────────────────────────────
+
+def _stub_card_repos(monkeypatch):
+    monkeypatch.setattr(db.playground_runs_repo, "create", _async({}))
+    monkeypatch.setattr(db.playground_runs_repo, "find_all", _async([]))  # poda no-op
+    monkeypatch.setattr(db.playground_runs_repo, "delete", _async(True))
+
+
+def test_post_run_grava_thread_quando_cabe(monkeypatch):
+    """POST com `thread` grava na tabela irmã (TEXT/json.dumps); has_thread=True."""
+    _stub_card_repos(monkeypatch)
+    tcap = {}
+
+    async def fake_tcreate(row):
+        tcap.update(row)
+        return row
+
+    monkeypatch.setattr(db.playground_threads_repo, "create", fake_tcreate)
+    thread = {"result": {"output": "oi", "pipeline_steps": [{"agent_name": "A"}]},
+              "timings": [{"start": 0, "end": 5}], "http": {"status": 200}}
+    r = _client().post("/api/v1/playground/runs", json={"message": "m", "thread": thread})
+    assert r.status_code == 201, r.text
+    assert r.json()["has_thread"] is True
+    assert tcap.get("id")  # mesma id da run (FK)
+    assert json.loads(tcap["thread_json"])["result"]["output"] == "oi"
+
+
+def test_post_run_thread_grande_so_grava_cartao(monkeypatch):
+    """Thread acima do teto → só o cartão (has_thread=False, threads_repo não tocado)."""
+    _stub_card_repos(monkeypatch)
+    called = {"t": False}
+
+    async def fake_tcreate(row):
+        called["t"] = True
+        return row
+
+    monkeypatch.setattr(db.playground_threads_repo, "create", fake_tcreate)
+    big = {"result": {"output": "x" * (pg._MAX_THREAD_BYTES + 10)}}
+    r = _client().post("/api/v1/playground/runs", json={"message": "m", "thread": big})
+    assert r.status_code == 201, r.text
+    assert r.json()["has_thread"] is False
+    assert called["t"] is False
+
+
+def test_get_run_retorna_cartao_e_thread(monkeypatch):
+    monkeypatch.setattr(db.playground_runs_repo, "find_by_id", _async({
+        "id": "r1", "user_id": "u-test", "pipeline_id": "p1", "pipeline_name": "S",
+        "message": "m", "verbosity": "summary", "status": "completed",
+        "size_bytes": 100, "duration_ms": 50, "created_at": datetime(2026, 6, 28, 10, 0, 0),
+    }))
+    monkeypatch.setattr(db.playground_threads_repo, "find_by_id", _async(
+        {"id": "r1", "thread_json": json.dumps({"result": {"output": "oi"}, "http": {"status": 200}})}))
+    r = _client().get("/api/v1/playground/runs/r1")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["pipeline_name"] == "S"
+    assert body["thread"]["result"]["output"] == "oi"
+    assert body["thread"]["http"]["status"] == 200
+
+
+def test_get_run_sem_thread_retorna_null(monkeypatch):
+    monkeypatch.setattr(db.playground_runs_repo, "find_by_id",
+                        _async({"id": "r1", "user_id": "u-test", "created_at": None}))
+    monkeypatch.setattr(db.playground_threads_repo, "find_by_id", _async(None))
+    r = _client().get("/api/v1/playground/runs/r1")
+    assert r.status_code == 200, r.text
+    assert r.json()["thread"] is None
+
+
+def test_get_run_de_outro_user_404_sem_buscar_thread(monkeypatch):
+    monkeypatch.setattr(db.playground_runs_repo, "find_by_id", _async({"id": "r1", "user_id": "outro"}))
+    tcalled = {"c": False}
+
+    async def fake_tfind(i):
+        tcalled["c"] = True
+        return None
+
+    monkeypatch.setattr(db.playground_threads_repo, "find_by_id", fake_tfind)
+    r = _client().get("/api/v1/playground/runs/r1")
+    assert r.status_code == 404, r.text
+    assert tcalled["c"] is False, "não pode buscar a thread de execução de outro user"
