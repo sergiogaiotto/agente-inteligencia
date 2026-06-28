@@ -134,6 +134,12 @@ def test_historico_persiste_no_servidor():
     # cache offline preservado (sobrevive offline) + tz-correto no carimbo do servidor
     assert "localStorage.setItem('pg_history'" in src
     assert "window.tzTime(r.created_at)" in src
+    # init carrega do servidor ao abrir (await: GET resolve antes de qualquer push)
+    assert "await this._loadHistory()" in src
+    # carimbo otimista também via tzTime (não toLocaleTimeString().slice → '3:05:' em en-US)
+    assert "window.tzTime(new Date().toISOString())" in src
+    # x-for keyed numa chave ESTÁVEL (não muda na reconciliação id local→servidor)
+    assert ':key="h.key"' in src
 
 
 def test_layout_lado_a_lado():

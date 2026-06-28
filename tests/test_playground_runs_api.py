@@ -28,6 +28,45 @@ def _client():
     return TestClient(app, raise_server_exceptions=False)
 
 
+def _client_noauth():
+    """Sem override de require_user → exercita o contrato de auth (401)."""
+    app = FastAPI()
+    app.include_router(pg.router)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_sem_auth_401_em_todos_os_verbos():
+    """Premissa da Feature 1 é escopo por-usuário: sem cookie/X-API-Key → 401
+    (require_user corta antes de tocar o DB; nenhum mock necessário)."""
+    c = _client_noauth()
+    assert c.post("/api/v1/playground/runs", json={"message": "x"}).status_code == 401
+    assert c.get("/api/v1/playground/runs").status_code == 401
+    assert c.delete("/api/v1/playground/runs").status_code == 401
+    assert c.delete("/api/v1/playground/runs/qualquer").status_code == 401
+
+
+def test_post_run_poda_retem_recentes_apaga_antigas(monkeypatch):
+    """Após gravar, _prune mantém só as _MAX_KEEP (50) mais recentes. find_all vem
+    DESC (mais novas primeiro), então rows[50:] é o excedente ANTIGO — e a fresca
+    (índice 0) sobrevive. Trava a direção da poda (regressão de ordenação mataria
+    a recém-inserida)."""
+    # 55 linhas, da mais nova (r0) à mais antiga (r54)
+    rows = [{"id": f"r{i}"} for i in range(55)]
+    monkeypatch.setattr(db.playground_runs_repo, "create", _async({}))
+    monkeypatch.setattr(db.playground_runs_repo, "find_all", _async(rows))
+    deleted = []
+
+    async def fake_del(i):
+        deleted.append(i)
+        return True
+
+    monkeypatch.setattr(db.playground_runs_repo, "delete", fake_del)
+    r = _client().post("/api/v1/playground/runs", json={"message": "nova"})
+    assert r.status_code == 201, r.text
+    assert deleted == [f"r{i}" for i in range(50, 55)], "deve apagar só as 5 mais antigas"
+    assert "r0" not in deleted, "a execução mais recente nunca é podada"
+
+
 def test_post_run_grava_escopado_ao_user_com_created_naive(monkeypatch):
     """POST grava com user_id do autenticado e created_at NAIVE (coluna TIMESTAMP)."""
     captured = {}

@@ -69,7 +69,8 @@ async def create_run(data: PlaygroundRunCreate, user: dict = Depends(require_use
 
     Chamado de forma OTIMISTA pela UI (empurra local + persiste). A mensagem é
     truncada defensivamente; ``created_at`` é NAIVE (coluna TIMESTAMP) — armadilha
-    asyncpg conhecida (datetime aware → 500).
+    asyncpg conhecida (datetime aware → 500). Após gravar, PODA o histórico do
+    usuário para ``<= _MAX_KEEP`` (50) execuções (retém as mais recentes).
     """
     row = {
         "id": str(uuid.uuid4()),

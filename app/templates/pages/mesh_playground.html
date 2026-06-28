@@ -79,7 +79,7 @@
                     <button @click="clearHistory()" type="button" class="text-[10px] text-surface-400 hover:text-rose-500">limpar</button>
                 </div>
                 <div class="space-y-1 max-h-56 overflow-y-auto">
-                    <template x-for="h in history" :key="h.id">
+                    <template x-for="h in history" :key="h.key">
                         <div @click="restore(h)" role="button" tabindex="0" class="cursor-pointer rounded-lg border border-surface-100 hover:border-brand-200 hover:bg-surface-50 px-2.5 py-1.5">
                             <div class="flex items-center gap-1.5 text-[11px]">
                                 <span class="font-mono rounded px-1 py-0.5 text-[9px] flex-none" :class="h.status==='completed' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'" x-text="h.status==='completed' ? 'ok' : (h.status || 'erro')"></span>
@@ -302,7 +302,7 @@ function playgroundPage() {
 
         async init() {
             this.curlAuth.keyNameHint = 'Playground';
-            this._loadHistory();
+            await this._loadHistory();  // await: GET resolve antes de qualquer push (sem clobber)
             try { const d = await api.get('/api/v1/pipelines'); this.pipelines = (d.pipelines || []).filter(p => p.status !== 'aposentado'); if (this.pipelines.length) this.selectedId = this.pipelines[0].id; }
             catch (e) { showToast('Falha ao carregar pipelines: ' + e.message, 'error'); }
         },
@@ -363,8 +363,14 @@ function playgroundPage() {
         // pinta a linha na hora, o POST grava em background e casa o id real depois.
         _pushHistory() {
             const e = {
+                // `key` é estável (x-for + ops locais); `id` começa 'local-' e vira o id
+                // do servidor após o POST. Separar os dois evita remount do nó e a corrida
+                // do "×"/limpar antes do POST casar (a linha é sempre achada pela `key`).
+                key: 'pg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
                 id: 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-                when: new Date().toLocaleTimeString().slice(0, 5),
+                // tzTime (sv-SE 24h) em vez de toLocaleTimeString().slice — evita '3:05:'
+                // em navegador en-US e casa o carimbo do servidor (que também usa tzTime).
+                when: (window.tzTime ? window.tzTime(new Date().toISOString()) : new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })),
                 pipelineId: this.selectedId, pipelineName: this.selectedName,
                 message: this.message.trim(), verbosity: this.verbosity, verbLabel: this.verbLabel,
                 status: (this.result && this.result.status) || '', sizeKb: this.sizeKb, totalMs: Math.round(this.totalMs),
@@ -375,8 +381,9 @@ function playgroundPage() {
             this._saveHistory();
             this._persistRun(e);
         },
-        // Grava no servidor (POST). A UI já mostrou `e` (otimista); aqui só trocamos
-        // o id local pelo id real, pra o "×" apagar a linha certa. Falha → fica no cache.
+        // Grava no servidor (POST). A UI já mostrou `e` (otimista); aqui casamos o id
+        // real pra o "×" apagar a linha certa. Se a linha SUMIU enquanto o POST voava
+        // (usuário clicou "×"/limpar antes), apagamos o órfão no servidor. Falha → cache.
         async _persistRun(e) {
             try {
                 const r = await api.post('/api/v1/playground/runs', {
@@ -384,16 +391,18 @@ function playgroundPage() {
                     message: e.message, verbosity: e.verbosity, status: e.status,
                     size_bytes: e.sizeBytes, duration_ms: e.totalMs,
                 });
-                const it = this.history.find(x => x.id === e.id);
-                if (it && r && r.id) { it.id = r.id; this._saveHistory(); }
+                if (!r || !r.id) return;
+                const it = this.history.find(x => x.key === e.key);
+                if (it) { it.id = r.id; this._saveHistory(); }
+                else { try { await api.del('/api/v1/playground/runs/' + r.id); } catch (_) {} } // removida mid-flight → mata o órfão
             } catch (_) { /* offline: segue só no localStorage */ }
         },
         restore(h) { this.selectedId = h.pipelineId; this.message = h.message; this.verbosity = h.verbosity; },
-        // Apaga UMA linha (servidor + local). Best-effort no servidor — id ainda
-        // 'local-' (POST pendente/falho) só remove do cache.
+        // Apaga UMA linha (servidor + local, sempre por `key`). Best-effort no servidor;
+        // id ainda 'local-' (POST pendente) → o órfão é morto pelo re-check do _persistRun.
         async removeRun(h) {
             if (h.id && h.id.indexOf('local-') !== 0) { try { await api.del('/api/v1/playground/runs/' + h.id); } catch (_) {} }
-            this.history = this.history.filter(x => x.id !== h.id);
+            this.history = this.history.filter(x => x.key !== h.key);
             this._saveHistory();
         },
         async clearHistory() {
@@ -415,7 +424,7 @@ function playgroundPage() {
         _mapRun(r) {
             const v = this.VERB.find(x => x.v === r.verbosity);
             return {
-                id: r.id,
+                key: 'srv-' + r.id, id: r.id,
                 when: (window.tzTime ? window.tzTime(r.created_at) : '') || '',
                 pipelineId: r.pipeline_id, pipelineName: r.pipeline_name,
                 message: r.message, verbosity: r.verbosity,
