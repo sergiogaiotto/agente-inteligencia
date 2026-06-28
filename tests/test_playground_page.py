@@ -102,8 +102,8 @@ def test_trace_recolhe_expande_com_tooltips():
 def test_console_tem_aba_http_e_mapa_de_erros():
     src = PG.read_text(encoding="utf-8")
     assert 'data-testid="pg-tab-http"' in src and 'data-testid="pg-http"' in src
-    # status + rate-limit lidos dos headers REAIS da resposta
-    assert "X-RateLimit-Remaining" in src and "this.http = {" in src
+    # status + rate-limit lidos dos headers REAIS da resposta (o stream escreve no sink)
+    assert "X-RateLimit-Remaining" in src and "http = {" in src
     # mapa de erros: 401/400/404 simuláveis + 409/422/429 na referência
     assert "ERRORS:" in src and "async testError(code)" in src
     for c in ("401", "400", "404", "409", "422", "429"):
@@ -140,6 +140,31 @@ def test_historico_persiste_no_servidor():
     assert "window.tzTime(new Date().toISOString())" in src
     # x-for keyed numa chave ESTÁVEL (não muda na reconciliação id local→servidor)
     assert ':key="h.key"' in src
+
+
+def test_compara_dois_pipelines_lado_a_lado():
+    """Feature 2: comparar A/B — mesma entrada, 2 execuções reais lado a lado,
+    com deltas (tempo/custo/tamanho/igualdade). Reusa o /invoke/stream (sem backend)."""
+    src = PG.read_text(encoding="utf-8")
+    # toggle + 2º destino + 2 modos (2 pipelines | mesmo pipeline 2 detalhes)
+    assert 'data-testid="pg-compare-toggle"' in src
+    assert 'data-testid="pg-pipeline-b"' in src
+    assert "compareMode" in src and "compareKind" in src and "verbosityB" in src
+    # núcleo de streaming reaproveitável (sink-aware) + slots A/B
+    assert "async _stream(pipelineId, verbosity, sink)" in src
+    assert "_ev(buf.slice(0, i), sink)" in src       # parser SSE escreve no sink
+    assert "async runCompare()" in src and "_runSlot(" in src
+    assert "Promise.all([this._runSlot(this.cmp.A), this._runSlot(this.cmp.B)])" in src
+    # 2 execuções reais = 2× custo (avisado) — não é projeção client-side
+    assert "2× custo de LLM" in src
+    # painel 2 colunas + deltas + helpers por-bucket
+    assert 'data-testid="pg-compare"' in src and 'data-testid="pg-deltas"' in src
+    assert "[cmp.A, cmp.B]" in src
+    assert "get deltas()" in src and "sameOutput" in src
+    assert "_outCards(slot)" in src and "_totalMs(slot)" in src and "_totalCost(slot)" in src
+    # botão despacha por modo; disponibilidade via canRun
+    assert "compareMode ? runCompare() : run()" in src
+    assert "get canRun()" in src
 
 
 def test_layout_lado_a_lado():

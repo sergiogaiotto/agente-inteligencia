@@ -64,11 +64,41 @@
                 <p class="text-[10px] text-surface-400 mt-1.5 leading-snug">Integrações (X-API-Key) vêm em <strong>Deploy</strong> por padrão — resposta + narrativa, sem trace/custo/SQL.</p>
             </div>
 
-            <button @click="run()" data-testid="pg-run" :disabled="running || !selectedId || !message.trim()"
+            <!-- comparar A/B (F2): mesma entrada → 2 destinos lado a lado -->
+            <div>
+                <label class="flex items-center gap-2 text-[11px] font-medium text-surface-600 cursor-pointer">
+                    <input type="checkbox" x-model="compareMode" data-testid="pg-compare-toggle" class="rounded border-surface-300 text-brand-500 focus:ring-brand-400">
+                    <span>Comparar dois lado a lado (A/B)</span>
+                </label>
+                <div x-show="compareMode" class="mt-2 space-y-2 rounded-lg border border-surface-100 bg-surface-50/60 p-2.5" data-testid="pg-compare-config">
+                    <div class="flex gap-1 text-[10.5px]">
+                        <button @click="compareKind='pipelines'" type="button" :class="compareKind==='pipelines' ? 'bg-brand-100 text-brand-700 border-brand-300' : 'bg-white text-surface-500 border-surface-200 hover:bg-surface-50'" class="rounded-md border px-2 py-1 font-medium">2 pipelines</button>
+                        <button @click="compareKind='verbosity'" type="button" :class="compareKind==='verbosity' ? 'bg-brand-100 text-brand-700 border-brand-300' : 'bg-white text-surface-500 border-surface-200 hover:bg-surface-50'" class="rounded-md border px-2 py-1 font-medium">mesmo pipeline · 2 detalhes</button>
+                    </div>
+                    <div x-show="compareKind==='pipelines'">
+                        <label class="block text-[10px] font-semibold text-surface-500 mb-1">Destino B</label>
+                        <select x-model="pipelineB" data-testid="pg-pipeline-b" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] text-brand-900 outline-none focus:border-brand-400">
+                            <option value="">— escolha o 2º pipeline —</option>
+                            <template x-for="p in pipelines" :key="p.id"><option :value="p.id" x-text="p.name"></option></template>
+                        </select>
+                    </div>
+                    <div x-show="compareKind==='verbosity'">
+                        <label class="block text-[10px] font-semibold text-surface-500 mb-1">Detalhe B</label>
+                        <div class="flex gap-1 text-[10.5px]">
+                            <template x-for="v in VERB" :key="v.v">
+                                <button @click="verbosityB=v.v" type="button" :class="verbosityB===v.v ? 'bg-brand-100 text-brand-700 border-brand-300' : 'bg-white text-surface-500 border-surface-200 hover:bg-surface-50'" class="rounded-md border px-2 py-1 font-medium" x-text="v.l"></button>
+                            </template>
+                        </div>
+                    </div>
+                    <p class="text-[9.5px] text-amber-700 leading-snug">⚠ 2 execuções reais = <strong>2× custo de LLM</strong>.</p>
+                </div>
+            </div>
+
+            <button @click="compareMode ? runCompare() : run()" data-testid="pg-run" :disabled="!canRun"
                     class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
                 <svg x-show="!running" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.25 5.65v12.7c0 .61.66 1 1.18.69l10.5-6.35a.8.8 0 000-1.38L6.43 4.96A.8.8 0 005.25 5.65z"/></svg>
                 <svg x-show="running" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
-                <span x-text="running ? 'Executando…' : 'Executar como integração'"></span>
+                <span x-text="running ? 'Executando…' : (compareMode ? 'Comparar A · B' : 'Executar como integração')"></span>
             </button>
             <p class="text-[10px] text-surface-400 -mt-2 leading-snug">Roda o endpoint real <span class="font-mono">/invoke/stream</span> via <span class="font-mono">X-API-Key</span> (sem cookie) — fidelidade total ao que o app recebe.</p>
 
@@ -102,7 +132,7 @@
 
         <!-- DIREITA: resposta / código -->
         <div class="p-4 lg:p-6">
-            <div class="flex items-center gap-1 mb-3">
+            <div class="flex items-center gap-1 mb-3" x-show="!compareMode">
                 <button @click="tab='resp'" type="button" :class="tab==='resp' ? 'bg-surface-100 text-brand-900 font-semibold' : 'text-surface-500'" class="rounded-md px-3 py-1.5 text-[12px]">Resposta</button>
                 <button @click="tab='tempo'" type="button" data-testid="pg-tab-tempo" :class="tab==='tempo' ? 'bg-surface-100 text-brand-900 font-semibold' : 'text-surface-500'" class="rounded-md px-3 py-1.5 text-[12px]" title="Latência por agente — onde o tempo (e o custo) foi gasto">Tempo</button>
                 <button @click="tab='trace'" type="button" data-testid="pg-tab-trace" :class="tab==='trace' ? 'bg-surface-100 text-brand-900 font-semibold' : 'text-surface-500'" class="rounded-md px-3 py-1.5 text-[12px]" title="Caminho da decisão (FSM), evidências e SQL por agente — só em Debug">Trace</button>
@@ -112,7 +142,7 @@
             </div>
 
             <!-- RESPOSTA -->
-            <div x-show="tab==='resp'" class="space-y-3">
+            <div x-show="tab==='resp' && !compareMode" class="space-y-3">
                 <!-- passo a passo ao vivo -->
                 <div x-show="running && liveSteps.length" data-testid="pg-live" class="rounded-lg border border-surface-100 bg-surface-50/70 p-3 space-y-1.5">
                     <template x-for="(s, i) in liveSteps" :key="i">
@@ -161,7 +191,7 @@
             </div>
 
             <!-- TEMPO (profiler) -->
-            <div x-show="tab==='tempo'" class="space-y-3" data-testid="pg-tempo">
+            <div x-show="tab==='tempo' && !compareMode" class="space-y-3" data-testid="pg-tempo">
                 <p x-show="!timings.length" class="text-[12px] text-surface-400">Execute para ver a latência por agente.</p>
                 <template x-if="timings.length">
                     <div class="space-y-3">
@@ -190,7 +220,7 @@
             </div>
 
             <!-- TRACE -->
-            <div x-show="tab==='trace'" class="space-y-2" data-testid="pg-trace">
+            <div x-show="tab==='trace' && !compareMode" class="space-y-2" data-testid="pg-trace">
                 <p x-show="!result" class="text-[12px] text-surface-400">Execute para ver o trace.</p>
                 <div x-show="result && !fullSteps.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11.5px] text-amber-800 leading-relaxed">
                     O trace detalhado — caminho da FSM, evidências, <span class="font-mono">SQL</span> renderado e custo — só aparece em <strong>Debug</strong>. Em Deploy/Só resposta o servidor não expõe a tripa interna. Rode em <strong>Debug</strong> para auditar.
@@ -231,7 +261,7 @@
             </div>
 
             <!-- HTTP (contrato) -->
-            <div x-show="tab==='http'" class="space-y-4" data-testid="pg-http">
+            <div x-show="tab==='http' && !compareMode" class="space-y-4" data-testid="pg-http">
                 <div x-show="http">
                     <div class="text-[11px] font-semibold text-surface-500 mb-1.5">Última resposta</div>
                     <div class="flex flex-wrap gap-2 text-[11px]">
@@ -263,7 +293,7 @@
             </div>
 
             <!-- CÓDIGO -->
-            <div x-show="tab==='code'" class="space-y-2">
+            <div x-show="tab==='code' && !compareMode" class="space-y-2">
                 <div class="flex items-center gap-1">
                     <template x-for="l in LANGS" :key="l.k">
                         <button @click="lang=l.k" type="button" :class="lang===l.k ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2.5 py-1 text-[12px]" x-text="l.l"></button>
@@ -275,6 +305,66 @@
                 </div>
                 <pre class="rounded-lg bg-brand-900 text-surface-50 p-3 text-[11.5px] overflow-x-auto whitespace-pre" data-testid="pg-code" x-text="snippet()"></pre>
                 <p class="text-[10px] text-surface-400">Reflete a requisição atual. <span x-show="!apiKey">Gere uma chave pra embutir o segredo.</span></p>
+            </div>
+
+            <!-- COMPARAR A/B (F2): 2 execuções reais lado a lado + deltas B vs A -->
+            <div x-show="compareMode" data-testid="pg-compare" class="space-y-3">
+                <template x-if="deltas">
+                    <div class="flex flex-wrap items-center gap-2 text-[11px] rounded-lg border border-surface-200 bg-surface-50 px-3 py-2" data-testid="pg-deltas">
+                        <span class="font-semibold text-surface-500">B vs A:</span>
+                        <span class="rounded-md px-2 py-0.5 font-mono" :class="deltas.dMs <= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'" x-text="(deltas.dMs <= 0 ? '−' : '+') + fmtMs(Math.abs(deltas.dMs))" title="Diferença de tempo total (B − A); verde = B mais rápido"></span>
+                        <span x-show="deltas.dCost !== null" class="rounded-md px-2 py-0.5 font-mono bg-surface-100 text-surface-600" x-text="'Δ US$ ' + (deltas.dCost !== null ? deltas.dCost.toFixed(4) : '')" title="Diferença de custo (só quando ambos vêm em Debug)"></span>
+                        <span class="rounded-md px-2 py-0.5 font-mono bg-surface-100 text-surface-600" x-text="(deltas.dSizeKb <= 0 ? '−' : '+') + Math.abs(deltas.dSizeKb).toFixed(1) + ' KB'" title="Diferença de tamanho da resposta"></span>
+                        <span class="rounded-md px-2 py-0.5 font-medium" :class="deltas.sameOutput ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'" x-text="deltas.sameOutput ? 'resposta idêntica' : 'resposta diferente'" title="Compara o texto de saída final de A e B"></span>
+                    </div>
+                </template>
+                <div class="grid grid-cols-2 gap-3">
+                    <template x-for="(slot, idx) in [cmp.A, cmp.B]" :key="idx">
+                        <div class="rounded-xl border border-surface-200 p-3 space-y-2 min-w-0">
+                            <div class="flex items-center gap-2 text-[11px]">
+                                <span class="font-mono rounded px-1.5 py-0.5 bg-brand-100 text-brand-700 flex-none" x-text="idx === 0 ? 'A' : 'B'"></span>
+                                <span class="font-medium text-brand-900 truncate" x-text="(slot && slot.pipelineName) || '—'"></span>
+                                <span x-show="slot && slot.verbosity" class="ml-auto rounded bg-surface-100 text-surface-500 px-1.5 py-0.5 flex-none" x-text="slot && slot.verbosity"></span>
+                            </div>
+                            <div x-show="slot && slot.running" class="flex items-center gap-2 text-[11px] text-surface-400">
+                                <svg class="w-3.5 h-3.5 animate-spin text-brand-500" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+                                executando…
+                            </div>
+                            <div x-show="slot && slot.error" class="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] text-rose-700 break-words" x-text="slot && slot.error"></div>
+                            <template x-if="slot && slot.result">
+                                <div class="space-y-2">
+                                    <div class="rounded-lg border border-brand-100 bg-brand-50/30 p-2.5 max-h-60 overflow-y-auto">
+                                        <template x-if="_outCards(slot)">
+                                            <div class="space-y-1.5">
+                                                <template x-for="c in _outCards(slot)" :key="c.label">
+                                                    <div>
+                                                        <div class="text-[9px] font-semibold uppercase tracking-wide text-brand-500 mb-0.5" x-text="c.label"></div>
+                                                        <p class="text-[12px] text-surface-800 leading-relaxed whitespace-pre-wrap break-words" x-text="c.value"></p>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </template>
+                                        <template x-if="!_outCards(slot)">
+                                            <p class="text-[12px] text-surface-800 leading-relaxed whitespace-pre-wrap break-words" x-text="slot.result.output || '(sem saída)'"></p>
+                                        </template>
+                                    </div>
+                                    <div x-show="(slot.result.steps || slot.result.pipeline_steps || []).length" class="flex flex-wrap gap-1">
+                                        <template x-for="(s, i) in (slot.result.steps || slot.result.pipeline_steps || [])" :key="i">
+                                            <span class="inline-flex items-center gap-1 rounded bg-surface-100 px-1.5 py-0.5 text-[10px]" :class="stepCls(s)"><span x-text="stepMeta(s).icon"></span><span x-text="s.agent_name"></span></span>
+                                        </template>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2 text-[10px] text-surface-400 font-mono">
+                                        <span x-text="'⏱ ' + fmtMs(_totalMs(slot))"></span>
+                                        <span x-show="_totalCost(slot) !== null" x-text="'US$ ' + _totalCost(slot)"></span>
+                                        <span x-show="slot.sizeKb" x-text="slot.sizeKb + ' KB'"></span>
+                                    </div>
+                                </div>
+                            </template>
+                            <p x-show="slot && !slot.result && !slot.running && !slot.error" class="text-[11px] text-surface-400">aguardando…</p>
+                        </div>
+                    </template>
+                </div>
+                <p class="text-[10px] text-surface-400 leading-snug">Mesma entrada nos dois. <strong>2 execuções reais</strong> (2× custo de LLM) — compare 2 pipelines ou o mesmo pipeline em 2 níveis de detalhe (A/B e regressão).</p>
             </div>
         </div>
     </div>
@@ -291,6 +381,10 @@ function playgroundPage() {
         running: false, liveSteps: [], result: null, error: null, sizeKb: null, respBytes: 0,
         timings: [], _t0: 0, expanded: {},
         http: null, errTests: {}, history: [],
+        // comparar A/B (F2): 2 execuções REAIS lado a lado — 2 pipelines OU o mesmo
+        // pipeline em 2 níveis de detalhe. Buckets cmp.A/cmp.B isolam cada execução.
+        compareMode: false, compareKind: 'pipelines', pipelineB: '', verbosityB: 'minimal',
+        cmp: { A: null, B: null },
         ERRORS: [
             { code: 401, when: 'chave de API ausente ou inválida', body: '{"detail":"Autenticação necessária (cookie ou X-API-Key)."}', test: true },
             { code: 400, when: 'mensagem (entrada) vazia', body: '{"detail":"Informe \'message\' (ou \'input\')."}', test: true },
@@ -332,31 +426,77 @@ function playgroundPage() {
             } catch (e) { this.errTests[code] = { status: 'erro', detail: e.message }; }
         },
 
+        // Pode disparar? (single: precisa do destino A; compare 2-pipelines: + destino B)
+        get canRun() {
+            if (!this.message.trim() || this.running || !this.selectedId) return false;
+            if (this.compareMode && this.compareKind === 'pipelines' && !this.pipelineB) return false;
+            return true;
+        },
+        _newSlot() { return { running: false, error: null, result: null, liveSteps: [], sizeKb: null, respBytes: 0, timings: [], _t0: 0, http: null, pipelineId: '', pipelineName: '', verbosity: '' }; },
+
         async run() {
-            if (!this.selectedId || !this.message.trim() || this.running) return;
+            if (!this.canRun) return;
             if (!this.apiKey) { showToast('Gere uma chave de API primeiro', 'info'); return; }
-            this.running = true; this.error = null; this.result = null; this.liveSteps = []; this.sizeKb = null; this.tab = 'resp';
-            this.timings = []; this.expanded = {}; this._t0 = performance.now(); this.http = null;
+            this.running = true; this.error = null; this.result = null; this.liveSteps = []; this.sizeKb = null; this.respBytes = 0; this.tab = 'resp';
+            this.timings = []; this.expanded = {}; this.http = null;
             try {
-                // credentials:'omit' OMITE o cookie → o servidor te trata como integração
-                // externa (X-API-Key) e projeta a resposta igual o app receberia.
-                const resp = await fetch(window.location.origin + '/api/v1/pipelines/' + this.selectedId + '/invoke/stream', {
-                    method: 'POST', credentials: 'omit',
-                    headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
-                    body: JSON.stringify({ message: this.message.trim(), verbosity: this.verbosity }),
-                });
-                this.http = { status: resp.status, ok: resp.ok, limit: resp.headers.get('X-RateLimit-Limit'), remaining: resp.headers.get('X-RateLimit-Remaining'), contentType: resp.headers.get('Content-Type') };
-                if (!resp.ok) {
-                    let d = ''; try { const j = await resp.json(); d = j.detail || JSON.stringify(j); } catch (_) {}
-                    throw new Error('HTTP ' + resp.status + (d ? (' — ' + (typeof d === 'string' ? d : JSON.stringify(d))) : ''));
-                }
-                if (!resp.body) throw new Error('sem corpo de stream');
-                const reader = resp.body.getReader(), dec = new TextDecoder();
-                let buf = '';
-                while (true) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let i; while ((i = buf.indexOf('\n\n')) >= 0) { this._ev(buf.slice(0, i)); buf = buf.slice(i + 2); } }
+                await this._stream(this.selectedId, this.verbosity, this);  // sink = this
                 if (this.result && !this.error) this._pushHistory();
             } catch (e) { this.error = e.message; }
             finally { this.running = false; }
+        },
+        // Comparar A/B: 2 execuções REAIS em paralelo (Promise.all), cada uma num slot
+        // isolado. 'pipelines' = 2 destinos; 'verbosity' = mesmo destino, 2 detalhes.
+        // 2 execuções = 2× custo de LLM (avisado na UI). Mutações vão pelos PROXIES
+        // reativos (this.cmp.A/B) — mutar o objeto cru não dispararia o render.
+        async runCompare() {
+            if (!this.canRun) return;
+            if (!this.apiKey) { showToast('Gere uma chave de API primeiro', 'info'); return; }
+            const a = Object.assign(this._newSlot(), { pipelineId: this.selectedId, pipelineName: this.selectedName, verbosity: this.verbosity });
+            const b = this.compareKind === 'verbosity'
+                ? Object.assign(this._newSlot(), { pipelineId: this.selectedId, pipelineName: this.selectedName, verbosity: this.verbosityB })
+                : Object.assign(this._newSlot(), { pipelineId: this.pipelineB, pipelineName: (this.pipelines.find(p => p.id === this.pipelineB) || {}).name || '', verbosity: this.verbosity });
+            this.cmp = { A: a, B: b };
+            this.running = true; this.cmp.A.running = true; this.cmp.B.running = true;
+            await Promise.all([this._runSlot(this.cmp.A), this._runSlot(this.cmp.B)]);
+            this.running = false;
+        },
+        async _runSlot(slot) {
+            try { await this._stream(slot.pipelineId, slot.verbosity, slot); }
+            catch (e) { slot.error = e.message; }
+            finally { slot.running = false; }
+        },
+        // Núcleo de streaming reaproveitável: consome /invoke/stream escrevendo num SINK
+        // (this no simples; um slot no comparar). credentials:'omit' OMITE o cookie → o
+        // servidor projeta a resposta de integração (X-API-Key), fiel ao que o app vê.
+        async _stream(pipelineId, verbosity, sink) {
+            sink._t0 = performance.now();
+            const resp = await fetch(window.location.origin + '/api/v1/pipelines/' + pipelineId + '/invoke/stream', {
+                method: 'POST', credentials: 'omit',
+                headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
+                body: JSON.stringify({ message: this.message.trim(), verbosity }),
+            });
+            sink.http = { status: resp.status, ok: resp.ok, limit: resp.headers.get('X-RateLimit-Limit'), remaining: resp.headers.get('X-RateLimit-Remaining'), contentType: resp.headers.get('Content-Type') };
+            if (!resp.ok) {
+                let d = ''; try { const j = await resp.json(); d = j.detail || JSON.stringify(j); } catch (_) {}
+                throw new Error('HTTP ' + resp.status + (d ? (' — ' + (typeof d === 'string' ? d : JSON.stringify(d))) : ''));
+            }
+            if (!resp.body) throw new Error('sem corpo de stream');
+            const reader = resp.body.getReader(), dec = new TextDecoder();
+            let buf = '';
+            while (true) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let i; while ((i = buf.indexOf('\n\n')) >= 0) { this._ev(buf.slice(0, i), sink); buf = buf.slice(i + 2); } }
+        },
+        // Deltas B vs A (tempo/custo/tamanho/igualdade) — o coração do A/B e regressão.
+        get deltas() {
+            const A = this.cmp.A, B = this.cmp.B;
+            if (!A || !B || !A.result || !B.result) return null;
+            const ca = this._totalCost(A), cb = this._totalCost(B);
+            return {
+                dMs: this._totalMs(B) - this._totalMs(A),
+                dCost: (ca !== null && cb !== null) ? (Number(cb) - Number(ca)) : null,
+                dSizeKb: (Number(B.sizeKb) || 0) - (Number(A.sizeKb) || 0),
+                sameOutput: ((A.result.output || '') === (B.result.output || '')),
+            };
         },
         // ── Histórico / REPL ──  PERSISTIDO no servidor (por-usuário, sobrevive a
         // troca de máquina); localStorage segue como CACHE OFFLINE. Otimista: a UI
@@ -434,28 +574,31 @@ function playgroundPage() {
                 totalMs: r.duration_ms || 0, sizeBytes: r.size_bytes,
             };
         },
-        _ev(frame) {
+        // sink-aware: escreve no bucket (this no simples; um slot no comparar).
+        _ev(frame, sink) {
+            sink = sink || this;
             if (!frame || frame[0] === ':') return;
             let name = 'message', dataStr = '';
             for (const line of frame.split('\n')) { if (line.indexOf('event:') === 0) name = line.slice(6).trim(); else if (line.indexOf('data:') === 0) dataStr += line.slice(5).trim(); }
             let ev = {}; try { ev = JSON.parse(dataStr || '{}'); } catch (_) { return; }
             if (name === 'agent_start') {
-                this.liveSteps.push({ agent_id: ev.agent_id, name: ev.agent_name || '', status: 'running', message: ev.processing_message || '' });
-                this.timings.push({ agent_id: ev.agent_id, name: ev.agent_name || '', start: performance.now() - this._t0, end: null, status: 'running' });
+                sink.liveSteps.push({ agent_id: ev.agent_id, name: ev.agent_name || '', status: 'running', message: ev.processing_message || '' });
+                sink.timings.push({ agent_id: ev.agent_id, name: ev.agent_name || '', start: performance.now() - sink._t0, end: null, status: 'running' });
             }
             else if (['agent_done', 'agent_passthrough', 'agent_skipped', 'agent_error'].includes(name)) {
                 const status = name === 'agent_error' ? 'error' : (name === 'agent_skipped' ? 'skipped' : (name === 'agent_passthrough' ? 'passthrough' : 'done'));
-                const st = [...this.liveSteps].reverse().find(s => s.agent_id === ev.agent_id && s.status === 'running');
-                if (st) st.status = status; else this.liveSteps.push({ agent_id: ev.agent_id, name: ev.agent_name || '', status, message: ev.processing_message || '' });
-                const tm = [...this.timings].reverse().find(t => t.agent_id === ev.agent_id && t.end === null);
-                if (tm) { tm.end = performance.now() - this._t0; tm.status = status; }
+                const st = [...sink.liveSteps].reverse().find(s => s.agent_id === ev.agent_id && s.status === 'running');
+                if (st) st.status = status; else sink.liveSteps.push({ agent_id: ev.agent_id, name: ev.agent_name || '', status, message: ev.processing_message || '' });
+                const tm = [...sink.timings].reverse().find(t => t.agent_id === ev.agent_id && t.end === null);
+                if (tm) { tm.end = performance.now() - sink._t0; tm.status = status; }
             }
-            else if (name === 'pipeline_done') { this.result = ev.result; this.respBytes = JSON.stringify(ev.result || {}).length; this.sizeKb = (this.respBytes / 1024).toFixed(1); }
-            else if (name === 'stream_error') { this.error = ev.error; }
+            else if (name === 'pipeline_done') { sink.result = ev.result; sink.respBytes = JSON.stringify(ev.result || {}).length; sink.sizeKb = (sink.respBytes / 1024).toFixed(1); }
+            else if (name === 'stream_error') { sink.error = ev.error; }
         },
         // resposta elegante (igual ao Fluxograma): JSON → cartões; texto → prosa.
-        outCards() {
-            const out = this.result ? this.result.output : '';
+        // _outCards(b) opera num bucket (this no simples; um slot no comparar).
+        _outCards(b) {
+            const out = b && b.result ? b.result.output : '';
             if (!out || typeof out !== 'string') return null;
             const t = out.trim(); if (!(t.startsWith('{') && t.endsWith('}'))) return null;
             try { const o = JSON.parse(t); if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
@@ -463,6 +606,7 @@ function playgroundPage() {
                 return cs.length ? cs : null;
             } catch (_) { return null; }
         },
+        outCards() { return this._outCards(this); },
         stepMeta(s) {
             const st = (s && s.status) || '', fs = (s && s.final_state) || '';
             if (st === 'error') return { icon: '✗' }; if (st.indexOf('skipped') === 0) return { icon: '⏭' };
@@ -474,9 +618,13 @@ function playgroundPage() {
 
         // ── Tempo (profiler) ──  custo/tokens só existem na resposta FULL (Debug);
         // o waterfall usa o timing dos eventos do stream (vale em qualquer modo).
-        get fullSteps() { return (this.result && this.result.pipeline_steps) || []; },
-        get totalMs() { const e = this.timings.filter(t => t.end != null).map(t => t.end); return e.length ? Math.max(...e) : 0; },
-        get totalCost() { if (!this.fullSteps.length) return null; return this.fullSteps.reduce((a, s) => a + (Number(s.cost_usd) || 0), 0).toFixed(4); },
+        // helpers *(b) operam num bucket → reusados pelos slots A/B do comparar.
+        _fullSteps(b) { return (b && b.result && b.result.pipeline_steps) || []; },
+        _totalMs(b) { const e = (b ? b.timings : []).filter(t => t.end != null).map(t => t.end); return e.length ? Math.max(...e) : 0; },
+        _totalCost(b) { const fs = this._fullSteps(b); if (!fs.length) return null; return fs.reduce((a, s) => a + (Number(s.cost_usd) || 0), 0).toFixed(4); },
+        get fullSteps() { return this._fullSteps(this); },
+        get totalMs() { return this._totalMs(this); },
+        get totalCost() { return this._totalCost(this); },
         get totalTokens() { if (!this.fullSteps.length) return null; return this.fullSteps.reduce((a, s) => a + (Number(s.tokens_used) || 0), 0); },
         get waterfall() {
             const span = this.totalMs || 1;
