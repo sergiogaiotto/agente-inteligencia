@@ -73,6 +73,32 @@ def test_console_tem_codegen_3_linguagens():
     assert "LANGS:" in src
 
 
+def test_codegen_multi_sdk_e_streaming():
+    """Feature 3: codegen para +SDKs (go/php/ruby/csharp/java/httpx/axios) e a
+    variante STREAMING (consumir o SSE de /invoke/stream) — frontend-only."""
+    src = PG.read_text(encoding="utf-8")
+    # spec único + 1 formatador por linguagem
+    assert "_reqSpec()" in src
+    for lang in ("'py-httpx'", "'node-axios'", "'go'", "'php'", "'ruby'", "'csharp'", "'java'"):
+        assert lang in src, f"falta a linguagem {lang} no dispatch/LANGS"
+    # formatadores idiomáticos presentes
+    assert "_cgGo(" in src and "net/http" in src
+    assert "_cgPhp(" in src and "curl_init(" in src
+    assert "_cgRuby(" in src and "Net::HTTP" in src
+    assert "_cgCsharp(" in src and "HttpClient" in src
+    assert "_cgJava(" in src and "BodyPublishers.ofString" in src
+    assert "_cgHttpx(" in src and "httpx.stream(" in src
+    assert "_cgAxios(" in src and 'responseType: "stream"' in src
+    # toggle sync|streaming + consumo de SSE (o diferencial)
+    assert "codeMode" in src and 'data-testid="pg-code-mode"' in src
+    assert "/invoke/stream" in src                        # endpoint de streaming no spec
+    assert "text/event-stream" in src                     # header Accept nos snippets de stream
+    assert "curl -N -X POST" in src                       # curl streaming
+    assert "getReader()" in src                           # JS fetch stream
+    assert "iter_lines" in src                            # Python stream
+    assert "BodyHandlers.ofLines" in src                  # Java stream
+
+
 def test_console_tem_abas_tempo_e_trace():
     src = PG.read_text(encoding="utf-8")
     # abas novas
