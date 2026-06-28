@@ -414,7 +414,6 @@ function playgroundPage() {
         get apiKey() { return this.curlAuth.generatedKey || ''; },
         get selectedName() { const p = this.pipelines.find(x => x.id === this.selectedId); return p ? p.name : ''; },
         get verbLabel() { const v = this.VERB.find(x => x.v === this.verbosity); return v ? v.l.toLowerCase() : this.verbosity; },
-        get invokeUrl() { return window.location.origin + '/api/v1/pipelines/' + (this.selectedId || '{pipeline_id}') + '/invoke'; },
         get bodyObj() { return { message: this.message, verbosity: this.verbosity }; },
 
         async genKey() { await this.generateAndEmbed(); },
