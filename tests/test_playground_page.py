@@ -93,6 +93,15 @@ def test_console_tem_aba_http_e_mapa_de_erros():
     assert "testError(e.code)" in src
 
 
+def test_console_tem_historico_repl():
+    src = PG.read_text(encoding="utf-8")
+    assert 'data-testid="pg-history"' in src
+    assert "_pushHistory()" in src
+    assert "restore(h)" in src and "re-rodar" in src and "clearHistory()" in src
+    # REPL persiste no navegador (sobrevive ao reload)
+    assert "localStorage.setItem('pg_history'" in src and "_loadHistory()" in src
+
+
 def test_layout_lado_a_lado():
     src = PG.read_text(encoding="utf-8")
     assert "lg:grid-cols-2" in src   # builder | resposta lado a lado
