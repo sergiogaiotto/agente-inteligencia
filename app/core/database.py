@@ -881,6 +881,26 @@ CREATE TABLE IF NOT EXISTS federation_nonces (
     seen_at TIMESTAMP DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_federation_nonces_seen_at ON federation_nonces(seen_at);
+
+-- Playground (console de API) — histórico de execuções POR USUÁRIO no servidor
+-- (Feature 1). Antes vivia só em localStorage (por-navegador); agora sobrevive a
+-- troca de máquina e fica auditável. Tudo ESCALAR (sem JSONB): guarda só o CARTÃO
+-- que a UI mostra (pipeline, mensagem, verbosidade, status, tamanho, duração),
+-- NUNCA a resposta inteira (que pode ser sensível). created_at é NAIVE — a rota
+-- grava datetime.utcnow() (coluna TIMESTAMP recusa datetime aware via asyncpg).
+CREATE TABLE IF NOT EXISTS playground_runs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    pipeline_id TEXT,
+    pipeline_name TEXT,
+    message TEXT,
+    verbosity TEXT,
+    status TEXT,
+    size_bytes INTEGER,
+    duration_ms INTEGER,
+    created_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_playground_runs_user ON playground_runs(user_id, created_at DESC);
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -1417,6 +1437,7 @@ pipelines_repo = Repository("pipelines")
 # Federação A2A (PR8b2): peers confiáveis (PK = id; workspace UNIQUE). Secrets
 # cifrados; helpers de registro/rotação/verificação em app/catalog/federation_peers.py.
 federation_peers_repo = Repository("federation_peers")
+playground_runs_repo = Repository("playground_runs")  # Feature 1 — histórico do Playground por usuário
 
 
 # ═══════════════════════════════════════════════════════════════

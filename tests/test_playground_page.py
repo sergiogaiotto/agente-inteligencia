@@ -120,6 +120,28 @@ def test_console_tem_historico_repl():
     assert "localStorage.setItem('pg_history'" in src and "_loadHistory()" in src
 
 
+def test_historico_persiste_no_servidor():
+    """Feature 1: o histórico agora é PERSISTIDO no servidor (por-usuário), com o
+    localStorage como cache offline. A página chama o CRUD de /playground/runs."""
+    src = PG.read_text(encoding="utf-8")
+    # POST otimista + GET no load + DELETE (tudo / por item)
+    assert "api.post('/api/v1/playground/runs'" in src
+    assert "api.get('/api/v1/playground/runs" in src
+    assert "api.del('/api/v1/playground/runs'" in src           # limpar tudo
+    assert "api.del('/api/v1/playground/runs/'" in src          # remover um
+    # métodos novos do ciclo servidor-backed
+    assert "_persistRun(" in src and "_mapRun(" in src and "removeRun(h)" in src
+    # cache offline preservado (sobrevive offline) + tz-correto no carimbo do servidor
+    assert "localStorage.setItem('pg_history'" in src
+    assert "window.tzTime(r.created_at)" in src
+    # init carrega do servidor ao abrir (await: GET resolve antes de qualquer push)
+    assert "await this._loadHistory()" in src
+    # carimbo otimista também via tzTime (não toLocaleTimeString().slice → '3:05:' em en-US)
+    assert "window.tzTime(new Date().toISOString())" in src
+    # x-for keyed numa chave ESTÁVEL (não muda na reconciliação id local→servidor)
+    assert ':key="h.key"' in src
+
+
 def test_layout_lado_a_lado():
     src = PG.read_text(encoding="utf-8")
     assert "lg:grid-cols-2" in src   # builder | resposta lado a lado
