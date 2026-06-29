@@ -261,6 +261,25 @@ def test_anexos_no_playground():
     assert "Imagens vão a agentes multimodais; documentos viram texto" in src
 
 
+def test_helper_inputs_esperados_e_template():
+    """Helper inline: descobre os inputs esperados do pipeline (agente-raiz) e gera
+    um template de payload — em vez de adivinhar o que mandar na Mensagem."""
+    src = PG.read_text(encoding="utf-8")
+    # dois botões ao lado da Mensagem + painel de inputs
+    assert 'data-testid="pg-inputs"' in src and 'data-testid="pg-template"' in src
+    assert 'data-testid="pg-inputs-panel"' in src
+    assert "verInputs()" in src and "inserirTemplate()" in src
+    # introspecção via o endpoint do pipeline (resolve a raiz no backend)
+    assert "/api/v1/pipelines/' + this.selectedId + '/inputs-schema'" in src
+    assert "get inputFields()" in src and "_buildTemplate()" in src
+    # reset do helper centralizado: vale p/ @change do select E p/ restore/re-rodar
+    # (troca programática de selectedId não dispara o @change → painel ficaria preso)
+    assert "_resetInputsHelper()" in src
+    assert "this.verbosity = h.verbosity; this._resetInputsHelper()" in src
+    # guards defensivos: required/properties malformados não podem quebrar o getter
+    assert "Array.isArray(isch.required)" in src
+
+
 def test_layout_lado_a_lado():
     src = PG.read_text(encoding="utf-8")
     assert "lg:grid-cols-2" in src   # builder | resposta lado a lado
