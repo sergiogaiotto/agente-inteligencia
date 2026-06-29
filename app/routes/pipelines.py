@@ -128,6 +128,29 @@ async def get_pipeline(pid: str):
     return _serialize(p, agent_ids)
 
 
+@router.get("/{pid}/inputs-schema")
+async def get_pipeline_inputs_schema(pid: str):
+    """Inputs ESPERADOS do pipeline = inputs do seu agente de ENTRADA (raiz).
+
+    Resolve a raiz via ``_build_subgraph`` (a MESMA do invoke) e reusa o schema do
+    agente (``## Inputs`` + variáveis ``inputs.*`` dos API Bindings). Read-only — ajuda
+    a montar o payload no Playground ("inputs esperados" / "inserir template"). Sem
+    raiz/inputs → schema vazio (o pipeline aceita texto livre na mensagem).
+    """
+    await _require(pid)
+    from app.catalog.pipeline_defs import _build_subgraph
+    sub = await _build_subgraph(pid)
+    root = sub.get("root_agent_id")
+    if not root:
+        return {
+            "pipeline_id": pid, "root_agent_id": None, "agent": None, "skill": None,
+            "inputs_schema": None, "inputs_referenced": [], "api_bindings": [], "execution_mode": None,
+        }
+    from app.routes.agents import get_agent_inputs_schema
+    data = await get_agent_inputs_schema(root)
+    return {**data, "pipeline_id": pid, "root_agent_id": root}
+
+
 @router.put("/{pid}")
 async def update_pipeline(pid: str, data: PipelineUpdate):
     """Atualiza metadados. NÃO muda status (use POST /{pid}/status — padrão do
