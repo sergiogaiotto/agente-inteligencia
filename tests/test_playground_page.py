@@ -272,8 +272,12 @@ def test_helper_inputs_esperados_e_template():
     # introspecção via o endpoint do pipeline (resolve a raiz no backend)
     assert "/api/v1/pipelines/' + this.selectedId + '/inputs-schema'" in src
     assert "get inputFields()" in src and "_buildTemplate()" in src
-    # cache por pipeline + reset ao trocar o destino
-    assert "_schemaCache" in src and "inputsSchema=null" in src
+    # reset do helper centralizado: vale p/ @change do select E p/ restore/re-rodar
+    # (troca programática de selectedId não dispara o @change → painel ficaria preso)
+    assert "_resetInputsHelper()" in src
+    assert "this.verbosity = h.verbosity; this._resetInputsHelper()" in src
+    # guards defensivos: required/properties malformados não podem quebrar o getter
+    assert "Array.isArray(isch.required)" in src
 
 
 def test_layout_lado_a_lado():

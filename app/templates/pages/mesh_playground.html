@@ -37,7 +37,7 @@
         <div class="p-4 lg:p-6 space-y-4 border-r border-surface-200">
             <div>
                 <label class="block text-[11px] font-semibold text-surface-500 mb-1.5">Destino</label>
-                <select x-model="selectedId" @change="result=null; liveSteps=[]; inputsSchema=null; showInputs=false; _schemaCache=null" data-testid="pg-pipeline"
+                <select x-model="selectedId" @change="result=null; liveSteps=[]; _resetInputsHelper()" data-testid="pg-pipeline"
                         class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[13px] text-brand-900 outline-none focus:border-brand-400">
                     <template x-for="p in pipelines" :key="p.id">
                         <option :value="p.id" x-text="p.name + ' (' + (p.agent_count||0) + ' agentes)'"></option>
@@ -522,24 +522,29 @@ function playgroundPage() {
             } catch (e) { showToast('Erro ao carregar inputs: ' + e.message, 'error'); return null; }
             finally { this.inputsLoading = false; }
         },
+        _resetInputsHelper() { this.inputsSchema = null; this.showInputs = false; this._schemaCache = null; },
+        // Guards defensivos: `## Inputs` é JSON do autor — `required`/`properties`
+        // podem vir malformados (ex.: required como objeto). new Set(não-iterável) joga.
         get inputFields() {
             const d = this.inputsSchema; if (!d) return [];
-            const props = (d.inputs_schema && d.inputs_schema.properties) || {};
-            const required = new Set((d.inputs_schema && d.inputs_schema.required) || []);
-            const refd = new Set(d.inputs_referenced || []);
+            const isch = d.inputs_schema || {};
+            const props = (isch.properties && typeof isch.properties === 'object') ? isch.properties : {};
+            const required = new Set(Array.isArray(isch.required) ? isch.required : []);
+            const refd = new Set(Array.isArray(d.inputs_referenced) ? d.inputs_referenced : []);
             const names = [...new Set([...Object.keys(props), ...refd])];
             return names.map(n => {
-                const s = props[n] || {};
+                const s = (props[n] && typeof props[n] === 'object') ? props[n] : {};
                 return { name: n, type: s.type || '—', required: required.has(n), desc: s.description || (refd.has(n) ? 'Referenciado em API Bindings' : '') };
             });
         },
         async verInputs() { const d = await this._loadInputsSchema(); if (d) this.showInputs = !this.showInputs; },
         _buildTemplate() {
             const fields = this.inputFields; if (!fields.length) return '';
-            const props = (this.inputsSchema.inputs_schema && this.inputsSchema.inputs_schema.properties) || {};
+            const isch = (this.inputsSchema && this.inputsSchema.inputs_schema) || {};
+            const props = (isch.properties && typeof isch.properties === 'object') ? isch.properties : {};
             const obj = {};
             for (const f of fields) {
-                const s = props[f.name] || {}, t = s.type || 'string';
+                const s = (props[f.name] && typeof props[f.name] === 'object') ? props[f.name] : {}, t = s.type || 'string';
                 if ('default' in s) obj[f.name] = s.default;
                 else if (t === 'integer' || t === 'number') obj[f.name] = 0;
                 else if (t === 'boolean') obj[f.name] = false;
@@ -703,7 +708,9 @@ function playgroundPage() {
             } catch (_) { /* offline: segue só no localStorage */ }
         },
         // Só a requisição (destino/mensagem/detalhe) — usado pelo "re-rodar".
-        _applyRequest(h) { this.selectedId = h.pipelineId; this.message = h.message; this.verbosity = h.verbosity; },
+        // Limpa o helper de inputs: trocar selectedId via JS (restore/re-rodar) NÃO
+        // dispara o @change do <select>, então o painel ficaria preso no pipeline antigo.
+        _applyRequest(h) { this.selectedId = h.pipelineId; this.message = h.message; this.verbosity = h.verbosity; this._resetInputsHelper(); },
         // Clicar numa linha RESTAURA a thread inteira (Resposta/Tempo/Trace/HTTP/Código)
         // sem re-rodar: usa a thread em memória (run desta sessão) OU busca no servidor
         // (GET /runs/{id}). Sem thread (execução antiga/grande) → só a requisição volta.

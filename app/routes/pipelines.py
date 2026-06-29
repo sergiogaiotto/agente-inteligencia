@@ -141,13 +141,21 @@ async def get_pipeline_inputs_schema(pid: str):
     from app.catalog.pipeline_defs import _build_subgraph
     sub = await _build_subgraph(pid)
     root = sub.get("root_agent_id")
+    _empty = {
+        "pipeline_id": pid, "root_agent_id": root, "agent": None, "skill": None,
+        "inputs_schema": None, "inputs_referenced": [], "api_bindings": [], "execution_mode": None,
+    }
     if not root:
-        return {
-            "pipeline_id": pid, "root_agent_id": None, "agent": None, "skill": None,
-            "inputs_schema": None, "inputs_referenced": [], "api_bindings": [], "execution_mode": None,
-        }
+        return _empty
     from app.routes.agents import get_agent_inputs_schema
-    data = await get_agent_inputs_schema(root)
+    try:
+        data = await get_agent_inputs_schema(root)
+    except HTTPException as e:
+        # Raiz órfã (agente removido, membership/entry pendente) → trata como sem-raiz
+        # em vez de vazar um 404 "agente" num endpoint de PIPELINE válido.
+        if e.status_code == 404:
+            return _empty
+        raise
     return {**data, "pipeline_id": pid, "root_agent_id": root}
 
 

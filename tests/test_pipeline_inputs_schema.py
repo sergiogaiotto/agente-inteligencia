@@ -57,3 +57,20 @@ def test_pipeline_inexistente_404(monkeypatch):
     monkeypatch.setattr(db.pipelines_repo, "find_by_id", _async(None))
     r = _client().get("/api/v1/pipelines/nope/inputs-schema")
     assert r.status_code == 404, r.text
+
+
+def test_raiz_orfa_404_do_agente_vira_schema_vazio(monkeypatch):
+    """Raiz resolvida mas com agente removido (membership/entry pendente): o 404
+    'agente' NÃO pode vazar num endpoint de pipeline válido → schema vazio (200)."""
+    from fastapi import HTTPException
+    monkeypatch.setattr(db.pipelines_repo, "find_by_id", _async({"id": "p1", "name": "P"}))
+    monkeypatch.setattr(pdefs, "_build_subgraph", _async({"root_agent_id": "ghost", "nodes": [], "edges": []}))
+
+    async def boom(aid):
+        raise HTTPException(404, f"Agente '{aid}' não encontrado")
+
+    monkeypatch.setattr(agents_mod, "get_agent_inputs_schema", boom)
+    r = _client().get("/api/v1/pipelines/p1/inputs-schema")
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["root_agent_id"] == "ghost" and d["inputs_schema"] is None
