@@ -243,6 +243,24 @@ def test_compara_dois_pipelines_lado_a_lado():
     assert "vName(slot.verbosity)" in src
 
 
+def test_anexos_no_playground():
+    """O Playground aceita anexos (como o app real): upload via /workspace/upload e
+    envio no corpo do invoke — o engine roteia cada arquivo aos agentes que aceitam."""
+    src = PG.read_text(encoding="utf-8")
+    # estado + UI de anexos (input file + chips + remover)
+    assert "attachments: [], uploading: false" in src
+    assert 'data-testid="pg-attach"' in src and 'data-testid="pg-attachments"' in src
+    assert 'x-ref="pgFiles"' in src and "uploadFiles($event.target.files)" in src
+    assert "attachments.splice(i,1)" in src
+    # upload reusa o /workspace/upload (cookie); o invoke segue fiel (X-API-Key)
+    assert "async uploadFiles(fileList)" in src
+    assert "/api/v1/workspace/upload" in src
+    # anexos vão no CORPO do invoke quando presentes
+    assert "if (this.attachments.length) _body.attachments = this.attachments" in src
+    # aviso honesto de tipos suportados
+    assert "Imagens vão a agentes multimodais; documentos viram texto" in src
+
+
 def test_layout_lado_a_lado():
     src = PG.read_text(encoding="utf-8")
     assert "lg:grid-cols-2" in src   # builder | resposta lado a lado
