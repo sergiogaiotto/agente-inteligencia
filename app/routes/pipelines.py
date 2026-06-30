@@ -135,7 +135,10 @@ def _validate_and_coerce_args(args: dict, schema: Optional[dict]) -> tuple:
     required = schema.get("required")
     if isinstance(required, list):
         for field in required:
-            if field not in coerced:
+            v = coerced.get(field)
+            # ausente OU vazio (string em branco / None) → não satisfaz required.
+            # Alinha com a validação do cliente (form do Playground).
+            if field not in coerced or v is None or (isinstance(v, str) and not v.strip()):
                 issues.append({"field": field, "code": "required_missing"})
     for field, val in coerced.items():
         if field not in props:
@@ -155,7 +158,10 @@ def _validate_and_coerce_args(args: dict, schema: Optional[dict]) -> tuple:
                            "expected": expected, "received": type(val).__name__})
             continue
         enum = spec.get("enum")
-        if isinstance(enum, list) and enum and val not in enum:
+        # comparação tolerante a tipo: enum [1,2] SEM `type` não é coagido, e o valor
+        # pode chegar como string "1" (form/JSON) — compara também por str pra não dar
+        # 422 falso (e casar com a validação do cliente, que compara por String()).
+        if isinstance(enum, list) and enum and val not in enum and str(val) not in [str(e) for e in enum]:
             issues.append({"field": field, "code": "enum_mismatch", "allowed": enum})
     return coerced, issues
 
@@ -187,6 +193,10 @@ async def _validate_and_fold_args(pid: str, root: str, user_input: str, args: di
             "issues": issues,
             "schema_url": f"/api/v1/pipelines/{pid}/inputs-schema",
         })
+    # args só com opcionais vazios (a coerção podou tudo) + sem texto livre → não há
+    # nada a executar; evita rodar o pipeline (gasta LLM) com entrada vazia.
+    if not user_input.strip() and not coerced:
+        raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args' com ao menos um valor.")
     return _fold_args_into_input(user_input, coerced)
 
 
@@ -616,7 +626,7 @@ async def invoke_pipeline_stream(
     async def _run():
         from app.agents.engine import execute_pipeline
         try:
-            await execute_pipeline(
+            result = await execute_pipeline(
                 entry_agent_id=root,
                 user_input=user_input,
                 channel=data.channel or "api",
@@ -625,6 +635,28 @@ async def invoke_pipeline_stream(
                 allowed_agent_ids=members,  # SELA ao subgrafo do pipeline
                 progress_callback=_cb,
             )
+            # Auditoria (paridade com o /invoke sync — este é o caminho da UI/Playground):
+            # registra a invocação + arg_keys. Envolta em try/except: auditoria NUNCA
+            # pode derrubar o stream do usuário.
+            try:
+                await audit_repo.create({
+                    "entity_type": "pipeline",
+                    "entity_id": pid,
+                    "action": "invoked",
+                    "details": json.dumps({
+                        "root_agent_id": root,
+                        "member_count": len(members),
+                        "completed_agents": (result or {}).get("completed_agents", 0),
+                        "interaction_id": (result or {}).get("interaction_id"),
+                        "actor_user_id": user.get("id"),
+                        "via": "api_key" if api_key_id else "session",
+                        "api_key_id": api_key_id,
+                        "stream": True,
+                        "arg_keys": sorted(data.args.keys()) if isinstance(data.args, dict) else [],
+                    }, ensure_ascii=False),
+                })
+            except Exception:
+                pass
         except Exception as e:
             await queue.put({"type": "stream_error", "error": str(e)[:300]})
         finally:

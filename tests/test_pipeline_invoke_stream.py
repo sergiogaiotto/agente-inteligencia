@@ -87,6 +87,32 @@ def test_stream_projeta_pipeline_done_por_verbosidade(monkeypatch):
     assert "sql_rendered" not in body                # nem o trace interno
 
 
+def test_stream_audits_arg_keys(monkeypatch):
+    # paridade com o /invoke sync: o stream (caminho da UI/Playground) também audita
+    # a invocação + arg_keys (só chaves, não valores).
+    import json as _json
+    import app.routes.agents as agents_routes
+    seen = {}
+    async def cap_audit(row):
+        seen.update(row); return {}
+    async def fake_exec(**k):
+        cb = k.get("progress_callback")
+        if cb:
+            await cb({"type": "pipeline_done", "result": {"output": "ok", "completed_agents": 1, "pipeline_steps": []}})
+        return {"completed_agents": 1, "interaction_id": "i1"}
+    async def _noschema(*a, **k):
+        return {"inputs_schema": None}
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(engine, "execute_pipeline", fake_exec)
+    monkeypatch.setattr(db.audit_repo, "create", cap_audit)
+    monkeypatch.setattr(agents_routes, "get_agent_inputs_schema", _noschema)
+    r = _client().post("/api/v1/pipelines/p1/invoke/stream", json={"message": "oi", "args": {"uf": "RS", "cd": 1}})
+    assert r.status_code == 200, r.text
+    details = _json.loads(seen["details"])
+    assert details["arg_keys"] == ["cd", "uf"]
+    assert details["stream"] is True
+
+
 def test_stream_400_sem_mensagem(monkeypatch):
     _stub_pipeline(monkeypatch)
     r = _client().post("/api/v1/pipelines/p1/invoke/stream", json={"message": "   "})

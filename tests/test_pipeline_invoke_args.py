@@ -122,6 +122,30 @@ class TestInvokeArgs:
         assert issues["uf"]["code"] == "enum_mismatch"
         assert issues["uf"]["allowed"] == ["RS", "SP"]
 
+    def test_enum_integer_without_type_accepts_string(self, monkeypatch):
+        # enum [1,2] SEM `type`: o valor chega como "1" (form/JSON) e NÃO pode dar 422
+        # falso (comparação tolerante a tipo, casando com a validação do cliente).
+        cap = _wire(monkeypatch, schema=_schema({"nivel": {"enum": [1, 2]}}))
+        r = _client().post("/api/v1/pipelines/p1/invoke", json={"args": {"nivel": "1"}})
+        assert r.status_code == 200, r.text
+        assert '"nivel": "1"' in cap["user_input"]
+
+    def test_422_required_empty_string(self, monkeypatch):
+        # required satisfeito por "  " (vazio) é inválido — alinha com o cliente.
+        _wire(monkeypatch, schema=_schema({"cd_cliente": {"type": "string"}}, required=["cd_cliente"]))
+        r = _client().post("/api/v1/pipelines/p1/invoke", json={"args": {"cd_cliente": "  "}})
+        assert r.status_code == 422, r.text
+        codes = {(i["field"], i["code"]) for i in r.json()["detail"]["issues"]}
+        assert ("cd_cliente", "required_missing") in codes
+
+    def test_400_when_args_only_empty_optionals(self, monkeypatch):
+        # args só com opcionais vazios (coerção poda tudo) + sem mensagem → 400; NÃO
+        # executa o pipeline (não gasta LLM com entrada vazia).
+        cap = _wire(monkeypatch, schema=_schema({"uf": {"type": "string"}}))
+        r = _client().post("/api/v1/pipelines/p1/invoke", json={"args": {"uf": ""}})
+        assert r.status_code == 400, r.text
+        assert "user_input" not in cap  # execute_pipeline não foi chamado
+
     def test_no_schema_passes_args_raw(self, monkeypatch):
         # Raiz sem ## Inputs → schema None → args passam crus (sem validação),
         # ainda dobrados na entrada. Mantém o "texto livre" como contrato.
