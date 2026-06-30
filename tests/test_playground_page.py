@@ -280,6 +280,34 @@ def test_helper_inputs_esperados_e_template():
     assert "Array.isArray(isch.required)" in src
 
 
+def test_form_de_args_estruturados():
+    """D3: o painel de inputs vira FORMULÁRIO tipado (1 widget por campo do
+    ## Inputs do agente-raiz). Os valores viram o objeto `args` do invoke
+    (validado no servidor), sem JSON na mão. Validação no cliente espelha o 422."""
+    src = PG.read_text(encoding="utf-8")
+    # estado + form com widgets por campo
+    assert "argValues: {}" in src
+    assert 'data-testid="pg-args-form"' in src and 'data-testid="pg-arg-field"' in src
+    # widget escolhe por tipo: enum→select, boolean→select, number→input number
+    assert "f.enum && f.enum.length" in src
+    assert "f.type === 'boolean'" in src
+    assert "f.type === 'integer' || f.type === 'number'" in src
+    # inputFields expõe enum p/ o dropdown
+    assert "enum: Array.isArray(s.enum) ? s.enum : null" in src
+    # payload pruned/coagido + getters de validação
+    assert "get argsPayload()" in src and "get hasArgs()" in src
+    assert "get argIssues()" in src and "get hasArgErrors()" in src and "argFieldError(f)" in src
+    # args vão no corpo do invoke E no codegen (via bodyObj)
+    assert "if (this.hasArgs) _body.args = this.argsPayload" in src
+    assert "{ message: this.message, args: a, verbosity: this.verbosity }" in src
+    # run gateado: texto OU args, e args inválidos travam (sem footgun de boolean)
+    assert "!this.message.trim() && !this.hasArgs" in src
+    assert "if (this.hasArgErrors) return false" in src
+    # "inserir template" preenche o FORM (não joga JSON na mensagem) + restore reidrata args
+    assert "this.argValues = JSON.parse(tpl)" in src
+    assert "this.argValues = h.argValues || {}" in src
+
+
 def test_layout_lado_a_lado():
     src = PG.read_text(encoding="utf-8")
     assert "lg:grid-cols-2" in src   # builder | resposta lado a lado
