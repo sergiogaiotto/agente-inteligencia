@@ -214,10 +214,13 @@ def _apply_defaults(args: dict, schema: Optional[dict]) -> tuple:
     props = schema.get("properties") if isinstance(schema, dict) else None
     if not isinstance(props, dict):
         return base, set()
+    import copy
     defaulted = set()
     for field, spec in props.items():
         if isinstance(spec, dict) and "default" in spec and field not in base:
-            base[field] = spec["default"]
+            # deepcopy: default mutável (list/dict) não pode compartilhar referência
+            # com o schema re-parseado (footgun latente se algo mutar `resolved`).
+            base[field] = copy.deepcopy(spec["default"])
             defaulted.add(field)
     return base, defaulted
 
@@ -521,8 +524,11 @@ async def invoke_pipeline(
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
     user_input = (data.message or data.input or "").strip()
-    # `dry` (pré-visualização) dispensa entrada: resolve o que houver (até defaults).
-    if not user_input and not data.args and not data.dry:
+    # `dry` dispensa entrada (resolve o que houver, até defaults). `args` presente
+    # — MESMO `{}` — engaja o contrato (defaults podem preencher); por isso o guard
+    # usa `is None` (igual ao gatilho de fold), não `not data.args`. Se nada resultar,
+    # o 400 vem de dentro de _validate_and_fold_args.
+    if not user_input and data.args is None and not data.dry:
         raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args'.")
 
     # Resolve o subgrafo VIVO do pipeline (raiz + membros) — reusa o builder do
@@ -645,7 +651,9 @@ async def invoke_pipeline_stream(
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
     user_input = (data.message or data.input or "").strip()
-    if not user_input and not data.args:
+    # `is None` (não `not data.args`): `args:{}` engaja o contrato — paridade com o
+    # /invoke sync e com o gatilho de fold abaixo.
+    if not user_input and data.args is None:
         raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args'.")
 
     from app.catalog.pipeline_defs import _build_subgraph
