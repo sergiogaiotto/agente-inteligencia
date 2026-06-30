@@ -179,25 +179,95 @@ async def _validate_and_fold_args(pid: str, root: str, user_input: str, args: di
     """Valida/coage `args` contra o ## Inputs do agente-raiz e devolve o
     `user_input` com o bloco estruturado anexado. 422 (nomeando cada campo) se os
     args não conferem com o contrato. Raiz órfã/sem schema → args passam crus."""
-    from app.routes.agents import get_agent_inputs_schema
-    try:
-        schema = (await get_agent_inputs_schema(root)).get("inputs_schema")
-    except HTTPException:
-        schema = None  # raiz órfã → trata como sem contrato (não vaza 404 de "agente")
-    coerced, issues = _validate_and_coerce_args(args, schema)
-    if issues:
+    schema = await _fetch_root_schema(root)
+    res = _resolve_args(args, schema)  # coage + aplica defaults + valida (fonte única)
+    if res["issues"]:
         raise HTTPException(422, {
             "error": "args_validation_failed",
             "pipeline_id": pid,
             "root_agent_id": root,
-            "issues": issues,
+            "issues": res["issues"],
             "schema_url": f"/api/v1/pipelines/{pid}/inputs-schema",
         })
+    resolved = res["resolved"]
     # args só com opcionais vazios (a coerção podou tudo) + sem texto livre → não há
     # nada a executar; evita rodar o pipeline (gasta LLM) com entrada vazia.
-    if not user_input.strip() and not coerced:
+    if not user_input.strip() and not resolved:
         raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args' com ao menos um valor.")
-    return _fold_args_into_input(user_input, coerced)
+    if not resolved:
+        return user_input  # nada estruturado a dobrar (só texto livre)
+    return _fold_args_into_input(user_input, resolved)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Defaults + proveniência + modo `dry` (pré-visualização) — camada sobre D1/D2.
+# Aplica os `default` declarados no ## Inputs (antes ausentes: D2 nunca os usava),
+# e expõe um modo que RESOLVE os args (coage→defaults→valida) devolvendo o payload
+# final + a origem de cada campo (caller|default) SEM executar (não gasta LLM).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _apply_defaults(args: dict, schema: Optional[dict]) -> tuple:
+    """Preenche campos AUSENTES que declaram `default` no schema. Retorna
+    ``(merged, defaulted_keys)``. Aplicado ANTES da validação pra que um required
+    com `default` seja satisfeito quando o caller omite."""
+    base = dict(args) if isinstance(args, dict) else {}
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict):
+        return base, set()
+    defaulted = set()
+    for field, spec in props.items():
+        if isinstance(spec, dict) and "default" in spec and field not in base:
+            base[field] = spec["default"]
+            defaulted.add(field)
+    return base, defaulted
+
+
+def _resolve_args(args: dict, schema: Optional[dict]) -> dict:
+    """Resolve os args: aplica defaults → coage → valida. Devolve
+    ``{resolved, issues, provenance}`` com provenance[campo] ∈ {caller, default}.
+    Fonte única de verdade da resolução, usada tanto pela execução (fold) quanto
+    pela pré-visualização (dry)."""
+    original = args if isinstance(args, dict) else {}
+    merged, defaulted = _apply_defaults(original, schema)
+    coerced, issues = _validate_and_coerce_args(merged, schema)
+    provenance = {
+        k: ("default" if (k in defaulted and k not in original) else "caller")
+        for k in coerced
+    }
+    return {"resolved": coerced, "issues": issues, "provenance": provenance}
+
+
+async def _fetch_root_schema(root: str) -> Optional[dict]:
+    """JSON Schema (## Inputs) do agente-raiz, ou None. Raiz órfã (404) → None,
+    sem vazar o 404 de "agente" num endpoint de PIPELINE."""
+    from app.routes.agents import get_agent_inputs_schema
+    try:
+        return (await get_agent_inputs_schema(root)).get("inputs_schema")
+    except HTTPException:
+        return None
+
+
+async def _plan_args(pid: str, root: str, args: dict) -> dict:
+    """Modo `dry`: resolve os args (coage/defaults/valida) e devolve o payload
+    resolvido + proveniência, SEM executar. 422 se os args não conferem."""
+    schema = await _fetch_root_schema(root)
+    res = _resolve_args(args or {}, schema)
+    if res["issues"]:
+        raise HTTPException(422, {
+            "error": "args_validation_failed",
+            "pipeline_id": pid,
+            "root_agent_id": root,
+            "issues": res["issues"],
+            "schema_url": f"/api/v1/pipelines/{pid}/inputs-schema",
+        })
+    return {
+        "dry": True,
+        "pipeline_id": pid,
+        "root_agent_id": root,
+        "resolved_args": res["resolved"],
+        "provenance": res["provenance"],
+        "has_schema": bool(isinstance(schema, dict) and schema.get("properties")),
+    }
 
 
 @router.get("")
@@ -451,7 +521,8 @@ async def invoke_pipeline(
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
     user_input = (data.message or data.input or "").strip()
-    if not user_input and not data.args:
+    # `dry` (pré-visualização) dispensa entrada: resolve o que houver (até defaults).
+    if not user_input and not data.args and not data.dry:
         raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args'.")
 
     # Resolve o subgrafo VIVO do pipeline (raiz + membros) — reusa o builder do
@@ -463,9 +534,15 @@ async def invoke_pipeline(
     if not root:
         raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar.")
 
-    # Args estruturados (D1/D2): valida/coage contra o ## Inputs do agente-raiz
-    # (422 nomeando cada campo) e dobra na entrada como bloco estruturado.
-    if data.args:
+    # Modo `dry`: RESOLVE os args (coage/defaults/valida) e devolve o payload
+    # resolvido + proveniência SEM executar (não gasta LLM). 422 se inválidos.
+    if data.dry:
+        return await _plan_args(pid, root, data.args or {})
+
+    # Args estruturados (D1/D2): `args` presente (mesmo {}) engaja o contrato —
+    # coage/aplica defaults/valida contra o ## Inputs do agente-raiz (422 nomeando
+    # cada campo) e dobra na entrada. `args` omitido (None) = texto livre puro.
+    if data.args is not None:
         user_input = await _validate_and_fold_args(pid, root, user_input, data.args)
 
     # Anexos: mapeia a saída do /workspace/upload pra forma que o engine consome.
@@ -578,8 +655,8 @@ async def invoke_pipeline_stream(
     if not root:
         raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar.")
 
-    # Args estruturados (D1/D2): mesma validação/coerção do /invoke sync.
-    if data.args:
+    # Args estruturados (D1/D2): mesma validação/coerção/defaults do /invoke sync.
+    if data.args is not None:
         user_input = await _validate_and_fold_args(pid, root, user_input, data.args)
 
     pipeline_attachments = [

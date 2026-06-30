@@ -209,6 +209,11 @@ class PipelineInvokeRequest(BaseModel):
     # consome como inputs). Opcional — texto livre em 'message' segue válido.
     # NÃO confundir com 'input' (alias de TEXTO LIVRE de 'message').
     args: Optional[dict] = None
+    # Pré-visualização (plan): quando true, o /invoke RESOLVE os args (coage,
+    # aplica defaults do schema, valida) e devolve o payload resolvido + a
+    # proveniência de cada campo (caller|default) SEM executar o pipeline (não
+    # gasta LLM). Ignorado no /invoke/stream (esse sempre executa).
+    dry: Optional[bool] = False
     session_id: Optional[str] = None
     channel: Optional[str] = "api"
     # Detalhe da resposta: full | summary | minimal. Ausente → default por auth

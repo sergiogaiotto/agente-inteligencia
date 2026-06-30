@@ -308,6 +308,23 @@ def test_form_de_args_estruturados():
     assert "this.argValues = h.argValues || {}" in src
 
 
+def test_pre_visualizar_args_dry():
+    """Pré-visualização (modo dry): botão que pede ao servidor pra RESOLVER os args
+    (coage + aplica defaults + valida) e mostra a origem de cada campo (você|default)
+    SEM executar. Expõe os defaults que o servidor injeta (invisíveis no form)."""
+    src = PG.read_text(encoding="utf-8")
+    assert 'data-testid="pg-preview-args"' in src and 'data-testid="pg-args-preview"' in src
+    assert "previewArgs()" in src and "argsPreview" in src
+    # chama o /invoke com dry:true (sem executar), via X-API-Key (omit cookie)
+    assert "dry: true" in src
+    assert "args: this.argsPayload, dry: true" in src
+    # mostra a proveniência por campo (badge default vs você)
+    assert "argsPreview.provenance[k]" in src
+    assert "'default'" in src and "'você'" in src
+    # reset junto com o helper de inputs
+    assert "this.argsPreview = null" in src
+
+
 def test_layout_lado_a_lado():
     src = PG.read_text(encoding="utf-8")
     assert "lg:grid-cols-2" in src   # builder | resposta lado a lado
