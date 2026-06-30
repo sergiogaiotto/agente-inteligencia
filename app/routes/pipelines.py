@@ -175,10 +175,11 @@ def _fold_args_into_input(user_input: str, args: dict) -> str:
     return f"{user_input}\n\n{block}" if user_input else block
 
 
-async def _validate_and_fold_args(pid: str, root: str, user_input: str, args: dict) -> str:
-    """Valida/coage `args` contra o ## Inputs do agente-raiz e devolve o
-    `user_input` com o bloco estruturado anexado. 422 (nomeando cada campo) se os
-    args não conferem com o contrato. Raiz órfã/sem schema → args passam crus."""
+async def _validate_and_fold_args(pid: str, root: str, user_input: str, args: dict) -> tuple:
+    """Valida/coage `args` contra o ## Inputs do agente-raiz e SEPARA em dois baldes:
+    `param` (envelope selado, fora da prosa) e o resto (dobrado na prosa). Devolve
+    ``(user_input_dobrado, sealed_param_dict)``. 422 (nomeando cada campo) se os args
+    não conferem. Raiz órfã/sem schema → tudo cai na prosa (sem envelope)."""
     schema = await _fetch_root_schema(root)
     res = _resolve_args(args, schema)  # coage + aplica defaults + valida (fonte única)
     if res["issues"]:
@@ -190,13 +191,18 @@ async def _validate_and_fold_args(pid: str, root: str, user_input: str, args: di
             "schema_url": f"/api/v1/pipelines/{pid}/inputs-schema",
         })
     resolved = res["resolved"]
+    uso = res["uso"]
     # args só com opcionais vazios (a coerção podou tudo) + sem texto livre → não há
     # nada a executar; evita rodar o pipeline (gasta LLM) com entrada vazia.
     if not user_input.strip() and not resolved:
         raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args' com ao menos um valor.")
-    if not resolved:
-        return user_input  # nada estruturado a dobrar (só texto livre)
-    return _fold_args_into_input(user_input, resolved)
+    # SPLIT: `param` (exato/determinístico) vai no envelope selado, fora da prosa;
+    # o resto (`llm`/sem anotação) é dobrado como bloco que o LLM lê. Default = prosa
+    # → comportamento legado de quem não usa `x-uso`.
+    sealed = {k: v for k, v in resolved.items() if uso.get(k) == "param"}
+    prose = {k: v for k, v in resolved.items() if uso.get(k) != "param"}
+    folded = _fold_args_into_input(user_input, prose) if prose else user_input
+    return folded, sealed
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,19 +220,32 @@ def _apply_defaults(args: dict, schema: Optional[dict]) -> tuple:
     props = schema.get("properties") if isinstance(schema, dict) else None
     if not isinstance(props, dict):
         return base, set()
+    import copy
     defaulted = set()
     for field, spec in props.items():
         if isinstance(spec, dict) and "default" in spec and field not in base:
-            base[field] = spec["default"]
+            # deepcopy: default mutável (list/dict) não compartilha referência com o
+            # schema re-parseado (footgun latente se algo mutar `resolved`).
+            base[field] = copy.deepcopy(spec["default"])
             defaulted.add(field)
     return base, defaulted
 
 
+def _field_uso(schema: Optional[dict], field: str) -> str:
+    """Intenção do campo (envelope selado): 'param' = valor EXATO/determinístico,
+    viaja fora da prosa e NÃO é tratado pelo LLM; 'llm' = interpretável, vai na
+    prosa. Default 'llm' (= comportamento legado) quando não há anotação `x-uso`."""
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    spec = props.get(field) if isinstance(props, dict) else None
+    uso = spec.get("x-uso") if isinstance(spec, dict) else None
+    return "param" if uso == "param" else "llm"
+
+
 def _resolve_args(args: dict, schema: Optional[dict]) -> dict:
     """Resolve os args: aplica defaults → coage → valida. Devolve
-    ``{resolved, issues, provenance}`` com provenance[campo] ∈ {caller, default}.
-    Fonte única de verdade da resolução, usada tanto pela execução (fold) quanto
-    pela pré-visualização (dry)."""
+    ``{resolved, issues, provenance, uso}`` com provenance[campo] ∈ {caller, default}
+    e uso[campo] ∈ {param, llm}. Fonte única de verdade da resolução, usada pela
+    execução (split em baldes) e pela pré-visualização (dry)."""
     original = args if isinstance(args, dict) else {}
     merged, defaulted = _apply_defaults(original, schema)
     coerced, issues = _validate_and_coerce_args(merged, schema)
@@ -234,7 +253,10 @@ def _resolve_args(args: dict, schema: Optional[dict]) -> dict:
         k: ("default" if (k in defaulted and k not in original) else "caller")
         for k in coerced
     }
-    return {"resolved": coerced, "issues": issues, "provenance": provenance}
+    return {
+        "resolved": coerced, "issues": issues, "provenance": provenance,
+        "uso": {k: _field_uso(schema, k) for k in coerced},
+    }
 
 
 async def _fetch_root_schema(root: str) -> Optional[dict]:
@@ -266,6 +288,7 @@ async def _plan_args(pid: str, root: str, args: dict) -> dict:
         "root_agent_id": root,
         "resolved_args": res["resolved"],
         "provenance": res["provenance"],
+        "uso": res["uso"],  # campo→param|llm: qual vai no envelope selado vs prosa
         "has_schema": bool(isinstance(schema, dict) and schema.get("properties")),
     }
 
@@ -521,8 +544,11 @@ async def invoke_pipeline(
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
     user_input = (data.message or data.input or "").strip()
-    # `dry` (pré-visualização) dispensa entrada: resolve o que houver (até defaults).
-    if not user_input and not data.args and not data.dry:
+    # `dry` dispensa entrada (resolve o que houver, até defaults). `args` presente
+    # — MESMO `{}` — engaja o contrato (defaults podem preencher); por isso o guard
+    # usa `is None` (igual ao gatilho de fold), não `not data.args`. Se nada resultar,
+    # o 400 vem de dentro de _validate_and_fold_args.
+    if not user_input and data.args is None and not data.dry:
         raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args'.")
 
     # Resolve o subgrafo VIVO do pipeline (raiz + membros) — reusa o builder do
@@ -541,9 +567,11 @@ async def invoke_pipeline(
 
     # Args estruturados (D1/D2): `args` presente (mesmo {}) engaja o contrato —
     # coage/aplica defaults/valida contra o ## Inputs do agente-raiz (422 nomeando
-    # cada campo) e dobra na entrada. `args` omitido (None) = texto livre puro.
+    # cada campo) e SEPARA em prosa + envelope `param` selado. `args` omitido (None)
+    # = texto livre puro.
+    sealed_inputs = None
     if data.args is not None:
-        user_input = await _validate_and_fold_args(pid, root, user_input, data.args)
+        user_input, sealed_inputs = await _validate_and_fold_args(pid, root, user_input, data.args)
 
     # Anexos: mapeia a saída do /workspace/upload pra forma que o engine consome.
     # O dispatcher do execute_pipeline roteia cada anexo só aos agentes da cadeia
@@ -570,6 +598,7 @@ async def invoke_pipeline(
             session_id=data.session_id,
             attachments=pipeline_attachments or None,
             allowed_agent_ids=members,  # SELA a execução ao subgrafo do pipeline
+            sealed_inputs=sealed_inputs or None,  # envelope param (out-of-band)
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -645,7 +674,9 @@ async def invoke_pipeline_stream(
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
     user_input = (data.message or data.input or "").strip()
-    if not user_input and not data.args:
+    # `is None` (não `not data.args`): `args:{}` engaja o contrato — paridade com o
+    # /invoke sync e com o gatilho de fold abaixo.
+    if not user_input and data.args is None:
         raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args'.")
 
     from app.catalog.pipeline_defs import _build_subgraph
@@ -655,9 +686,11 @@ async def invoke_pipeline_stream(
     if not root:
         raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar.")
 
-    # Args estruturados (D1/D2): mesma validação/coerção/defaults do /invoke sync.
+    # Args estruturados (D1/D2): mesma validação/coerção/defaults do /invoke sync,
+    # separando o envelope `param` selado da prosa.
+    sealed_inputs = None
     if data.args is not None:
-        user_input = await _validate_and_fold_args(pid, root, user_input, data.args)
+        user_input, sealed_inputs = await _validate_and_fold_args(pid, root, user_input, data.args)
 
     pipeline_attachments = [
         {
@@ -710,6 +743,7 @@ async def invoke_pipeline_stream(
                 session_id=data.session_id,
                 attachments=pipeline_attachments or None,
                 allowed_agent_ids=members,  # SELA ao subgrafo do pipeline
+                sealed_inputs=sealed_inputs or None,  # envelope param (out-of-band)
                 progress_callback=_cb,
             )
             # Auditoria (paridade com o /invoke sync — este é o caminho da UI/Playground):

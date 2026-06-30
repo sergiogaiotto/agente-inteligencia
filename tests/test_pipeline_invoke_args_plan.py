@@ -72,6 +72,22 @@ class TestDefaults:
         assert r.status_code == 200, r.text
         assert '"canal": "web"' in cap["user_input"]
 
+    def test_empty_args_dict_engages_contract_and_fills_defaults(self, monkeypatch):
+        # args:{} (mesmo vazio) ENGAJA o contrato — sem mensagem, os defaults
+        # preenchem e o pipeline executa (guard usa `is None`, não `not data.args`).
+        cap = _wire(monkeypatch, schema=_schema(
+            {"tier": {"type": "string", "default": "free"}}, required=["tier"]))
+        r = _client().post("/api/v1/pipelines/p1/invoke", json={"args": {}})
+        assert r.status_code == 200, r.text
+        assert '"tier": "free"' in cap["user_input"]
+
+    def test_empty_args_dict_no_defaults_no_message_400(self, monkeypatch):
+        # args:{} sem defaults e sem mensagem → nada a executar → 400 (guard interno).
+        cap = _wire(monkeypatch, schema=_schema({"uf": {"type": "string"}}))
+        r = _client().post("/api/v1/pipelines/p1/invoke", json={"args": {}})
+        assert r.status_code == 400, r.text
+        assert "user_input" not in cap
+
 
 class TestDryPlan:
     def test_dry_returns_resolved_and_provenance_without_executing(self, monkeypatch):
