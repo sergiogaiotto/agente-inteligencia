@@ -325,6 +325,20 @@ def test_pre_visualizar_args_dry():
     assert "this.argsPreview = null" in src
 
 
+def test_badge_balde_param_vs_llm():
+    """Envelope selado (x-uso): o form e a pré-visualização mostram, por campo, o
+    balde — 'exato' (valor selado, fora do LLM) vs 'interpretar' (vai pro LLM)."""
+    src = PG.read_text(encoding="utf-8")
+    # inputFields deriva o balde do x-uso do schema
+    assert "s['x-uso'] === 'param'" in src
+    assert "uso," in src  # uso entra no objeto do campo
+    # badge no form (exato vs interpretar)
+    assert "f.uso === 'param' ? 'exato' : 'interpretar'" in src
+    # pré-visualização (dry) mostra o balde por campo + captura uso da resposta
+    assert "uso: j.uso || {}" in src
+    assert "argsPreview.uso && argsPreview.uso[k] === 'param'" in src
+
+
 def test_layout_lado_a_lado():
     src = PG.read_text(encoding="utf-8")
     assert "lg:grid-cols-2" in src   # builder | resposta lado a lado
