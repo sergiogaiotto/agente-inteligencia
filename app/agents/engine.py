@@ -1462,7 +1462,8 @@ def _extract_inputs_from_text(text: str | None) -> dict:
 
 
 async def _run_declarative_as_interaction(
-    *, agent: dict, parsed_skill, user_input: str, session_id: str | None
+    *, agent: dict, parsed_skill, user_input: str, session_id: str | None,
+    sealed_inputs: dict | None = None,
 ) -> dict:
     """Roda uma SKILL declarativa (## API Bindings / ## Data Tables) pelo engine
     declarativo e adapta o retorno para o shape de `execute_interaction`.
@@ -1498,6 +1499,13 @@ async def _run_declarative_as_interaction(
     # 3) fallback legado: texto puro vira {"question": <texto>}
     if not inputs and msg:
         inputs = {"question": msg}
+
+    # Envelope param SELADO (out-of-band): args marcados `x-uso: param` no ## Inputs
+    # viajam FORA da prosa e o caller é SOBERANO — sobrepõem o que o roteador upstream
+    # (AOBD/SR) tenha emitido no bloco {"inputs": ...}. Garante o valor determinístico,
+    # intacto, mesmo atrás de uma cadeia de roteadores LLM.
+    if sealed_inputs:
+        inputs = {**inputs, **sealed_inputs}
 
     decl = await execute_declarative(
         agent=agent, skill_parsed=parsed_skill, inputs=inputs,
@@ -1566,8 +1574,13 @@ async def execute_interaction(
     context_mode: str = "auto",
     grounding_strict: Optional[bool] = None,
     retrieval_query: Optional[str] = None,
+    sealed_inputs: dict | None = None,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
+
+    `sealed_inputs` (envelope param selado): dict de args determinísticos do caller
+    (marcados `x-uso: param`), repassado ao engine declarativo SEM passar pela prosa.
+    Soberano sobre o que um roteador upstream emita. None = sem envelope (legado).
 
     `context_mode` (2026-06-06 — memória de conversa): controla se o histórico
     da sessão é reinjetado no LLM. 'none' = stateless (legado); 'auto' (default)
@@ -1688,7 +1701,7 @@ async def execute_interaction(
         try:
             return await _run_declarative_as_interaction(
                 agent=agent, parsed_skill=parsed, user_input=user_input,
-                session_id=session_id,
+                session_id=session_id, sealed_inputs=sealed_inputs,
             )
         except Exception as _decl_e:
             logger.warning(
@@ -3036,8 +3049,14 @@ async def execute_pipeline(
     session_id: str | None = None,
     context_mode: str = "auto",
     allowed_agent_ids: set | None = None,
+    sealed_inputs: dict | None = None,
 ) -> dict:
     """Executa pipeline completo pelo AI Mesh.
+
+    `sealed_inputs` (envelope param selado): args determinísticos do caller
+    (`x-uso: param`) que acompanham TODA a cadeia fora da prosa e chegam intactos
+    a qualquer agente declarativo (entry ou downstream), soberanos sobre o que um
+    roteador LLM emita. None = sem envelope (comportamento legado).
 
     `allowed_agent_ids` (Trilha A / PR-A1, opt-in): SELA a execução ao subgrafo
     do pipeline — a cadeia só inclui agentes do conjunto (membros). None = BFS
@@ -3482,6 +3501,9 @@ async def execute_pipeline(
                 # carrega histórico. Subagentes (i>0) recebem session_id=None e,
                 # por política de camada, janela 0 — seguem stateless.
                 context_mode=context_mode,
+                # Envelope param selado: vai a TODO passo declarativo da cadeia
+                # (entry e downstream), soberano sobre o bloco do roteador.
+                sealed_inputs=sealed_inputs,
             )
             iid = result.get("interaction_id")
             # Primeiro agente executado (não pass-through) vira o master
