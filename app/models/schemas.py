@@ -201,7 +201,14 @@ class PipelineEntrySet(BaseModel):
 class PipelineInvokeRequest(BaseModel):
     """Invoca um pipeline pela ENTIDADE (contrato API-first selado — Trilha A PR-A2)."""
     message: Optional[str] = None
-    input: Optional[str] = None  # alias amigável p/ message
+    input: Optional[str] = None  # alias amigável p/ message (texto livre)
+    # Parâmetros ESTRUTURADOS (dict) — validados/coagidos contra o ## Inputs do
+    # agente-raiz ANTES de executar (422 nomeando cada campo: required ausente,
+    # tipo, enum, chave fora do contrato). Dobrados na entrada como bloco
+    # "## Parâmetros estruturados" (raiz LLM lê como contexto; raiz declarativa
+    # consome como inputs). Opcional — texto livre em 'message' segue válido.
+    # NÃO confundir com 'input' (alias de TEXTO LIVRE de 'message').
+    args: Optional[dict] = None
     session_id: Optional[str] = None
     channel: Optional[str] = "api"
     # Detalhe da resposta: full | summary | minimal. Ausente → default por auth

@@ -77,6 +77,119 @@ async def _require(pid: str) -> dict:
     return p
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Args estruturados do invoke (D1/D2) — campo `args` opcional no contrato.
+# Reusa o schema que o `/inputs-schema` já publica (## Inputs do agente-raiz) +
+# os mesmos validadores/coersores do agent invoke e do chat. Os args são
+# DOBRADOS na entrada como bloco "## Parâmetros estruturados" (raiz LLM lê como
+# contexto; raiz declarativa extrai via `_extract_inputs_from_text`). Texto livre
+# em `message` permanece o caminho primário e intacto.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _did_you_mean(name: str, candidates: list) -> Optional[str]:
+    """Campo mais próximo (Levenshtein) — só sugere se for 'perto' o bastante,
+    pra um typo (`uf`→`ufe`) virar dica sem inventar associação distante."""
+    best, best_d = None, 1 << 30
+    for c in candidates:
+        d = _levenshtein(name.lower(), str(c).lower())
+        if d < best_d:
+            best, best_d = c, d
+    if best is not None and best_d <= max(2, len(name) // 3):
+        return best
+    return None
+
+
+def _validate_and_coerce_args(args: dict, schema: Optional[dict]) -> tuple:
+    """Coage `args` contra o JSON Schema do agente-raiz e valida.
+
+    Retorna ``(coerced, issues)`` — issues vazio = ok. Sem schema/properties →
+    devolve os args como vieram, SEM validar (pipeline aceita texto livre, então
+    args livres também passam). Política: coage tipos (lenient) → exige required →
+    checa tipo/enum → REJEITA chave fora do contrato (governança) com did-you-mean.
+    """
+    if not isinstance(args, dict):
+        return {}, []
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict) or not props:
+        return args, []
+    from app.routes.workspace import _coerce_inputs_by_schema
+    from app.routes.agents import _JSON_TYPE_MAP
+    coerced = _coerce_inputs_by_schema(args, schema)
+    issues: list = []
+    required = schema.get("required")
+    if isinstance(required, list):
+        for field in required:
+            if field not in coerced:
+                issues.append({"field": field, "code": "required_missing"})
+    for field, val in coerced.items():
+        if field not in props:
+            issue = {"field": field, "code": "unknown_field"}
+            dym = _did_you_mean(field, list(props))
+            if dym:
+                issue["did_you_mean"] = dym
+            issues.append(issue)
+            continue
+        spec = props.get(field)
+        if not isinstance(spec, dict):
+            continue
+        expected = spec.get("type")
+        py_type = _JSON_TYPE_MAP.get(expected) if expected else None
+        if py_type and not isinstance(val, py_type):
+            issues.append({"field": field, "code": "type_mismatch",
+                           "expected": expected, "received": type(val).__name__})
+            continue
+        enum = spec.get("enum")
+        if isinstance(enum, list) and enum and val not in enum:
+            issues.append({"field": field, "code": "enum_mismatch", "allowed": enum})
+    return coerced, issues
+
+
+def _fold_args_into_input(user_input: str, args: dict) -> str:
+    """Anexa os args como bloco "## Parâmetros estruturados" (mesmo padrão do
+    agent invoke, agents.py). O fenced ```json é o que `_extract_inputs_from_text`
+    do engine pesca pro agente-raiz declarativo."""
+    block = ("## Parâmetros estruturados\n```json\n"
+             + json.dumps(args, ensure_ascii=False, indent=2) + "\n```")
+    return f"{user_input}\n\n{block}" if user_input else block
+
+
+async def _validate_and_fold_args(pid: str, root: str, user_input: str, args: dict) -> str:
+    """Valida/coage `args` contra o ## Inputs do agente-raiz e devolve o
+    `user_input` com o bloco estruturado anexado. 422 (nomeando cada campo) se os
+    args não conferem com o contrato. Raiz órfã/sem schema → args passam crus."""
+    from app.routes.agents import get_agent_inputs_schema
+    try:
+        schema = (await get_agent_inputs_schema(root)).get("inputs_schema")
+    except HTTPException:
+        schema = None  # raiz órfã → trata como sem contrato (não vaza 404 de "agente")
+    coerced, issues = _validate_and_coerce_args(args, schema)
+    if issues:
+        raise HTTPException(422, {
+            "error": "args_validation_failed",
+            "pipeline_id": pid,
+            "root_agent_id": root,
+            "issues": issues,
+            "schema_url": f"/api/v1/pipelines/{pid}/inputs-schema",
+        })
+    return _fold_args_into_input(user_input, coerced)
+
+
 @router.get("")
 async def list_pipelines(status: Optional[str] = None, domain: Optional[str] = None):
     """Lista pipelines + agent_ids/agent_count. Filtros opcionais por igualdade.
@@ -328,8 +441,8 @@ async def invoke_pipeline(
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
     user_input = (data.message or data.input or "").strip()
-    if not user_input:
-        raise HTTPException(400, "Informe 'message' (ou 'input').")
+    if not user_input and not data.args:
+        raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args'.")
 
     # Resolve o subgrafo VIVO do pipeline (raiz + membros) — reusa o builder do
     # snapshot do catálogo (mesma lógica: membership + arestas intra-pipeline + raiz).
@@ -339,6 +452,11 @@ async def invoke_pipeline(
     members = {n.get("id") for n in sub.get("nodes", []) if n.get("id")}
     if not root:
         raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar.")
+
+    # Args estruturados (D1/D2): valida/coage contra o ## Inputs do agente-raiz
+    # (422 nomeando cada campo) e dobra na entrada como bloco estruturado.
+    if data.args:
+        user_input = await _validate_and_fold_args(pid, root, user_input, data.args)
 
     # Anexos: mapeia a saída do /workspace/upload pra forma que o engine consome.
     # O dispatcher do execute_pipeline roteia cada anexo só aos agentes da cadeia
@@ -384,6 +502,9 @@ async def invoke_pipeline(
             "actor_user_id": user.get("id"),
             "via": "api_key" if api_key_id else "session",
             "api_key_id": api_key_id,
+            # Governança: registra QUAIS args foram passados (só as chaves, não os
+            # valores — evita vazar PII no log de auditoria).
+            "arg_keys": sorted(data.args.keys()) if isinstance(data.args, dict) else [],
         }, ensure_ascii=False),
     })
     payload = {
@@ -437,8 +558,8 @@ async def invoke_pipeline_stream(
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
     user_input = (data.message or data.input or "").strip()
-    if not user_input:
-        raise HTTPException(400, "Informe 'message' (ou 'input').")
+    if not user_input and not data.args:
+        raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args'.")
 
     from app.catalog.pipeline_defs import _build_subgraph
     sub = await _build_subgraph(pid)
@@ -446,6 +567,10 @@ async def invoke_pipeline_stream(
     members = {n.get("id") for n in sub.get("nodes", []) if n.get("id")}
     if not root:
         raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar.")
+
+    # Args estruturados (D1/D2): mesma validação/coerção do /invoke sync.
+    if data.args:
+        user_input = await _validate_and_fold_args(pid, root, user_input, data.args)
 
     pipeline_attachments = [
         {
