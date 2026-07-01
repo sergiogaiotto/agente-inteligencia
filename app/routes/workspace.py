@@ -17,6 +17,19 @@ from app.core.database import interactions_repo, turns_repo
 
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "uploads"
 
+
+def _safe_upload_name(filename: str, file_id: str) -> str:
+    """Nome de arquivo seguro p/ gravação — anti path-traversal (CWE-22).
+
+    Usa só o BASENAME do nome enviado (descarta componentes de diretório e os
+    separadores `/` e `\\`), neutraliza `..` e `:` residuais, colapsa espaços e
+    limita o tamanho. O nome do cliente NUNCA controla o diretório de destino.
+    """
+    raw = (filename or "upload").replace("\\", "/")
+    base = raw.split("/")[-1].strip() or "upload"
+    base = base.replace("..", "_").replace(":", "_").replace(" ", "_")[:150] or "upload"
+    return f"{file_id}_{base}"
+
 router = APIRouter(prefix="/api/v1/workspace", tags=["workspace"])
 
 
@@ -434,12 +447,35 @@ async def rename_session(session_id: str, title: str = ""):
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """Upload de arquivo para uso pelo agente na sessão."""
+    from app.core.config import get_settings
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     file_id = str(uuid.uuid4())[:8]
-    safe_name = f"{file_id}_{file.filename.replace(' ', '_')}"
+    safe_name = _safe_upload_name(file.filename, file_id)
     file_path = UPLOAD_DIR / safe_name
 
-    content_bytes = await file.read()
+    # Defesa em profundidade: confirma que o caminho resolvido fica DENTRO de
+    # UPLOAD_DIR (anti path-traversal, mesmo que _safe_upload_name mude).
+    base_dir = UPLOAD_DIR.resolve()
+    dest = file_path.resolve()
+    if dest != base_dir and not str(dest).startswith(str(base_dir) + os.sep):
+        raise HTTPException(400, "Nome de arquivo inválido")
+
+    # Leitura em chunks com teto de tamanho — anti-DoS de memória/disco (CWE-400).
+    max_bytes = max(1, get_settings().max_upload_mb) * 1024 * 1024
+    total = 0
+    parts: list[bytes] = []
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                413, f"Arquivo excede o limite de {get_settings().max_upload_mb} MB"
+            )
+        parts.append(chunk)
+    content_bytes = b"".join(parts)
+
     async with aiofiles.open(str(file_path), "wb") as f:
         await f.write(content_bytes)
 

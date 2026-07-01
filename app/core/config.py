@@ -130,6 +130,9 @@ class Settings(BaseSettings):
     rate_limit_auth_per_min: int = 10          # /login (anti-brute-force)
     # Cap de tokens por interação — proteção LLM04 contra runaway loops
     interaction_max_tokens: int = 80000
+    # Tamanho máximo de upload (MB) — anti-DoS de memória/disco (CWE-400).
+    # O handler lê em chunks e aborta com 413 ao exceder.
+    max_upload_mb: int = 25
 
     # ── Auth hardening (Onda 1) ──
     # bcrypt sempre ativo; SHA256 legado validado e migrado no próximo login.
