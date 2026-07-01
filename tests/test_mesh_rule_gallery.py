@@ -84,9 +84,22 @@ def test_param_card_generates_inputs_rule(html: str):
     assert 'data-testid="param-field"' in html and 'data-testid="param-value"' in html
     # _draftExpr monta `inputs.${f} ${op} ${val}`
     assert "`inputs.${f} ${op} ${val}`" in html
-    # valor de texto é EXATO (helper sem lowercase), número fica cru
+    # valor de texto é EXATO (helper sem lowercase)
     assert "_jinjaStrExact(" in html
-    assert "/^-?\\d+(\\.\\d+)?$/.test(raw)" in html
+
+
+def test_param_card_guards_invalid_input(html: str):
+    """Guardas (revisão adversarial): entrada inválida geraria Jinja quebrado que,
+    no fail-open do gate, rodaria SEMPRE (oposto do intent). O card previne e avisa."""
+    # campo precisa ser identificador válido (senão `inputs.cd cliente` estoura)
+    assert "/^[A-Za-z_]\\w*$/.test(f)" in html
+    # decimal pt-BR normalizado (1,5 → 1.5)
+    assert "raw.replace(',', '.')" in html
+    # maior/menor exige número (comparar número com texto estoura no runtime)
+    assert "if (ordering && !isNum) return ''" in html
+    # feedback inline (não falha em silêncio)
+    assert 'data-testid="param-field-hint"' in html and 'data-testid="param-value-hint"' in html
+    assert "_paramFieldOk()" in html and "_paramValueOrderingOk()" in html
 
 
 def test_gallery_compiles_to_editor_expr(html: str):
