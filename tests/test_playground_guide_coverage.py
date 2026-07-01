@@ -45,3 +45,32 @@ def test_revisao_renomeou_fluxograma_no_guia():
     não deve mais aparecer no conteúdo do Guia."""
     assert "Fluxograma" not in HELP.read_text(encoding="utf-8")
     assert "Fluxograma" not in GUIDE.read_text(encoding="utf-8")
+
+
+# ─── Orientação das features de args (D1–D4) ─────────────────────────────────
+
+_PG = Path("app/templates/pages/mesh_playground.html")
+
+
+def test_playground_expoe_selo_do_contrato():
+    """O Playground mostra o selo do contrato e avisa de drift (o comportamento
+    'publicado valida contra o selo, não o skill vivo')."""
+    pg = _PG.read_text(encoding="utf-8")
+    assert "get sealInfo()" in pg
+    assert 'data-testid="pg-seal"' in pg and 'data-testid="pg-drift"' in pg
+    assert "Contrato selado" in pg and "Alterações não publicadas" in pg
+    # auto-carrega o schema ao trocar de pipeline (pro selo aparecer sem clicar)
+    assert "_resetInputsHelper(); _loadInputsSchema()" in pg
+
+
+def test_ajuda_playground_cobre_args_e_contrato():
+    help_ = HELP.read_text(encoding="utf-8")
+    assert "exato" in help_ and "interpretar" in help_          # faixas dos args
+    assert "Contrato selado" in help_
+    assert "valida contra o CONTRATO SELADO" in help_          # a pegadinha do drift
+
+
+def test_guia_modulos_tem_invoke_args():
+    guide = GUIDE.read_text(encoding="utf-8")
+    assert "id: 'invoke_args'" in guide
+    assert "Parâmetros do invoke e contrato selado" in guide
