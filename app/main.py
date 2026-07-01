@@ -84,6 +84,14 @@ from app.core.request_context import install_request_context_middleware
 install_request_context_middleware(app)
 
 # ── Middlewares de segurança (Onda 1) ──────────────────────────
+# Autenticação default-deny no data plane /api/v1/* (fail-closed): todo endpoint
+# sob /api/v1 exige sessão assinada OU X-API-Key, salvo allowlist mínimo
+# (login/logout/me/check-setup, bootstrap do 1º usuário, ingress federado).
+# Registrado ANTES do RateLimit para que o RateLimit (adicionado depois) seja o
+# mais externo e rejeite floods com 429 antes do trabalho de auth.
+from app.core.api_auth import install_api_auth_middleware
+install_api_auth_middleware(app)
+
 # Rate-limit (sliding window via Redis com fallback memory) — defesa LLM04.
 from app.core.ratelimit import RateLimitMiddleware
 app.add_middleware(RateLimitMiddleware)

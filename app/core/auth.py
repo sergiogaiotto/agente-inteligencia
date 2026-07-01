@@ -185,6 +185,12 @@ async def require_user(request: Request) -> dict:
     Side-effect: quando X-API-Key é usado, popula request.state.api_key_id
     e .api_key_name pra audit log saber qual integração disparou.
     """
+    # Reuso do resultado do ApiAuthMiddleware (quando o scope propaga request.state)
+    # — evita um 2º lookup no mesmo request. Sem propagação, cai no fluxo normal.
+    cached = getattr(request.state, "auth_user", None)
+    if cached is not None:
+        return cached
+
     from app.core.database import users_repo
 
     # Cookie path (UI) — cookie ASSINADO: read_session_uid rejeita forja/expiração.

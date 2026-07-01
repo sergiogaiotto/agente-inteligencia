@@ -23,9 +23,22 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def app_client():
+def app_client(monkeypatch):
+    # /api/v1/* agora exige autenticação (default-deny). O middleware chama
+    # require_user DIRETO (fora do DI), então autenticamos com um cookie de
+    # sessão ASSINADO + um find_by_id mockado (o endpoint em si não usa DB).
+    async def _fake_find_by_id(uid):
+        return {"id": uid, "username": "t", "status": "active", "role": "root"} if uid else None
+
+    import app.core.database as db
+    monkeypatch.setattr(db.users_repo, "find_by_id", _fake_find_by_id)
+
     from app.main import app
-    return TestClient(app)
+    from app.core.auth import sign_session
+
+    client = TestClient(app)
+    client.cookies.set("user_id", sign_session("u-test"))
+    return client
 
 
 # SKILL gerada com Workflow imperativo correto + operations válidas + Examples
