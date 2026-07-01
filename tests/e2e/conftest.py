@@ -81,6 +81,7 @@ def e2e_auth() -> dict:
     """
     info = {
         "user_id": None,
+        "session_cookie": None,
         "username": E2E_USERNAME,
         "password": E2E_PASSWORD,
         "available": False,
@@ -114,9 +115,13 @@ def e2e_auth() -> dict:
                 json={"username": E2E_USERNAME, "password": E2E_PASSWORD},
             )
             if r.status_code == 200:
-                uid = (r.json().get("user") or {}).get("id") or c.cookies.get("user_id")
-                if uid:
+                uid = (r.json().get("user") or {}).get("id")
+                # Cookie de sessão ASSINADO emitido pelo login (não o UUID cru):
+                # é ele que deve ser reenviado nas requisições autenticadas.
+                session_cookie = c.cookies.get("user_id")
+                if uid and session_cookie:
                     info["user_id"] = uid
+                    info["session_cookie"] = session_cookie
                     info["available"] = True
         except Exception:
             pass
@@ -185,7 +190,7 @@ def api(e2e_auth: dict):
     c = _RetryingClient(
         base_url=BASE_URL,
         timeout=30.0,
-        cookies={"user_id": e2e_auth["user_id"]},
+        cookies={"user_id": e2e_auth["session_cookie"]},
     )
     try:
         yield c
@@ -199,7 +204,7 @@ def authed_page(browser, e2e_auth: dict):
     _require_auth(e2e_auth)
     context = browser.new_context(base_url=BASE_URL)
     context.add_cookies(
-        [{"name": "user_id", "value": e2e_auth["user_id"], "url": BASE_URL}]
+        [{"name": "user_id", "value": e2e_auth["session_cookie"], "url": BASE_URL}]
     )
     page = context.new_page()
     try:

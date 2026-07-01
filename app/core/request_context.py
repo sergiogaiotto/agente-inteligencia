@@ -163,10 +163,12 @@ def _resolve_user_id(request: Request) -> str:
     hdr_uid = request.headers.get("x-user-id")
     if hdr_uid:
         return hdr_uid[:64]
-    # Cookie `user_id` setado em /api/v1/users/login (UUID em texto puro).
-    uid_cookie = request.cookies.get("user_id")
-    if uid_cookie:
-        return uid_cookie[:64]
+    # Cookie `user_id` = token de sessão ASSINADO; extrai o UUID verificado
+    # (um cookie forjado não polui os logs com uma identidade falsa).
+    from app.core.auth import read_session_uid
+    uid = read_session_uid(request)
+    if uid:
+        return uid[:64]
     return ""
 
 

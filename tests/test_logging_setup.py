@@ -355,12 +355,21 @@ class TestResolveUserIdCookie:
         return app
 
     def test_user_id_cookie_populates_context_var(self):
-        """Cookie `user_id` (UUID) é lido e propagado para os logs."""
+        """Cookie de sessão ASSINADO é verificado e o UUID propaga para os logs."""
+        from app.core.auth import sign_session
+        client = TestClient(self._make_app())
+        client.cookies.set("user_id", sign_session("41e3a8b8-0000-1111-2222-aaaabbbbcccc"))
+        r = client.get("/whoami")
+        assert r.status_code == 200
+        assert r.json()["user_id"] == "41e3a8b8-0000-1111-2222-aaaabbbbcccc"
+
+    def test_forged_raw_cookie_does_not_populate_context_var(self):
+        """Cookie forjado (UUID cru, sem assinatura) NÃO é aceito — log fica anônimo."""
         client = TestClient(self._make_app())
         client.cookies.set("user_id", "41e3a8b8-0000-1111-2222-aaaabbbbcccc")
         r = client.get("/whoami")
         assert r.status_code == 200
-        assert r.json()["user_id"] == "41e3a8b8-0000-1111-2222-aaaabbbbcccc"
+        assert r.json()["user_id"] == ""
 
     def test_x_user_id_header_takes_precedence(self):
         """Header X-User-Id (server-to-server) vence o cookie."""
@@ -388,10 +397,11 @@ class TestResolveUserIdCookie:
         assert "sess:" not in r.json()["user_id"]
 
     def test_long_cookie_value_truncated_to_64_chars(self):
-        """Defesa contra envenenamento via cookie inflado."""
+        """Defesa contra envenenamento via cookie inflado (uid verificado é truncado)."""
+        from app.core.auth import sign_session
         client = TestClient(self._make_app())
         long_uid = "x" * 200
-        client.cookies.set("user_id", long_uid)
+        client.cookies.set("user_id", sign_session(long_uid))
         r = client.get("/whoami")
         assert len(r.json()["user_id"]) == 64
 

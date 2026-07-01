@@ -135,8 +135,14 @@ limiter = RateLimiter()
 
 
 def _client_identity(request: Request) -> str:
-    """Retorna user:<uid> se autenticado, ip:<addr> caso contrário."""
-    uid = request.cookies.get("user_id")
+    """Retorna user:<uid> se autenticado, ip:<addr> caso contrário.
+
+    Lê o user_id do cookie de sessão ASSINADO (read_session_uid) — um cookie
+    forjado não vira uma identidade `user:` (cai no bucket por IP), evitando
+    que um atacante escape do rate-limit com cookies arbitrários.
+    """
+    from app.core.auth import read_session_uid
+    uid = read_session_uid(request)
     if uid:
         return f"user:{uid}"
     xff = request.headers.get("x-forwarded-for", "")

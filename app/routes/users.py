@@ -14,7 +14,7 @@ from app.models.schemas import UserCreate, UserUpdate, UserLogin, DomainCreate
 from app.core.database import users_repo, domains_repo
 from app.core.auth import (
     hash_password, verify_password, needs_rehash,
-    make_csrf_token, cookie_kwargs,
+    make_csrf_token, cookie_kwargs, sign_session, read_session_uid,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,9 @@ async def login(data: UserLogin, response: Response):
             logger.warning(f"login: falha ao migrar hash user={user['id']}: {e}")
 
     # Cookies seguros + CSRF token (front pode ler csrf_token e mandar em header)
+    # Cookie de sessão ASSINADO (não o UUID cru) — impede forja/impersonação.
     ck = cookie_kwargs()
-    response.set_cookie("user_id", user["id"], **ck)
+    response.set_cookie("user_id", sign_session(user["id"]), **ck)
     csrf = make_csrf_token()
     # csrf_token NÃO é HttpOnly — front precisa ler para mandar no header
     response.set_cookie("csrf_token", csrf, **{**ck, "httponly": False})
@@ -67,7 +68,7 @@ async def logout(response: Response):
 
 @router.get("/me")
 async def get_current_user(request: Request, response: Response):
-    user_id = request.cookies.get("user_id")
+    user_id = read_session_uid(request)
     if not user_id:
         return {"user": None}
     user = await users_repo.find_by_id(user_id)
@@ -199,7 +200,7 @@ async def delete_user(user_id: str, request: Request):
 
 
 async def _get_caller(request: Request):
-    uid = request.cookies.get("user_id")
+    uid = read_session_uid(request)
     if not uid:
         return None
     return await users_repo.find_by_id(uid)
