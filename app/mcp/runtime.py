@@ -18,7 +18,9 @@ CORREÇÃO (2026-04-21):
 """
 
 import re
+import os
 import json
+import shutil
 import logging
 import asyncio
 import shlex
@@ -191,6 +193,53 @@ async def mcp_http_handshake(client, endpoint: str, base_headers: dict) -> dict:
 # Stdio MCP Client — subprocess communication
 # ═══════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════
+# Hardening de RCE (SKILL.md §3 / CWE-78) — allowlist de runtime stdio
+# ═══════════════════════════════════════════════════
+# O comando de um MCP stdio vem da configuração do conector (controlado por
+# operador). Historicamente ele era passado a `create_subprocess_shell` no
+# Windows (injeção de shell literal) e a `create_subprocess_exec(*shlex.split)`
+# no Linux (execução de QUALQUER binário como argv[0] — ex.: `/bin/sh -c ...`).
+# Agora:
+#   1) NUNCA usamos shell (nenhum metacaractere é interpretado);
+#   2) argv[0] precisa ser um runtime conhecido (npx/node/python/uvx/...), por
+#      basename — qualquer outro executável é REJEITADO (fail-closed).
+# Isso NÃO afeta o uso legítimo (`npx -y <pkg>`, `node <file>`, `python -m ...`).
+_ALLOWED_STDIO_RUNTIMES = frozenset({
+    "npx", "npm", "pnpm", "pnpx", "bunx", "bun",
+    "node", "deno",
+    "python", "python3", "py",
+    "uv", "uvx", "pipx",
+})
+
+
+def _stdio_runtime_basename(exe: str) -> str:
+    """Basename em minúsculas, sem sufixo de executável (.cmd/.exe/.bat/.ps1)."""
+    base = os.path.basename(exe).strip().lower()
+    for suf in (".cmd", ".exe", ".bat", ".ps1"):
+        if base.endswith(suf):
+            return base[: -len(suf)]
+    return base
+
+
+def build_stdio_argv(command: str) -> list[str]:
+    """Tokeniza e VALIDA um comando MCP stdio → argv para exec direto (sem shell).
+
+    Levanta ValueError se o comando for vazio ou se argv[0] não for um runtime
+    allowlistado. O caller (run_stdio_session) trata a exceção como falha limpa.
+    """
+    parts = shlex.split(command, posix=(os.name != "nt"))
+    if not parts:
+        raise ValueError("comando MCP stdio vazio")
+    base = _stdio_runtime_basename(parts[0])
+    if base not in _ALLOWED_STDIO_RUNTIMES:
+        raise ValueError(
+            f"runtime MCP stdio não permitido: {parts[0]!r}. "
+            f"Use um destes: {', '.join(sorted(_ALLOWED_STDIO_RUNTIMES))}."
+        )
+    return parts
+
+
 class StdioMCPClient:
     """Comunica com MCP Server via stdin/stdout JSON-RPC."""
 
@@ -203,26 +252,23 @@ class StdioMCPClient:
         self._stderr_task = None
 
     async def start(self):
-        """Spawna o processo MCP e inicia leitor de stderr concorrente."""
-        import sys
-        is_windows = sys.platform == "win32"
+        """Spawna o processo MCP (exec direto, SEM shell) e inicia leitor de stderr.
 
-        if is_windows:
-            # Windows: npx.cmd precisa de shell=True
-            self.process = await asyncio.create_subprocess_shell(
-                self.command,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        else:
-            parts = shlex.split(self.command)
-            self.process = await asyncio.create_subprocess_exec(
-                *parts,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+        argv[0] é validado contra o allowlist de runtimes (anti-RCE). Nenhum shell
+        é envolvido, então metacaracteres (`;`, `|`, `&&`, `$(...)`) não são
+        interpretados em plataforma alguma.
+        """
+        argv = build_stdio_argv(self.command)
+        # Resolve o executável no PATH quando possível (robustez, inclusive p/
+        # `.cmd` no Windows); o basename já foi validado por build_stdio_argv.
+        exe = shutil.which(argv[0]) or argv[0]
+        self.process = await asyncio.create_subprocess_exec(
+            exe,
+            *argv[1:],
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
 
         # Buffer de stderr alimentado em background — captura tudo, não só pós-morte
         self._stderr_buf = []
