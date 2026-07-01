@@ -1,0 +1,41 @@
+# Build context mínimo (defesa em profundidade — SKILL.md §11).
+# O Dockerfile já copia só app/, scripts/ e requirements.txt, mas isto blinda
+# contra um futuro `COPY . .` que vazaria segredos, e reduz o contexto enviado
+# ao daemon (build mais rápido).
+
+# Segredos / credenciais — NUNCA no build context
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# VCS e metadados
+.git
+.gitignore
+.github/
+.claude/
+
+# Dados, logs e artefatos locais
+data/
+logs/
+*.db
+*.db-journal
+build_docs/
+.planning/
+
+# Testes e caches
+tests/
+.pytest_cache/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Ferramentas de dev
+.pre-commit-config.yaml
+docker-compose.yml
