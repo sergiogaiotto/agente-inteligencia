@@ -74,3 +74,27 @@ def test_guia_modulos_tem_invoke_args():
     guide = GUIDE.read_text(encoding="utf-8")
     assert "id: 'invoke_args'" in guide
     assert "Parâmetros do invoke e contrato selado" in guide
+
+
+# ─── Revisão do Guia Interativo: descoberta cruzada + limpeza ───────────────
+
+def test_ajuda_mesh_cobre_selo_e_roteamento_por_valor():
+    """Revisão: o help do 'Fluxo de agentes' cruza p/ o selo do contrato e o
+    roteamento determinístico por parâmetro exato (inputs.X)."""
+    help_ = HELP.read_text(encoding="utf-8")
+    assert "SELA o contrato de entrada" in help_
+    assert "inputs.tier == 'gold'" in help_        # roteamento por valor no mesh
+    assert "Parâmetro exato" in help_              # card da Galeria citado
+
+
+def test_ajuda_skills_explica_x_uso():
+    """Revisão: quem edita a skill em /skills descobre como marcar campo exato."""
+    help_ = HELP.read_text(encoding="utf-8")
+    assert '"x-uso": "param"' in help_
+
+
+def test_pagepathmap_sem_chaves_mortas():
+    """Revisão: limpeza — rotas inexistentes removidas do _pagePathMap."""
+    base = BASE.read_text(encoding="utf-8")
+    assert "'/dashboard':" not in base            # rota não existe; '/' já mapeia
+    assert "'/api_connectors':" not in base       # variante underscore morta (real é -)

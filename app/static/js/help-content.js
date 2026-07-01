@@ -334,7 +334,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           { name: 'Frontmatter (YAML)', required: true, body: 'Cabeçalho YAML no topo. Precisa de id, version, kind (orchestrator/router/subagent), owner, stability (alpha/beta/stable/deprecated).', example: '---\\nid: skill-fiscal-irpf\\nversion: 1.2.0\\nkind: subagent\\nowner: equipe-fiscal\\nstability: stable\\n---' },
           { name: 'Purpose', required: true, body: 'Frase única declarando o que a skill faz. Aparece em listas e ajuda outros agents a encontrar a skill certa.' },
           { name: 'Activation Criteria', required: true, body: 'Quando esta skill deve ser acionada (a "porta de entrada"). O parser exige esta seção — sem ela, a validação falha.' },
-          { name: 'Inputs', required: true, body: 'O que a skill espera receber. Seção obrigatória no parser. Quando declara o schema dos argumentos, ele tem prioridade sobre o que vem descoberto das tools.' },
+          { name: 'Inputs', required: true, body: 'O que a skill espera receber (JSON Schema). Obrigatória no parser; quando declarada, tem prioridade sobre o schema descoberto das tools. Cada campo pode ser marcado como "exato" (adicione "x-uso": "param") — vira um valor determinístico, selado e fora do LLM, à prova de reinterpretação (ex.: um código de cliente) — ou "interpretar" (padrão), quando a IA deve entender o valor. Detalhes no módulo "Parâmetros do invoke e contrato selado" (Guia dos Módulos).', example: '## Inputs\\n{"type":"object","required":["cd_cliente"],\\n "properties":{\\n   "cd_cliente":{"type":"integer","x-uso":"param"},\\n   "tom":{"type":"string"}\\n }}' },
           { name: 'Workflow', required: true, body: 'Passo-a-passo do raciocínio. Pode usar markdown rico — listas, código, headings. É o "corpo" da skill e alimenta o prompt.' },
           { name: 'Tool Bindings', required: true, body: 'Lista de ferramentas (MCP servers) que essa skill pode invocar. Tools FORA dessa lista são invisíveis para o LLM, mesmo registradas no /mcp.' },
           { name: 'Output Contract', required: true, body: 'Schema esperado da resposta (JSON Schema ou descrição). O Verifier (§14.2) usa para validar antes de entregar. Falha precoce evita resposta ruim para o usuário.' },
@@ -459,10 +459,10 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           <ul>
             <li><strong>Sequencial</strong> — A → B → C. O output de A vira contexto de B.</li>
             <li><strong>Paralela (fan-out)</strong> — A → (B + C + D). Os destinos rodam TODOS ao mesmo tempo com o mesmo input (não é escolha 1-de-N).</li>
-            <li><strong>Condicional</strong> — A → B só se uma regra casar. É o roteamento 1-de-N: o destino roda conforme a pergunta do usuário ou a resposta do upstream.</li>
+            <li><strong>Condicional</strong> — A → B só se uma regra casar. É o roteamento 1-de-N: o destino roda conforme a pergunta do usuário, a resposta do agente anterior ou um parâmetro exato do pedido (ex.: <code>inputs.tier == 'gold'</code>).</li>
             <li><strong>Padrão (default)</strong> — o destino "else": roda quando NENHUMA regra condicional do fan-out casou. Combine um <code>default</code> com várias <code>conditional</code> para garantir que sempre haja um caminho.</li>
           </ul>
-          <p>Cada conexão também escolhe <strong>quanto contexto passa adiante</strong>: <em>Herdar</em> (output inteiro, padrão), <em>Filtrar/scoped</em> (transforma o output antes de repassar — economiza tokens) ou <em>Isolar</em> (o próximo agent recebe só a pergunta original).</p>
+          <p>Cada conexão também escolhe <strong>quanto contexto passa adiante</strong>: <em>Herdar</em> (resposta inteira, padrão), <em>Filtrado</em> (transforma a resposta antes de repassar — economiza tokens) ou <em>Isolar</em> (o próximo agent recebe só a pergunta original).</p>
           <p>Agents <strong>pass-through</strong> (sem skill vinculada e sem prompt customizado) são detectados e <strong>pulados</strong> automaticamente. Não desperdiça chamada de LLM em nó que não faz nada.</p>
           <p>Para roteamento automático (decidir QUAL agent chamar pela intenção do usuário), o <strong>Maestro</strong> consulta o <strong>CAR</strong> (Catálogo de Roteadores) — não usa o Mesh diretamente. Mesh é para fluxos que você desenha; CAR é para a escolha automática.</p>
         `
@@ -471,10 +471,10 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'fundamentos',
         title: 'Regras condicionais sem decorar sintaxe',
         body: `
-          <p>Uma conexão <strong>condicional</strong> só dispara quando a regra casa. A regra é uma expressão (Jinja) sobre variáveis como <code>input_lower</code> (a pergunta), <code>output_lower</code> (a resposta do agent anterior), <code>has_document</code> (veio um anexo?) ou <code>is_refuse</code> (a decisão foi recusar?). Você não precisa decorar nada — há três caminhos para a MESMA regra:</p>
+          <p>Uma conexão <strong>condicional</strong> só dispara quando a regra casa. A regra é uma expressão simples sobre variáveis como <code>input_lower</code> (a pergunta), <code>output_lower</code> (a resposta do agente anterior), <code>has_document</code> (veio um anexo?), <code>is_refuse</code> (a decisão foi recusar?) ou <code>inputs.&lt;campo&gt;</code> (um parâmetro exato do pedido). Você não precisa decorar nada — há três caminhos para a MESMA regra:</p>
           <ul>
             <li><strong>Descreva em português</strong> — escreva "se mencionar pix ou anexar um documento" e a IA traduz para a expressão. O sistema PROVA: rejeita variável inexistente e testa se a regra avalia sem erro antes de oferecer.</li>
-            <li><strong>Monte por cards (Galeria)</strong> — escolha cartões prontos (palavra na pergunta, tipo de anexo, decisão tomada) e combine com <strong>E / OU</strong> e parênteses, sem escrever código.</li>
+            <li><strong>Monte por cards (Galeria)</strong> — escolha cartões prontos (palavra na pergunta, tipo de anexo, decisão tomada, <strong>parâmetro exato</strong> do pedido) e combine com <strong>E / OU</strong> e parênteses, sem escrever código. O card "Parâmetro exato" roteia por valor sem gastar IA (ex.: cliente "gold" → agente premium).</li>
             <li><strong>Teste no Simulador</strong> — antes de salvar, informe uma pergunta, uma resposta simulada, anexos e a decisão, e veja na hora se a regra <em>casa</em> ou <em>não casa</em>. O erro aparece para você corrigir (fail-closed), em vez de quebrar só na produção.</li>
           </ul>
           <p>A lista completa de variáveis disponíveis (com explicação em português) é a mesma que o construtor mostra ao lado do campo.</p>
@@ -496,11 +496,12 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           { title: 'Mesh / Pipeline ≠ CAR ≠ Recipe', severity: 'info', body: 'Fluxo de agentes/Pipeline = fluxo desenhado visualmente (você define), publicável no Catálogo como kind=pipeline. CAR = catálogo para roteamento automático (o Maestro decide). Recipe = composição declarativa no Catálogo. Conceitos distintos.' },
           { title: 'Sempre teste a regra no Simulador', severity: 'warning', body: 'O Simulador honra pergunta, anexos E a decisão (Recommend/Refuse/Escalate) — não só o texto da resposta. Uma regra sobre a pergunta (input_lower) ou sobre anexo (has_document) que parece errada pode estar certa: confirme no Simulador antes de salvar.' },
           { title: 'Condicional sem default vira buraco', severity: 'warning', body: 'Num fan-out 1-de-N, se nenhuma regra condicional casar e não houver conexão default, nenhum destino roda. Adicione um destino default como rede de segurança.' },
-          { title: 'Pass-through sumiu da execução', severity: 'info', body: 'Se um agent "desapareceu" do log, provavelmente está pass-through (sem skill nem prompt). Adicione skill ou prompt customizado para ativar.' }
+          { title: 'Pass-through sumiu da execução', severity: 'info', body: 'Se um agent "desapareceu" do log, provavelmente está pass-through (sem skill nem prompt). Adicione skill ou prompt customizado para ativar.' },
+          { title: 'Publicar SELA o contrato de entrada', severity: 'info', body: 'Ao publicar um pipeline (rascunho → publicado), o formato esperado da entrada (o ## Inputs do agente-raiz) é CONGELADO como um contrato selado. A partir daí, o invoke valida contra esse contrato — não contra a skill que você editar depois. Para atualizar a API publicada, RE-PUBLIQUE (a versão sobe se o formato mudou). O Playground avisa quando há alterações não publicadas.' }
         ]
       }
     ],
-    related: ['agents', 'catalog', 'workspace']
+    related: ['agents', 'catalog', 'workspace', 'playground']
   },
 
   // ═════════════════════════════════════════════════════════════════
