@@ -3968,6 +3968,41 @@ def _target_handles_attachment(
     return bool((accepts_documents and has_doc) or (accepts_images and has_img))
 
 
+class _MissingArg:
+    """`inputs.<campo>` AUSENTE numa regra condicional: falsy e comparação-SEGURA em
+    QUALQUER operador (==, !=, <, >, <=, >=, `in`, aninhado). Assim uma regra por
+    valor (ex.: `inputs.limite > 1000`) com o campo omitido simplesmente NÃO casa —
+    em vez de estourar (o que, no fail-open do gate, faria o agente RODAR, o oposto
+    do intent). O `ChainableUndefined` do Jinja é falsy em `==`/`in` mas ESTOURA em
+    ordenação — por isso o sentinel próprio."""
+    __slots__ = ()
+    def __eq__(self, o): return False
+    def __ne__(self, o): return True
+    def __lt__(self, o): return False
+    def __le__(self, o): return False
+    def __gt__(self, o): return False
+    def __ge__(self, o): return False
+    def __bool__(self): return False
+    def __contains__(self, o): return False
+    def __iter__(self): return iter(())
+    def __len__(self): return 0
+    def __getattr__(self, name): return self
+    def __getitem__(self, key): return self
+    def __hash__(self): return 0
+    def __str__(self): return ""
+
+
+_MISSING_ARG = _MissingArg()
+
+
+class _ArgsView(dict):
+    """Args do caller expostos às regras condicionais: chave AUSENTE → sentinel
+    comparação-segura (`_MissingArg`), não KeyError/Undefined. Chave presente = valor
+    normal."""
+    def __missing__(self, key):
+        return _MISSING_ARG
+
+
 def _build_conditional_context(
     output: str | None = None,
     final_state: str | None = None,
@@ -4067,8 +4102,9 @@ def _build_conditional_context(
         # Args SELADOS `x-uso: param` (Postura B — roteamento determinístico): valores
         # EXATOS do caller, disponíveis como `inputs.<campo>` na expr. Sobrevivem intactos
         # à cadeia (não passam por LLM), então uma regra pode ramificar por VALOR sem
-        # roteador LLM. Campo ausente → Undefined (falsy). dict → acesso `inputs.tier`.
-        "inputs": dict(inputs or {}),
+        # roteador LLM. Campo ausente → sentinel comparação-seguro (não casa em NENHUM
+        # operador, inclusive `>`/`<`). dict-view → acesso `inputs.tier`.
+        "inputs": _ArgsView(inputs or {}),
     }
 
 

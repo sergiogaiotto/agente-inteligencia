@@ -40,8 +40,21 @@ class TestConditionalContext:
         assert _eval_conditional("inputs.limite > 9000", ctx) is False
 
     def test_eval_missing_key_is_falsy(self):
-        # campo ausente → ChainableUndefined (falsy), sem crash
+        # campo ausente → sentinel comparação-seguro (falsy), sem crash
         assert _eval_conditional("inputs.tier == 'gold'", _build_conditional_context()) is False
+
+    def test_eval_missing_ordering_is_falsy_not_crash(self):
+        # REGRESSÃO (revisão adversarial): `inputs.X > n` com X AUSENTE não pode
+        # estourar (o fail-open do gate faria o agente RODAR — o oposto do intent).
+        ctx = _build_conditional_context()  # sem inputs
+        for expr in ("inputs.limite > 1000", "inputs.limite < 10", "inputs.limite >= 0",
+                     "inputs.score <= 0.8", "'x' in inputs.tags", "inputs.a.b == 'z'"):
+            assert _eval_conditional(expr, ctx) is False, expr
+
+    def test_present_ordering_still_works(self):
+        ctx = _build_conditional_context(inputs={"limite": 5000})
+        assert _eval_conditional("inputs.limite > 1000", ctx) is True
+        assert _eval_conditional("inputs.limite > 9000", ctx) is False
 
 
 class TestVarsMeta:
@@ -55,6 +68,15 @@ class TestVarsMeta:
         canonical = {v["name"] for v in CONDITIONAL_VARS_META}
         res = validate_conditional_expression("inputs.tier == 'gold'", canonical)
         assert res["valid"] is True, res
+
+    def test_repair_preserves_inputs_member_access(self):
+        # REGRESSÃO (revisão adversarial): o auto-conserto de literal-sem-aspas NÃO
+        # pode mastigar `inputs.tag in output_lower` (acesso a membro legítimo) em
+        # `inputs.'tag' in ...` (inválido). E o caso legítimo (pix) segue consertando.
+        from app.agents.conditional_suggest import repair_unquoted_literals
+        canonical = {v["name"] for v in CONDITIONAL_VARS_META}
+        assert repair_unquoted_literals("inputs.tag in output_lower", canonical) == "inputs.tag in output_lower"
+        assert repair_unquoted_literals("pix in input_lower", canonical) == "'pix' in input_lower"
 
 
 class TestShouldSkipThreadsInputs:
