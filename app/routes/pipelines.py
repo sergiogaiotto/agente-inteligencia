@@ -15,6 +15,7 @@ execuções que gastam tokens de LLM. Mesmo padrão do `POST /api/v1/workspace/c
 """
 import uuid
 import json
+import hashlib
 from datetime import datetime
 from typing import Optional
 
@@ -175,12 +176,12 @@ def _fold_args_into_input(user_input: str, args: dict) -> str:
     return f"{user_input}\n\n{block}" if user_input else block
 
 
-async def _validate_and_fold_args(pid: str, root: str, user_input: str, args: dict) -> tuple:
-    """Valida/coage `args` contra o ## Inputs do agente-raiz e SEPARA em dois baldes:
-    `param` (envelope selado, fora da prosa) e o resto (dobrado na prosa). Devolve
-    ``(user_input_dobrado, sealed_param_dict)``. 422 (nomeando cada campo) se os args
-    não conferem. Raiz órfã/sem schema → tudo cai na prosa (sem envelope)."""
-    schema = await _fetch_root_schema(root)
+async def _validate_and_fold_args(pid: str, p: dict, root: str, user_input: str, args: dict) -> tuple:
+    """Valida/coage `args` contra o contrato do pipeline (SELADO se publicado, senão
+    o ## Inputs vivo) e SEPARA em dois baldes: `param` (envelope selado, fora da prosa)
+    e o resto (dobrado na prosa). Devolve ``(user_input_dobrado, sealed_param_dict)``.
+    422 (nomeando cada campo) se os args não conferem. Sem schema → tudo cai na prosa."""
+    schema, _sealed = await _resolve_invoke_schema(p, root)
     res = _resolve_args(args, schema)  # coage + aplica defaults + valida (fonte única)
     if res["issues"]:
         raise HTTPException(422, {
@@ -269,10 +270,68 @@ async def _fetch_root_schema(root: str) -> Optional[dict]:
         return None
 
 
-async def _plan_args(pid: str, root: str, args: dict) -> dict:
-    """Modo `dry`: resolve os args (coage/defaults/valida) e devolve o payload
-    resolvido + proveniência, SEM executar. 422 se os args não conferem."""
-    schema = await _fetch_root_schema(root)
+# ─────────────────────────────────────────────────────────────────────────────
+# D4 — contrato de args SELADO/versionado. Sela a ENTRADA como `allowed_agent_ids`
+# sela o GRAFO: ao publicar, o ## Inputs do agente-raiz é congelado no pipeline
+# (schema + hash + versão). O invoke de um pipeline PUBLICADO valida contra o SELO,
+# não contra o skill vivo — a API do pipeline publicado não muda quando o autor
+# edita o skill. Rascunho valida ao vivo (conveniência de autoria). Re-publicar
+# re-sela (versão sobe só quando o hash muda).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _schema_hash(schema: Optional[dict]) -> str:
+    canonical = json.dumps(schema or {}, sort_keys=True, ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _parse_contract(v) -> Optional[dict]:
+    """args_contract (JSONB) → dict. asyncpg pode devolver str ou dict conforme codec."""
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v.strip():
+        try:
+            d = json.loads(v)
+            return d if isinstance(d, dict) else None
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+async def _resolve_invoke_schema(p: dict, root: str) -> tuple:
+    """Retorna ``(schema, sealed_bool)``. PUBLICADO + com selo → schema SELADO
+    (estável). Rascunho/sem selo → schema VIVO do agente-raiz."""
+    if p.get("status") == "publicado" and p.get("contract_hash"):
+        sealed = _parse_contract(p.get("args_contract"))
+        return (sealed or None), True  # {} selado (raiz sem ## Inputs) → None
+    return (await _fetch_root_schema(root)), False
+
+
+async def _seal_args_contract(pid: str) -> None:
+    """Congela o ## Inputs do agente-raiz no pipeline (schema+hash+versão). Versão só
+    incrementa quando o hash MUDA — re-publicar sem mudança mantém a versão (estável
+    p/ integradores). JSONB → json.dumps antes do asyncpg."""
+    from app.catalog.pipeline_defs import _build_subgraph
+    sub = await _build_subgraph(pid)
+    root = sub.get("root_agent_id")
+    schema = await _fetch_root_schema(root) if root else None
+    h = _schema_hash(schema)
+    p = await pipelines_repo.find_by_id(pid) or {}
+    prev_hash = p.get("contract_hash")
+    prev_ver = p.get("contract_version") or 0
+    version = prev_ver if (prev_hash == h and prev_ver) else prev_ver + 1
+    await pipelines_repo.update(pid, {
+        "args_contract": json.dumps(schema or {}),
+        "contract_version": version,
+        "contract_hash": h,
+        "contract_sealed_at": datetime.utcnow(),
+    })
+
+
+async def _plan_args(pid: str, p: dict, root: str, args: dict) -> dict:
+    """Modo `dry`: resolve os args (coage/defaults/valida) contra o contrato (SELADO
+    se publicado) e devolve o payload resolvido + proveniência, SEM executar. 422 se
+    os args não conferem. Sinaliza se o contrato é selado e sua versão."""
+    schema, sealed = await _resolve_invoke_schema(p, root)
     res = _resolve_args(args or {}, schema)
     if res["issues"]:
         raise HTTPException(422, {
@@ -290,6 +349,8 @@ async def _plan_args(pid: str, root: str, args: dict) -> dict:
         "provenance": res["provenance"],
         "uso": res["uso"],  # campo→param|llm: qual vai no envelope selado vs prosa
         "has_schema": bool(isinstance(schema, dict) and schema.get("properties")),
+        "sealed": sealed,                                   # validou contra o contrato SELADO?
+        "contract_version": p.get("contract_version"),      # versão do selo (None se rascunho)
     }
 
 
@@ -353,26 +414,41 @@ async def get_pipeline_inputs_schema(pid: str):
     a montar o payload no Playground ("inputs esperados" / "inserir template"). Sem
     raiz/inputs → schema vazio (o pipeline aceita texto livre na mensagem).
     """
-    await _require(pid)
+    p = await _require(pid)
     from app.catalog.pipeline_defs import _build_subgraph
     sub = await _build_subgraph(pid)
     root = sub.get("root_agent_id")
-    _empty = {
+    is_sealed = p.get("status") == "publicado" and bool(p.get("contract_hash"))
+
+    # Metadata VIVA do agente-raiz (agent/skill/inputs_referenced/api_bindings + schema vivo).
+    live = None
+    if root:
+        from app.routes.agents import get_agent_inputs_schema
+        try:
+            live = await get_agent_inputs_schema(root)
+        except HTTPException as e:
+            # Raiz órfã (agente removido) → engole só o 404, não vaza num endpoint de PIPELINE.
+            if e.status_code != 404:
+                raise
+    base = {
         "pipeline_id": pid, "root_agent_id": root, "agent": None, "skill": None,
         "inputs_schema": None, "inputs_referenced": [], "api_bindings": [], "execution_mode": None,
     }
-    if not root:
-        return _empty
-    from app.routes.agents import get_agent_inputs_schema
-    try:
-        data = await get_agent_inputs_schema(root)
-    except HTTPException as e:
-        # Raiz órfã (agente removido, membership/entry pendente) → trata como sem-raiz
-        # em vez de vazar um 404 "agente" num endpoint de PIPELINE válido.
-        if e.status_code == 404:
-            return _empty
-        raise
-    return {**data, "pipeline_id": pid, "root_agent_id": root}
+    if live:
+        base.update(live)
+    base["pipeline_id"] = pid
+    base["root_agent_id"] = root
+    base["sealed"] = is_sealed
+
+    # D4: pipeline PUBLICADO expõe o contrato SELADO (o que o invoke valida), com
+    # `contract_drift` quando o autor editou o skill depois (precisa re-publicar).
+    if is_sealed:
+        base["inputs_schema"] = _parse_contract(p.get("args_contract")) or None
+        base["contract_version"] = p.get("contract_version")
+        base["contract_hash"] = p.get("contract_hash")
+        live_hash = _schema_hash(live.get("inputs_schema")) if live else None
+        base["contract_drift"] = bool(live and live_hash != p.get("contract_hash"))
+    return base
 
 
 @router.put("/{pid}")
@@ -438,11 +514,22 @@ async def change_status(pid: str, data: PipelineStatusChange):
             f"Transições válidas: {nxt}.",
         )
     await pipelines_repo.update(pid, {"status": to_state, "updated_at": datetime.utcnow()})
+    # D4: ao PUBLICAR, sela o contrato de args (congela o ## Inputs do agente-raiz).
+    # O invoke de um pipeline publicado passa a validar contra o SELO. Best-effort:
+    # falha ao selar NÃO impede a publicação (o invoke cai no schema vivo até re-selar).
+    sealed_info = None
+    if to_state == "publicado":
+        try:
+            await _seal_args_contract(pid)
+            fresh = await pipelines_repo.find_by_id(pid) or {}
+            sealed_info = {"version": fresh.get("contract_version"), "hash": fresh.get("contract_hash")}
+        except Exception:
+            pass
     await audit_repo.create({
         "entity_type": "pipeline",
         "entity_id": pid,
         "action": "status_changed",
-        "details": json.dumps({"from": current, "to": to_state}),
+        "details": json.dumps({"from": current, "to": to_state, "sealed_contract": sealed_info}),
     })
     row = await pipelines_repo.find_by_id(pid)
     agent_ids = await pipeline_membership.agents_of(pid)
@@ -563,7 +650,7 @@ async def invoke_pipeline(
     # Modo `dry`: RESOLVE os args (coage/defaults/valida) e devolve o payload
     # resolvido + proveniência SEM executar (não gasta LLM). 422 se inválidos.
     if data.dry:
-        return await _plan_args(pid, root, data.args or {})
+        return await _plan_args(pid, p, root, data.args or {})
 
     # Args estruturados (D1/D2): `args` presente (mesmo {}) engaja o contrato —
     # coage/aplica defaults/valida contra o ## Inputs do agente-raiz (422 nomeando
@@ -571,7 +658,7 @@ async def invoke_pipeline(
     # = texto livre puro.
     sealed_inputs = None
     if data.args is not None:
-        user_input, sealed_inputs = await _validate_and_fold_args(pid, root, user_input, data.args)
+        user_input, sealed_inputs = await _validate_and_fold_args(pid, p, root, user_input, data.args)
 
     # Anexos: mapeia a saída do /workspace/upload pra forma que o engine consome.
     # O dispatcher do execute_pipeline roteia cada anexo só aos agentes da cadeia
@@ -690,7 +777,7 @@ async def invoke_pipeline_stream(
     # separando o envelope `param` selado da prosa.
     sealed_inputs = None
     if data.args is not None:
-        user_input, sealed_inputs = await _validate_and_fold_args(pid, root, user_input, data.args)
+        user_input, sealed_inputs = await _validate_and_fold_args(pid, p, root, user_input, data.args)
 
     pipeline_attachments = [
         {
