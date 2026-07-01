@@ -813,5 +813,47 @@ MAESTRO_SECRET_KEY=&lt;chave-forte&gt;</pre>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">curl 'http://localhost:7000/api/v1/llm/health?force=true' | jq</pre>`,
     usar: `<p>Clique no chip para abrir o detalhamento por papel: provider/modelo resolvido, status e latência. A linha de <b>Embeddings</b> mostra <code>configured</code> (o que você escolheu) x <code>effective</code> (o que de fato respondeu) — quando diferem, o fallback está ativo.</p>
 <p class="mt-2">Endpoint por trás: <code>GET /api/v1/llm/health</code> (em <code>app/routes/dashboard.py</code>), implementado em <code>app/core/model_health.py</code>. O roteamento por papel vem de <b>Configurações → Roteamento LLM</b>; o provider de embeddings, de <b>Configurações → Plataforma → Embedding</b>.</p>`
+  },
+
+  // ═════════════════════════════════════════════════════════════════
+  // Parâmetros do invoke (args) + contrato selado
+  // ═════════════════════════════════════════════════════════════════
+  {
+    id: 'invoke_args',
+    section: '§D',
+    label: 'Parâmetros do invoke e contrato selado',
+    fundamento: `<p>Além da mensagem em texto, um pipeline aceita <b>parâmetros estruturados</b> (o objeto <code>args</code>) — como preencher um formulário em vez de escrever tudo em prosa. Cada campo tem um papel, definido no <code>## Inputs</code> da skill do agente de entrada:</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>"exato"</b> (<code>x-uso: param</code>) — valor literal e determinístico (ex.: um código de cliente). Viaja num "envelope lacrado" fora da prosa: <b>não passa pela IA</b> e chega intacto a quem executa, mesmo atravessando uma cadeia de agentes. Rápido e à prova de reinterpretação.</li>
+  <li><b>"interpretar"</b> (padrão) — valor que a IA lê e entende (ex.: o tom de uma resposta). Vai como contexto para o modelo.</li>
+</ul>
+<p class="mt-2"><b>Analogia:</b> você chega num balcão com um <b>número de cadastro</b> (exato — tem que estar certo) e uma <b>descrição do problema</b> (interpretar — alguém precisa entender). O número vai lacrado direto para quem te atende; a descrição, os atendentes interpretam ao te encaminhar.</p>
+<p class="mt-2"><b>Contrato selado:</b> ao <b>publicar</b> o pipeline, o formato esperado da entrada é <b>congelado</b> (versão v1, v2…). O invoke de um pipeline publicado valida contra esse selo — <b>não</b> contra o skill que você edita depois. Assim como o pipeline já sela QUAIS agentes rodam, agora ele sela também o FORMATO da entrada.</p>`,
+    aplicacao: `<p>Use parâmetros estruturados quando:</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Determinismo importa</b> — um código, um CPF, um limite. Marque como "exato" para o valor chegar intacto, sem a IA reformatar. Bônus: campos "exato" consumidos por um agente declarativo rodam <b>sem gastar token de LLM</b>.</li>
+  <li><b>Roteamento por valor</b> — decidir o caminho por um parâmetro (ex.: cliente "gold" → agente premium). Uma regra de conexão pode usar <code>inputs.tier == 'gold'</code> e ramificar <b>sem IA</b>. Há um card "Parâmetro exato" na Galeria de regras que monta isso sem escrever código.</li>
+  <li><b>Estabilidade da API</b> — o contrato selado garante que quem integrou com o seu pipeline publicado não quebra quando você edita o skill.</li>
+</ul>
+<p class="mt-2"><b>Quando NÃO precisa:</b> um pipeline conversacional que só recebe uma pergunta em texto. Mande só a mensagem — <code>args</code> é opcional e o comportamento antigo continua idêntico.</p>`,
+    ativar: `<p>É nativo — todo pipeline aceita <code>args</code>. Para o autor:</p>
+<ul class="list-disc pl-4 mt-2 space-y-1.5">
+  <li><b>Declarar os campos:</b> no editor da skill do agente de entrada, seção <code>## Inputs</code> (JSON Schema).</li>
+  <li><b>Marcar "exato":</b> adicione <code>"x-uso": "param"</code> na propriedade. Sem isso, o campo é "interpretar".</li>
+  <li><b>Selar o contrato:</b> publique o pipeline (rascunho → publicado) no Fluxo de agentes. Editou depois? Re-publique para atualizar o selo (a versão sobe se o formato mudou).</li>
+</ul>
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">## Inputs
+{"type":"object","required":["cd_cliente"],
+ "properties":{
+   "cd_cliente":{"type":"integer","x-uso":"param"},
+   "tom":{"type":"string"}
+ }}</pre>`,
+    usar: `<p><b>Pelo Playground</b> (<code>/mesh/playground</code>): escolha o pipeline — se publicado, aparece a etiqueta "Contrato selado · vN". O formulário mostra cada campo com a etiqueta <b>exato</b>/<b>interpretar</b>. Clique em <b>pré-visualizar</b> para ver, sem gastar nada, o que o servidor vai resolver (valores, origem e faixa).</p>
+<p class="mt-2"><b>Pela API:</b></p>
+<pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">POST /api/v1/pipelines/{id}/invoke
+{"message":"analise o risco",
+ "args":{"cd_cliente":4071,"tom":"formal"}}
+# dry:true pré-visualiza sem executar</pre>
+<p class="mt-2"><b>Editou o skill e a API não mudou?</b> É proposital: pipeline publicado valida contra o contrato selado. Suas edições só valem depois de <b>re-publicar</b>. O Playground avisa (etiqueta amarela — "alterações não publicadas") quando há divergência.</p>`
   }
 ];

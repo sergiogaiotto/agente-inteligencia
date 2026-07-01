@@ -555,12 +555,39 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         `
       },
       {
+        kind: 'concept',
+        title: 'Parâmetros (args): "exato" vs "interpretar"',
+        body: `
+          <p>Além da mensagem em texto, você pode mandar <strong>parâmetros estruturados</strong> (o objeto <code>args</code>). Cada campo tem um <strong>papel</strong>, mostrado por uma etiqueta no formulário de entrada:</p>
+          <ul>
+            <li><strong>exato</strong> — valor literal e determinístico (ex.: um código de cliente). Ele <strong>não passa pela IA</strong>: viaja num "envelope lacrado" e chega intacto a quem executa. É rápido e à prova de reinterpretação — mesmo passando por uma cadeia de agentes.</li>
+            <li><strong>interpretar</strong> — valor que a IA lê e entende (ex.: o tom desejado de uma resposta). Vai como contexto para o modelo.</li>
+          </ul>
+          <p>Quem define o papel é o autor do agente de entrada, marcando o campo no <code>## Inputs</code> da skill. Sem marcação, o padrão é <strong>interpretar</strong>.</p>
+          <p><strong>Pré-visualizar</strong> (o botão ao lado de "inputs esperados") mostra, <em>sem gastar nada</em>, exatamente o que o servidor vai usar: os valores já resolvidos, de onde cada um veio (<em>você</em> ou <em>default</em>) e em qual faixa (exato/interpretar).</p>
+        `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Contrato selado (pipeline publicado)',
+        body: `
+          <p>Quando um pipeline é <strong>publicado</strong>, o formato esperado da entrada é <strong>congelado</strong> — vira um <strong>contrato selado</strong>, com uma versão (v1, v2…). O Playground mostra a etiqueta "Contrato selado · vN" ao escolher o pipeline.</p>
+          <p>Isso tem uma consequência importante e proposital:</p>
+          <blockquote style="border-left:3px solid var(--color-border-secondary,#ccc);padding-left:.75rem;margin:.5rem 0;">A entrada de um pipeline <strong>publicado</strong> é validada contra o <strong>contrato selado</strong> — <strong>não</strong> contra o skill que você está editando agora. Editar o <code>## Inputs</code> do agente <strong>não muda</strong> a API que já está publicada.</blockquote>
+          <p><strong>Por quê:</strong> quem integrou com o seu pipeline depende de um contrato estável. Se ele mudasse a cada edição do skill, as integrações quebrariam sem aviso. O selo protege isso — como o pipeline já "sela" quais agentes rodam, agora ele sela também o formato da entrada.</p>
+          <p><strong>Para atualizar o contrato:</strong> <strong>re-publique</strong> o pipeline. O selo é recalculado e a versão sobe <em>se</em> o formato mudou (re-publicar sem mudança mantém a versão). Enquanto você não re-publica, a etiqueta fica <strong>amarela</strong> avisando que há <strong>alterações não publicadas</strong>.</p>
+          <p><strong>Rascunho</strong> valida sempre ao vivo (contra o skill atual) — é a conveniência de quem ainda está montando.</p>
+        `
+      },
+      {
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
           { title: 'Precisa de chave de API', severity: 'info', body: 'O console roda como integração (X-API-Key, sem cookie). Sem uma chave gerada, o Executar avisa — clique em "Gerar chave de API" primeiro.' },
           { title: 'Trace e custo só em Debug', severity: 'info', body: 'Em Deploy/Só resposta o servidor não devolve a tripa interna (trace, SQL, custo). Rode em Debug para auditar — é o mesmo da resposta real por verbosidade.' },
-          { title: 'Comparar = 2× custo de LLM', severity: 'warning', body: 'O modo A/B faz DUAS execuções reais (sem projeção falsa). É fiel, mas gasta o dobro — use quando o objetivo for justamente comparar.' }
+          { title: 'Comparar = 2× custo de LLM', severity: 'warning', body: 'O modo A/B faz DUAS execuções reais (sem projeção falsa). É fiel, mas gasta o dobro — use quando o objetivo for justamente comparar.' },
+          { title: 'Editou o skill mas a API não mudou?', severity: 'warning', body: 'Se o pipeline está PUBLICADO, a entrada valida contra o CONTRATO SELADO, não contra o skill vivo. Suas edições no ## Inputs só valem na API depois de RE-PUBLICAR o pipeline. A etiqueta "Contrato selado" fica amarela ("alterações não publicadas") quando há divergência.' },
+          { title: 'Campo "exato" não chega ao especialista?', severity: 'info', body: 'Valores marcados como "exato" só têm efeito determinístico onde há um agente que os consome estruturalmente (declarativo, que faz HTTP/SQL). Num agente puramente de IA, um valor "exato" não é usado — quem interpreta é a IA (marque como "interpretar").' }
         ]
       }
     ],
