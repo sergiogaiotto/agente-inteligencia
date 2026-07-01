@@ -1031,6 +1031,14 @@ _IDEMPOTENT_MIGRATIONS = [
     # Setado (membro) = o invoke/_build_subgraph usam ele como raiz — desempata
     # 2+ raízes / 0 conexões, dando controle de "por onde o pipeline começa".
     "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS entry_agent_id TEXT",
+    # D4 (contrato de args SELADO/versionado): ao PUBLICAR (rascunho→publicado), o
+    # ## Inputs do agente-raiz é CONGELADO aqui. O invoke de um pipeline publicado
+    # valida contra o SELO (estável mesmo que o autor edite o skill; re-publicar
+    # re-sela). Rascunho valida ao vivo. args_contract é JSONB (json.dumps ao gravar).
+    "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS args_contract JSONB",
+    "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS contract_version INTEGER",
+    "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS contract_hash TEXT",
+    "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS contract_sealed_at TIMESTAMP",
     # Onda Tabular: kb_mode declara o tipo de conteúdo da KS.
     # - 'text': só RAG (textos, FAQs, contratos). Upload de planilha vira chunks markdown.
     # - 'tabular': só Tabelas DuckDB. Rejeita formatos não-estruturados. ZERO chunks no Qdrant/Postgres.
