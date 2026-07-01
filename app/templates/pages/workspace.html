@@ -1579,7 +1579,18 @@ function workspacePage() {
                 .replace(/`([^`]+)`/g, '<code class="rounded bg-surface-100 px-1 py-0.5 text-[10px] font-mono text-red-700">$1</code>')
                 .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-brand-900">$1</strong>')
                 .replace(/\*(.+?)\*/g, '<em>$1</em>')
-                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="text-brand-500 underline hover:text-brand-700">$1</a>');
+                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, txt, url) => `<a href="${this._safeHref(url)}" target="_blank" rel="noopener" class="text-brand-500 underline hover:text-brand-700">${txt}</a>`);
+        },
+
+        // Allowlist de esquema p/ href (anti-XSS, SKILL.md §4): só http/https/mailto
+        // ou caminho relativo; javascript:/data:/vbscript:/etc. viram '#'. Aspas e
+        // angle brackets são percent-encoded p/ não escapar do atributo.
+        _safeHref(url) {
+            const raw = String(url == null ? '' : url).trim();
+            const enc = s => s.replace(/"/g, '%22').replace(/</g, '%3C').replace(/>/g, '%3E');
+            if (/^(https?:|mailto:)/i.test(raw)) return enc(raw);
+            if (/^[a-z][a-z0-9+.\-]*:/i.test(raw)) return '#';   // esquema explícito não permitido
+            return enc(raw);                                     // relativo (sem esquema)
         },
 
         _esc(s) {
