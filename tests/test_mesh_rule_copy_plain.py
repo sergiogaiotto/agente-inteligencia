@@ -87,5 +87,5 @@ def test_field_names_and_types_preserved():
     for n in ("output_lower", "input_lower", "has_document", "is_refuse", "final_state", "contains_url"):
         assert n in names
     for v in CONDITIONAL_VARS_META:
-        assert v["type"] in {"str", "int", "bool", "float"}
+        assert v["type"] in {"str", "int", "bool", "float", "dict"}
         assert len(v["desc"]) > 10

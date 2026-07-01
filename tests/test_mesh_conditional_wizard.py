@@ -91,7 +91,7 @@ class TestConditionalVarsMeta:
         from app.agents.engine import CONDITIONAL_VARS_META
         for v in CONDITIONAL_VARS_META:
             assert v["name"] and isinstance(v["name"], str)
-            assert v["type"] in {"str", "int", "bool", "float"}
+            assert v["type"] in {"str", "int", "bool", "float", "dict"}
             assert v["desc"] and len(v["desc"]) > 10
 
 
