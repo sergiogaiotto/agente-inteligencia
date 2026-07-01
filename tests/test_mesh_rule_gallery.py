@@ -36,6 +36,7 @@ GALLERY_VARS = {
     "is_recommend", "is_refuse", "is_escalate", "final_state",  # card decisão
     "contains_url", "contains_pdf", "contains_image",  # card conteúdo (Fatia 3)
     "has_output", "output_length",                   # card tamanho (Fatia 3)
+    "inputs",                                        # card parâmetro exato (Postura B)
 }
 
 
@@ -69,10 +70,23 @@ def test_template_fetches_conditional_vars(html: str):
     assert "condVars: []" in html
 
 
-def test_template_has_five_intent_cards(html: str):
-    # núcleo (Fatia 2) + conteúdo/tamanho (Fatia 3)
-    for intent in ("'keyword'", "'attachment'", "'decision'", "'content'", "'size'"):
+def test_template_has_intent_cards(html: str):
+    # núcleo (Fatia 2) + conteúdo/tamanho (Fatia 3) + parâmetro exato (Postura B)
+    for intent in ("'keyword'", "'attachment'", "'decision'", "'content'", "'size'", "'param'"):
         assert f"selectIntent({intent})" in html, f"card de intenção {intent} ausente"
+
+
+def test_param_card_generates_inputs_rule(html: str):
+    """Card 'Parâmetro exato' (Postura B): gera `inputs.<campo> <op> <valor>` — roteia
+    por valor de arg selado, sem IA. Valor de texto é EXATO (sem lowercase)."""
+    assert "selectIntent('param')" in html
+    assert 'data-testid="intent-param"' in html
+    assert 'data-testid="param-field"' in html and 'data-testid="param-value"' in html
+    # _draftExpr monta `inputs.${f} ${op} ${val}`
+    assert "`inputs.${f} ${op} ${val}`" in html
+    # valor de texto é EXATO (helper sem lowercase), número fica cru
+    assert "_jinjaStrExact(" in html
+    assert "/^-?\\d+(\\.\\d+)?$/.test(raw)" in html
 
 
 def test_gallery_compiles_to_editor_expr(html: str):
