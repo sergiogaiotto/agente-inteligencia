@@ -17,6 +17,7 @@ import hmac
 import logging
 import secrets
 
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from passlib.context import CryptContext
 
 from app.core.config import get_settings
@@ -96,6 +97,57 @@ def cookie_kwargs() -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
+# Sessão ASSINADA — o cookie `user_id` carrega um token HMAC, não o
+# UUID cru (CWE-565/CWE-639: antes qualquer um forjava `Cookie: user_id=<uuid>`
+# e virava aquele usuário, inclusive root). O token embrulha o user_id com
+# assinatura derivada de `secret_key`: legível, porém à prova de forja e
+# adulteração, e com expiração verificada server-side (fail-closed).
+# ═══════════════════════════════════════════════════════════════
+
+# Nome do cookie mantido como "user_id" por retrocompat (delete_cookie, JS que
+# checa presença). O VALOR mudou de UUID cru → token assinado.
+SESSION_COOKIE = "user_id"
+_SESSION_SALT = "maestro-session-v1"
+
+
+def _session_serializer() -> URLSafeTimedSerializer:
+    # Chaveado por secret_key: sem ela não há como produzir/alterar um token
+    # válido. Reconstruído a cada chamada para refletir rotação de secret_key
+    # (get_settings é cacheado, então o custo é desprezível).
+    return URLSafeTimedSerializer(get_settings().secret_key, salt=_SESSION_SALT)
+
+
+def sign_session(user_id: str) -> str:
+    """Serializa+assina o `user_id` num token de sessão opaco-para-forja."""
+    return _session_serializer().dumps(user_id)
+
+
+def read_session_uid_from_value(token: str | None) -> str | None:
+    """Extrai o user_id de um token de sessão assinado e não-expirado.
+
+    Fail-closed: retorna None se ausente, adulterado, forjado ou expirado.
+    Tolera o formato legado (UUID cru) apenas para NÃO autenticar — um valor
+    sem assinatura válida sempre vira None, forçando novo login.
+    """
+    if not token:
+        return None
+    try:
+        uid = _session_serializer().loads(
+            token, max_age=get_settings().session_max_age_seconds
+        )
+        return uid if isinstance(uid, str) and uid else None
+    except (BadSignature, SignatureExpired):
+        return None
+    except Exception:  # pragma: no cover - defensivo
+        return None
+
+
+def read_session_uid(request: "Request") -> str | None:
+    """Igual a read_session_uid_from_value, lendo o cookie do request."""
+    return read_session_uid_from_value(request.cookies.get(SESSION_COOKIE))
+
+
+# ═══════════════════════════════════════════════════════════════
 # Auth unificada — cookie OU X-API-Key (Depends pra endpoints)
 # ═══════════════════════════════════════════════════════════════
 
@@ -135,8 +187,8 @@ async def require_user(request: Request) -> dict:
     """
     from app.core.database import users_repo
 
-    # Cookie path (UI)
-    uid = request.cookies.get("user_id")
+    # Cookie path (UI) — cookie ASSINADO: read_session_uid rejeita forja/expiração.
+    uid = read_session_uid(request)
     if uid:
         user = await users_repo.find_by_id(uid)
         if user and user.get("status", "active") == "active":

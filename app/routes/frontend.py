@@ -36,7 +36,8 @@ PAGES = {
 }
 
 async def _get_user(request: Request):
-    uid = request.cookies.get("user_id")
+    from app.core.auth import read_session_uid
+    uid = read_session_uid(request)
     if not uid:
         return None
     return await users_repo.find_by_id(uid)
