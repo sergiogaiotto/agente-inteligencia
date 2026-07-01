@@ -72,11 +72,20 @@ class _RedisLimiter:
 
 class _MemoryLimiter:
     """Fallback in-process. Não compartilha entre workers — aceitável quando
-    Redis cai temporariamente, ou em desenvolvimento single-worker."""
+    Redis cai temporariamente, ou em desenvolvimento single-worker.
+
+    Faz GC periódico de chaves ociosas (CWE-400): sem ele, cada identidade
+    distinta (user/IP × bucket) deixava um resíduo permanente no dict, crescendo
+    sem limite sob tráfego de muitos IPs.
+    """
+
+    _GC_EVERY = 500        # varre a cada N checks
+    _GC_HORIZON = 300.0    # remove chaves sem atividade há > 5 min (>> janela de 60s)
 
     def __init__(self):
         self._buckets: dict[str, list[float]] = {}
         self._lock = asyncio.Lock()
+        self._ops = 0
 
     async def check(self, key: str, limit: int, window: int) -> tuple[bool, int, int]:
         async with self._lock:
@@ -90,7 +99,18 @@ class _MemoryLimiter:
                 reset_in = max(1, int(bucket[0] + window - now))
             else:
                 reset_in = window
+            self._ops += 1
+            if self._ops >= self._GC_EVERY:
+                self._ops = 0
+                self._gc(now)
             return count <= limit, max(0, limit - count), reset_in
+
+    def _gc(self, now: float) -> None:
+        """Remove chaves cujo timestamp mais recente saiu do horizonte de GC."""
+        horizon = now - self._GC_HORIZON
+        dead = [k for k, ts in self._buckets.items() if not ts or ts[-1] < horizon]
+        for k in dead:
+            self._buckets.pop(k, None)
 
 
 class RateLimiter:
@@ -163,7 +183,19 @@ def _client_identity(request: Request) -> str:
 def _bucket_for_path(path: str) -> tuple[str, int]:
     """Retorna (bucket_name, limit_per_window) para uma rota."""
     settings = get_settings()
-    if path.startswith("/api/v1/workspace") or path.startswith("/api/v1/agents") and "/run" in path:
+    # Rotas que DISPARAM LLM (caras) → bucket 'workspace' (limite apertado).
+    # Allowlist EXPLÍCITA com parênteses: a versão antiga
+    # (`... or path.startswith('/agents') and '/run' in path`) sofria de
+    # precedência (`and` liga antes de `or`) e deixava /agents/{id}/invoke,
+    # /pipelines/{id}/invoke e /wizard/* caírem no bucket genérico (60/min).
+    is_llm = (
+        path.startswith("/api/v1/workspace")
+        or path.startswith("/api/v1/wizard")
+        or (path.startswith("/api/v1/agents/")
+            and (path.endswith("/invoke") or path.endswith("/run")))
+        or (path.startswith("/api/v1/pipelines/") and "/invoke" in path)
+    )
+    if is_llm:
         return ("workspace", settings.rate_limit_workspace_per_min)
     if path.startswith("/api/v1/users/login") or path.endswith("/login"):
         return ("auth", settings.rate_limit_auth_per_min)
