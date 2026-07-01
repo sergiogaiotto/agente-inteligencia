@@ -593,6 +593,12 @@
                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21 6H3M15 12H3M21 18H3"/></svg>
                                             <span>Tamanho</span>
                                         </button>
+                                        <button type="button" @click="selectIntent('param')" data-testid="intent-param"
+                                                class="rounded-lg border px-2 py-2 flex flex-col items-center gap-1 text-[11px] transition-colors"
+                                                :class="editor.intent==='param' ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-surface-200 text-surface-600 hover:bg-surface-50'">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M10 3L8 21M16 3l-2 18M4 9h16M3 15h16"/></svg>
+                                            <span>Parâmetro exato</span>
+                                        </button>
                                     </div>
 
                                     <template x-if="editor.intent==='keyword'">
@@ -672,6 +678,29 @@
                                                     <span>caracteres</span>
                                                 </span>
                                             </template>
+                                        </div>
+                                    </template>
+
+                                    <template x-if="editor.intent==='param'">
+                                        <div class="rounded-lg border border-surface-200 p-2.5 space-y-2">
+                                            <div class="flex items-center gap-1.5 text-[11px] text-surface-500 flex-wrap">
+                                                <span>Quando o parâmetro exato</span>
+                                                <input x-model="editor.paramField" @input="syncExpr()" data-testid="param-field"
+                                                       placeholder="ex.: tier" class="w-24 rounded border border-surface-200 px-1.5 py-1 text-[11px] font-mono">
+                                                <select x-model="editor.paramOp" @change="syncExpr()" data-testid="param-op" class="rounded border border-surface-200 px-1.5 py-1 text-[11px]">
+                                                    <option value="==">for igual a</option>
+                                                    <option value="!=">for diferente de</option>
+                                                    <option value=">">for maior que</option>
+                                                    <option value="<">for menor que</option>
+                                                    <option value=">=">for maior ou igual a</option>
+                                                    <option value="<=">for menor ou igual a</option>
+                                                </select>
+                                                <input x-model="editor.paramValue" @input="syncExpr()" data-testid="param-value"
+                                                       placeholder="ex.: gold ou 1000" class="w-24 rounded border border-surface-200 px-1.5 py-1 text-[11px]">
+                                            </div>
+                                            <p x-show="!_paramFieldOk()" class="text-[10px] text-rose-500" data-testid="param-field-hint">Nome inválido — use letras, números e _ (sem espaço), começando por letra.</p>
+                                            <p x-show="!_paramValueOrderingOk()" class="text-[10px] text-rose-500" data-testid="param-value-hint">Para maior/menor, o valor precisa ser um número (ex.: 1000 ou 1,5).</p>
+                                            <p class="text-[10px] text-surface-400">Valor <strong>exato</strong> enviado na chamada (o campo marcado "exato" no formulário). Texto vira comparação literal; número, comparação numérica. Decide o caminho <strong>sem IA</strong>.</p>
                                         </div>
                                     </template>
 
@@ -1828,7 +1857,8 @@ function meshFlowPage() {
             this.sim = null; this.scopeSim = null; this.nlSuggest = null;
             this.editor = { mode: 'new', id: null, source: srcId, target: tgtId, type: 'sequential', expr: '', scopeMode: 'inherit', scopeTemplate: '', sampleOut: '', sampleInput: '', sampleFinalState: 'Recommend', sampleHasDoc: false, sampleHasImg: false,
                 ruleMode: 'gallery', intent: null, kwTerms: [], kwDraft: '', kwWhere: 'output_lower', kwMode: 'any', attKind: 'has_document', decision: 'is_recommend',
-                clauses: [], join: 'and', contentKind: 'contains_url', sizeKind: 'empty', sizeN: 200, nlDesc: '' };
+                clauses: [], join: 'and', contentKind: 'contains_url', sizeKind: 'empty', sizeN: 200, nlDesc: '',
+                paramField: '', paramOp: '==', paramValue: '' };
         },
 
         editEdge(id) {
@@ -1849,6 +1879,7 @@ function meshFlowPage() {
                 ruleMode: (cfg.expr || '').trim() ? 'manual' : 'gallery',
                 intent: null, kwTerms: [], kwDraft: '', kwWhere: 'output_lower', kwMode: 'any', attKind: 'has_document', decision: 'is_recommend',
                 clauses: [], join: 'and', contentKind: 'contains_url', sizeKind: 'empty', sizeN: 200, nlDesc: '',
+                paramField: '', paramOp: '==', paramValue: '',
             };
         },
 
@@ -1916,6 +1947,16 @@ function meshFlowPage() {
         // mudança de runtime). Escape hatch p/ Jinja cru sempre presente.
         selectIntent(kind) { this.editor.intent = (this.editor.intent === kind ? null : kind); this.syncExpr(); },
         _jinjaStr(s) { return "'" + String(s).toLowerCase().replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; },
+        // EXATO (sem lowercase): `inputs.X == 'Gold'` compara o valor cru do arg, não uma busca de substring.
+        _jinjaStrExact(s) { return "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; },
+        // Validação do card 'param' (feedback inline — evita gerar Jinja quebrado em silêncio).
+        _paramFieldOk() { const f = (this.editor.paramField || '').trim(); return f === '' || /^[A-Za-z_]\w*$/.test(f); },
+        _paramValueOrderingOk() {
+            const op = this.editor.paramOp;
+            if (!['>', '<', '>=', '<='].includes(op)) return true;
+            const v = String(this.editor.paramValue == null ? '' : this.editor.paramValue).trim();
+            return v === '' || /^-?\d+(\.\d+)?$/.test(v.replace(',', '.'));
+        },
         addKw() {
             const ed = this.editor;
             const raw = (ed.kwDraft || '').trim();
@@ -1947,6 +1988,22 @@ function meshFlowPage() {
                 if (ed.sizeKind === 'short') return `output_length < ${v}`;
                 if (ed.sizeKind === 'long') return `output_length > ${v}`;
             }
+            if (ed.intent === 'param') {
+                const f = (ed.paramField || '').trim();
+                // campo precisa ser identificador válido — `inputs.cd cliente` estouraria
+                // Jinja no runtime e o fail-open do gate faria o agente RODAR sempre.
+                if (!f || !/^[A-Za-z_]\w*$/.test(f)) return '';
+                const raw = (ed.paramValue == null ? '' : String(ed.paramValue)).trim();
+                const op = ed.paramOp || '==';
+                const norm = raw.replace(',', '.');   // decimal pt-BR: 1,5 → 1.5
+                const isNum = norm !== '' && /^-?\d+(\.\d+)?$/.test(norm);
+                const ordering = op === '>' || op === '<' || op === '>=' || op === '<=';
+                // maior/menor exige número — comparar número com texto estoura no runtime
+                if (ordering && !isNum) return '';
+                // número fica cru; texto vira literal EXATO (sem lowercase — valor cru do arg)
+                const val = isNum ? norm : this._jinjaStrExact(raw);
+                return `inputs.${f} ${op} ${val}`;
+            }
             return '';
         },
         // Rótulo pt-BR legível do rascunho (mostrado na lista de condições).
@@ -1964,6 +2021,10 @@ function meshFlowPage() {
                 if (ed.sizeKind === 'empty') return 'resposta vazia';
                 if (ed.sizeKind === 'short') return `resposta curta (< ${ed.sizeN})`;
                 if (ed.sizeKind === 'long') return `resposta longa (> ${ed.sizeN})`;
+            }
+            if (ed.intent === 'param') {
+                const opL = { '==': 'é igual a', '!=': 'é diferente de', '>': 'é maior que', '<': 'é menor que', '>=': 'é ≥', '<=': 'é ≤' }[ed.paramOp] || ed.paramOp;
+                return `parâmetro exato ${ed.paramField || '?'} ${opL} ${ed.paramValue || ''}`;
             }
             return '';
         },
@@ -1987,14 +2048,14 @@ function meshFlowPage() {
             if (!frag) return;
             ed.clauses.push({ label: this._draftLabel(), expr: frag });
             // limpa o card para a próxima condição (preserva o conector global)
-            ed.intent = null; ed.kwTerms = []; ed.kwDraft = '';
+            ed.intent = null; ed.kwTerms = []; ed.kwDraft = ''; ed.paramField = ''; ed.paramValue = ''; ed.paramOp = '==';
             this.syncExpr();
         },
         removeClause(i) { this.editor.clauses.splice(i, 1); this.syncExpr(); },
         switchToManual() { this.editor.ruleMode = 'manual'; },   // expr compilada vira ponto de partida editável
         backToGallery() {
             const ed = this.editor;
-            ed.ruleMode = 'gallery'; ed.intent = null; ed.clauses = []; ed.kwTerms = []; ed.kwDraft = ''; ed.expr = ''; this.sim = null;
+            ed.ruleMode = 'gallery'; ed.intent = null; ed.clauses = []; ed.kwTerms = []; ed.kwDraft = ''; ed.paramField = ''; ed.paramValue = ''; ed.paramOp = '=='; ed.expr = ''; this.sim = null;
         },
         insertVar(name) {
             const cur = this.editor.expr || '';

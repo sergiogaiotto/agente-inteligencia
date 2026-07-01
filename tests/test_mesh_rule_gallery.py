@@ -36,6 +36,7 @@ GALLERY_VARS = {
     "is_recommend", "is_refuse", "is_escalate", "final_state",  # card decisão
     "contains_url", "contains_pdf", "contains_image",  # card conteúdo (Fatia 3)
     "has_output", "output_length",                   # card tamanho (Fatia 3)
+    "inputs",                                        # card parâmetro exato (Postura B)
 }
 
 
@@ -69,10 +70,36 @@ def test_template_fetches_conditional_vars(html: str):
     assert "condVars: []" in html
 
 
-def test_template_has_five_intent_cards(html: str):
-    # núcleo (Fatia 2) + conteúdo/tamanho (Fatia 3)
-    for intent in ("'keyword'", "'attachment'", "'decision'", "'content'", "'size'"):
+def test_template_has_intent_cards(html: str):
+    # núcleo (Fatia 2) + conteúdo/tamanho (Fatia 3) + parâmetro exato (Postura B)
+    for intent in ("'keyword'", "'attachment'", "'decision'", "'content'", "'size'", "'param'"):
         assert f"selectIntent({intent})" in html, f"card de intenção {intent} ausente"
+
+
+def test_param_card_generates_inputs_rule(html: str):
+    """Card 'Parâmetro exato' (Postura B): gera `inputs.<campo> <op> <valor>` — roteia
+    por valor de arg selado, sem IA. Valor de texto é EXATO (sem lowercase)."""
+    assert "selectIntent('param')" in html
+    assert 'data-testid="intent-param"' in html
+    assert 'data-testid="param-field"' in html and 'data-testid="param-value"' in html
+    # _draftExpr monta `inputs.${f} ${op} ${val}`
+    assert "`inputs.${f} ${op} ${val}`" in html
+    # valor de texto é EXATO (helper sem lowercase)
+    assert "_jinjaStrExact(" in html
+
+
+def test_param_card_guards_invalid_input(html: str):
+    """Guardas (revisão adversarial): entrada inválida geraria Jinja quebrado que,
+    no fail-open do gate, rodaria SEMPRE (oposto do intent). O card previne e avisa."""
+    # campo precisa ser identificador válido (senão `inputs.cd cliente` estoura)
+    assert "/^[A-Za-z_]\\w*$/.test(f)" in html
+    # decimal pt-BR normalizado (1,5 → 1.5)
+    assert "raw.replace(',', '.')" in html
+    # maior/menor exige número (comparar número com texto estoura no runtime)
+    assert "if (ordering && !isNum) return ''" in html
+    # feedback inline (não falha em silêncio)
+    assert 'data-testid="param-field-hint"' in html and 'data-testid="param-value-hint"' in html
+    assert "_paramFieldOk()" in html and "_paramValueOrderingOk()" in html
 
 
 def test_gallery_compiles_to_editor_expr(html: str):
