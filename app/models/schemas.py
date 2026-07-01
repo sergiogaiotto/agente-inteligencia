@@ -333,9 +333,12 @@ class RunEvalRequest(BaseModel):
     release_id: str; agent_id: str
     gold_version: str = "latest"; run_type: str = "baseline"
 
+_MIN_PASSWORD_LEN = 8  # política mínima de senha (SKILL.md §1 / CWE-521)
+
+
 class UserCreate(BaseModel):
     username: str
-    password: str
+    password: str = Field(..., min_length=_MIN_PASSWORD_LEN)
     display_name: Optional[str] = ""
     email: Optional[str] = ""
     role: str = "comum"
@@ -347,6 +350,15 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     domains: Optional[str] = None
     password: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def _password_policy(cls, v):
+        # None/"" = "não alterar a senha" (o handler só grava se truthy); qualquer
+        # senha NOVA precisa cumprir o mínimo.
+        if v and len(v) < _MIN_PASSWORD_LEN:
+            raise ValueError(f"senha deve ter ao menos {_MIN_PASSWORD_LEN} caracteres")
+        return v
 
 class UserLogin(BaseModel):
     username: str
