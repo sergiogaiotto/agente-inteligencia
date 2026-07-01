@@ -86,7 +86,7 @@ markitdown[all]>=0.1.5
 # via seção `## Data Tables` no SKILL.md, paridade declarativa com API
 # Bindings. read_csv_auto + read_xlsx nativos: tipos inferidos sem pandas.
 # Arquivo .duckdb por tabela em data/tabular/<ks_id>/<table_id>.duckdb.
-duckdb>=1.0.0
+duckdb>=1.5.4
 
 # === Testing (dev) ===
 # Testes de lógica pura (Pydantic, parsers, state machines) +
