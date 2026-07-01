@@ -84,6 +84,12 @@ from app.core.request_context import install_request_context_middleware
 install_request_context_middleware(app)
 
 # ── Middlewares de segurança (Onda 1) ──────────────────────────
+# Cabeçalhos de segurança baseline no nível do app (independentes do proxy):
+# X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy,
+# CSP (frame-ancestors/object-src/base-uri) e HSTS sob HTTPS.
+from app.core.security_headers import install_security_headers_middleware
+install_security_headers_middleware(app)
+
 # Autenticação default-deny no data plane /api/v1/* (fail-closed): todo endpoint
 # sob /api/v1 exige sessão assinada OU X-API-Key, salvo allowlist mínimo
 # (login/logout/me/check-setup, bootstrap do 1º usuário, ingress federado).
