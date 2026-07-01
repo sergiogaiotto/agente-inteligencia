@@ -67,7 +67,9 @@ import re as _re
 # Variáveis de TEXTO onde `<literal> in <var>` faz sentido (busca de substring).
 _TEXT_TARGETS = ("input_lower", "output_lower", "text_all", "session_text", "input", "output")
 _JINJA_KEYWORDS = {"and", "or", "not", "in", "is", "true", "false", "none"}
-_REPAIR_RE = _re.compile(r"\b([A-Za-z_]\w*)\s+in\s+(" + "|".join(_TEXT_TARGETS) + r")\b")
+# `(?<![.\w])` — não casa palavra precedida por ponto: `inputs.tag in output_lower`
+# é acesso a membro legítimo (`inputs.tag`), NÃO um literal sem aspas a consertar.
+_REPAIR_RE = _re.compile(r"(?<![.\w])([A-Za-z_]\w*)\s+in\s+(" + "|".join(_TEXT_TARGETS) + r")\b")
 
 
 def repair_unquoted_literals(expr: str, canonical: set[str]) -> str:

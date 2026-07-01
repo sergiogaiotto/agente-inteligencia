@@ -3292,6 +3292,8 @@ async def execute_pipeline(
                 # chega o tipo de anexo que ele aceita (router como dispatcher).
                 target_accepts_documents=bool(agent.get("accepts_documents") or 0),
                 target_accepts_images=bool(agent.get("accepts_images") or 0),
+                # Postura B: os args selados alimentam `inputs.X` na regra da aresta.
+                inputs=sealed_inputs,
             )
             if skip_by_conditional:
                 # Rastreabilidade do MOTIVO (Fatia 3a — 2026-06-07): distinguir
@@ -3354,6 +3356,7 @@ async def execute_pipeline(
                 user_input=user_input,
                 attachments=attachments,
                 session_text=session_text,
+                inputs=sealed_inputs,
             )
             if skip_by_default:
                 steps.append({
@@ -3965,12 +3968,48 @@ def _target_handles_attachment(
     return bool((accepts_documents and has_doc) or (accepts_images and has_img))
 
 
+class _MissingArg:
+    """`inputs.<campo>` AUSENTE numa regra condicional: falsy e comparação-SEGURA em
+    QUALQUER operador (==, !=, <, >, <=, >=, `in`, aninhado). Assim uma regra por
+    valor (ex.: `inputs.limite > 1000`) com o campo omitido simplesmente NÃO casa —
+    em vez de estourar (o que, no fail-open do gate, faria o agente RODAR, o oposto
+    do intent). O `ChainableUndefined` do Jinja é falsy em `==`/`in` mas ESTOURA em
+    ordenação — por isso o sentinel próprio."""
+    __slots__ = ()
+    def __eq__(self, o): return False
+    def __ne__(self, o): return True
+    def __lt__(self, o): return False
+    def __le__(self, o): return False
+    def __gt__(self, o): return False
+    def __ge__(self, o): return False
+    def __bool__(self): return False
+    def __contains__(self, o): return False
+    def __iter__(self): return iter(())
+    def __len__(self): return 0
+    def __getattr__(self, name): return self
+    def __getitem__(self, key): return self
+    def __hash__(self): return 0
+    def __str__(self): return ""
+
+
+_MISSING_ARG = _MissingArg()
+
+
+class _ArgsView(dict):
+    """Args do caller expostos às regras condicionais: chave AUSENTE → sentinel
+    comparação-segura (`_MissingArg`), não KeyError/Undefined. Chave presente = valor
+    normal."""
+    def __missing__(self, key):
+        return _MISSING_ARG
+
+
 def _build_conditional_context(
     output: str | None = None,
     final_state: str | None = None,
     user_input: str | None = None,
     attachments: list | None = None,
     session_text: str | None = None,
+    inputs: dict | None = None,
 ) -> dict:
     """Monta o dict de variáveis disponíveis para expressões condicionais.
 
@@ -4060,6 +4099,12 @@ def _build_conditional_context(
         # Memória de conversa: perguntas recentes do usuário (já em text_all;
         # exposta isolada p/ exprs que queiram olhar só o histórico).
         "session_text": sess_text,
+        # Args SELADOS `x-uso: param` (Postura B — roteamento determinístico): valores
+        # EXATOS do caller, disponíveis como `inputs.<campo>` na expr. Sobrevivem intactos
+        # à cadeia (não passam por LLM), então uma regra pode ramificar por VALOR sem
+        # roteador LLM. Campo ausente → sentinel comparação-seguro (não casa em NENHUM
+        # operador, inclusive `>`/`<`). dict-view → acesso `inputs.tier`.
+        "inputs": _ArgsView(inputs or {}),
     }
 
 
@@ -4090,6 +4135,7 @@ CONDITIONAL_VARS_META: list[dict] = [
     {"name": "attachment_exts", "type": "str", "desc": "O tipo dos arquivos pela extensão, em minúsculas — ex.: 'pdf png'"},
     {"name": "attachment_types", "type": "str", "desc": "O tipo técnico de cada arquivo, em minúsculas — ex.: 'application/pdf image/png'"},
     {"name": "attachment_count", "type": "int", "desc": "Quantos arquivos o usuário enviou"},
+    {"name": "inputs", "type": "dict", "desc": "Os parâmetros EXATOS enviados na chamada (campos marcados como 'exato' no formulário). Use como inputs.<campo> — ex.: inputs.tier == 'gold'. Chega intacto (sem passar pela IA), então a regra decide o caminho por VALOR, sem depender de um agente de IA para rotear."},
 ]
 
 
@@ -4254,6 +4300,7 @@ async def _should_skip_conditional(
     session_text: str = "",
     target_accepts_documents: bool = False,
     target_accepts_images: bool = False,
+    inputs: dict | None = None,
 ) -> bool:
     """True se a conexão source→target é `connection_type=conditional` e
     a expressão configurada em `config.expr` avaliou para `False`.
@@ -4409,6 +4456,7 @@ async def _should_skip_conditional(
                 user_input=user_input,
                 attachments=attachments,
                 session_text=session_text,
+                inputs=inputs,
             ),
         )
     except Exception as e:
@@ -4437,6 +4485,7 @@ async def _should_skip_default(
     user_input: str = "",
     attachments: list | None = None,
     session_text: str = "",
+    inputs: dict | None = None,
 ) -> bool:
     """True se a conexão source→target é `connection_type=default` (aresta
     catch-all / "else") E algum IRMÃO condicional do mesmo source disparou.
@@ -4514,6 +4563,7 @@ async def _should_skip_default(
             session_text=session_text,
             target_accepts_documents=sib_accepts_doc,
             target_accepts_images=sib_accepts_img,
+            inputs=inputs,
         )
         if not sib_skip:
             # um irmão condicional disparou → o default (else) NÃO roda.
