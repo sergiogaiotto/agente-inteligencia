@@ -20,3 +20,9 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
+    ignore:
+      # Bump de python base quebrou o build (#473: 3.11→3.14 sem cp314 wheels
+      # p/ onnxruntime/magika via markitdown). Major/minor da base é decisão
+      # manual com build-test; patches (3.11.x) seguem automáticos.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
