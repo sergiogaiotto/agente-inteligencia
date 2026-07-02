@@ -83,12 +83,14 @@ def lint_skill(parsed: Any) -> list[dict]:
 
     exec_mode = getattr(parsed, "execution_mode", "") or ""
     bindings = list(getattr(parsed, "api_bindings_parsed", []) or [])
+    data_tables = list(getattr(parsed, "data_tables_parsed", []) or [])
 
     # ── Checks globais ──────────────────────────────────────
-    # Mensagem alinhada com a do parser (parser.py:202-204) para que o
+    # Mensagem alinhada com a do parser (parser.py:205-214) para que o
     # operador não veja dois erros diferentes para a mesma causa em
-    # caminhos de validação distintos.
-    if exec_mode == "declarative" and not bindings:
+    # caminhos de validação distintos. Como no parser, QUALQUER fonte
+    # declarativa satisfaz: ## API Bindings OU ## Data Tables.
+    if exec_mode == "declarative" and not (bindings or data_tables):
         issues.append(LintIssue(
             "error", "*", "declarative_without_bindings",
             "execution_mode=declarative exige ## API Bindings OU ## Data Tables "
