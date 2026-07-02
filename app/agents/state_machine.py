@@ -15,6 +15,8 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+
+from app.core.datetime_utils import naive_utc_now
 from enum import Enum
 from typing import Optional
 from app.core.database import interactions_repo, turns_repo, audit_repo
@@ -289,7 +291,7 @@ class InteractionStateMachine:
         if self.ctx.interaction_id:
             await interactions_repo.update(self.ctx.interaction_id, {
                 "state": State.LOG_AND_CLOSE.value,
-                "ended_at": datetime.now(),
+                "ended_at": naive_utc_now(),
             })
             # Registra turno de saída — output também é redactado.
             # Saída do LLM pode regurgitar PII vinda das evidências.

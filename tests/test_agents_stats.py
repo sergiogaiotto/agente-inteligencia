@@ -185,6 +185,62 @@ class TestStatsEndpoint:
 
 
 # ────────────────────────────────────────────────────────────────
+# Regressão tz: cutoff deve ser naive (colunas TIMESTAMP sem tz)
+# ────────────────────────────────────────────────────────────────
+
+
+def _make_capture_pool(captured_params: list):
+    """Pool fake que captura os params bindados — o mock de fetchrow não passa
+    pelo encode do asyncpg, então o 500 real ('can't subtract offset-naive and
+    offset-aware datetimes') só é pego validando o tzinfo do cutoff."""
+    zero_q1 = {"total": 0, "ok": 0, "errors": 0, "in_progress": 0}
+    zero_q2 = {"total_tokens": 0, "avg_latency": 0.0, "p50_latency": 0.0, "p99_latency": 0.0, "turn_count": 0}
+    zero_q4 = {"total": 0, "ok": 0, "errors": 0, "avg_latency": 0.0}
+    zero_q5 = {"total": 0, "ok": 0, "errors": 0}
+    fetchrow_iter = iter([zero_q1, zero_q2, zero_q4, zero_q5])
+
+    con = MagicMock()
+
+    async def fake_fetchrow(query, *params):
+        captured_params.append(params)
+        return next(fetchrow_iter)
+
+    async def fake_fetch(query, *params):
+        captured_params.append(params)
+        return []
+
+    con.fetchrow = fake_fetchrow
+    con.fetch = fake_fetch
+    pool = MagicMock()
+
+    class _AcquireCtx:
+        async def __aenter__(self_inner): return con
+        async def __aexit__(self_inner, *a): return None
+
+    pool.acquire = lambda: _AcquireCtx()
+    return pool
+
+
+class TestStatsTzNaiveRegression:
+    @pytest.mark.parametrize("window", ["24h", "7d", "30d", "all", "bogus"])
+    def test_since_param_is_naive(self, app_client, monkeypatch, window):
+        _patch_agents(monkeypatch)
+        captured: list = []
+        monkeypatch.setattr(
+            "app.core.database._get_pool", lambda: _make_capture_pool(captured)
+        )
+        r = app_client.get(f"/api/v1/agents/{AGENT_ROW['id']}/stats?window={window}")
+        assert r.status_code == 200
+        assert captured, "nenhuma query executada?"
+        for params in captured:
+            since = params[1]
+            assert since.tzinfo is None, (
+                f"cutoff tz-aware ({since!r}) bindado em coluna TIMESTAMP naive "
+                "— asyncpg rejeita com DataError"
+            )
+
+
+# ────────────────────────────────────────────────────────────────
 # UI smoke
 # ────────────────────────────────────────────────────────────────
 

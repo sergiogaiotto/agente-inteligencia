@@ -18,6 +18,8 @@ import logging
 import secrets
 import uuid
 from datetime import datetime
+
+from app.core.datetime_utils import naive_utc_now
 from typing import Optional
 
 from app.core.crypto import decrypt_secret, encrypt_secret
@@ -102,7 +104,7 @@ async def revoke_peer(peer_id: str) -> Optional[dict]:
     if not row:
         return None
     await federation_peers_repo.update(
-        peer_id, {"status": "revoked", "updated_at": datetime.utcnow()}
+        peer_id, {"status": "revoked", "updated_at": naive_utc_now()}
     )
     return row
 
@@ -122,8 +124,8 @@ async def rotate_peer_secret(peer_id: str) -> Optional[tuple[dict, str]]:
     await federation_peers_repo.update(peer_id, {
         "secret_prev": row.get("shared_secret"),
         "shared_secret": encrypt_secret(plaintext),
-        "rotated_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "rotated_at": naive_utc_now(),
+        "updated_at": naive_utc_now(),
     })
     updated = await federation_peers_repo.find_by_id(peer_id)
     return updated, plaintext
