@@ -91,7 +91,7 @@ duckdb>=1.5.4
 # === Testing (dev) ===
 # Testes de lógica pura (Pydantic, parsers, state machines) +
 # integration tests com Postgres real (tests/integration/, requer docker).
-pytest>=8.0.0
+pytest>=9.1.1
 pytest-asyncio>=1.4.0
 # Cobertura de código — reporta % no CI sem bloquear merge.
 # Roda com: pytest --cov=app --cov-report=term-missing
