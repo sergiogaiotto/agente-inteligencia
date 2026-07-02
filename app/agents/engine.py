@@ -1507,9 +1507,48 @@ async def _run_declarative_as_interaction(
     if sealed_inputs:
         inputs = {**inputs, **sealed_inputs}
 
+    # Rastro da execução (gap do seeding Aurora, 2026-07-01): invoke direto e
+    # pipeline chegam aqui SEM dono da sessão — com register_interaction=False e
+    # nenhuma persistência local, a execução declarativa não aparecia em
+    # /history nem em /agents/{id}/invocations. O /chat do workspace NÃO passa
+    # por aqui (branch is_declarative própria persiste no handler); aqui o
+    # engine é o dono: interaction + turno de entrada antes, turno de saída
+    # depois. Best-effort — falha de DB não bloqueia a execução dos bindings.
+    from app.agents.state_machine import _maybe_redact
+
+    interaction_id = (session_id or "").strip() or str(uuid.uuid4())
+    next_turn = 1
+    persisted = False
+    try:
+        existing = await interactions_repo.find_by_id(interaction_id)
+        if existing:
+            old_turns = await turns_repo.find_all(interaction_id=interaction_id, limit=500)
+            next_turn = max((int(t.get("turn_number") or 0) for t in old_turns), default=0) + 1
+            await interactions_repo.update(interaction_id, {"state": "Intake"})
+        else:
+            await interactions_repo.create({
+                "id": interaction_id,
+                "title": _maybe_redact(msg)[:80].strip() or (agent.get("name") or "agent")[:80],
+                "agent_id": agent.get("id", ""),
+                "channel": "api",
+                "journey_id": "",
+                "state": "Intake",
+            })
+        await turns_repo.create({
+            "id": str(uuid.uuid4()),
+            "turn_number": next_turn,
+            "user_text_redacted": _maybe_redact(msg),
+            "interaction_id": interaction_id,
+        })
+        persisted = True
+    except Exception as e:
+        logger.warning("Declarativo (via cadeia): falha ao persistir interaction %s: %s", interaction_id, e)
+
+    # session_id=interaction_id: o finalize interno do execute_declarative
+    # (state final + ended_at) atualiza a MESMA row criada acima.
     decl = await execute_declarative(
         agent=agent, skill_parsed=parsed_skill, inputs=inputs,
-        context=None, session_id=session_id, dry_run=False,
+        context=None, session_id=interaction_id, dry_run=False,
         register_interaction=False,
     )
 
@@ -1536,8 +1575,19 @@ async def _run_declarative_as_interaction(
         + (f" · {len(errors)} aviso(s)/erro(s)" if errors else "")
     )
 
+    if persisted:
+        try:
+            await turns_repo.create({
+                "id": str(uuid.uuid4()),
+                "turn_number": next_turn + 1,
+                "output_text_redacted": _maybe_redact(output_text),
+                "interaction_id": interaction_id,
+            })
+        except Exception as e:
+            logger.warning("Declarativo (via cadeia): falha ao persistir turno de saída %s: %s", interaction_id, e)
+
     return {
-        "interaction_id": decl.get("interaction_id") or session_id,
+        "interaction_id": decl.get("interaction_id") or interaction_id,
         "agent_id": agent.get("id", ""),
         "output": output_text,
         "final_state": decl.get("final_state", "completed"),
