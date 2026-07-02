@@ -92,7 +92,7 @@ duckdb>=1.5.4
 # Testes de lógica pura (Pydantic, parsers, state machines) +
 # integration tests com Postgres real (tests/integration/, requer docker).
 pytest>=8.0.0
-pytest-asyncio>=0.23.0
+pytest-asyncio>=1.4.0
 # Cobertura de código — reporta % no CI sem bloquear merge.
 # Roda com: pytest --cov=app --cov-report=term-missing
 # Útil pra ver módulos sem teste (não pra atingir 100% — alvo realista: 70-80%).
