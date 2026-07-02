@@ -12,6 +12,35 @@
         </button>
     </div>
 
+    <!-- Saúde do vector store: drift de dimensão desativa a busca vetorial em
+         SILÊNCIO (ingest partial=true, fallback BM25-only). O banner torna o
+         estado visível e dá o CTA de reindex — antes o único caminho era um
+         POST manual em /api/v1/evidence/reindex. -->
+    <template x-if="ragHealth && ragHealth.dim_drift">
+        <div data-testid="rag-drift-banner" class="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4">
+            <div class="flex items-start gap-3">
+                <svg class="w-5 h-5 text-amber-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                <div class="flex-1">
+                    <h3 class="text-[13px] font-semibold text-amber-900">Busca semântica degradada — dimensão dos embeddings em drift</h3>
+                    <p class="text-[12px] text-amber-800 mt-1">
+                        A coluna de vetores foi criada com dimensão <strong x-text="ragHealth.dim_actual"></strong>,
+                        mas o modelo de embedding ativo produz <strong x-text="ragHealth.dim_expected"></strong>.
+                        Novos ingests ficam sem vetor (<code class="px-1 bg-amber-100 rounded">partial=true</code>) e a busca cai para palavra-chave (BM25) silenciosamente.
+                        Reindexar recria a coluna na dimensão certa e re-embeda todos os chunks a partir do texto já salvo — <strong>nenhum documento é perdido</strong>.
+                    </p>
+                    <div class="mt-3 flex items-center gap-3">
+                        <button @click="runReindex()" :disabled="reindexRunning" data-testid="rag-reindex-btn"
+                                class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-amber-700 disabled:opacity-60 transition-colors">
+                            <svg class="w-3.5 h-3.5" :class="reindexRunning && 'animate-spin'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+                            <span x-text="reindexRunning ? 'Reindexando… (pode levar minutos)' : 'Reindexar agora'"></span>
+                        </button>
+                        <span class="text-[11px] text-amber-700" x-show="ragHealth.points_count !== null" x-text="`${ragHealth.points_count || 0} chunk(s) com vetor hoje`"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+
     <!-- Cards — linha inteira clicável (abre drawer Inspecionar com 'overview').
          Ações internas (Ingerir/Editar/Deletar) usam @click.stop pra não disparar
          duplo. Bases sem chunks ainda abrem o drawer — usuário aprende ali. -->
@@ -352,8 +381,9 @@
                                 <span class="block mt-1 text-amber-800">
                                     ⚠ Índice vetorial divergente — Postgres tem todos os chunks, mas o
                                     <span x-text="(ingestProgress.result.rag_vector_backend || 'vector store') === 'pgvector' ? 'pgvector' : (ingestProgress.result.rag_vector_backend || 'vector store')"></span>
-                                    ficou incompleto. Re-execute a ingestão quando o backend estiver OK
-                                    (ou rode <code class="px-1 bg-amber-100 rounded">POST /api/v1/evidence/reindex</code>).
+                                    ficou incompleto. Se houver drift de dimensão, o banner no topo da
+                                    página oferece o botão <strong>Reindexar agora</strong>
+                                    (equivalente a <code class="px-1 bg-amber-100 rounded">POST /api/v1/evidence/reindex</code>).
                                 </span>
                             </template>
                             <!-- Onda Tabular: feedback explícito sobre análise (estado: loading / ok / error / idle) -->
@@ -1033,6 +1063,9 @@ function evidencePage() {
         ingestForm: { text: '', file: null, url: '', replace: true, chunk_size: '', chunk_overlap: '' },
         ingestProgress: { loading: false, error: null, result: null },
         ingestAdvancedOpen: false,
+        // ─── Saúde do vector store (drift de dimensão → banner + reindex) ───
+        ragHealth: null,
+        reindexRunning: false,
         // Defaults exibidos como placeholder (lidos do .env via /api/v1/dashboard/rag-config)
         defaultChunkSize: 500,
         defaultChunkOverlap: 50,
@@ -1094,6 +1127,9 @@ function evidencePage() {
                 this.defaultChunkSize = cfg.chunk_size || 500;
                 this.defaultChunkOverlap = cfg.chunk_overlap || 50;
             } catch {}
+            // Saúde do vector store — alimenta o banner de drift de dimensão
+            try { this.ragHealth = await api.get('/api/v1/rag/health'); }
+            catch { this.ragHealth = null; }
             // Carrega stats em paralelo (uma req por source). Para volumes grandes
             // (>50 sources) considerar endpoint batch — fora de escopo desta onda.
             await this.loadAllStats();
@@ -1110,6 +1146,26 @@ function evidencePage() {
                 }
             }));
             this.statsBy = out;
+        },
+
+        async runReindex() {
+            // Recria a coluna de vetores na dimensão do modelo ATIVO e re-embeda
+            // todos os chunks a partir do texto no Postgres (source-of-truth) —
+            // os vetores antigos são descartados, nenhum documento é perdido.
+            if (!confirm('Reindexar o vector store?\n\nOs vetores atuais são recriados na dimensão do modelo de embedding ativo, re-embedando todos os chunks a partir do texto já salvo. Nenhum documento é perdido. Pode levar alguns minutos.')) return;
+            this.reindexRunning = true;
+            try {
+                const r = await api.post('/api/v1/evidence/reindex', { recreate_collection: true, batch_size: 64 });
+                showToast(
+                    r.ok
+                        ? `Reindex concluído: ${r.chunks_upserted}/${r.chunks_total} chunks (dim ${r.dim_before || '—'} → ${r.dim_after})`
+                        : `Reindex parcial: ${r.chunks_upserted}/${r.chunks_total} chunks — veja os logs`,
+                    r.ok ? 'success' : 'error'
+                );
+                try { this.ragHealth = await api.get('/api/v1/rag/health'); } catch {}
+                await this.loadAllStats();
+            } catch(e) { showToast('Reindex falhou: ' + e.message, 'error'); }
+            finally { this.reindexRunning = false; }
         },
 
         ago(iso) {

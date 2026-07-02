@@ -1351,11 +1351,27 @@ async def rag_health():
     """
     from app.evidence.pgvector_store import collection_info
     info = await collection_info()
+    # Drift de dimensão em DESTAQUE (incidente do seeding Aurora, 2026-07-01):
+    # coluna vector(1536) + modelo ativo 1024 fazia o upsert falhar silencioso
+    # (ingest partial=true) e a busca degradar para BM25-only sem ninguém ver.
+    # UI e monitores leem estes campos de topo sem escavar o objeto aninhado.
+    status = (info or {}).get("status") or "unavailable"
+    dim_drift = bool(info) and info.get("dim_match") is False
     return {
         "qdrant_collection": info,  # nome legacy preservado pra back-compat
         "vector_collection": info,  # nome backend-neutro novo
         "backend": "pgvector",
         "rag_available": info is not None,
+        "status": status,
+        "dim_actual": (info or {}).get("dim_actual"),
+        "dim_expected": (info or {}).get("dim_expected"),
+        "dim_drift": dim_drift,
+        "points_count": (info or {}).get("points_count"),
+        "hint": (
+            "Coluna de embeddings com dimensão divergente do modelo ativo — "
+            "busca vetorial desativada (fallback BM25). Reindexe em /rag "
+            "(botão Reindexar) ou POST /api/v1/evidence/reindex."
+        ) if dim_drift else None,
     }
 
 

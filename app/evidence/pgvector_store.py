@@ -260,12 +260,23 @@ async def upsert_chunks(chunks: list[dict]) -> int:
         return 0
     if not await ensure_embedding_column():
         source_ids = list({c.get("source_id") for c in chunks if c.get("source_id")})
-        logger.warning(
-            "pgvector upsert_chunks abortado: coluna indisponível",
+        try:
+            actual_dim = await _column_dim()
+        except Exception:
+            actual_dim = None
+        # ERROR (não warning): o chamador segue com HTTP 200/partial=true e o
+        # sintoma some de vista — busca vetorial degrada para BM25-only até
+        # alguém reindexar. Este é o único rastro acionável do drift.
+        logger.error(
+            "pgvector upsert_chunks abortado: coluna indisponível/dimensão em "
+            "drift — vetores NÃO gravados (ingest partial; busca cai em BM25)",
             extra={
-                "event": "pgvector.upsert.aborted_no_column",
+                "event": "pgvector.upsert.blocked_dim_mismatch",
                 "chunk_count": len(chunks),
                 "source_ids": source_ids,
+                "dim_actual": actual_dim,
+                "dim_expected": get_active_embedding_dim(),
+                "hint": "POST /api/v1/evidence/reindex (ou botão Reindexar em /rag)",
             },
         )
         return 0
