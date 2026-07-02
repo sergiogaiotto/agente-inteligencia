@@ -62,9 +62,17 @@ class TestGetProviderThreading:
         p = get_provider("gpt-oss-120b", model="x", temperature=0.7, reasoning_effort="high")
         assert p.reasoning_effort == "high"
 
-    def test_azure_recebe_effort(self):
-        p = get_provider("azure", reasoning_effort="medium")
+    def test_azure_modelo_reasoning_recebe_effort(self):
+        # Gate por MODELO (2026-07-02): na Azure/OpenAI só a família de
+        # raciocínio (o1/o3/o4/gpt-5) aceita reasoning_effort. Mandar para
+        # gpt-4o dava 400 "Unrecognized request argument" — e derrubava a
+        # cadeia de resiliência justamente no fallback.
+        p = get_provider("azure", model="o3-mini", reasoning_effort="medium")
         assert p.reasoning_effort == "medium"
+
+    def test_azure_gpt4o_descarta_effort(self):
+        p = get_provider("azure", model="gpt-4o", reasoning_effort="medium")
+        assert p.reasoning_effort is None
 
     def test_ollama_nao_quebra_com_effort(self):
         # ollama NÃO é família OpenAI → get_provider faz pop e NÃO repassa o kwarg,

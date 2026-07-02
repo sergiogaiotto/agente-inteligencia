@@ -22,7 +22,7 @@ from dataclasses import asdict
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
-from app.core.llm_providers import get_provider, is_llm_unreachable
+from app.core.llm_providers import get_provider, is_llm_unreachable, is_llm_param_rejection
 from app.core.observability import get_langfuse_handler, tracker
 from app.agents.conversation_memory import (
     build_history_messages as _build_history_messages,
@@ -499,6 +499,35 @@ def _collect_token_usage(result: dict, agent: dict, agent_id: str) -> dict:
     return {"input": 0, "output": 0, "total": 0, "calls": 0, "input_billed_sum": 0, "total_billed": 0}
 
 
+# ─── Cache in-process de providers FORA (falha de alcance) ─────────────────
+# A cadeia de resiliência reordena candidatos para não queimar o timeout de
+# novo num hub sabidamente morto (a mesma informação que o popover "Modelos em
+# uso" mostra ao operador). Providers marcados NUNCA são removidos da cadeia —
+# só vão para o fim; com TTL curto, a recuperação é detectada na 1ª tentativa
+# após expirar. Sem isso, cada interação pagava ~60s de retries no primário
+# morto antes de cair no fallback (incidente Aurora, 2026-07-02).
+_LLM_DOWN_TTL_SECONDS = 90.0
+_llm_down_at: dict[str, float] = {}
+
+
+def _mark_llm_down(provider: str) -> None:
+    _llm_down_at[provider] = time.monotonic()
+
+
+def _mark_llm_up(provider: str) -> None:
+    _llm_down_at.pop(provider, None)
+
+
+def _llm_marked_down(provider: str) -> bool:
+    t = _llm_down_at.get(provider)
+    if t is None:
+        return False
+    if time.monotonic() - t > _LLM_DOWN_TTL_SECONDS:
+        _llm_down_at.pop(provider, None)
+        return False
+    return True
+
+
 async def _run_llm_chain(
     candidates: list[tuple[str, str]],
     agent: dict,
@@ -530,6 +559,23 @@ async def _run_llm_chain(
         False) — ex.: 401/404/429. O caller mapeia pra mensagem acionável. Só
         falhas de "não responde" (conexão/timeout/URL ausente) disparam fallback.
     """
+    # Candidatos recém-marcados FORA vão pro fim da fila (nunca são pulados de
+    # vez): se o primário está morto há segundos, a resposta vem do fallback
+    # imediatamente em vez de re-pagar o timeout. `_chosen` do caller usa a
+    # lista ORIGINAL, então a nota de contingência continua correta.
+    down = [c for c in candidates if _llm_marked_down(c[0])]
+    if down and len(down) < len(candidates):
+        alive = [c for c in candidates if not _llm_marked_down(c[0])]
+        logger.info(
+            "agent.llm.chain.reordered",
+            extra={
+                "event": "agent.llm.chain.reordered",
+                "agent_id": agent_id,
+                "deferred": [f"{p}/{m}" for p, m in down],
+            },
+        )
+        candidates = alive + down
+
     attempted: list[str] = []
     result = None
     for ci, (cand_p, cand_m) in enumerate(candidates):
@@ -539,10 +585,36 @@ async def _run_llm_chain(
         try:
             result = await run_attempt(cand_p, cand_m)
         except Exception as attempt_exc:
+            if is_llm_param_rejection(attempt_exc) and agent.get("reasoning_effort"):
+                # O modelo do candidato rejeitou um PARÂMETRO opcional (ex.:
+                # azure/gpt-4o com reasoning_effort → 400 "Unrecognized request
+                # argument"). Re-tenta UMA vez o MESMO candidato sem o parâmetro
+                # — sem isso o 400 propagava e derrubava a interação inteira
+                # justamente no fallback (incidente Aurora, 2026-07-02). O strip
+                # fica no dict em memória (não persiste no agente).
+                logger.warning(
+                    "agent.llm.param_rejected_stripped",
+                    extra={
+                        "event": "agent.llm.param_rejected_stripped",
+                        "agent_id": agent_id,
+                        "provider": cand_p,
+                        "model": cand_m,
+                        "stripped": ["reasoning_effort"],
+                        "error": str(attempt_exc)[:200],
+                    },
+                )
+                agent["reasoning_effort"] = None
+                try:
+                    result = await run_attempt(cand_p, cand_m)
+                    _mark_llm_up(cand_p)
+                    break
+                except Exception as retry_exc:
+                    attempt_exc = retry_exc
             if not is_llm_unreachable(attempt_exc):
                 # Não é "não responder" (404/401/etc) → propaga pro except
                 # externo, que mapeia pra mensagem acionável específica.
                 raise
+            _mark_llm_down(cand_p)
             has_next = ci + 1 < len(candidates)
             # SEMPRE registra em observabilidade + LOG (independente do checkbox
             # show_in_trace, que só controla a NOTA visível na UI).
@@ -560,7 +632,7 @@ async def _run_llm_chain(
                     ),
                     "error_type": type(attempt_exc).__name__,
                 },
-                exc_info=True,
+                exc_info=attempt_exc,
             )
             result = None
             if has_next:
@@ -573,10 +645,11 @@ async def _run_llm_chain(
                     "agent_id": agent_id,
                     "attempted": attempted,
                 },
-                exc_info=True,
+                exc_info=attempt_exc,
             )
             break
         # sucesso nesta tentativa — encerra a cadeia
+        _mark_llm_up(cand_p)
         break
     return result, attempted
 
@@ -2204,6 +2277,11 @@ async def execute_interaction(
             ctx.metadata["tokens"] = _collect_token_usage(result, agent, agent_id)
     except Exception as llm_err:
         err_str = str(llm_err)
+        # A cadeia muta agent['llm_provider'] por candidato — sincroniza o rótulo
+        # das mensagens com o candidato que REALMENTE falhou (antes aparecia
+        # "gpt-oss-20b/gpt-4o": provider antigo + modelo novo, confundindo o
+        # troubleshooting).
+        provider = agent.get("llm_provider", provider)
         if "404" in err_str or "not found" in err_str.lower():
             draft = f"⚠ Modelo '{agent.get('model', '?')}' não encontrado no provedor '{provider}'. Verifique o nome do modelo em Configurações ou edite o agente."
         elif "401" in err_str or "auth" in err_str.lower() or "invalid api key" in err_str.lower():

@@ -35,6 +35,15 @@ from app.agents import engine
 from app.core.llm_providers import is_llm_unreachable
 
 
+@pytest.fixture(autouse=True)
+def _clear_llm_down_cache():
+    """O cache in-process de providers FORA reordena a cadeia — limpar entre
+    testes para que a ordem dos candidatos seja determinística."""
+    engine._llm_down_at.clear()
+    yield
+    engine._llm_down_at.clear()
+
+
 # ─── Fixtures de exceções ──────────────────────────────────────────
 
 def _req() -> httpx.Request:

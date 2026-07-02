@@ -24,9 +24,49 @@ from app.core.config import get_settings
 # Para esses, omitimos temperature do request. gpt-oss-* e gpt-4o NÃO casam (aceitam temp).
 _REASONING_ONLY_RE = re.compile(r"^(o1|o3|o4)(\b|-|$)", re.IGNORECASE)
 
+# Modelos da família OpenAI/Azure que ACEITAM o campo reasoning_effort no body.
+# gpt-4o/gpt-4/gpt-35 NÃO aceitam — Azure devolve 400 "Unrecognized request
+# argument supplied: reasoning_effort" (incidente do fallback Aurora, 2026-07-02).
+_REASONING_EFFORT_RE = re.compile(r"^(o1|o3|o4|gpt-5)(\b|-|$)", re.IGNORECASE)
+
 
 def _is_reasoning_only_model(model) -> bool:
     return bool(model and _REASONING_ONLY_RE.match(str(model).strip()))
+
+
+def model_supports_reasoning_effort(provider_name, model) -> bool:
+    """True quando o par provider/model aceita ``reasoning_effort`` no request.
+
+    - hub gpt-oss (20b/120b): aceita para qualquer modelo servido lá (validado
+      ao vivo contra o endpoint real);
+    - Azure/OpenAI: SÓ modelos de raciocínio (o1/o3/o4/gpt-5). Enviar para
+      gpt-4o & cia = 400 invalid_request_error — o que matava a cadeia de
+      resiliência quando o fallback do gpt-oss caía na Azure.
+    - demais providers (maritaca/ollama): não conhecem o parâmetro.
+    """
+    p = (provider_name or "").strip().lower()
+    if p in ("gpt-oss-20b", "gpt-oss-120b"):
+        return True
+    if p in ("azure", "openai", "openai_public"):
+        return bool(model and _REASONING_EFFORT_RE.match(str(model).strip()))
+    return False
+
+
+def is_llm_param_rejection(exc: BaseException) -> bool:
+    """True quando o provider rejeitou um PARÂMETRO do request (não o conteúdo).
+
+    Ex.: Azure gpt-4o com ``reasoning_effort`` → 400 invalid_request_error
+    "Unrecognized request argument supplied". A cadeia de resiliência usa este
+    detector para re-tentar o MESMO candidato sem os parâmetros opcionais, em
+    vez de propagar o 400 e derrubar a interação inteira.
+    """
+    s = str(exc or "").lower()
+    return any(m in s for m in (
+        "unrecognized request argument",
+        "unsupported parameter",
+        "unknown parameter",
+        "unsupported_value",
+    ))
 
 
 def _openai_chat_kwargs(temperature, model, reasoning_effort) -> dict:
@@ -485,12 +525,25 @@ def get_provider(provider_name: str = "azure", **kwargs) -> LLMProvider:
     'openai_public' (PR #194) chama api.openai.com diretamente — usado quando
     operador quer comparar latência/qualidade do GPT-4o público vs Azure.
     """
-    # reasoning_effort só é aceito pela família OpenAI (Azure/OpenAI público/gpt-oss).
-    # Para os demais (maritaca/ollama) NÃO repassamos — evita TypeError de kwarg
-    # inesperado no construtor que não conhece o parâmetro.
+    # reasoning_effort só vai quando o MODELO de destino aceita (gpt-oss; o1/o3/
+    # o4/gpt-5 na Azure/OpenAI). Gate por provider era insuficiente: azure/gpt-4o
+    # devolve 400 "Unrecognized request argument" — e num fallback de cadeia isso
+    # derrubava a interação inteira. Para maritaca/ollama NÃO repassamos — evita
+    # TypeError de kwarg inesperado no construtor.
     reasoning_effort = kwargs.pop("reasoning_effort", None)
-    if reasoning_effort and provider_name in ("azure", "openai", "openai_public", "gpt-oss-20b", "gpt-oss-120b"):
-        kwargs["reasoning_effort"] = reasoning_effort
+    if reasoning_effort:
+        if model_supports_reasoning_effort(provider_name, kwargs.get("model")):
+            kwargs["reasoning_effort"] = reasoning_effort
+        else:
+            logger.info(
+                "reasoning_effort descartado: modelo de destino não aceita o parâmetro",
+                extra={
+                    "event": "llm.reasoning_effort.stripped",
+                    "provider": provider_name,
+                    "model": kwargs.get("model"),
+                    "reasoning_effort": reasoning_effort,
+                },
+            )
 
     providers = {
         "azure": AzureOpenAIProvider,
