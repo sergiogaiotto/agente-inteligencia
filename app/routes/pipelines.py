@@ -17,6 +17,8 @@ import uuid
 import json
 import hashlib
 from datetime import datetime
+
+from app.core.datetime_utils import naive_utc_now
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -323,7 +325,7 @@ async def _seal_args_contract(pid: str) -> None:
         "args_contract": json.dumps(schema or {}),
         "contract_version": version,
         "contract_hash": h,
-        "contract_sealed_at": datetime.utcnow(),
+        "contract_sealed_at": naive_utc_now(),
     })
 
 
@@ -469,7 +471,7 @@ async def update_pipeline(pid: str, data: PipelineUpdate):
     if data.description is not None:
         patch["description"] = data.description or None
     if patch:
-        patch["updated_at"] = datetime.utcnow()
+        patch["updated_at"] = naive_utc_now()
         await pipelines_repo.update(pid, patch)
     row = await pipelines_repo.find_by_id(pid)
     agent_ids = await pipeline_membership.agents_of(pid)
@@ -513,7 +515,7 @@ async def change_status(pid: str, data: PipelineStatusChange):
             f"Pipeline em '{current}' não pode transitar para '{to_state}'. "
             f"Transições válidas: {nxt}.",
         )
-    await pipelines_repo.update(pid, {"status": to_state, "updated_at": datetime.utcnow()})
+    await pipelines_repo.update(pid, {"status": to_state, "updated_at": naive_utc_now()})
     # D4: ao PUBLICAR, sela o contrato de args (congela o ## Inputs do agente-raiz).
     # O invoke de um pipeline publicado passa a validar contra o SELO. Best-effort:
     # falha ao selar NÃO impede a publicação (o invoke cai no schema vivo até re-selar).
@@ -592,7 +594,7 @@ async def set_pipeline_entry(pid: str, data: PipelineEntrySet):
         owner = await pipeline_membership.pipeline_of(agent_id)
         if owner != pid:
             raise HTTPException(422, "agent_id deve ser um membro deste pipeline (ou null para automático).")
-    await pipelines_repo.update(pid, {"entry_agent_id": agent_id, "updated_at": datetime.utcnow()})
+    await pipelines_repo.update(pid, {"entry_agent_id": agent_id, "updated_at": naive_utc_now()})
     await audit_repo.create({
         "entity_type": "pipeline",
         "entity_id": pid,

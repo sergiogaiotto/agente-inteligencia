@@ -5,6 +5,8 @@ import os
 import re
 import ast
 from datetime import datetime
+
+from app.core.datetime_utils import naive_utc_now
 import aiofiles
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
@@ -1054,7 +1056,7 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                         "channel": data.channel,
                         "journey_id": data.journey or "",
                         "state": "LogAndClose",
-                        "ended_at": datetime.now(),
+                        "ended_at": naive_utc_now(),
                     })
                     next_turn = 1
                 else:
@@ -1062,7 +1064,7 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                     next_turn = max((int(t.get("turn_number") or 0) for t in old_turns), default=0) + 1
                     await interactions_repo.update(interaction_id, {
                         "state": "LogAndClose",
-                        "ended_at": datetime.now(),
+                        "ended_at": naive_utc_now(),
                     })
 
                 await turns_repo.create({
@@ -1556,7 +1558,7 @@ async def _persist_invoke_turn(
                 "channel": "workspace",
                 "journey_id": "",
                 "state": "LogAndClose",
-                "ended_at": datetime.now(),
+                "ended_at": naive_utc_now(),
             })
             next_turn = 1
         else:
@@ -1564,7 +1566,7 @@ async def _persist_invoke_turn(
             next_turn = max((int(t.get("turn_number") or 0) for t in old_turns), default=0) + 1
             await interactions_repo.update(sid, {
                 "state": "LogAndClose",
-                "ended_at": datetime.now(),
+                "ended_at": naive_utc_now(),
             })
         await turns_repo.create({
             "id": str(uuid.uuid4()),

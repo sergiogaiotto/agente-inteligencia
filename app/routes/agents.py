@@ -844,18 +844,21 @@ async def get_agent_stats(agent_id: str, window: str = "7d"):
          api_calls, binding_executions, estimated_cost_usd}
         Quando agente não tem atividade no período, todos counts = 0.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     from app.core.database import _get_pool
+    from app.core.datetime_utils import naive_utc_now
 
     agent = await agents_repo.find_by_id(agent_id)
     if not agent:
         raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
 
-    # Resolve since
-    now = datetime.now(timezone.utc)
+    # Resolve since — UTC naive: as colunas TIMESTAMP (sem tz) fazem o asyncpg
+    # rejeitar datetime tz-aware no bind ("can't subtract offset-naive and
+    # offset-aware datetimes").
+    now = naive_utc_now()
     window_map = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
     if window == "all":
-        since = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        since = datetime(1970, 1, 1)
         window_norm = "all"
     elif window in window_map:
         since = now - window_map[window]

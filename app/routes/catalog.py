@@ -24,6 +24,8 @@ from typing import Optional
 
 from datetime import datetime, timezone
 
+from app.core.datetime_utils import naive_utc_now
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.catalog.lifecycle import can_transition_entry, can_transition_review
@@ -97,16 +99,9 @@ router = APIRouter(prefix="/api/v1/catalog", tags=["catalog"])
 # ─── Helpers ─────────────────────────────────────────────────────
 
 
-def _naive_utc_now() -> datetime:
-    """Retorna o UTC corrente como datetime tz-naive.
-
-    As colunas de timestamp do schema usam TIMESTAMP (não TIMESTAMP WITH TIME
-    ZONE), e asyncpg recusa datetime tz-aware nesses casos com
-    'can't subtract offset-naive and offset-aware datetimes'. Este helper
-    preserva o instante UTC mas remove o tzinfo, que é o que asyncpg espera.
-    Use em qualquer write de coluna TIMESTAMP do projeto.
-    """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+# Convenção do projeto centralizada em app/core/datetime_utils.py — mantido o
+# alias local para os call-sites existentes deste módulo.
+_naive_utc_now = naive_utc_now
 
 
 async def _audit(action: str, entry_id: str, actor_id: str, details: Optional[dict] = None):

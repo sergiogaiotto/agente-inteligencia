@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
+
+from app.core.datetime_utils import naive_utc_now
 from typing import Any, Awaitable, Callable
 
 from app.core.database import data_tables_repo
@@ -43,7 +45,7 @@ async def apply_catalog(
     schema = row.get("schema_json") or []
     schema_names = {c.get("name") for c in schema if isinstance(c, dict)}
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = naive_utc_now().isoformat()
     uid = (user or {}).get("id") or ""
 
     cat_columns: dict[str, Any] = {}
@@ -90,7 +92,7 @@ async def apply_catalog(
         # JSONB: dumps ANTES do asyncpg (Repository.update passa o valor cru).
         "catalog_json": json.dumps(catalog_json, ensure_ascii=False),
         "description": str(table_description or "").strip(),
-        "updated_at": datetime.utcnow(),
+        "updated_at": naive_utc_now(),
     })
     return await find_by_id_with_ks(table_id)
 

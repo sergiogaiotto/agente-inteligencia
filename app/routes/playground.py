@@ -30,6 +30,8 @@ import logging
 import uuid
 from datetime import datetime
 
+from app.core.datetime_utils import naive_utc_now
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import require_user
@@ -94,7 +96,7 @@ async def create_run(data: PlaygroundRunCreate, user: dict = Depends(require_use
         "status": (data.status or None),
         "size_bytes": data.size_bytes,
         "duration_ms": data.duration_ms,
-        "created_at": datetime.utcnow(),  # NAIVE — coluna TIMESTAMP (não aware!)
+        "created_at": naive_utc_now(),  # NAIVE — coluna TIMESTAMP (não aware!)
     }
     await playground_runs_repo.create(row)
 
@@ -112,7 +114,7 @@ async def create_run(data: PlaygroundRunCreate, user: dict = Depends(require_use
                 await playground_threads_repo.create({
                     "id": run_id,
                     "thread_json": blob,
-                    "created_at": datetime.utcnow(),
+                    "created_at": naive_utc_now(),
                 })
                 stored_thread = True
             except Exception as e:

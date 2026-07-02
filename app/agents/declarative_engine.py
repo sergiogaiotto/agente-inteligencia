@@ -15,6 +15,8 @@ import re
 import time
 import uuid
 from datetime import datetime
+
+from app.core.datetime_utils import naive_utc_now
 from typing import Any
 
 import httpx
@@ -940,7 +942,7 @@ async def _finalize_declarative_interaction(trace_id: str, final_state: str) -> 
     try:
         await interactions_repo.update(trace_id, {
             "state": final_state,
-            "ended_at": datetime.utcnow(),
+            "ended_at": naive_utc_now(),
         })
     except Exception as e:
         logger.warning("Declarativo: falha ao finalizar interaction %s: %s", trace_id, e)
