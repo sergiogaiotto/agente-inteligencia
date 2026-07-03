@@ -1388,7 +1388,18 @@
         const t = document.createElement('div');
         const c = {success:'bg-emerald-500',error:'bg-rose-500',info:'bg-brand-500'};
         t.className = `fixed bottom-4 right-4 z-[999] ${c[type]||c.info} text-white text-[13px] font-medium px-4 py-2.5 rounded-lg shadow-lg fade-in`;
-        t.textContent = msg; document.body.appendChild(t); setTimeout(()=>t.remove(),3500);
+        t.style.maxWidth = '28rem';
+        t.textContent = msg; document.body.appendChild(t);
+        // Erro fica na tela o tempo de LER (as mensagens acionáveis do backend
+        // têm ~300+ chars — em 3,5s fixos ninguém lê "conecte-se à VPN...") e
+        // é dispensável no clique. Sucesso/info mantêm os 3,5s de sempre.
+        const ms = type === 'error' ? Math.min(15000, Math.max(6000, msg.length * 45)) : 3500;
+        if (type === 'error') {
+            t.style.cursor = 'pointer';
+            t.title = 'Clique para fechar';
+            t.addEventListener('click', () => t.remove());
+        }
+        setTimeout(() => t.remove(), ms);
     }
     // navigator.clipboard.writeText() exige contexto seguro (HTTPS, localhost ou
     // 127.0.0.1). Fora disso, cai no fallback textarea+execCommand('copy') que
