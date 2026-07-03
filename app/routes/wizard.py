@@ -26,7 +26,11 @@ import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
-from app.core.llm_providers import get_provider, is_llm_unreachable
+from app.core.llm_providers import (
+    get_provider,
+    is_llm_param_rejection,
+    is_llm_unreachable,
+)
 from app.llm_routing import resolve_llm_for_task, load_routing
 import logging
 
@@ -47,6 +51,16 @@ _DEFAULT_TASK_TYPE = {
     # planejamento (qual destino para qual intenção) — mesmo espírito do /agent.
     "compose": "reasoning",
 }
+
+# Esforço de raciocínio nas GERAÇÕES pesadas do wizard (/agent e /skill).
+# Passa pelo factory get_provider, que só REPASSA quando o modelo de destino
+# aceita o parâmetro (gpt-oss sempre; Azure/OpenAI só o1/o3/o4/gpt-5 —
+# gpt-4o devolve 400 "Unrecognized request argument"). Efeito prático: com o
+# gpt-oss-120b roteado a geração USA reasoning; se cair no fallback hospedado
+# (gpt-4o), o parâmetro é descartado e a geração segue SEM reasoning em vez
+# de quebrar. Rotas leves (refine/mentor/compose) não o usam — latência de
+# chat importa mais que profundidade.
+_WIZARD_REASONING_EFFORT = "high"
 
 
 async def _resolve_wizard_llm(data, route_name: str) -> tuple[str, str, str]:
@@ -121,13 +135,16 @@ async def _resolve_wizard_llm(data, route_name: str) -> tuple[str, str, str]:
 
 
 # ─── Resiliência de LLM no wizard: fallback hospedado quando inacessível ───
-# As rotas do wizard (mentor, refine) resolvem o LLM via task_type. O default
-# de `instruct` aponta para o hub interno (GPT-OSS), que fica INACESSÍVEL fora
-# da rede corporativa/VPN — aí o wizard morria com 500 genérico após ~21s de
-# timeout ("Não consegui responder agora"). Aqui detectamos esse caso e caímos
-# no modelo HOSPEDADO do `multimodal_fallback` (azure/gpt-4o por padrão —
-# acessível pela internet pública), que é o modelo "sempre disponível" da
-# plataforma. Se nem ele responder, devolvemos mensagem CLARA e ACIONÁVEL.
+# As rotas do wizard resolvem o LLM via task_type, e os defaults apontam para
+# o hub interno (GPT-OSS), que fica INACESSÍVEL fora da rede corporativa/VPN
+# — aí o wizard morria com 500 genérico após ~21s de timeout ("Não consegui
+# responder agora"). Aqui detectamos esse caso e caímos no modelo HOSPEDADO do
+# `multimodal_fallback` (azure/gpt-4o por padrão — acessível pela internet
+# pública), que é o modelo "sempre disponível" da plataforma. Se nem ele
+# responder, devolvemos mensagem CLARA e ACIONÁVEL. TODAS as rotas que geram
+# via LLM devem usar _wizard_llm_complete — chamar get_provider().generate()
+# direto deixa a rota sem fallback (incidente req_c60a15302ffd, 2026-07-03:
+# /skill e /agent estavam cruas e o ConnectError virava 500).
 
 def _is_llm_unreachable(exc: Exception) -> bool:
     """Wrapper fino — lógica canônica em
@@ -217,6 +234,7 @@ async def _wizard_hosted_fallback(
 async def _wizard_llm_complete(
     messages: list[dict], provider: str, model: str, *, route: str,
     temperature: Optional[float] = None, response_format: Optional[dict] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> tuple[str, str, str]:
     """Gera com o provider roteado; se INACESSÍVEL, tenta o fallback hospedado.
 
@@ -228,10 +246,17 @@ async def _wizard_llm_complete(
     provider (construtor) e ao generate respectivamente. None → comportamento
     legado intacto (o /catalog/suggest não os passa). Usado pelo Tier 2 para
     gerar struct DETERMINÍSTICO (temperature=0 + JSON-mode).
+
+    `reasoning_effort` (opcional): pedido de raciocínio repassado ao factory
+    get_provider — o gate por MODELO vive lá (gpt-oss aceita; gpt-4o dropa).
+    Vale para o primário E para o fallback: se o primário com reasoning cair
+    num fallback que não aceita o parâmetro, a geração segue sem reasoning.
     """
     prov_kwargs: dict = {"model": (model or None)}
     if temperature is not None:
         prov_kwargs["temperature"] = temperature
+    if reasoning_effort is not None:
+        prov_kwargs["reasoning_effort"] = reasoning_effort
     gen_kwargs: dict = {}
     if response_format is not None:
         gen_kwargs["response_format"] = response_format
@@ -240,6 +265,28 @@ async def _wizard_llm_complete(
         resp = await llm.generate(messages, **gen_kwargs)
         return resp["content"], provider, model
     except Exception as exc:
+        # Rejeição de PARÂMETRO (ex.: servidor OpenAI-compatible atrás da URL
+        # do gpt-oss que não conhece reasoning_effort → 400 "extra inputs"):
+        # re-entra UMA vez sem o parâmetro — mesmo espírito do strip-retry da
+        # cadeia do engine (#492). A recursão com reasoning_effort=None não
+        # repete o strip e mantém TODO o resto da resiliência (fallback
+        # hospedado, 503 acionável) para a re-tentativa.
+        if reasoning_effort is not None and is_llm_param_rejection(exc):
+            logger.info(
+                "wizard.llm.param_stripped_retry",
+                extra={
+                    "event": "wizard.llm.param_stripped_retry",
+                    "wizard_route": route,
+                    "provider": provider,
+                    "model": model,
+                    "stripped": "reasoning_effort",
+                },
+            )
+            return await _wizard_llm_complete(
+                messages, provider, model, route=route,
+                temperature=temperature, response_format=response_format,
+                reasoning_effort=None,
+            )
         # Tenta o fallback hospedado tanto em INACESSÍVEL (rede) quanto em
         # AUTH (401 — chave ruim): um provider com credencial inválida não deve
         # derrubar o wizard se o multimodal_fallback (azure) tem credencial OK.
@@ -368,9 +415,10 @@ async def wizard_agent(data: WizardAgentRequest):
     """
     try:
         provider, model, _ = await _resolve_wizard_llm(data, "agent")
-        llm = get_provider(provider, model=(model or None))
-        response = await llm.generate([
-            {"role": "system", "content": """Você é um arquiteto de agentes de IA. 
+        # Fallback hospedado quando o roteado está inacessível/401; reasoning
+        # só chega ao modelo que aceita o parâmetro (gate no get_provider).
+        content, used_provider, used_model = await _wizard_llm_complete([
+            {"role": "system", "content": """Você é um arquiteto de agentes de IA.
 Dado uma descrição do usuário, gere a configuração completa de um agente.
 
 Responda APENAS com JSON válido (sem markdown, sem ```), contendo:
@@ -390,8 +438,8 @@ Regras:
 - kind=subagent para tarefas atômicas e específicas
 - O system_prompt deve ser rico, com instruções claras, formato de saída e guardrails"""},
             {"role": "user", "content": data.description},
-        ])
-        content = response["content"].strip()
+        ], provider, model, route="agent", reasoning_effort=_WIZARD_REASONING_EFFORT)
+        content = content.strip()
         if content.startswith("```"):
             import re
             m = re.search(r"```(?:json)?\s*(.*?)```", content, re.DOTALL)
@@ -400,6 +448,9 @@ Regras:
         return {"status": "ok", "agent": result}
     except json.JSONDecodeError:
         return {"status": "ok", "agent": {"name": "", "description": data.description, "kind": "subagent", "domain": data.domain, "system_prompt": content, "suggested_skills": [], "suggested_tools": []}}
+    except HTTPException:
+        # 503 acionável do _wizard_llm_complete — não re-empacotar como 500.
+        raise
     except Exception as e:
         raise HTTPException(500, f"Erro no wizard: {str(e)}")
 
@@ -1324,14 +1375,13 @@ async def wizard_skill(data: WizardSkillRequest):
 
         # Wave Wizard Routing: usa task_type=reasoning (default) e roteamento global.
         provider, model, resolved_task = await _resolve_wizard_llm(data, "skill")
-        llm = get_provider(provider, model=(model or None))
 
-        # ── Geração inicial ──
-        response = await llm.generate([
+        # ── Geração inicial ── (fallback hospedado quando o roteado está
+        # inacessível/401; reasoning só chega ao modelo que aceita o param)
+        skill_md, used_provider, used_model = await _wizard_llm_complete([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
-        ])
-        skill_md = response["content"]
+        ], provider, model, route="skill", reasoning_effort=_WIZARD_REASONING_EFFORT)
         # Contrato MCP (fix bug "tavily a", 2026-06-08): força o ## Inputs ao
         # `{operation, query}` quando há tool MCP e o LLM inventou inputs de
         # domínio. Antes de validar, pra o validador ver a versão corrigida.
@@ -1368,11 +1418,13 @@ async def wizard_skill(data: WizardSkillRequest):
                 },
             )
             try:
-                retry_response = await llm.generate([
+                # Reusa o par que RESPONDEU a geração inicial — se o primário
+                # caiu e o fallback atendeu, não re-paga o timeout do morto.
+                retry_skill_md, retry_provider, retry_model = await _wizard_llm_complete([
                     {"role": "system", "content": system_prompt + retry_instruction},
                     {"role": "user", "content": user_prompt},
-                ])
-                retry_skill_md = retry_response["content"]
+                ], used_provider, used_model, route="skill",
+                    reasoning_effort=_WIZARD_REASONING_EFFORT)
                 retry_skill_md = _ensure_mcp_inputs_contract(retry_skill_md, bindings.get("mcp_tools") or [])
                 # Re-valida o retry — se também violar, mantém o RETRY (geralmente
                 # melhor que o original) mas devolve warnings pro operador
@@ -1382,6 +1434,11 @@ async def wizard_skill(data: WizardSkillRequest):
                     skill_md = retry_skill_md
                     validation_result = retry_validation
                     retries_used = 1
+                    # O retry adotado pode ter saído de OUTRO par (fallback
+                    # dentro do próprio retry) — `resolved` reporta quem
+                    # gerou o conteúdo FINAL. Se o retry for descartado
+                    # (parse error), o par da geração inicial permanece.
+                    used_provider, used_model = retry_provider, retry_model
                 except Exception:
                     # Retry quebrou o parser — mantém SKILL original (que ao
                     # menos parsea) e devolve validation_result original
@@ -1405,9 +1462,13 @@ async def wizard_skill(data: WizardSkillRequest):
                 "rag_count": len(bindings["rag_sources"]),
                 "table_count": len(bindings["data_tables"]),
                 "api_count": len(bindings["api_endpoints"]),
-                # Wave Wizard Routing: mostra qual LLM foi escolhido.
-                "llm_provider": provider,
-                "llm_model": model,
+                # Wave Wizard Routing: mostra qual LLM REALMENTE respondeu
+                # (pós-fallback — pode diferir do roteado quando o hub caiu).
+                "llm_provider": used_provider,
+                "llm_model": used_model,
+                # True quando a resposta veio de par diferente do roteado —
+                # reroteio por fallback nunca é silencioso na API.
+                "llm_fallback": used_provider != provider,
                 "llm_task_type": resolved_task,
             },
         }
@@ -1417,6 +1478,9 @@ async def wizard_skill(data: WizardSkillRequest):
             result["validation"] = validation_result.to_dict()
             result["validation"]["retries_used"] = retries_used
         return result
+    except HTTPException:
+        # 503 acionável do _wizard_llm_complete — não re-empacotar como 500.
+        raise
     except Exception as e:
         logger.exception("wizard_skill falhou")
         raise HTTPException(500, f"Erro no wizard: {str(e)}")

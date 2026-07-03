@@ -184,6 +184,7 @@ def _patch_providers(monkeypatch, behaviors: dict[str, str], captured: dict | No
         if captured is not None:
             captured.setdefault("providers", []).append(provider_name)
             captured.setdefault("models", []).append(kwargs.get("model"))
+            captured.setdefault("efforts", []).append(kwargs.get("reasoning_effort"))
         if provider_name not in behaviors:
             raise AssertionError(f"provider inesperado: {provider_name}")
         return _FakeProvider(behaviors[provider_name])
@@ -359,3 +360,255 @@ class TestRefineRouteFallback:
                 )
             )
         assert ei.value.status_code == 503
+
+
+# ═════════════════════════════════════════════════════════════════
+# Rotas — fallback de ponta a ponta (/skill + /agent)
+# Incidente req_c60a15302ffd (2026-07-03): as duas rotas chamavam
+# get_provider().generate() CRU — hub gpt-oss fora da VPN → ConnectError
+# virava 500 genérico sem nenhuma tentativa de fallback.
+# ═════════════════════════════════════════════════════════════════
+def _patch_resolve_reasoning(monkeypatch):
+    async def _fake_resolve(data, route):
+        return ("gpt-oss-120b", "openai/gpt-oss-120b", "reasoning")
+    monkeypatch.setattr(wizard, "_resolve_wizard_llm", _fake_resolve)
+
+
+def _patch_validation_ok(monkeypatch):
+    """Validação da SKILL gerada passa limpa — isola o teste no FALLBACK
+    (conteúdo fake tipo "SKILL_FB" parsea, e o validador real flagaria
+    crítico → retry → chamadas extras de provider não-determinísticas)."""
+    import app.skill_parser.wizard_validator as validator_mod
+
+    class _OkValidation:
+        ok = True
+        critical_count = 0
+        warning_count = 0
+        violations = []
+        def critical_suggestions(self):
+            return []
+        def to_dict(self):
+            return {"ok": True}
+
+    monkeypatch.setattr(
+        validator_mod, "validate_generated_skill",
+        lambda parsed, bindings, raw_md=None: _OkValidation(),
+    )
+
+
+class TestSkillRouteFallback:
+    @pytest.mark.asyncio
+    async def test_skill_inacessivel_responde_via_fallback(self, monkeypatch):
+        _patch_resolve_reasoning(monkeypatch)
+        _patch_validation_ok(monkeypatch)
+        _patch_routing(monkeypatch, "azure/gpt-4o")
+        _patch_providers(monkeypatch, {"gpt-oss-120b": "connect", "azure": "ok:SKILL_FB"})
+        out = await wizard.wizard_skill(wizard.WizardSkillRequest(description="skill de teste"))
+        assert out["status"] == "ok"
+        assert out["skill_md"] == "SKILL_FB"
+        # `resolved` reporta o LLM que REALMENTE respondeu (pós-fallback).
+        assert out["resolved"]["llm_provider"] == "azure"
+        assert out["resolved"]["llm_model"] == "gpt-4o"
+        assert out["resolved"]["llm_fallback"] is True
+
+    @pytest.mark.asyncio
+    async def test_skill_primario_ok_nao_marca_fallback(self, monkeypatch):
+        _patch_resolve_reasoning(monkeypatch)
+        _patch_validation_ok(monkeypatch)
+        _patch_providers(monkeypatch, {"gpt-oss-120b": "ok:DIRETO"})
+        out = await wizard.wizard_skill(wizard.WizardSkillRequest(description="skill"))
+        assert out["resolved"]["llm_provider"] == "gpt-oss-120b"
+        assert out["resolved"]["llm_fallback"] is False
+
+    @pytest.mark.asyncio
+    async def test_skill_503_passa_direto_nao_vira_500(self, monkeypatch):
+        _patch_resolve_reasoning(monkeypatch)
+        _patch_routing(monkeypatch, "azure/gpt-4o")
+        _patch_providers(monkeypatch, {"gpt-oss-120b": "connect", "azure": "connect"})
+        with pytest.raises(wizard.HTTPException) as ei:
+            await wizard.wizard_skill(wizard.WizardSkillRequest(description="skill"))
+        assert ei.value.status_code == 503
+        assert "inacessível" in ei.value.detail
+
+    @pytest.mark.asyncio
+    async def test_skill_pede_reasoning_ao_primario_e_ao_fallback(self, monkeypatch):
+        # O wizard PASSA reasoning_effort ao factory nas duas tentativas; o
+        # gate por modelo (dropar p/ gpt-4o, manter p/ gpt-oss) vive no
+        # get_provider real — coberto em test_reasoning_effort.py.
+        _patch_resolve_reasoning(monkeypatch)
+        _patch_validation_ok(monkeypatch)
+        _patch_routing(monkeypatch, "azure/gpt-4o")
+        captured: dict = {}
+        _patch_providers(
+            monkeypatch, {"gpt-oss-120b": "connect", "azure": "ok:FB"}, captured
+        )
+        await wizard.wizard_skill(wizard.WizardSkillRequest(description="skill"))
+        assert captured["providers"] == ["gpt-oss-120b", "azure"]
+        assert captured["efforts"] == ["high", "high"]
+
+
+class TestAgentRouteFallback:
+    @pytest.mark.asyncio
+    async def test_agent_inacessivel_responde_via_fallback(self, monkeypatch):
+        _patch_resolve_reasoning(monkeypatch)
+        _patch_routing(monkeypatch, "azure/gpt-4o")
+        _patch_providers(monkeypatch, {
+            "gpt-oss-120b": "connect",
+            "azure": 'ok:{"name": "Agente X", "kind": "subagent"}',
+        })
+        out = await wizard.wizard_agent(wizard.WizardAgentRequest(description="agente"))
+        assert out["status"] == "ok"
+        assert out["agent"]["name"] == "Agente X"
+
+    @pytest.mark.asyncio
+    async def test_agent_503_passa_direto_nao_vira_500(self, monkeypatch):
+        _patch_resolve_reasoning(monkeypatch)
+        _patch_routing(monkeypatch, "azure/gpt-4o")
+        _patch_providers(monkeypatch, {"gpt-oss-120b": "connect", "azure": "connect"})
+        with pytest.raises(wizard.HTTPException) as ei:
+            await wizard.wizard_agent(wizard.WizardAgentRequest(description="agente"))
+        assert ei.value.status_code == 503
+        assert "Roteamento LLM" in ei.value.detail
+
+    @pytest.mark.asyncio
+    async def test_agent_pede_reasoning_effort(self, monkeypatch):
+        _patch_resolve_reasoning(monkeypatch)
+        captured: dict = {}
+        _patch_providers(
+            monkeypatch, {"gpt-oss-120b": 'ok:{"name": "A"}'}, captured
+        )
+        await wizard.wizard_agent(wizard.WizardAgentRequest(description="agente"))
+        assert captured["efforts"] == ["high"]
+
+
+def _patch_validation_critical(monkeypatch):
+    """Validador sempre reprova com crítico → força o retry de validação."""
+    import app.skill_parser.parser as parser_mod
+    import app.skill_parser.wizard_validator as validator_mod
+
+    class _CriticalValidation:
+        ok = False
+        critical_count = 1
+        warning_count = 0
+        violations = []
+        def critical_suggestions(self):
+            return ["corrija X"]
+        def to_dict(self):
+            return {"ok": False}
+
+    monkeypatch.setattr(parser_mod, "parse_skill_md", lambda md: {"parsed": True})
+    monkeypatch.setattr(
+        validator_mod, "validate_generated_skill",
+        lambda parsed, bindings, raw_md=None: _CriticalValidation(),
+    )
+
+
+class TestSkillRetryReusesRespondingProvider:
+    @pytest.mark.asyncio
+    async def test_retry_de_validacao_reusa_o_par_que_respondeu(self, monkeypatch):
+        # Primário caiu → fallback respondeu a geração inicial. Se o validador
+        # pedir retry, o retry vai DIRETO ao par que respondeu (azure) — sem
+        # re-pagar o timeout do primário morto.
+        _patch_resolve_reasoning(monkeypatch)
+        _patch_validation_critical(monkeypatch)
+        _patch_routing(monkeypatch, "azure/gpt-4o")
+        captured: dict = {}
+        _patch_providers(
+            monkeypatch, {"gpt-oss-120b": "connect", "azure": "ok:GERADO"}, captured
+        )
+
+        out = await wizard.wizard_skill(wizard.WizardSkillRequest(description="skill"))
+        assert out["status"] == "ok"
+        # 3 chamadas ao factory: primário (connect), fallback (ok), retry.
+        # O retry NÃO volta ao gpt-oss-120b morto — vai direto ao azure.
+        assert captured["providers"] == ["gpt-oss-120b", "azure", "azure"]
+        assert out["validation"]["retries_used"] == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_que_caiu_no_fallback_atualiza_resolved(self, monkeypatch):
+        # Hub INTERMITENTE: geração inicial responde no gpt-oss; o retry de
+        # validação encontra o hub morto e cai no azure. O conteúdo FINAL é o
+        # do retry → `resolved` reporta o par que o gerou (azure) + flag.
+        _patch_resolve_reasoning(monkeypatch)
+        _patch_validation_critical(monkeypatch)
+        _patch_routing(monkeypatch, "azure/gpt-4o")
+        state = {"oss_calls": 0}
+
+        class _FlakyOss:
+            async def generate(self, messages, **kwargs):
+                state["oss_calls"] += 1
+                if state["oss_calls"] == 1:
+                    return {"content": "GERADO_OSS"}
+                raise httpx.ConnectError("All connection attempts failed")
+
+        class _AzureOk:
+            async def generate(self, messages, **kwargs):
+                return {"content": "RETRY_AZURE"}
+
+        monkeypatch.setattr(
+            wizard, "get_provider",
+            lambda name, **kw: _FlakyOss() if name == "gpt-oss-120b" else _AzureOk(),
+        )
+
+        out = await wizard.wizard_skill(wizard.WizardSkillRequest(description="skill"))
+        assert out["skill_md"] == "RETRY_AZURE"
+        assert out["resolved"]["llm_provider"] == "azure"
+        assert out["resolved"]["llm_model"] == "gpt-4o"
+        assert out["resolved"]["llm_fallback"] is True
+        assert out["validation"]["retries_used"] == 1
+        assert state["oss_calls"] == 2  # inicial ok + retry no hub morto
+
+
+# ═════════════════════════════════════════════════════════════════
+# Rejeição de PARÂMETRO no wizard — strip-retry de reasoning_effort
+# (backend OpenAI-compatible estrito rejeita campo desconhecido c/ 400;
+#  não é unreachable nem auth → antes viraria 500)
+# ═════════════════════════════════════════════════════════════════
+class TestWizardParamRejectionStripRetry:
+    @pytest.mark.asyncio
+    async def test_400_de_parametro_re_tenta_sem_reasoning_effort(self, monkeypatch):
+        calls = {"efforts": []}
+
+        class _PickyProvider:
+            def __init__(self, effort):
+                self.effort = effort
+            async def generate(self, messages, **kwargs):
+                if self.effort:
+                    raise RuntimeError(
+                        "gpt-oss-120b HTTP 400: Extra inputs are not permitted"
+                    )
+                return {"content": "SEM_EFFORT"}
+
+        def _fake_get_provider(provider_name, **kwargs):
+            calls["efforts"].append(kwargs.get("reasoning_effort"))
+            return _PickyProvider(kwargs.get("reasoning_effort"))
+
+        monkeypatch.setattr(wizard, "get_provider", _fake_get_provider)
+        content, p, m = await wizard._wizard_llm_complete(
+            _MSGS, "gpt-oss-120b", "openai/gpt-oss-120b", route="skill",
+            reasoning_effort="high",
+        )
+        assert (content, p) == ("SEM_EFFORT", "gpt-oss-120b")
+        assert calls["efforts"] == ["high", None]
+
+    @pytest.mark.asyncio
+    async def test_sem_effort_pedido_400_de_parametro_propaga(self, monkeypatch):
+        # Sem reasoning_effort no pedido não há o que despir — o 400 propaga
+        # (erro de config/uso que o operador deve ver, não mascarar).
+        _patch_providers(monkeypatch, {
+            "gpt-oss-120b": "runtime:HTTP 400: Extra inputs are not permitted",
+        })
+        with pytest.raises(RuntimeError):
+            await wizard._wizard_llm_complete(
+                _MSGS, "gpt-oss-120b", "openai/gpt-oss-120b", route="skill"
+            )
+
+
+def test_toast_de_erro_e_legivel_e_dispensavel():
+    """O 503 acionável do wizard tem ~330 chars — em 3,5s fixos ninguém lê.
+    Toasts type='error' escalam a duração com o tamanho e fecham no clique
+    (showToast em base.html); sucesso/info mantêm os 3,5s."""
+    from pathlib import Path
+    src = Path("app/templates/layouts/base.html").read_text(encoding="utf-8")
+    assert "Math.min(15000, Math.max(6000, msg.length * 45)) : 3500" in src
+    assert "Clique para fechar" in src

@@ -66,6 +66,9 @@ def is_llm_param_rejection(exc: BaseException) -> bool:
         "unsupported parameter",
         "unknown parameter",
         "unsupported_value",
+        # Servidores OpenAI-compatible com validação pydantic estrita (vLLM
+        # extra=forbid & cia) rejeitam campo desconhecido com esta mensagem.
+        "extra inputs are not permitted",
     ))
 
 
@@ -379,6 +382,18 @@ class GPTOSSProvider(LLMProvider):
                 f"gpt-oss-{self.size}: URL não configurada. "
                 f"Configure em /settings → Plataforma → GPT-OSS."
             )
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            **kwargs,
+        }
+        # reasoning_effort do construtor vale também no path httpx cru — antes
+        # só get_langchain_llm() o repassava, então callers de .generate()
+        # (wizard, verifier) pediam reasoning e o hub nunca recebia o campo.
+        # Kwarg explícito do caller tem precedência sobre o do construtor.
+        if self.reasoning_effort and "reasoning_effort" not in body:
+            body["reasoning_effort"] = self.reasoning_effort
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 f"{self.api_url}/chat/completions",
@@ -386,12 +401,7 @@ class GPTOSSProvider(LLMProvider):
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": self.temperature,
-                    **kwargs,
-                },
+                json=body,
             )
             return _parse_openai_compatible_response(
                 response, provider=f"gpt-oss-{self.size}", model=self.model,

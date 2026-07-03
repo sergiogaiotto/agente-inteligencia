@@ -81,6 +81,57 @@ class TestGetProviderThreading:
         assert not hasattr(p, "reasoning_effort")
 
 
+# ───────────────── path httpx cru do GPT-OSS honra o effort ─────────────────
+
+class TestGptOssRawGenerateBody:
+    """Fix 2026-07-03: o reasoning_effort do construtor só ia no path LangChain
+    (get_langchain_llm). Callers de .generate() cru (wizard) pediam reasoning e
+    o hub nunca recebia o campo no body do POST."""
+
+    def _capture_post(self, monkeypatch):
+        from app.core import llm_providers as lp
+        captured = {}
+
+        class _FakeResponse:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+        async def _fake_post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _FakeResponse()
+
+        monkeypatch.setattr(lp.httpx.AsyncClient, "post", _fake_post)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_effort_do_construtor_vai_no_body(self, monkeypatch):
+        captured = self._capture_post(monkeypatch)
+        p = get_provider("gpt-oss-120b", model="m", reasoning_effort="high")
+        p.api_url = "http://hub.local/v1"
+        out = await p.generate([{"role": "user", "content": "oi"}])
+        assert out["content"] == "ok"
+        assert captured["json"]["reasoning_effort"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_kwarg_explicito_tem_precedencia_sobre_construtor(self, monkeypatch):
+        captured = self._capture_post(monkeypatch)
+        p = get_provider("gpt-oss-120b", model="m", reasoning_effort="high")
+        p.api_url = "http://hub.local/v1"
+        await p.generate([{"role": "user", "content": "oi"}], reasoning_effort="low")
+        assert captured["json"]["reasoning_effort"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_sem_effort_nao_emite_o_campo(self, monkeypatch):
+        captured = self._capture_post(monkeypatch)
+        p = get_provider("gpt-oss-120b", model="m")
+        p.api_url = "http://hub.local/v1"
+        await p.generate([{"role": "user", "content": "oi"}])
+        assert "reasoning_effort" not in captured["json"]
+
+
 # ───────────────── validação de schema ─────────────────
 
 class TestSchemaValidation:

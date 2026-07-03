@@ -78,6 +78,14 @@ class TestIsLlmParamRejection:
             "'reasoning_effort' is not supported with this model.\"}}"
         )) is True
 
+    def test_extra_inputs_pydantic_vllm(self):
+        # Servidor OpenAI-compatible com validação estrita (vLLM extra=forbid)
+        # rejeita campo desconhecido com a mensagem pydantic — também é
+        # rejeição de parâmetro, não de conteúdo.
+        assert is_llm_param_rejection(RuntimeError(
+            "gpt-oss-120b HTTP 400: Extra inputs are not permitted"
+        )) is True
+
     def test_connection_error_nao_e(self):
         assert is_llm_param_rejection(_openai_conn()) is False
 
