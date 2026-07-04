@@ -137,7 +137,7 @@ Configurado por ambiente (alguns também na UI). Defaults pensados para zero-ris
 | Variável | Default | Efeito |
 |---|---|---|
 | `VERIFIER_V2_ENABLED` | **false** | Juiz 4D (factuality/completeness/tone/safety) + ContractValidator. |
-| `VERIFIER_JUDGE_MODEL` | `azure/gpt-4o` | Modelo do juiz (idealmente provider ≠ do gerador). |
+| `VERIFIER_JUDGE_MODEL` | `azure/gpt-4o` | Modelo do juiz (idealmente provider ≠ do gerador). **Desde 24.8.0**: o card "LLM como Juiz" em Configurações → Roteamento LLM (papel `judge`) tem PRECEDÊNCIA sobre esta env; ela vale só como default quando nenhuma rota foi salva na UI. |
 | `VERIFIER_*_THRESHOLD` (factuality/completeness/tone) | 3.0 (0–5) | Score mínimo para aprovação. |
 | `VERIFIER_MAX_TOKENS` | 800 | Cap da resposta do juiz. |
 | `VERIFIER_CONTRACT_RETRY_ENABLED` / `_MAX_TOKENS` | true / 2000 | Re-chama LLM 1× para corrigir contrato. |

@@ -10,10 +10,11 @@ CORREÇÕES (2026-04):
   MCP Streamable HTTP (spec 2025-03-26) retornam HTTP 406 Not Acceptable.
 """
 import uuid, json, logging
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.models.schemas import ReleaseCreate, GoldCaseCreate, KnowledgeSourceCreate, ToolCreate, ToolUpdate, RunEvalRequest
+from app.core.auth import require_user
 from app.core.database import (
     releases_repo, gold_cases_repo, eval_runs_repo, knowledge_repo,
     tools_repo, agents_repo, skills_repo, interactions_repo,
@@ -859,6 +860,9 @@ class LLMRoutingUpdate(BaseModel):
     instruct: Optional[str] = None
     classification: Optional[str] = None
     skill_generation: Optional[str] = None
+    # Papel "LLM como Juiz" (Verifier §14.2/MultiDimJudge). Rota salva aqui
+    # vence a env legada VERIFIER_JUDGE_MODEL (ver _apply_judge_env_default).
+    judge: Optional[str] = None
     multimodal_fallback: Optional[str] = None
     # Checkbox "Mostrar contingência na rastreabilidade" (bloco Multimodal
     # Fallback). Controla SOMENTE a nota VISÍVEL no painel do Workspace; a
@@ -873,7 +877,7 @@ async def get_llm_routing():
     """Retorna o routing config atual + defaults + lista de task types."""
     from app.llm_routing import (
         load_routing, DEFAULT_ROUTING, TASK_TYPES, global_primary_routing,
-        fallback_show_in_trace,
+        fallback_show_in_trace, _apply_judge_env_default,
     )
     routing = await load_routing()
     # skill_generation: default efetivo segue o Modelo Primário global da
@@ -882,6 +886,10 @@ async def get_llm_routing():
     gm = global_primary_routing()
     if gm:
         defaults["skill_generation"] = gm
+    # judge: default efetivo honra a env legada VERIFIER_JUDGE_MODEL — sem
+    # isso o botão "Aplicar padrões" sobrescreveria a env do operador com o
+    # hardcoded azure/gpt-4o (explicit vazio = "nenhuma rota salva na UI").
+    _apply_judge_env_default(defaults, set())
     return {
         "routing": routing,
         "defaults": defaults,
@@ -896,20 +904,29 @@ async def get_llm_routing():
             "instruct": "Apenas texto (instruction following). Inferência comum. **Aceita imagens** — quando input é multimodal, plataforma roteia automaticamente pro multimodal_fallback. Default: GPT-OSS-20B (open-weight via hub interno).",
             "classification": "Classificação e categorização. Estruturação de informações em labels/buckets fixos. Default: GPT-OSS-20B (open-weight via hub interno).",
             "skill_generation": "Criação e alteração de SKILL.md no Wizard. Como o SKILL.md precisa respeitar um formato rígido, escolha um modelo forte em seguir instruções e gerar saída estruturada (JSON). Default: o modelo global da plataforma (Modelo Primário) — você pode trocar aqui a qualquer momento.",
+            "judge": "LLM como Juiz (Verifier): avalia cada resposta dos agentes em 4 dimensões — factualidade, completude, tom e segurança — e alimenta as páginas Qualidade e o gate de release do Harness. Escolha um modelo forte em análise e saída JSON. Default: Azure GPT-4o (ou a variável VERIFIER_JUDGE_MODEL, se configurada no ambiente).",
             "multimodal_fallback": "Modelo usado quando o input contém imagem mas o modelo da task escolhida é text-only. Default: Azure GPT-4o (único multimodal nativo pronto pra produção).",
         },
     }
 
 
 @router.put("/dashboard/llm-routing")
-async def put_llm_routing(data: LLMRoutingUpdate):
+async def put_llm_routing(data: LLMRoutingUpdate, user: dict = Depends(require_user)):
     """Atualiza routing config. Aceita subset (só keys não-None mudam).
     Cada valor de roteamento é validado como `provider/model` antes de persistir.
+
+    Gate por ROLE de verdade (24.8.0): o Roteamento LLM muda o modelo de TODA
+    a plataforma — root/admin apenas. Antes o gate era só cosmético (aba
+    escondida no template); a API aceitava qualquer usuário autenticado.
 
     `fallback_show_in_trace` (bool) é tratado à parte: persiste via settings_store
     (não save_routing, que só aceita strings provider/model). Controla apenas a
     nota visível no painel — observabilidade/LOGs do fallback são sempre gravados.
     """
+    if (user.get("role") or "").lower() not in ("root", "admin"):
+        raise HTTPException(
+            403, "Apenas root/admin podem alterar o Roteamento LLM."
+        )
     from app.llm_routing import (
         save_routing, set_fallback_show_in_trace, fallback_show_in_trace,
     )

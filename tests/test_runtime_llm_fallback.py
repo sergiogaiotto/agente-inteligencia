@@ -415,7 +415,7 @@ class TestDashboardEndpoints:
         monkeypatch.setattr("app.llm_routing.set_fallback_show_in_trace", _fake_set)
         monkeypatch.setattr("app.llm_routing.fallback_show_in_trace", _fake_show)
         from app.routes.dashboard import put_llm_routing, LLMRoutingUpdate
-        out = await put_llm_routing(LLMRoutingUpdate(fallback_show_in_trace=False))
+        out = await put_llm_routing(LLMRoutingUpdate(fallback_show_in_trace=False), user={"role": "root"})
         assert saved["v"] is False
         assert "fallback_show_in_trace" in out["updated"]
         assert out["fallback_show_in_trace"] is False
@@ -435,7 +435,7 @@ class TestDashboardEndpoints:
         monkeypatch.setattr("app.llm_routing.set_fallback_show_in_trace", _fake_set)
         monkeypatch.setattr("app.llm_routing.fallback_show_in_trace", _fake_show)
         from app.routes.dashboard import put_llm_routing, LLMRoutingUpdate
-        out = await put_llm_routing(LLMRoutingUpdate(fallback_show_in_trace=True))
+        out = await put_llm_routing(LLMRoutingUpdate(fallback_show_in_trace=True), user={"role": "root"})
         assert out["updated"] == ["fallback_show_in_trace"]
 
     @pytest.mark.asyncio
@@ -443,7 +443,7 @@ class TestDashboardEndpoints:
         from app.routes.dashboard import put_llm_routing, LLMRoutingUpdate
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as ei:
-            await put_llm_routing(LLMRoutingUpdate())
+            await put_llm_routing(LLMRoutingUpdate(), user={"role": "root"})
         assert ei.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -465,7 +465,8 @@ class TestDashboardEndpoints:
         monkeypatch.setattr("app.llm_routing.fallback_show_in_trace", _fake_show)
         from app.routes.dashboard import put_llm_routing, LLMRoutingUpdate
         out = await put_llm_routing(
-            LLMRoutingUpdate(tool_calling="azure/gpt-4o", fallback_show_in_trace=False)
+            LLMRoutingUpdate(tool_calling="azure/gpt-4o", fallback_show_in_trace=False),
+            user={"role": "root"},
         )
         assert saved["routing_payload"] == {"tool_calling": "azure/gpt-4o"}
         assert saved["v"] is False

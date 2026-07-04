@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # ─── Catálogo ──────────────────────────────────────────────────────
 
 TASK_TYPES = ("tool_calling", "reasoning", "instruct", "classification",
-              "skill_generation")
+              "skill_generation", "judge")
 
 DEFAULT_ROUTING: dict[str, str] = {
     "tool_calling": "gpt-oss-120b/openai/gpt-oss-120b",
@@ -54,6 +54,13 @@ DEFAULT_ROUTING: dict[str, str] = {
     # O valor abaixo é só o ÚLTIMO recurso, quando nenhum Modelo Primário está
     # configurado em platform_settings.
     "skill_generation": "azure/gpt-4o",
+    # judge: "LLM como Juiz" do Verifier §14.2 (MultiDimJudge) — avalia cada
+    # resposta em 4 dimensões (factualidade/completude/tom/segurança).
+    # Recomendação anti-autopreferência: provedor DIFERENTE do que gera as
+    # respostas dos agentes. Default EFETIVO honra a env legada
+    # VERIFIER_JUDGE_MODEL quando o operador não salvou rota na UI (ver
+    # _apply_judge_env_default) — retrocompat com instalações pré-UI.
+    "judge": "azure/gpt-4o",
     "multimodal_fallback": "azure/gpt-4o",
 }
 
@@ -137,6 +144,7 @@ async def load_routing() -> dict[str, str]:
     except Exception as e:
         logger.warning(f"settings_store.get_all falhou: {e}; usando defaults")
         _apply_skill_generation_global_default(out, explicit)
+        _apply_judge_env_default(out, explicit)
         return out  # não cacheia em erro — retenta no próximo load
 
     for key, value in all_settings.items():
@@ -147,6 +155,7 @@ async def load_routing() -> dict[str, str]:
                 explicit.add(short_key)
 
     _apply_skill_generation_global_default(out, explicit)
+    _apply_judge_env_default(out, explicit)
 
     _routing_cache = dict(out)
     _routing_cache_at = now
@@ -164,6 +173,23 @@ def _apply_skill_generation_global_default(
     gm = global_primary_routing()
     if gm:
         out["skill_generation"] = gm
+
+
+def _apply_judge_env_default(out: dict[str, str], explicit: set[str]) -> None:
+    """Retrocompat do papel `judge`: quando o operador NÃO salvou rota
+    explícita na UI, o default honra a env legada VERIFIER_JUDGE_MODEL
+    (.env/container) — instalações que já configuravam o juiz por env não
+    mudam de comportamento ao atualizar. Rota salva na UI SEMPRE vence.
+    Mutates `out` in place; no-op se a env não estiver setada."""
+    if "judge" in explicit:
+        return
+    try:
+        from app.core.config import get_settings
+        vj = (get_settings().verifier_judge_model or "").strip()
+    except Exception:
+        return
+    if vj and "/" in vj:
+        out["judge"] = vj
 
 
 async def save_routing(updates: dict[str, str]) -> dict[str, str]:
