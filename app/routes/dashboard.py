@@ -452,6 +452,12 @@ async def verifications_stats(window: str = "24h"):
         where = "WHERE created_at > now() - interval '7 days'"
     elif window == "30d":
         where = "WHERE created_at > now() - interval '30 days'"
+    # Linhas re-julgadas (profile='rejudge') ficam FORA dos agregados: são
+    # A/B de juízes sob demanda (sem evidências re-anexadas — claims não
+    # comparáveis), não tráfego real. Aparecem no breakdown by_profile, na
+    # lista (filtro "re-julgados") e no by_judge_model (onde o A/B se lê).
+    _rj = "profile IS DISTINCT FROM 'rejudge'"
+    where_rj = f"{where} AND {_rj}" if where else f"WHERE {_rj}"
     async with pool.acquire() as con:
         row = await con.fetchrow(
             f"""
@@ -467,7 +473,7 @@ async def verifications_stats(window: str = "24h"):
               count(*) FILTER (WHERE unsupported_claims != '[]' AND unsupported_claims IS NOT NULL)::int AS with_unsupported,
               avg(duration_ms)::float                  AS avg_duration_ms
             FROM verifications
-            {where}
+            {where_rj}
             """
         )
         # Distribuição por judge_model
@@ -492,12 +498,66 @@ async def verifications_stats(window: str = "24h"):
             """
         )
 
+        # Auditoria (25.0.0) — desempenho por AGENTE e por PIPELINE na janela.
+        # LEFT JOIN p/ nome humano; linhas pré-migração (dono NULL) e
+        # re-julgamentos ficam fora (não são tráfego real).
+        where_v = where_rj.replace("created_at", "v.created_at").replace(
+            "profile IS DISTINCT", "v.profile IS DISTINCT"
+        )
+        by_agent = await con.fetch(
+            f"""
+            SELECT v.agent_id, a.name AS agent_name, count(*)::int AS n,
+                   count(*) FILTER (WHERE v.ok)::int AS ok_count,
+                   avg(v.factuality_score)::float    AS avg_factuality,
+                   avg(v.completeness_score)::float  AS avg_completeness,
+                   avg(v.tone_score)::float          AS avg_tone,
+                   count(*) FILTER (WHERE v.unsupported_claims != '[]'
+                                    AND v.unsupported_claims IS NOT NULL)::int AS with_unsupported
+            FROM verifications v
+            LEFT JOIN agents a ON a.id = v.agent_id
+            {where_v} AND v.agent_id IS NOT NULL
+            GROUP BY v.agent_id, a.name
+            ORDER BY n DESC
+            LIMIT 12
+            """
+        )
+        by_pipeline = await con.fetch(
+            f"""
+            SELECT v.pipeline_id, p.name AS pipeline_name, count(*)::int AS n,
+                   count(*) FILTER (WHERE v.ok)::int AS ok_count,
+                   avg(v.factuality_score)::float    AS avg_factuality,
+                   avg(v.completeness_score)::float  AS avg_completeness,
+                   avg(v.tone_score)::float          AS avg_tone,
+                   count(*) FILTER (WHERE v.unsupported_claims != '[]'
+                                    AND v.unsupported_claims IS NOT NULL)::int AS with_unsupported
+            FROM verifications v
+            LEFT JOIN pipelines p ON p.id = v.pipeline_id
+            {where_v} AND v.pipeline_id IS NOT NULL
+            GROUP BY v.pipeline_id, p.name
+            ORDER BY n DESC
+            LIMIT 12
+            """
+        )
+
+    def _round_row(r: dict) -> dict:
+        return {k: (round(v, 3) if isinstance(v, float) else v) for k, v in r.items()}
+
     stats = dict(row) if row else {}
+    # Threshold do juiz exposto p/ a UI não inventar critério próprio
+    # (card "Atenção" da Observabilidade compara contra ELE, com legenda).
+    try:
+        from app.core.config import get_settings
+        _fact_th = float(get_settings().verifier_factuality_threshold)
+    except Exception:
+        _fact_th = 3.0
     return {
         "window": window,
         "stats": {k: (round(v, 3) if isinstance(v, float) else v) for k, v in stats.items()},
+        "factuality_threshold": _fact_th,
         "by_judge_model": [dict(r) for r in models],
         "by_profile": [dict(r) for r in profiles],
+        "by_agent": [_round_row(dict(r)) for r in by_agent],
+        "by_pipeline": [_round_row(dict(r)) for r in by_pipeline],
     }
 
 
@@ -511,12 +571,20 @@ async def list_verifications(
     profile: Optional[str] = None,
     judge_model: Optional[str] = None,
     interaction_id: Optional[str] = None,
+    # Auditoria (25.0.0): drill-down por dono + "só com alucinação".
+    agent_id: Optional[str] = None,
+    pipeline_id: Optional[str] = None,
+    with_claims_only: bool = False,
 ):
     """Lista paginada de verificações com filtros.
 
     Filtro `interaction_id` (Onda 6 deep-link): permite o /workspace abrir
     /quality?interaction_id=X pra mostrar a auditoria completa daquela
     interação específica (vs. lista geral).
+
+    Auditoria (25.0.0): filtros por `agent_id`/`pipeline_id` +
+    `with_claims_only`; itens incluem o par pergunta/resposta julgado
+    (redacted), rastro do contract-retry e nomes humanos do dono.
     """
     from app.core.database import _get_pool
     limit = max(1, min(int(limit), 1000))
@@ -540,6 +608,14 @@ async def list_verifications(
     if interaction_id:
         args.append(interaction_id)
         where.append(f"interaction_id = ${len(args)}")
+    if agent_id:
+        args.append(agent_id)
+        where.append(f"agent_id = ${len(args)}")
+    if pipeline_id:
+        args.append(pipeline_id)
+        where.append(f"pipeline_id = ${len(args)}")
+    if with_claims_only:
+        where.append("unsupported_claims != '[]' AND unsupported_claims IS NOT NULL")
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
 
     pool = _get_pool()
@@ -549,11 +625,13 @@ async def list_verifications(
         rows = await con.fetch(
             f"""
             SELECT id, turn_id, interaction_id,
+                   agent_id, pipeline_id, question_redacted, draft_redacted,
                    factuality_score, factuality_reason,
                    completeness_score, completeness_reason,
                    tone_score, tone_reason,
                    safety_score, safety_reason,
                    contract_compliant, contract_errors,
+                   contract_retried, contract_original_errors,
                    ok, confidence, unsupported_claims,
                    judge_model, profile, duration_ms, created_at
             FROM verifications
@@ -567,18 +645,264 @@ async def list_verifications(
         for r in rows:
             d = dict(r)
             # Decodifica JSONs em strings
-            try:
-                d["contract_errors"] = json.loads(d.get("contract_errors") or "[]")
-            except Exception:
-                d["contract_errors"] = []
-            try:
-                d["unsupported_claims"] = json.loads(d.get("unsupported_claims") or "[]")
-            except Exception:
-                d["unsupported_claims"] = []
+            for jf in ("contract_errors", "unsupported_claims", "contract_original_errors"):
+                try:
+                    d[jf] = json.loads(d.get(jf) or "[]")
+                except Exception:
+                    d[jf] = []
             if d.get("created_at"):
                 d["created_at"] = d["created_at"].isoformat()
             items.append(d)
+
+        # Nomes humanos do dono (batch — no máx. 2 queries por página)
+        a_ids = list({d["agent_id"] for d in items if d.get("agent_id")})
+        p_ids = list({d["pipeline_id"] for d in items if d.get("pipeline_id")})
+        names_a: dict = {}
+        names_p: dict = {}
+        try:
+            if a_ids:
+                rows_a = await con.fetch(
+                    "SELECT id, name FROM agents WHERE id = ANY($1::text[])", a_ids
+                )
+                names_a = {r["id"]: r["name"] for r in rows_a}
+            if p_ids:
+                rows_p = await con.fetch(
+                    "SELECT id, name FROM pipelines WHERE id = ANY($1::text[])", p_ids
+                )
+                names_p = {r["id"]: r["name"] for r in rows_p}
+        except Exception:
+            pass  # nomes são decoração — a auditoria funciona sem eles
+        for d in items:
+            d["agent_name"] = names_a.get(d.get("agent_id"))
+            d["pipeline_name"] = names_p.get(d.get("pipeline_id"))
         return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/dashboard/verifications/claims")
+async def verification_claims(window: str = "7d", limit: int = 50):
+    """Explorador de alucinações (25.0.0): as `unsupported_claims` mais
+    recentes da janela, achatadas por afirmação, com o agente dono — o
+    operador varre O QUE está sendo dito sem respaldo e por quem."""
+    from app.core.database import _get_pool
+    limit = max(1, min(int(limit), 200))
+    # rejudge fora: sem evidências re-anexadas, os claims do re-julgamento
+    # não são comparáveis aos do tráfego real (falso-positivo garantido).
+    where = ("WHERE v.unsupported_claims != '[]' AND v.unsupported_claims IS NOT NULL "
+             "AND v.profile IS DISTINCT FROM 'rejudge'")
+    if window == "24h":
+        where += " AND v.created_at > now() - interval '24 hours'"
+    elif window == "7d":
+        where += " AND v.created_at > now() - interval '7 days'"
+    elif window == "30d":
+        where += " AND v.created_at > now() - interval '30 days'"
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            f"""
+            SELECT v.id, v.agent_id, a.name AS agent_name, v.pipeline_id,
+                   v.interaction_id, v.unsupported_claims, v.created_at
+            FROM verifications v
+            LEFT JOIN agents a ON a.id = v.agent_id
+            {where}
+            ORDER BY v.created_at DESC
+            LIMIT {limit}
+            """
+        )
+    claims: list[dict] = []
+    for r in rows:
+        try:
+            cs = json.loads(r["unsupported_claims"] or "[]")
+        except Exception:
+            cs = []
+        for c in cs:
+            claims.append({
+                "claim": c,
+                "verification_id": r["id"],
+                "agent_id": r["agent_id"],
+                "agent_name": r["agent_name"],
+                "interaction_id": r["interaction_id"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            })
+            if len(claims) >= limit:
+                break
+        if len(claims) >= limit:
+            break
+    return {"window": window, "claims": claims}
+
+
+@router.post("/dashboard/verifications/{vid}/rejudge")
+async def rejudge_verification(vid: str, user: dict = Depends(require_user)):
+    """Re-julga uma verificação com o juiz ATUAL (25.0.0) — habilita A/B de
+    juízes sobre material real: o par pergunta/resposta persistido é
+    re-submetido ao MultiDimJudge (papel `judge` do Roteamento) e o novo
+    veredito é gravado com profile='rejudge' (identificável e filtrável).
+
+    Custa 1 chamada LLM — root/admin apenas. Evidências não são re-anexadas
+    (não são persistidas), então factuality vem null no re-judge; a
+    comparação vale para completeness/tone/safety/claims.
+    """
+    if (user.get("role") or "").lower() not in ("root", "admin"):
+        raise HTTPException(403, "Apenas root/admin podem re-julgar.")
+    # Fail-fast com v2 OFF: Verifier.verify cairia no _LegacyVerifier, que
+    # com evidences=[] devolve veredito ENLATADO (ok=False, confidence=0)
+    # sem chamar juiz nenhum e sem persistir — a UI mentiria "re-julgado".
+    from app.core.config import get_settings
+    if not get_settings().verifier_v2_enabled:
+        raise HTTPException(
+            409,
+            "Verifier v2 está desligado — o re-julgamento usa o MultiDimJudge. "
+            "Ative VERIFIER_V2_ENABLED e tente novamente.",
+        )
+    from app.core.database import _get_pool
+    async with _get_pool().acquire() as con:
+        row = await con.fetchrow("SELECT * FROM verifications WHERE id = $1", vid)
+    if not row:
+        raise HTTPException(404, "Verificação não encontrada.")
+    if (row["profile"] or "") == "rejudge":
+        raise HTTPException(
+            409, "Esta linha já é um re-julgamento — re-julgue a linha ORIGINAL."
+        )
+    if not row["draft_redacted"]:
+        raise HTTPException(
+            400,
+            "Esta verificação não tem o par pergunta/resposta persistido "
+            "(anterior à v24.10.0 ou payload já limpo pela retenção) — "
+            "não há material para re-julgar.",
+        )
+    from app.verifier import verifier as _verifier
+    from app.agents.engine import _serialize_verification
+    v = await _verifier.verify(
+        draft=row["draft_redacted"],
+        evidences=[],
+        user_question=row["question_redacted"] or "",
+        profile="rejudge",
+        interaction_id=row["interaction_id"],
+        agent_id=row["agent_id"],
+        pipeline_id=row["pipeline_id"],
+        persist=True,
+    )
+    logger.info(
+        "verifications.rejudged",
+        extra={
+            "event": "verifications.rejudged",
+            "verification_id": vid,
+            "agent_id": row["agent_id"],
+            "new_judge_model": v.judge_model,
+        },
+    )
+    return {
+        "status": "ok",
+        "original": {
+            "id": row["id"],
+            "judge_model": row["judge_model"],
+            "ok": row["ok"],
+            "confidence": row["confidence"],
+            "factuality_score": row["factuality_score"],
+            "completeness_score": row["completeness_score"],
+            "tone_score": row["tone_score"],
+            "safety_score": row["safety_score"],
+        },
+        "rejudged": _serialize_verification(v),
+    }
+
+
+@router.get("/dashboard/verifications/export")
+async def export_verifications(
+    format: str = "csv",
+    window: str = "all",
+    agent_id: Optional[str] = None,
+    pipeline_id: Optional[str] = None,
+    ok_only: bool = False,
+    min_factuality: Optional[float] = None,
+    profile: Optional[str] = None,
+    interaction_id: Optional[str] = None,
+    with_claims_only: bool = False,
+    user: dict = Depends(require_user),
+):
+    """Export da auditoria (25.0.0) p/ compliance — CSV ou JSONL, até 5000
+    linhas mais recentes. Honra os MESMOS filtros da lista (o arquivo bate
+    com o que a tela mostra). Par pergunta/resposta REDACTED (DLP já rodou
+    na persistência)."""
+    from fastapi.responses import Response
+    from app.core.database import _get_pool
+    where = []
+    args: list = []
+    if window == "24h":
+        where.append("created_at > now() - interval '24 hours'")
+    elif window == "7d":
+        where.append("created_at > now() - interval '7 days'")
+    elif window == "30d":
+        where.append("created_at > now() - interval '30 days'")
+    if agent_id:
+        args.append(agent_id)
+        where.append(f"agent_id = ${len(args)}")
+    if pipeline_id:
+        args.append(pipeline_id)
+        where.append(f"pipeline_id = ${len(args)}")
+    if ok_only:
+        where.append("ok = TRUE")
+    if min_factuality is not None:
+        args.append(min_factuality)
+        where.append(f"factuality_score >= ${len(args)}")
+    if profile:
+        args.append(profile)
+        where.append(f"profile = ${len(args)}")
+    if interaction_id:
+        args.append(interaction_id)
+        where.append(f"interaction_id = ${len(args)}")
+    if with_claims_only:
+        where.append("unsupported_claims != '[]' AND unsupported_claims IS NOT NULL")
+    where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+    cols = [
+        "id", "created_at", "interaction_id", "agent_id", "pipeline_id",
+        "ok", "confidence", "factuality_score", "completeness_score",
+        "tone_score", "safety_score", "contract_compliant", "contract_retried",
+        "unsupported_claims", "judge_model", "profile", "duration_ms",
+        "question_redacted", "draft_redacted",
+    ]
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            f"SELECT {', '.join(cols)} FROM verifications {where_clause} "
+            f"ORDER BY created_at DESC LIMIT 5000",
+            *args,
+        )
+    if format == "jsonl":
+        lines = []
+        for r in rows:
+            d = dict(r)
+            if d.get("created_at"):
+                d["created_at"] = d["created_at"].isoformat()
+            lines.append(json.dumps(d, ensure_ascii=False, default=str))
+        return Response(
+            "\n".join(lines),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": "attachment; filename=auditoria.jsonl"},
+        )
+    # CSV (default)
+    import csv
+    import io
+
+    def _csv_safe(v):
+        # Excel/Sheets executam células iniciadas em = + - @ como FÓRMULA —
+        # neutraliza injeção vinda de texto gerado por LLM/usuário.
+        if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+            return "'" + v
+        return v
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(cols)
+    for r in rows:
+        w.writerow([
+            (r[c].isoformat() if c == "created_at" and r[c] else _csv_safe(r[c]))
+            for c in cols
+        ])
+    # BOM UTF-8 (﻿): sem ele o Excel abre acentos pt-BR como mojibake.
+    _bom = "\N{ZERO WIDTH NO-BREAK SPACE}"
+    return Response(
+        _bom + buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=auditoria.csv"},
+    )
 
 # ═══ Releases §18 ═══
 @router.get("/releases")

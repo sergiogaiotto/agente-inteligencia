@@ -33,6 +33,53 @@
         </div>
     </div>
 
+    <!-- Card-resumo Auditoria (25.0.0): O QUÊ foi respondido está certo vive
+         em /quality — aqui só o pulso (janela 24h) + atalho. Divisão do
+         produto: Observabilidade = COMO executou; Qualidade = auditoria. -->
+    <div x-show="auditStats.total > 0" x-cloak data-testid="obs-audit-card"
+         class="rounded-lg border border-surface-200 bg-white mb-4">
+        <div class="flex items-center justify-between border-b border-surface-100 px-4 py-2.5">
+            <h2 class="text-[12px] font-semibold text-brand-900">⚖️ Auditoria das respostas (24h)</h2>
+            <a href="/quality" class="text-[11px] font-semibold text-brand-500 hover:text-brand-700">Abrir Qualidade →</a>
+        </div>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 p-3">
+            <div class="rounded-lg border border-surface-200 px-3 py-2">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Julgamentos</div>
+                <div class="text-[16px] font-bold text-brand-900" x-text="auditStats.total"></div>
+            </div>
+            <div class="rounded-lg border border-surface-200 px-3 py-2">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Aprovação</div>
+                <div class="text-[16px] font-bold"
+                     :class="auditOkRate >= 0.8 ? 'text-emerald-600' : auditOkRate >= 0.5 ? 'text-amber-600' : 'text-rose-600'"
+                     x-text="(auditOkRate*100).toFixed(0)+'%'"></div>
+            </div>
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="Média de factuality (0–5) contra evidências">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Factuality média</div>
+                <div class="text-[16px] font-bold text-brand-900" x-text="auditStats.avg_factuality != null ? Number(auditStats.avg_factuality).toFixed(1) : '—'"></div>
+            </div>
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="Verificações com afirmações sem respaldo nas evidências">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">⚑ c/ alucinação</div>
+                <div class="text-[16px] font-bold" :class="(auditStats.with_unsupported||0) > 0 ? 'text-rose-600' : 'text-surface-400'"
+                     x-text="auditStats.with_unsupported ?? 0"></div>
+            </div>
+        </div>
+        <template x-if="auditWorstAgents.length > 0">
+            <div class="border-t border-surface-100 px-4 py-2">
+                <span class="text-[9px] font-semibold uppercase tracking-wider text-surface-400 mr-2"
+                      :title="'Critério: factuality média < ' + (auditStats.factuality_threshold ?? 3.0) + ' (threshold do juiz) com amostra ≥ 3 julgamentos na janela'"
+                      x-text="'Atenção (factuality < ' + (auditStats.factuality_threshold ?? 3.0) + ', amostra ≥ 3):'"></span>
+                <template x-for="a in auditWorstAgents" :key="a.agent_id">
+                    <a :href="'/quality?agent_id=' + encodeURIComponent(a.agent_id)"
+                       class="inline-flex items-center gap-1 mr-2 text-[10px] text-brand-700 hover:underline"
+                       :title="a.n + ' julgamentos na janela — clique para ver só os dele'">
+                        <span x-text="a.agent_name || a.agent_id"></span>
+                        <span class="text-rose-600 font-bold" x-text="'F' + (a.avg_factuality != null ? Number(a.avg_factuality).toFixed(1) : '·')"></span>
+                    </a>
+                </template>
+            </div>
+        </template>
+    </div>
+
     <!-- Interactions log -->
     <div class="rounded-lg border border-surface-200 bg-white mb-4">
         <div class="flex items-center justify-between border-b border-surface-100 px-4 py-2.5">
@@ -595,6 +642,24 @@ function observabilityPage() {
         stats: {},
         interactions: [],
         agents: [],
+        // Card-resumo Auditoria (25.0.0) — pulso 24h do Verifier; drill-down em /quality
+        auditStats: {},
+        auditByAgent: [],
+        get auditOkRate() {
+            const t = this.auditStats.total || 0;
+            return t > 0 ? (this.auditStats.ok_count || 0) / t : 0;
+        },
+        get auditWorstAgents() {
+            // Critério VISÍVEL na legenda do card: factuality média abaixo do
+            // threshold REAL do juiz (vem do backend, não inventado aqui) e
+            // amostra mínima de 3 julgamentos — sem guard de amostra pequena,
+            // 1 nota ruim já colocaria o agente em "Atenção" (falsa confiança).
+            const th = this.auditStats.factuality_threshold ?? 3.0;
+            return this.auditByAgent
+                .filter(a => a.avg_factuality != null && a.n >= 3 && a.avg_factuality < th)
+                .sort((x, y) => x.avg_factuality - y.avg_factuality)
+                .slice(0, 3);
+        },
         selectedLog: null,
         langfuseUrl: 'https://cloud.langfuse.com',
         pageSize: 10, currentPage: 0, totalInteractions: 0,
@@ -635,6 +700,12 @@ function observabilityPage() {
         async load() {
             try { this.stats = await api.get('/api/v1/dashboard/stats'); this.totalInteractions = this.stats.total_interactions || 0; } catch {}
             try { const d = await api.get('/api/v1/agents'); this.agents = d.agents || []; } catch {}
+            // Pulso da Auditoria (24h) — card some quando não há julgamentos.
+            try {
+                const a = await api.get('/api/v1/dashboard/verifications/stats?window=24h');
+                this.auditStats = a.stats || {};
+                this.auditByAgent = a.by_agent || [];
+            } catch { this.auditStats = {}; this.auditByAgent = []; }
             await this.loadPage();
             try { const s = await api.get('/api/v1/settings'); this.langfuseUrl = s.settings?.langfuse_host || 'https://cloud.langfuse.com'; } catch {}
             // Sessão atual + mapa UUID→nome (usados no header "Sessão" e no filtro user do Log Viewer).
