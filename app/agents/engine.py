@@ -50,6 +50,54 @@ _tracer = get_tracer(__name__)
 
 
 # ═══════════════════════════════════════════════════
+# Cache de topologia POR REQUISIÇÃO (25.2.0)
+# ═══════════════════════════════════════════════════
+# execute_pipeline re-consulta mesh_connections e agents dezenas de vezes por
+# invoke (chain-resolver + cada gate de skip + display). A topologia NÃO muda
+# durante um invoke. Um cache contextvar-scoped memoiza os lookups do caminho
+# quente. Ativado só quando execute_pipeline o liga (toggle
+# query_topology_cache_enabled); fora de pipeline o contextvar é None e os
+# helpers passam direto (zero mudança de comportamento; retrocompat total com
+# os testes que chamam os gates isolados).
+import contextvars as _contextvars
+
+_pipeline_topo = _contextvars.ContextVar("pipeline_topo", default=None)
+
+
+async def _topo_mesh_out(source_id: str, limit: int = 100) -> list[dict]:
+    """Arestas de saída de um agente, memoizadas por requisição de pipeline."""
+    from app.core.database import mesh_repo
+    cache = _pipeline_topo.get()
+    if cache is None:
+        return await mesh_repo.find_all(source_agent_id=source_id, limit=limit)
+    m = cache["mesh"]
+    if source_id not in m:
+        # Busca com limite generoso (agente real tem poucas arestas) pra o
+        # cache ser completo p/ todos os callers (uns usam limit 20, outros 50).
+        m[source_id] = await mesh_repo.find_all(source_agent_id=source_id, limit=max(limit, 100))
+    return m[source_id]
+
+
+async def _topo_agent(agent_id: str) -> Optional[dict]:
+    """Agente por id, memoizado por requisição de pipeline.
+
+    Retorna uma CÓPIA RASA — `find_by_id` devolvia um dict fresco a cada
+    chamada e o hot path MUTA o agente (ex.: `_run_llm_chain` troca
+    `llm_provider`/`model` no fallback). Sem a cópia, a mutação vazaria para
+    o objeto cacheado e corromperia lookups seguintes do mesmo agente.
+    """
+    from app.core.database import agents_repo
+    cache = _pipeline_topo.get()
+    if cache is None:
+        return await agents_repo.find_by_id(agent_id)
+    a = cache["agents"]
+    if agent_id not in a:
+        a[agent_id] = await agents_repo.find_by_id(agent_id)
+    cached = a[agent_id]
+    return dict(cached) if cached is not None else None
+
+
+# ═══════════════════════════════════════════════════
 # Helpers — Idioma de resposta (resolução em cascata)
 # ═══════════════════════════════════════════════════
 
@@ -1747,7 +1795,7 @@ async def execute_interaction(
     vetorial com o texto do upstream. Ver `execute_pipeline`.
     """
     start = time.time()
-    agent = await agents_repo.find_by_id(agent_id)
+    agent = await _topo_agent(agent_id)
     if not agent:
         raise ValueError(f"Agente '{agent_id}' não encontrado.")
 
@@ -3128,7 +3176,7 @@ async def _resolve_mesh_chain(agent_id: str, agent: dict) -> list:
             sid = conn.get("source_agent_id", "")
             if sid and sid not in visited:
                 visited.add(sid)
-                src = await agents_repo.find_by_id(sid)
+                src = await _topo_agent(sid)
                 if src:
                     upstream_chain.insert(0, {
                         "id": sid, "name": src.get("name",""), "kind": src.get("kind",""),
@@ -3141,12 +3189,12 @@ async def _resolve_mesh_chain(agent_id: str, agent: dict) -> list:
     queue_down = [agent_id]
     while queue_down:
         current = queue_down.pop(0)
-        conns = await mesh_repo.find_all(source_agent_id=current, limit=20)
+        conns = await _topo_mesh_out(current, limit=20)
         for conn in conns:
             tid = conn.get("target_agent_id", "")
             if tid and tid not in visited:
                 visited.add(tid)
-                tgt = await agents_repo.find_by_id(tid)
+                tgt = await _topo_agent(tid)
                 if tgt:
                     downstream_chain.append({
                         "id": tid, "name": tgt.get("name",""), "kind": tgt.get("kind",""),
@@ -3248,8 +3296,23 @@ async def execute_pipeline(
     é absorvido — não afeta a execução do pipeline.
     """
     start = time.time()
-    entry_agent = await agents_repo.find_by_id(entry_agent_id)
+    # Cache de topologia por requisição (25.2.0): liga o memo de mesh/agents
+    # do caminho quente quando o toggle permite. contextvar é request-scoped
+    # (sem vazar entre requisições concorrentes); resetado antes do return.
+    from app.core.database import _topology_cache_on
+    _topo_token = None
+    if _topology_cache_on():
+        _topo_token = _pipeline_topo.set({"mesh": {}, "agents": {}})
+    def _clear_topo():
+        # Higiene do contextvar: reseta em TODO caminho de saída (raises do
+        # setup + return final). O loop de steps captura erros de step
+        # internamente (não propaga), então estes + o return cobrem tudo.
+        if _topo_token is not None:
+            _pipeline_topo.reset(_topo_token)
+
+    entry_agent = await _topo_agent(entry_agent_id)
     if not entry_agent:
+        _clear_topo()
         raise ValueError(f"Agente '{entry_agent_id}' não encontrado.")
 
     # PR2 — gate de runtime por status do pipeline (decisão travada 2026-06-12).
@@ -3289,6 +3352,7 @@ async def execute_pipeline(
             })
         except Exception:
             pass  # auditoria não impede o bloqueio
+        _clear_topo()
         raise ValueError(
             f"Pipeline '{entry_pipeline.get('name')}' está aposentado — não é roteável. "
             f"Reative-o (aposentado→publicado) para voltar a executar."
@@ -3332,7 +3396,7 @@ async def execute_pipeline(
     _chain_meta = []
     for _aid in chain:
         try:
-            _a = await agents_repo.find_by_id(_aid)
+            _a = await _topo_agent(_aid)
             if _a:
                 _chain_meta.append({"id": _aid, "name": _a.get("name", ""), "kind": _a.get("kind", "")})
         except Exception:
@@ -3366,7 +3430,7 @@ async def execute_pipeline(
     names_by_id: dict = {}
 
     for i, agent_id in enumerate(chain):
-        agent = await agents_repo.find_by_id(agent_id)
+        agent = await _topo_agent(agent_id)
         if not agent or agent.get("status") != "active":
             steps.append({"agent_id": agent_id, "agent_name": agent.get("name","?") if agent else "?", "status": "skipped", "reason": "inativo"})
             await _emit({
@@ -3850,7 +3914,7 @@ async def execute_pipeline(
         if not _pid:
             continue
         try:
-            _conns = await _mesh_repo_disp.find_all(source_agent_id=_pid, limit=20)
+            _conns = await _topo_mesh_out(_pid, limit=20)
             _c = next((c for c in _conns if c.get("target_agent_id") == _aid), None)
             conn_type_by_id[_aid] = (_c or {}).get("connection_type", "sequential")
         except Exception:
@@ -3948,6 +4012,7 @@ async def execute_pipeline(
 
     await _emit({"type": "pipeline_done", "result": final_result})
 
+    _clear_topo()
     return final_result
 
 
@@ -4547,9 +4612,7 @@ async def _should_skip_conditional(
     (NÃO skipa). É melhor executar o agente que perder dados por bug
     de regra. Operador vê o warning em errors.log e corrige.
     """
-    from app.core.database import mesh_repo
-
-    conns = await mesh_repo.find_all(source_agent_id=source_id, limit=20)
+    conns = await _topo_mesh_out(source_id, limit=20)
     conn = next((c for c in conns if c.get("target_agent_id") == target_id), None)
     if not conn or conn.get("connection_type") != "conditional":
         return False
@@ -4727,9 +4790,7 @@ async def _should_skip_default(
     Política de erro: **fail-open** — qualquer falha NÃO skipa (roda o
     default). É melhor responder pelo else do que cair em silêncio.
     """
-    from app.core.database import mesh_repo
-
-    conns = await mesh_repo.find_all(source_agent_id=source_id, limit=50)
+    conns = await _topo_mesh_out(source_id, limit=50)
     conn = next((c for c in conns if c.get("target_agent_id") == target_id), None)
     if not conn or conn.get("connection_type") != "default":
         return False
@@ -4762,7 +4823,7 @@ async def _should_skip_default(
         sib_accepts_doc = False
         sib_accepts_img = False
         try:
-            sib_agent = await agents_repo.find_by_id(sib_target_id)
+            sib_agent = await _topo_agent(sib_target_id)
             if sib_agent:
                 sib_name = sib_agent.get("name", "")
                 # Capability do irmão p/ o override "o anexo manda" propagar aqui:
@@ -4886,7 +4947,7 @@ async def _resolve_context_scope(
     }
 
     try:
-        conns = await mesh_repo.find_all(source_agent_id=source_id, limit=20)
+        conns = await _topo_mesh_out(source_id, limit=20)
     except Exception as e:
         logger.error(
             "mesh.context_scope.repo_lookup_failed",
@@ -5060,7 +5121,7 @@ async def _resolve_ordered_chain_with_parents(
     parent_of: dict = {}
     while queue:
         current = queue.pop(0)
-        conns = await mesh_repo.find_all(source_agent_id=current, limit=20)
+        conns = await _topo_mesh_out(current, limit=20)
         for conn in conns:
             tid = conn.get("target_agent_id", "")
             if not tid or tid in visited:

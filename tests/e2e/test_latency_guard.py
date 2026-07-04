@@ -18,11 +18,14 @@ pytestmark = pytest.mark.e2e
 
 # Pipeline Aurora seedado (mesmo do harness). O invoke 'limite' é declarativo.
 _PIPELINE = "8df2d21e-8417-4ac1-9610-bbadaf7f005d"
-# Teto de round-trips por invoke LEVE. Baseline medido 2026-07-04 ≈ 246-296
-# (amplificação de queries — engine re-consulta topologia/agents e o
-# _order_col introspeciona information_schema por find_all). A Onda 2.3 do
-# plano de tuning derruba isso p/ ~15; ao implementar, APERTAR este teto.
-_ROUNDTRIP_CEILING = 360
+# Teto de round-trips por invoke LEVE.
+# - Baseline (v25.1.x) ≈ 246-296 (amplificação: engine re-consultava
+#   topologia/agents e o _order_col introspecionava information_schema).
+# - PR-1 (v25.2.0, cache de topologia/schema) derrubou p/ ~155-195.
+# Teto abaixo do baseline (prova o ganho travado) com margem p/ ruído do
+# xact_commit sob tráfego concorrente. Follow-up (reuso de conexão por
+# request) aperta mais.
+_ROUNDTRIP_CEILING = 230
 
 
 def _xact_commit() -> int:
