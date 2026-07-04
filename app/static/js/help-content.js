@@ -826,13 +826,15 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           <p>Cada interação no Workspace, quando <code>VERIFIER_V2_ENABLED=true</code>, gera uma linha em <code>verifications</code> com 4 dimensões (factuality, completeness, tone_adherence, safety) + reasoning do juiz + claims sem suporte.</p>
           <p>Antes do juiz LLM, um <strong>ContractValidator determinístico</strong> roda — sem custo de tokens — para validar JSON Schema declarado no <code>output_contract</code> da skill. Falha aqui evita gastar com o juiz.</p>
           <p>Métricas agregadas (janela 24h/7d/30d/all) ajudam a detectar drift: se factuality caiu de 4.5 para 3.2 nos últimos 7d, algo mudou (skill, modelo, base de evidência).</p>
+          <p><strong>Desde a v25.0.0</strong>: cada julgamento carrega o DONO (agente e pipeline) e o par pergunta/resposta que o juiz viu (com PII redigida). A página ganhou painéis "Desempenho por agente/pipeline" (clique para filtrar), o explorador de afirmações sem respaldo, filtros por dono, export CSV/JSONL para compliance e o botão <strong>Re-julgar</strong> (root/admin) — re-submete uma resposta antiga ao juiz ATUAL do Roteamento LLM, materializando o A/B de juízes. Steps de pipeline com profile <code>rigorous</code> também são julgados individualmente.</p>
         `
       },
       {
         kind: 'casos_de_uso',
         title: 'Casos de uso',
         items: [
-          { title: 'Auditoria de incidente', body: 'Cliente reclamou de resposta errada. Você vai em /quality, busca pela interação, vê a nota — factuality 1/5 com unsupported_claims preenchido. Aí você corrige a skill ou a base de evidência.' },
+          { title: 'Auditoria de incidente', body: 'Cliente reclamou de resposta errada. Você vai em /quality, busca pela interação, vê a nota — factuality 1/5 com unsupported_claims preenchido — e agora também a pergunta e a resposta julgada, lado a lado. Aí você corrige a skill ou a base de evidência.' },
+          { title: 'Qual agente está pior?', body: 'O painel "Desempenho por agente" ordena por volume e mostra médias F/C/T + ⚑alucinações de cada um na janela. Clique num agente para ver só os julgamentos dele.' },
           { title: 'Detecção de drift', body: 'Acompanhe a métrica agregada semanal. Queda súbita em uma dimensão = algo mudou. Pode ser troca de modelo, atualização de skill, ou mudança em RAG.' },
           { title: 'A/B de juízes', body: 'Quer testar se um juiz menor (mais barato) dá resultados parecidos? Troque o modelo no card "LLM como Juiz" em Configurações → Roteamento LLM e compare métricas entre janelas (a distribuição por judge_model desta página mostra os dois lado a lado).' }
         ]
