@@ -273,9 +273,8 @@ GET /api/v1/knowledge-sources/$SRC/chunks</pre>`
   <li><b>Quality gate em produção</b> — score por dimensão alimenta o sistema de drift. Se factuality cai semana a semana, alguma coisa mudou (skill, modelo, base de evidência).</li>
   <li><b>Sinal estruturado para Harness</b> — promoção de release pode exigir não só "passou nos casos" mas "passou nos casos com factuality ≥ 4".</li>
 </ul>`,
-    ativar: `<p>Toggle: <code>VERIFIER_V2_ENABLED=true</code> no <code>.env</code>.</p>
-<p class="mt-2">O <b>modelo do juiz</b> é definido no card "LLM como Juiz" em <b>Configurações → Roteamento LLM</b> (papel <code>judge</code>). A env <code>VERIFIER_JUDGE_MODEL</code> continua valendo como default quando nenhuma rota foi salva na UI.</p>
-<p class="mt-2">Configuração completa (.env):</p>
+    ativar: `<p>Toggle e thresholds ficam em <b>Configurações → Parâmetros</b> (root/admin) — efeito em runtime, sem restart. O <b>modelo do juiz</b> é o card "LLM como Juiz" em <b>Configurações → Roteamento LLM</b> (papel <code>judge</code>).</p>
+<p class="mt-2">As mesmas chaves seguem aceitando <code>.env</code> como fallback (quando não salvas na UI):</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">VERIFIER_V2_ENABLED=true
 VERIFIER_JUDGE_MODEL=azure/gpt-4o  # default; a UI (Roteamento LLM) tem precedência
 VERIFIER_FACTUALITY_THRESHOLD=3.0

@@ -224,3 +224,28 @@ async def require_user_optional(request: Request) -> Optional[dict]:
         return await require_user(request)
     except HTTPException:
         return None
+
+
+def require_role(*roles: str):
+    """Dependency factory: autenticado E com role permitida (403 senão).
+
+    Primeiro gate por ROLE reusável da plataforma (25.1.0) — antes cada rota
+    fazia check inline (logs_admin, users, llm-routing). Uso:
+
+        @router.put("/algo")
+        async def handler(user: dict = Depends(require_role("root", "admin"))):
+            ...
+    """
+    allowed = {r.strip().lower() for r in roles if r}
+
+    async def _dep(request: Request) -> dict:
+        user = await require_user(request)
+        if (user.get("role") or "").lower() not in allowed:
+            raise HTTPException(
+                403,
+                "Permissão insuficiente — requer papel "
+                + " ou ".join(sorted(allowed)) + ".",
+            )
+        return user
+
+    return _dep
