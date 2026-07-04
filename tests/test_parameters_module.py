@@ -260,3 +260,10 @@ class TestParamsUi:
         src = Path("app/templates/layouts/base.html").read_text(encoding="utf-8")
         assert "_errDetail" in src
         assert "Array.isArray(d)" in src
+        # os 3 verbos com corpo de erro roteiam pelo _errDetail — o DELETE do
+        # "restaurar padrão" também surfacea 400/403 acionáveis (finding da
+        # revisão pós-fix: api.del tinha ficado de fora).
+        for verb in ("async post", "async put", "async del"):
+            i = src.index(verb)
+            line = src[i:src.index("\n", i)]
+            assert "_errDetail" in line, f"api.{verb.split()[1]} não usa _errDetail"
