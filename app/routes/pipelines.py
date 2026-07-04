@@ -688,6 +688,7 @@ async def invoke_pipeline(
             attachments=pipeline_attachments or None,
             allowed_agent_ids=members,  # SELA a execução ao subgrafo do pipeline
             sealed_inputs=sealed_inputs or None,  # envelope param (out-of-band)
+            pipeline_id=pid,  # auditoria: dono do julgamento nas verifications
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -834,6 +835,7 @@ async def invoke_pipeline_stream(
                 allowed_agent_ids=members,  # SELA ao subgrafo do pipeline
                 sealed_inputs=sealed_inputs or None,  # envelope param (out-of-band)
                 progress_callback=_cb,
+                pipeline_id=pid,  # auditoria: dono do julgamento nas verifications
             )
             # Auditoria (paridade com o /invoke sync — este é o caminho da UI/Playground):
             # registra a invocação + arg_keys. Envolta em try/except: auditoria NUNCA

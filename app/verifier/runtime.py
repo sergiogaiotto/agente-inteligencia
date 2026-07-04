@@ -93,6 +93,11 @@ class Verifier:
         # antigo continua funcionando, apenas perde o ganho do retry).
         llm_provider_name: Optional[str] = None,
         llm_model: Optional[str] = None,
+        # Auditoria por agente/pipeline (24.10.0): dono do julgamento.
+        # Persistidos em verifications p/ o drill-down da página Qualidade
+        # (agregação por agente/pipeline sem JOIN frágil).
+        agent_id: Optional[str] = None,
+        pipeline_id: Optional[str] = None,
     ) -> VerificationResult:
         """Verifica um draft.
 
@@ -284,7 +289,11 @@ class Verifier:
             # ─── 4. Persistência ────────────────────────────────
             if persist:
                 try:
-                    await self._persist(result, turn_id, interaction_id, profile)
+                    await self._persist(
+                        result, turn_id, interaction_id, profile,
+                        agent_id=agent_id, pipeline_id=pipeline_id,
+                        user_question=user_question, draft=draft,
+                    )
                 except Exception as e:
                     logger.warning(f"verifier persist falhou: {e}")
 
@@ -431,9 +440,19 @@ class Verifier:
                 "turn_id": turn_id,
             })
 
-    async def _persist(self, result: VerificationResult, turn_id, interaction_id, profile: str):
-        """Insere em `verifications`. Best-effort — falha não derruba o pipeline."""
+    async def _persist(
+        self, result: VerificationResult, turn_id, interaction_id, profile: str,
+        agent_id: Optional[str] = None, pipeline_id: Optional[str] = None,
+        user_question: str = "", draft: str = "",
+    ):
+        """Insere em `verifications`. Best-effort — falha não derruba o pipeline.
+
+        Auditoria (24.10.0): grava também o dono (agent_id/pipeline_id), o par
+        pergunta/resposta JULGADO (DLP-redacted — o draft aqui é o que o juiz
+        viu, pós contract-retry) e o rastro do retry de contrato.
+        """
         from app.core.database import _get_pool
+        from app.core.dlp import redact_for_persist
         pool = _get_pool()
         rid = str(uuid.uuid4())
         d = result.dimensions or {}
@@ -441,26 +460,35 @@ class Verifier:
         def _g(name: str, key: str) -> Any:
             return (d.get(name) or {}).get(key)
 
+        q_red = redact_for_persist(user_question or "")[:4000] or None
+        draft_red = redact_for_persist(draft or "")[:8000] or None
+
         async with pool.acquire() as con:
             await con.execute(
                 """
                 INSERT INTO verifications
                   (id, turn_id, interaction_id,
+                   agent_id, pipeline_id, question_redacted, draft_redacted,
                    factuality_score, factuality_reason,
                    completeness_score, completeness_reason,
                    tone_score, tone_reason,
                    safety_score, safety_reason,
                    contract_compliant, contract_errors,
+                   contract_retried, contract_original_errors,
                    ok, confidence, unsupported_claims,
                    judge_model, profile, duration_ms)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                        $16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
                 """,
                 rid, turn_id, interaction_id,
+                agent_id, pipeline_id, q_red, draft_red,
                 _g("factuality", "score"), _g("factuality", "reason"),
                 _g("completeness", "score"), _g("completeness", "reason"),
                 _g("tone_adherence", "score"), _g("tone_adherence", "reason"),
                 _g("safety", "score"), _g("safety", "reason"),
                 result.contract_compliant, json.dumps(result.contract_errors)[:8000],
+                result.contract_retried,
+                json.dumps(result.contract_original_errors)[:8000],
                 result.ok, result.confidence, json.dumps(result.unsupported_claims)[:8000],
                 result.judge_model, profile, result.duration_ms,
             )
