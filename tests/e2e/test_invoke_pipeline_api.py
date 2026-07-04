@@ -66,11 +66,16 @@ def _create_connection(api, src: str, tgt: str) -> str | None:
     return _id_of(r.json())
 
 
-def _llm_chat_ready() -> bool:
+def _llm_chat_ready(api) -> bool:
     """True se o papel de chat usado pelos agentes (reasoning) responde — para
-    decidir se o caminho feliz roda ou pula (não testamos qualidade do LLM)."""
+    decidir se o caminho feliz roda ou pula (não testamos qualidade do LLM).
+
+    Usa o cliente AUTENTICADO: `/api/v1/llm/health` fica atrás do default-deny
+    de `/api/v1/*` (auditoria de segurança 2026-07); um GET sem cookie dá 401
+    e o guard retornava False SEMPRE — o caminho feliz pulava mesmo com o hub
+    de pé (falso-skip que escondia a cobertura do LLM real)."""
     try:
-        d = httpx.get(f"{BASE_URL}/api/v1/llm/health", timeout=20.0).json()
+        d = api.get("/api/v1/llm/health").json()
     except Exception:
         return False
     chat = d.get("chat") or {}
@@ -217,7 +222,7 @@ def test_invoke_happy_is_sealed_to_members(api, pipeline_env):
       aresta B→C; os steps completos ⊆ {A,B}.
     Não asserimos o TEXTO do LLM (flaky). Se o chat não estiver saudável, PULA.
     """
-    if not _llm_chat_ready():
+    if not _llm_chat_ready(api):
         pytest.skip("Papel de chat (reasoning) indisponível — caminho feliz não roda neste ambiente.")
 
     pid, a_id, b_id, c_id = (pipeline_env["pid"], pipeline_env["a"],
