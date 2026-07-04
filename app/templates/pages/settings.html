@@ -1372,6 +1372,11 @@ function settingsPage() {
                 {key:'harness_max_hallucination_rate', type:'number', min:0, max:1, step:0.01, label:'Máx. taxa de alucinação (0–1)', desc:'Fração de casos com afirmações sem respaldo.'},
                 {key:'harness_max_dim_regression_pct', type:'number', min:0, max:100, step:0.5, label:'Máx. regressão por dimensão (%)', desc:'Queda tolerada vs baseline em execuções de regressão.'},
               ]},
+            { title: '⚡ Performance do invoke',
+              hint: 'Otimizações do caminho de execução de pipeline. Efeito em runtime, sem restart.',
+              items: [
+                {key:'query_topology_cache_enabled', type:'bool', label:'Cache de topologia/schema', desc:'Evita re-consultar o mesmo dado imutável (schema, arestas do mesh, agentes) durante um invoke — colapsa centenas de idas ao banco. Seguro; desligue só como válvula de rollback.'},
+              ]},
         ],
         _paramMeta() {
             // Achata paramGroups → {key: {min,max,label,type}} p/ validação.

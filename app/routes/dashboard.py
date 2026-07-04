@@ -2685,6 +2685,8 @@ class SettingsSave(BaseModel):
     harness_min_contract_compliance: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     harness_max_hallucination_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     harness_max_dim_regression_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    # Tuning de performance do invoke (25.2.0)
+    query_topology_cache_enabled: Optional[bool] = None
 
 @router.get("/settings")
 async def get_settings(user: dict = Depends(require_role("root", "admin"))):

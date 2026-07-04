@@ -224,6 +224,13 @@ class Settings(BaseSettings):
     harness_max_hallucination_rate: float = 0.10
     harness_max_dim_regression_pct: float = 5.0
 
+    # ── Tuning de performance do invoke (25.2.0) ──
+    # Cache de topologia/schema por processo/requisição: elimina a amplificação
+    # de queries do execute_pipeline (~250 round-trips → dezenas). Correção-
+    # neutro (só evita re-consultar dado imutável). Default ON; toggle na aba
+    # Parâmetros como válvula de rollback.
+    query_topology_cache_enabled: bool = True
+
     # ── Policy Engine (Onda 4a — OPA Policy as Code) ──
     # Quando True, decisões sensíveis (PolicyCheck, tool invocation) consultam o
     # OPA em opa_url e seguem a decisão. Auditoria via audit_log.
@@ -423,6 +430,8 @@ _UI_TO_ENV_MAP = {
     "harness_min_contract_compliance": "HARNESS_MIN_CONTRACT_COMPLIANCE",
     "harness_max_hallucination_rate": "HARNESS_MAX_HALLUCINATION_RATE",
     "harness_max_dim_regression_pct": "HARNESS_MAX_DIM_REGRESSION_PCT",
+    # Tuning de performance (25.2.0)
+    "query_topology_cache_enabled": "QUERY_TOPOLOGY_CACHE_ENABLED",
 }
 
 # Chaves do módulo Parâmetros — usadas pelo endpoint GET /settings/parameters
@@ -447,6 +456,7 @@ PARAMETER_UI_KEYS = (
     "harness_min_contract_compliance",
     "harness_max_hallucination_rate",
     "harness_max_dim_regression_pct",
+    "query_topology_cache_enabled",
 )
 
 

@@ -1287,6 +1287,7 @@ async def init_db():
     """
     global _pool
     settings = get_settings()
+    _ORDER_COL_CACHE.clear()  # 25.2.0: re-detecta a coluna de ordenação no boot
     async with _init_lock:
         if _pool is None:
             _pool = await asyncpg.create_pool(
@@ -1334,6 +1335,22 @@ async def close_db():
 # ═══════════════════════════════════════════════════════════════
 
 
+# Cache por PROCESSO da coluna de ORDER BY por tabela (25.2.0). O schema é
+# imutável em runtime, mas `_order_col` introspeciona information_schema em
+# TODO find_all (~32 queries/invoke de pipeline). Correção-neutro; gated pelo
+# toggle query_topology_cache_enabled (válvula de rollback). Limpo no init_db.
+_ORDER_COL_CACHE: dict[str, str] = {}
+
+
+def _topology_cache_on() -> bool:
+    """Toggle 'Cache de topologia/schema' (Parâmetros). Fail-safe: ON."""
+    try:
+        from app.core.config import get_settings
+        return bool(get_settings().query_topology_cache_enabled)
+    except Exception:
+        return True
+
+
 class Repository:
     """CRUD genérico para uma tabela em PostgreSQL via asyncpg."""
 
@@ -1341,16 +1358,23 @@ class Repository:
         self.table = table
 
     async def _order_col(self, con: asyncpg.Connection) -> str:
+        cache_on = _topology_cache_on()
+        if cache_on and self.table in _ORDER_COL_CACHE:
+            return _ORDER_COL_CACHE[self.table]
         rows = await con.fetch(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_schema = 'public' AND table_name = $1",
             self.table,
         )
         cols = {r["column_name"] for r in rows}
+        col = "id"
         for candidate in ("created_at", "started_at", "id"):
             if candidate in cols:
-                return candidate
-        return "id"
+                col = candidate
+                break
+        if cache_on:
+            _ORDER_COL_CACHE[self.table] = col
+        return col
 
     async def find_all(self, limit: int = 100, offset: int = 0, **filters) -> list[dict]:
         pool = _get_pool()
