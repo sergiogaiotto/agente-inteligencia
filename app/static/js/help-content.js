@@ -834,7 +834,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         items: [
           { title: 'Auditoria de incidente', body: 'Cliente reclamou de resposta errada. Você vai em /quality, busca pela interação, vê a nota — factuality 1/5 com unsupported_claims preenchido. Aí você corrige a skill ou a base de evidência.' },
           { title: 'Detecção de drift', body: 'Acompanhe a métrica agregada semanal. Queda súbita em uma dimensão = algo mudou. Pode ser troca de modelo, atualização de skill, ou mudança em RAG.' },
-          { title: 'A/B de juízes', body: 'Quer testar se um juiz menor (mais barato) dá resultados parecidos? Configure VERIFIER_JUDGE_MODEL e compare métricas entre janelas.' }
+          { title: 'A/B de juízes', body: 'Quer testar se um juiz menor (mais barato) dá resultados parecidos? Troque o modelo no card "LLM como Juiz" em Configurações → Roteamento LLM e compare métricas entre janelas (a distribuição por judge_model desta página mostra os dois lado a lado).' }
         ]
       },
       {

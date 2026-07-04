@@ -274,9 +274,10 @@ GET /api/v1/knowledge-sources/$SRC/chunks</pre>`
   <li><b>Sinal estruturado para Harness</b> — promoção de release pode exigir não só "passou nos casos" mas "passou nos casos com factuality ≥ 4".</li>
 </ul>`,
     ativar: `<p>Toggle: <code>VERIFIER_V2_ENABLED=true</code> no <code>.env</code>.</p>
-<p class="mt-2">Configuração completa:</p>
+<p class="mt-2">O <b>modelo do juiz</b> é definido no card "LLM como Juiz" em <b>Configurações → Roteamento LLM</b> (papel <code>judge</code>). A env <code>VERIFIER_JUDGE_MODEL</code> continua valendo como default quando nenhuma rota foi salva na UI.</p>
+<p class="mt-2">Configuração completa (.env):</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">VERIFIER_V2_ENABLED=true
-VERIFIER_JUDGE_MODEL=azure/gpt-4o
+VERIFIER_JUDGE_MODEL=azure/gpt-4o  # default; a UI (Roteamento LLM) tem precedência
 VERIFIER_FACTUALITY_THRESHOLD=3.0
 VERIFIER_COMPLETENESS_THRESHOLD=3.0
 VERIFIER_TONE_THRESHOLD=3.0</pre>

@@ -8,8 +8,14 @@
         {% if user_role == 'root' %}
         <button @click="tab='platform'" data-testid="settings-tab-platform" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='platform' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Plataforma</button>
-        <button @click="tab='routing'; loadRouting()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
+        {% endif %}
+        {# Roteamento LLM: root E admin — o Admin precisa poder definir o
+           "LLM como Juiz" (e demais papéis) sem depender do root. #}
+        {% if user_role in ['root', 'admin'] %}
+        <button @click="tab='routing'; loadRouting()" data-testid="settings-tab-routing" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='routing' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Roteamento LLM</button>
+        {% endif %}
+        {% if user_role == 'root' %}
         <button @click="tab='prompts'; loadPrompts()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='prompts' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">System Prompts</button>
         {% endif %}
@@ -70,6 +76,38 @@
                     </select>
                 </div>
             </template>
+
+            <!-- LLM como Juiz (Verifier §14.2 / MultiDimJudge) -->
+            <div class="rounded-xl border-2 border-amber-200 bg-amber-50/30 p-4">
+                <div class="flex items-start justify-between gap-3 mb-2">
+                    <div class="flex-1 min-w-0">
+                        <h4 class="text-[13px] font-bold text-amber-900">⚖️ LLM como Juiz</h4>
+                        <p class="text-[11px] text-amber-800 leading-relaxed mt-0.5" x-text="routingDescriptions.judge || ''"></p>
+                    </div>
+                    <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-mono font-bold text-amber-800 shrink-0">judge</span>
+                </div>
+                <select x-model="routingForm.judge" @change="routingDirty = true" data-testid="routing-judge-select"
+                        class="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-amber-400">
+                    <!-- Valor herdado do ambiente fora do catálogo: mantém
+                         selecionado e rotulado em vez de um select vazio. -->
+                    <template x-if="judgeUnlistedOption">
+                        <option :value="judgeUnlistedOption" x-text="'Atual (ambiente): ' + judgeUnlistedOption"></option>
+                    </template>
+                    <template x-for="opt in routingOptions" :key="opt.value">
+                        <option :value="opt.value" x-text="opt.label + (opt.multimodal ? ' 🖼' : '')"></option>
+                    </template>
+                </select>
+                <p class="text-[10px] text-amber-800 mt-1.5">
+                    <strong>Recomendado:</strong> use um provedor/modelo <strong>diferente</strong> do que gera as
+                    respostas dos agentes — um juiz da mesma família tende à autopreferência (notas infladas).
+                </p>
+                <!-- Aviso dinâmico de autopreferência: juiz == modelo de algum papel gerador -->
+                <p x-show="judgeSelfPreference" x-cloak data-testid="routing-judge-selfpref-warning"
+                   class="mt-1.5 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[10px] font-medium text-amber-900">
+                    ⚠️ O juiz está no <strong>mesmo modelo</strong> usado para gerar respostas
+                    (papéis: <span x-text="judgeSelfPreference"></span>) — as notas podem sair infladas.
+                </p>
+            </div>
 
             <!-- Multimodal fallback -->
             <div class="rounded-xl border-2 border-red-200 bg-red-50/30 p-4">
@@ -1239,7 +1277,7 @@ function settingsPage() {
         },
 
         /* ── Roteamento LLM (Onda 7) ── */
-        routingForm: {tool_calling:'', reasoning:'', instruct:'', classification:'', skill_generation:'', multimodal_fallback:'', fallback_show_in_trace:true},
+        routingForm: {tool_calling:'', reasoning:'', instruct:'', classification:'', skill_generation:'', judge:'', multimodal_fallback:'', fallback_show_in_trace:true},
         routingDefaults: {},
         routingDescriptions: {},
         routingDirty: false, routingSaving: false, routingLastSaved: '',
@@ -1332,7 +1370,29 @@ function settingsPage() {
                 instruct: '📝 Instruct',
                 classification: '🏷 Classification',
                 skill_generation: '🪄 Skill Generation',
+                judge: '⚖️ LLM como Juiz',
             }[task] || task;
+        },
+
+        // Judge herdado do ambiente (VERIFIER_JUDGE_MODEL) pode apontar pra um
+        // modelo FORA do catálogo de routingOptions — sem esta opção extra o
+        // select renderizaria vazio e o operador "corrigiria" sem querer.
+        get judgeUnlistedOption() {
+            const j = (this.routingForm.judge || '').trim();
+            if (!j) return '';
+            return this.routingOptions.some(o => o.value === j) ? '' : j;
+        },
+
+        // Autopreferência: juiz apontando pro MESMO provider/model que algum
+        // papel GERADOR de respostas (tool_calling/reasoning/instruct/
+        // classification). Retorna os papéis coincidentes p/ o aviso do card.
+        get judgeSelfPreference() {
+            const j = (this.routingForm.judge || '').trim();
+            if (!j) return '';
+            return ['tool_calling', 'reasoning', 'instruct', 'classification']
+                .filter(r => (this.routingForm[r] || '').trim() === j)
+                .map(r => this.taskLabel(r).replace(/^[^ ]+ /, ''))
+                .join(', ');
         },
 
         async loadRouting() {
@@ -1344,6 +1404,7 @@ function settingsPage() {
                     instruct: r.routing?.instruct || '',
                     classification: r.routing?.classification || '',
                     skill_generation: r.routing?.skill_generation || '',
+                    judge: r.routing?.judge || '',
                     multimodal_fallback: r.routing?.multimodal_fallback || '',
                     // Default true (transparência) quando o backend não informa.
                     fallback_show_in_trace: r.fallback_show_in_trace !== false,
@@ -1369,6 +1430,7 @@ function settingsPage() {
                 instruct: this.routingDefaults.instruct || 'maritaca/sabia-4',
                 classification: this.routingDefaults.classification || 'maritaca/sabia-4',
                 skill_generation: this.routingDefaults.skill_generation || 'azure/gpt-4o',
+                judge: this.routingDefaults.judge || 'azure/gpt-4o',
                 multimodal_fallback: this.routingDefaults.multimodal_fallback || 'azure/gpt-4o',
                 // Padrão recomendado: mostrar a contingência (transparência).
                 fallback_show_in_trace: true,
@@ -1380,7 +1442,16 @@ function settingsPage() {
             if (!this.routingDirty) return;
             this.routingSaving = true;
             try {
-                await api.put('/api/v1/dashboard/llm-routing', this.routingForm);
+                // Envia SÓ o delta vs snapshot (o backend aceita subset).
+                // Sem isso, papéis HERDADOS de default/env (ex.: judge vindo
+                // de VERIFIER_JUDGE_MODEL, skill_generation do Modelo
+                // Primário) virariam rota explícita na tabela em qualquer
+                // save de outro papel — e a env pararia de valer em silêncio.
+                const snap = JSON.parse(this._routingSnapshot || '{}');
+                const delta = Object.fromEntries(
+                    Object.entries(this.routingForm).filter(([k, v]) => v !== snap[k])
+                );
+                await api.put('/api/v1/dashboard/llm-routing', delta);
                 this._routingSnapshot = JSON.stringify(this.routingForm);
                 this.routingDirty = false;
                 this.routingLastSaved = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});

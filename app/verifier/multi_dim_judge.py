@@ -3,8 +3,10 @@
 Avalia um draft em 4 dimensões: factuality, completeness, tone_adherence, safety.
 Output JSON estrito; parse robusto com fallback.
 
-Modelo configurável via VERIFIER_JUDGE_MODEL (default azure/gpt-4o).
-Anti-self-preference: trocar para outro provider quando disponível.
+Modelo configurável no card "LLM como Juiz" (Configurações → Roteamento LLM,
+papel `judge`); a env VERIFIER_JUDGE_MODEL vale como default quando nenhuma
+rota foi salva na UI (retrocompat; default azure/gpt-4o).
+Anti-self-preference: usar provider diferente do que gera as respostas.
 """
 from __future__ import annotations
 
@@ -114,13 +116,22 @@ class MultiDimJudge:
             guardrails=guardrails or "(nenhum guardrail explícito)",
         )
 
+        # Resolve provider+model via Roteamento LLM (papel "judge" — card
+        # "LLM como Juiz" em Configurações). Rota salva na UI vence; sem rota,
+        # load_routing honra a env legada VERIFIER_JUDGE_MODEL (retrocompat).
+        # Falha na leitura do roteamento (DB fora etc.) → cai direto na env.
+        try:
+            from app.llm_routing import resolve_llm_for_task
+            provider_name, model = await resolve_llm_for_task("judge")
+        except Exception:
+            provider_name, model = self._parse_model_id(settings.verifier_judge_model)
+        judge_model_id = f"{provider_name}/{model}"
+
         with _tracer.start_as_current_span("verifier.judge") as span:
-            span.set_attribute("judge.model_id", settings.verifier_judge_model)
+            span.set_attribute("judge.model_id", judge_model_id)
             span.set_attribute("judge.draft_length", len(draft or ""))
             span.set_attribute("judge.evidences_count", len(evidences))
 
-            # Resolve provider+model: VERIFIER_JUDGE_MODEL = "<provider>/<model>"
-            provider_name, model = self._parse_model_id(settings.verifier_judge_model)
             provider = get_provider(provider_name, model=model)
 
             resp = await provider.generate(
@@ -154,7 +165,7 @@ class MultiDimJudge:
             return {
                 "dimensions": dimensions,
                 "unsupported_claims": unsupported_claims[:20],
-                "model": resp.get("model", settings.verifier_judge_model),
+                "model": resp.get("model", judge_model_id),
             }
 
     @staticmethod
