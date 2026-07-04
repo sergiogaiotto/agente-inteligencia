@@ -66,6 +66,9 @@ def dispatch(
     profile: str,
     interaction_id: str,
     max_concurrent: int,
+    # Auditoria (24.10.0): dono do julgamento — vai pras colunas novas.
+    agent_id: str | None = None,
+    pipeline_id: str | None = None,
 ) -> bool:
     """Cria task em background para verificar o draft.
 
@@ -88,6 +91,7 @@ def dispatch(
                 output_contract=output_contract, guardrails=guardrails,
                 user_question=user_question, profile=profile,
                 interaction_id=interaction_id,
+                agent_id=agent_id, pipeline_id=pipeline_id,
             ),
             name=f"verifier_async_{(interaction_id or 'noid')[:8]}",
         )
@@ -111,6 +115,8 @@ async def _run_verification(
     user_question: str,
     profile: str,
     interaction_id: str,
+    agent_id: str | None = None,
+    pipeline_id: str | None = None,
 ) -> None:
     """Corpo da task. Falha aqui propaga para o callback contar como failed."""
     # Import lazy: evita ciclo verifier → dispatcher → verifier no boot.
@@ -125,6 +131,8 @@ async def _run_verification(
             profile=profile,
             interaction_id=interaction_id,
             persist=True,  # vai pra verifications table
+            agent_id=agent_id,
+            pipeline_id=pipeline_id,
         )
     except Exception as e:
         logger.warning(

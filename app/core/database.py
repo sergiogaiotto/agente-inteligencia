@@ -471,6 +471,15 @@ CREATE TABLE IF NOT EXISTS verifications (
     id TEXT PRIMARY KEY,
     turn_id TEXT,
     interaction_id TEXT,
+    -- Auditoria por agente/pipeline (24.10.0) — agregação sem JOIN frágil.
+    -- pipeline_id NULL fora de pipeline; interaction_id de step de pipeline
+    -- é re-apontado pro master na consolidação (filhas são deletadas).
+    agent_id TEXT,
+    pipeline_id TEXT,
+    -- Par pergunta/resposta JULGADO, DLP-redacted (auditoria profunda:
+    -- o draft aqui é o que o juiz viu — pós contract-retry, pré-formatação).
+    question_redacted TEXT,
+    draft_redacted TEXT,
     -- Dimensões (NULL se não avaliadas — ex: profile fast pula judge)
     factuality_score REAL,
     factuality_reason TEXT,
@@ -483,6 +492,8 @@ CREATE TABLE IF NOT EXISTS verifications (
     -- ContractValidator (determinístico, sem LLM)
     contract_compliant BOOLEAN,
     contract_errors TEXT DEFAULT '[]',
+    contract_retried BOOLEAN DEFAULT FALSE,
+    contract_original_errors TEXT DEFAULT '[]',
     -- Agregados
     ok BOOLEAN NOT NULL DEFAULT FALSE,
     confidence REAL,
@@ -496,6 +507,10 @@ CREATE TABLE IF NOT EXISTS verifications (
 CREATE INDEX IF NOT EXISTS idx_verifications_turn ON verifications (turn_id);
 CREATE INDEX IF NOT EXISTS idx_verifications_interaction ON verifications (interaction_id);
 CREATE INDEX IF NOT EXISTS idx_verifications_created_at ON verifications (created_at DESC);
+-- idx_verifications_agent/pipeline vivem SÓ em _IDEMPOTENT_MIGRATIONS: o
+-- SCHEMA roda ANTES das migrações e, em DB existente, as colunas agent_id/
+-- pipeline_id ainda não existem nesse momento (CREATE INDEX aqui = boot
+-- crash; incidente 2026-07-04 pego no smoke).
 
 -- ═══════════════════════════════════════════════════════════════
 -- Catálogo / Marketplace corporativo (Onda 1)
@@ -978,6 +993,17 @@ _IDEMPOTENT_MIGRATIONS = [
     # Acurácia bruta (não-ponderada): calculada e exibida no Comparar Execuções,
     # mas faltava a coluna → delta "Acurácia bruta" vinha sempre vazio.
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS accuracy_unweighted REAL",
+    # Auditoria por agente/pipeline (24.10.0): verifications ganha dono
+    # (agent_id/pipeline_id), o par pergunta/resposta julgado (DLP-redacted)
+    # e o rastro do contract-retry — fundação do drill-down em /quality.
+    "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS agent_id TEXT",
+    "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS pipeline_id TEXT",
+    "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS question_redacted TEXT",
+    "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS draft_redacted TEXT",
+    "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS contract_retried BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS contract_original_errors TEXT DEFAULT '[]'",
+    "CREATE INDEX IF NOT EXISTS idx_verifications_agent ON verifications (agent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_verifications_pipeline ON verifications (pipeline_id)",
     # Tabela `traces` foi criada no schema mas nunca escrita por ninguém — traces
     # vivem no Tempo via OTLP. Drop idempotente p/ remover de instâncias antigas
     # (sempre vazia, sem dependentes).

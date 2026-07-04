@@ -400,6 +400,43 @@ async def module_activity(limit: int = 20, offset: int = 0):
 
 
 # ─── Verifier — visualização da tabela `verifications` (§14.2) ──────
+@router.post("/dashboard/verifications/cleanup")
+async def cleanup_verifications_payload(
+    days: int = 90, user: dict = Depends(require_user)
+):
+    """Retenção do payload da Auditoria (24.10.0): NULLifica question_redacted/
+    draft_redacted de verificações mais antigas que `days` dias. Preserva as
+    LINHAS (scores/dimensões continuam alimentando drift, harness e /quality);
+    remove só o texto (~12KB/linha no pior caso) — controle de crescimento.
+    Root/admin apenas.
+    """
+    if (user.get("role") or "").lower() not in ("root", "admin"):
+        raise HTTPException(403, "Apenas root/admin podem executar a limpeza.")
+    days = max(1, min(int(days or 90), 3650))
+    from app.core.database import _get_pool
+    async with _get_pool().acquire() as con:
+        status = await con.execute(
+            "UPDATE verifications SET question_redacted = NULL, draft_redacted = NULL "
+            "WHERE created_at < now() - ($1 || ' days')::interval "
+            "AND (question_redacted IS NOT NULL OR draft_redacted IS NOT NULL)",
+            str(days),
+        )
+    rows = 0
+    try:
+        rows = int((status or "").split()[-1])
+    except Exception:
+        pass
+    logger.info(
+        "verifications.payload_cleanup",
+        extra={
+            "event": "verifications.payload_cleanup",
+            "days": days,
+            "rows_cleaned": rows,
+        },
+    )
+    return {"status": "ok", "days": days, "rows_cleaned": rows}
+
+
 @router.get("/dashboard/verifications/stats")
 async def verifications_stats(window: str = "24h"):
     """Agregados para os cards do topo da página /quality.

@@ -1095,7 +1095,10 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
         # missing que viram "undefinedms" no frontend de sessão antiga.
         iid = result.get("interaction_id")
         if iid:
-            trace_persist = {k: result.get(k) for k in ["interaction_id","agent_id","final_state","evidence_score","transitions","duration_ms","trace","pipeline_steps","mode"]}
+            # "verification" incluída (24.10.0): o painel Verifier do Workspace
+            # agora RESTAURA a auditoria ao recarregar a sessão (antes ela só
+            # existia no response vivo do /chat e sumia no reload).
+            trace_persist = {k: result.get(k) for k in ["interaction_id","agent_id","final_state","evidence_score","transitions","duration_ms","trace","pipeline_steps","mode","verification"]}
             # Defaults pra campos que o frontend espera sempre presentes
             trace_persist.setdefault("interaction_id", iid)
             trace_persist.setdefault("agent_id", data.agent_id)

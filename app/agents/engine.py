@@ -1686,6 +1686,26 @@ async def _run_declarative_as_interaction(
     }
 
 
+def _verify_autopass(
+    pipeline_context, skip_evidence, exec_profile: str, v2_enabled: bool
+) -> bool:
+    """True → fase VerifyEvidence auto-passa SEM rodar verifier.
+
+    Steps de pipeline (pipeline_context truthy) pulam o verifier — EXCETO no
+    profile `rigorous` COM Verifier v2 LIGADO (decisão 2026-07-04: auditoria
+    por step só onde o operador pediu rigor; cada julgamento custa +1 chamada
+    LLM por step). Com v2 OFF o step de pipeline auto-passa como sempre —
+    sem isso, o step rigorous cairia nos ramos LEGACY (judge sem persistência
+    + risco de Refuse no meio do pipeline) pagando custo SEM gerar auditoria.
+    `skip_evidence` (require_evidence off / profile fast) sempre auto-passa.
+    """
+    if skip_evidence:
+        return True
+    if not pipeline_context:
+        return False
+    return exec_profile != "rigorous" or not v2_enabled
+
+
 async def execute_interaction(
     agent_id: str,
     user_input: str,
@@ -1698,6 +1718,10 @@ async def execute_interaction(
     grounding_strict: Optional[bool] = None,
     retrieval_query: Optional[str] = None,
     sealed_inputs: dict | None = None,
+    # Auditoria (24.10.0): id do pipeline dono desta execução — vai pras
+    # verifications (agregação por pipeline na página Qualidade). None fora
+    # de pipeline.
+    pipeline_id: str | None = None,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
 
@@ -2428,9 +2452,24 @@ async def execute_interaction(
             },
         )
         await fsm.run_verify_evidence({"ok": False, "confidence": 0.0})
-    elif pipeline_context or skip_evidence:
+    elif _verify_autopass(
+        pipeline_context, skip_evidence, exec_profile,
+        _pg_settings.verifier_v2_enabled,
+    ):
+        # Steps de pipeline auto-passam SEM verifier — EXCETO rigorous com
+        # v2 ON (decisão 2026-07-04: auditoria por step só onde o operador
+        # pediu rigor; cada julgamento custa +1 chamada LLM por step).
         await fsm.run_verify_evidence({"ok": True, "confidence": 1.0})
-    elif _pg_settings.verifier_v2_enabled and _pg_settings.verifier_production_async:
+    elif (
+        _pg_settings.verifier_v2_enabled
+        and _pg_settings.verifier_production_async
+        and not pipeline_context
+    ):
+        # `not pipeline_context`: step rigorous de pipeline NÃO entra no
+        # sampling async — o judge async persistiria DEPOIS da consolidação
+        # (que re-aponta e deleta as interactions filhas) → linha órfã, e o
+        # snapshot no pipeline_steps ficaria vazio. Step rigorous cai no ramo
+        # SÍNCRONO abaixo, que persiste antes da consolidação.
         # ─── Production sample async (§14.2) ──
         # Não bloqueia a resposta: amostra rate% das interações para judge
         # em background. Tasks pendentes drenadas no shutdown (lifespan).
@@ -2448,6 +2487,8 @@ async def execute_interaction(
                 profile=exec_profile,
                 interaction_id=ctx.interaction_id,
                 max_concurrent=_pg_settings.verifier_max_concurrent_jobs,
+                agent_id=agent_id,
+                pipeline_id=pipeline_id,
             )
         avg_score = (sum(e.relevance_score for e in evidences) / len(evidences)) if evidences else 0.5
         await fsm.run_verify_evidence({"ok": avg_score >= _min_relevance, "confidence": avg_score})
@@ -2471,6 +2512,9 @@ async def execute_interaction(
                 # marcar compliant=false. Sem isso, retry fica desabilitado.
                 llm_provider_name=agent.get("llm_provider"),
                 llm_model=agent.get("model"),
+                # Auditoria (24.10.0): dono do julgamento.
+                agent_id=agent_id,
+                pipeline_id=pipeline_id,
             )
             await fsm.run_verify_evidence({
                 "ok": verification.ok,
@@ -3178,6 +3222,9 @@ async def execute_pipeline(
     context_mode: str = "auto",
     allowed_agent_ids: set | None = None,
     sealed_inputs: dict | None = None,
+    # Auditoria (24.10.0): id do pipeline (tabela pipelines) — propagado a
+    # cada step p/ as verifications. None em execuções fora do invoke selado.
+    pipeline_id: str | None = None,
 ) -> dict:
     """Executa pipeline completo pelo AI Mesh.
 
@@ -3246,6 +3293,27 @@ async def execute_pipeline(
             f"Pipeline '{entry_pipeline.get('name')}' está aposentado — não é roteável. "
             f"Reative-o (aposentado→publicado) para voltar a executar."
         )
+
+    # Auditoria (24.10.0): sem pipeline_id explícito do caller (invoke selado
+    # passa o dele), reusa o resolvido pelo gate acima — atribuição
+    # best-effort via membership exclusiva do entry. Cobre workspace/agents/
+    # catálogo sem cada caller precisar plumbar o id.
+    #
+    # Quando o id foi INFERIDO, um run de mesh LIVRE (não-selado) pode
+    # percorrer agentes FORA do pipeline do entry — esses steps não podem
+    # ser atribuídos ao pipeline. Carrega o conjunto de membros UMA vez e
+    # filtra por step. Caller explícito (invoke selado) já vem com
+    # allowed_agent_ids restringindo a cadeia → sem filtro extra.
+    _pipeline_members: set | None = None
+    if pipeline_id is None:
+        pipeline_id = entry_pipeline_id
+        if pipeline_id:
+            try:
+                _pipeline_members = set(
+                    await pipeline_membership.agents_of(pipeline_id)
+                )
+            except Exception:
+                _pipeline_members = None
 
     chain, parent_of = await _resolve_ordered_chain_with_parents(entry_agent_id, allowed_agent_ids)
     if not chain:
@@ -3635,6 +3703,13 @@ async def execute_pipeline(
                 # Envelope param selado: vai a TODO passo declarativo da cadeia
                 # (entry e downstream), soberano sobre o bloco do roteador.
                 sealed_inputs=sealed_inputs,
+                # Auditoria (24.10.0): dono do julgamento nas verifications —
+                # em run não-selado, só steps MEMBROS do pipeline inferido.
+                pipeline_id=(
+                    pipeline_id
+                    if (_pipeline_members is None or agent_id in _pipeline_members)
+                    else None
+                ),
             )
             iid = result.get("interaction_id")
             # Primeiro agente executado (não pass-through) vira o master
@@ -3660,6 +3735,10 @@ async def execute_pipeline(
                 "evidence_score": result.get("evidence_score", 0),
                 "transitions": result.get("transitions", []),
                 "trace": result.get("trace"),
+                # Auditoria (24.10.0): snapshot do julgamento do step (steps
+                # rigorous têm verifier próprio agora) — as interactions filhas
+                # são deletadas na consolidação, este JSON é o rastro que fica.
+                "verification": result.get("verification"),
                 "interaction_id": iid,
                 "tokens_used": _step_tokens,
                 "cost_usd": _step_cost,
@@ -3731,6 +3810,20 @@ async def execute_pipeline(
                     child_turns = await turns_repo.find_all(interaction_id=cid, limit=100)
                     for ct in child_turns:
                         await turns_repo.delete(ct["id"])
+                    # Auditoria (24.10.0): re-aponta as verifications da filha
+                    # pro master ANTES do delete — senão o julgamento do step
+                    # (rigorous) vira linha órfã, invisível no deep-link do
+                    # /quality?interaction_id=master.
+                    try:
+                        from app.core.database import _get_pool
+                        async with _get_pool().acquire() as _con:
+                            await _con.execute(
+                                "UPDATE verifications SET interaction_id = $1 "
+                                "WHERE interaction_id = $2",
+                                master_interaction_id, cid,
+                            )
+                    except Exception:
+                        pass
                     await interactions_repo.delete(cid)
                 except Exception:
                     pass
