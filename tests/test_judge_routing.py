@@ -84,6 +84,41 @@ class TestJudgeEnvRetrocompat:
         routing = asyncio.run(lr.load_routing())
         assert routing["judge"] == DEFAULT_ROUTING["judge"]
 
+    def test_default_hardcoded_honra_deployment_azure_customizado(self, monkeypatch):
+        """Finding da revisão 24.9.0: com o default intocado ("azure/gpt-4o")
+        e deployment Azure de nome customizado, o model explícito viraria
+        azure_deployment literal → 404 em todo julgamento. O default efetivo
+        deve seguir o deployment REAL configurado."""
+        async def fake_get_all():
+            return {}
+        monkeypatch.setattr("app.core.database.settings_store.get_all", fake_get_all)
+        monkeypatch.setattr(
+            "app.core.config.get_settings",
+            lambda: SimpleNamespace(
+                verifier_judge_model="azure/gpt-4o",
+                azure_openai_chat_deployment="meu-gpt4o",
+                primary_provider="", primary_model="",
+            ),
+        )
+        routing = asyncio.run(lr.load_routing())
+        assert routing["judge"] == "azure/meu-gpt4o"
+
+    def test_env_customizada_nao_e_tocada_pelo_deployment(self, monkeypatch):
+        # Operador que SETOU a env explicitamente (≠ default) manda nela.
+        async def fake_get_all():
+            return {}
+        monkeypatch.setattr("app.core.database.settings_store.get_all", fake_get_all)
+        monkeypatch.setattr(
+            "app.core.config.get_settings",
+            lambda: SimpleNamespace(
+                verifier_judge_model="azure/o3-mini",
+                azure_openai_chat_deployment="meu-gpt4o",
+                primary_provider="", primary_model="",
+            ),
+        )
+        routing = asyncio.run(lr.load_routing())
+        assert routing["judge"] == "azure/o3-mini"
+
     def test_resolve_llm_for_task_judge(self, monkeypatch):
         self._patch(monkeypatch, {"llm_routing.judge": "azure/o3-mini"}, "")
         provider, model = asyncio.run(lr.resolve_llm_for_task("judge"))
@@ -120,7 +155,9 @@ class TestMultiDimJudgeUsesRouting:
             captured["provider"] = name
             captured["model"] = kw.get("model")
             return _P()
-        monkeypatch.setattr(mdj, "get_provider", fake_get_provider)
+        # 24.9.0: o juiz gera via generate_with_hosted_fallback (core) — o
+        # factory a mockar vive em app.core.llm_providers.
+        monkeypatch.setattr("app.core.llm_providers.get_provider", fake_get_provider)
 
         out = await mdj.MultiDimJudge().evaluate("draft", [], user_question="q")
         assert captured["task"] == "judge"
@@ -151,11 +188,44 @@ class TestMultiDimJudgeUsesRouting:
             captured["provider"] = name
             captured["model"] = kw.get("model")
             return _P()
-        monkeypatch.setattr(mdj, "get_provider", fake_get_provider)
+        monkeypatch.setattr("app.core.llm_providers.get_provider", fake_get_provider)
 
         out = await mdj.MultiDimJudge().evaluate("draft", [])
         assert (captured["provider"], captured["model"]) == ("openai_public", "gpt-4.1")
         assert out["model"] == "openai_public/gpt-4.1"
+
+    @pytest.mark.asyncio
+    async def test_judge_inacessivel_cai_no_fallback_hospedado(self, monkeypatch):
+        """24.9.0: juiz roteado (ex.: gpt-oss fora da VPN) inacessível → a
+        cadeia do core re-tenta no multimodal_fallback; o judge_model reflete
+        quem REALMENTE julgou."""
+        import httpx
+        import app.verifier.multi_dim_judge as mdj
+
+        async def fake_resolve(task):
+            return ("gpt-oss-120b", "openai/gpt-oss-120b")
+        monkeypatch.setattr("app.llm_routing.resolve_llm_for_task", fake_resolve)
+
+        async def fake_load_routing():
+            return {"multimodal_fallback": "azure/gpt-4o"}
+        monkeypatch.setattr("app.llm_routing.load_routing", fake_load_routing)
+
+        class _Down:
+            async def generate(self, messages, **kw):
+                raise httpx.ConnectError("All connection attempts failed")
+
+        class _Ok:
+            async def generate(self, messages, **kw):
+                return {"content": _JUDGE_JSON}
+
+        monkeypatch.setattr(
+            "app.core.llm_providers.get_provider",
+            lambda name, **kw: _Down() if name == "gpt-oss-120b" else _Ok(),
+        )
+
+        out = await mdj.MultiDimJudge().evaluate("draft", [], user_question="q")
+        assert out["model"] == "azure/gpt-4o"
+        assert out["dimensions"]["completeness"]["score"] == 5
 
 
 # ─── Endpoint + UI ──────────────────────────────────────────────────

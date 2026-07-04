@@ -185,11 +185,22 @@ def _apply_judge_env_default(out: dict[str, str], explicit: set[str]) -> None:
         return
     try:
         from app.core.config import get_settings
-        vj = (get_settings().verifier_judge_model or "").strip()
+        s = get_settings()
+        vj = (s.verifier_judge_model or "").strip()
     except Exception:
         return
-    if vj and "/" in vj:
-        out["judge"] = vj
+    if not vj or "/" not in vj:
+        return
+    if vj == "azure/gpt-4o":
+        # Default hardcoded intocado pelo operador: honra o DEPLOYMENT Azure
+        # real configurado — model explícito vira azure_deployment literal, e
+        # instalações com deployment de nome customizado (ex. "meu-gpt4o")
+        # dariam 404 DeploymentNotFound em todo julgamento (regressão vs o
+        # get_provider("openai") sem model, que usava o deployment da config).
+        dep = (getattr(s, "azure_openai_chat_deployment", "") or "").strip()
+        if dep and dep != "gpt-4o":
+            vj = f"azure/{dep}"
+    out["judge"] = vj
 
 
 async def save_routing(updates: dict[str, str]) -> dict[str, str]:
