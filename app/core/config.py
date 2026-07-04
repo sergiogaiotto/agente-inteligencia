@@ -397,7 +397,57 @@ _UI_TO_ENV_MAP = {
     # NOTA: openai_key/openai_model não mapeiam — provider 'openai' virou
     # alias de Azure na Onda 7 Wave 5. Mantidos no settings_store apenas
     # pra retrocompat de UI (card OpenAI continua mostrando os campos).
+    #
+    # ── Módulo Parâmetros (25.1.0): Verifier/juiz + gates do Harness ──
+    # Editáveis em Configurações → Parâmetros (root/admin). Efeito em runtime
+    # SEM restart: o verifier relê get_settings() a cada julgamento e o PUT
+    # /settings chama apply_settings_to_env + cache_clear (padrão F6 do MCP
+    # per-tool). O modelo do juiz NÃO está aqui — é o papel `judge` do
+    # Roteamento LLM (card "LLM como Juiz").
+    "verifier_v2_enabled": "VERIFIER_V2_ENABLED",
+    "verifier_factuality_threshold": "VERIFIER_FACTUALITY_THRESHOLD",
+    "verifier_completeness_threshold": "VERIFIER_COMPLETENESS_THRESHOLD",
+    "verifier_tone_threshold": "VERIFIER_TONE_THRESHOLD",
+    "verifier_max_tokens": "VERIFIER_MAX_TOKENS",
+    "verifier_contract_retry_enabled": "VERIFIER_CONTRACT_RETRY_ENABLED",
+    "verifier_contract_retry_max_tokens": "VERIFIER_CONTRACT_RETRY_MAX_TOKENS",
+    "verifier_production_async": "VERIFIER_PRODUCTION_ASYNC",
+    "verifier_production_sample_rate": "VERIFIER_PRODUCTION_SAMPLE_RATE",
+    "verifier_max_concurrent_jobs": "VERIFIER_MAX_CONCURRENT_JOBS",
+    "harness_use_verifier": "HARNESS_USE_VERIFIER",
+    "harness_min_accuracy": "HARNESS_MIN_ACCURACY",
+    "harness_min_avg_factuality": "HARNESS_MIN_AVG_FACTUALITY",
+    "harness_min_avg_completeness": "HARNESS_MIN_AVG_COMPLETENESS",
+    "harness_min_avg_tone": "HARNESS_MIN_AVG_TONE",
+    "harness_max_safety_violation_rate": "HARNESS_MAX_SAFETY_VIOLATION_RATE",
+    "harness_min_contract_compliance": "HARNESS_MIN_CONTRACT_COMPLIANCE",
+    "harness_max_hallucination_rate": "HARNESS_MAX_HALLUCINATION_RATE",
+    "harness_max_dim_regression_pct": "HARNESS_MAX_DIM_REGRESSION_PCT",
 }
+
+# Chaves do módulo Parâmetros — usadas pelo endpoint GET /settings/parameters
+# (valores efetivos p/ a aba) e pelos testes de contrato do mapa.
+PARAMETER_UI_KEYS = (
+    "verifier_v2_enabled",
+    "verifier_factuality_threshold",
+    "verifier_completeness_threshold",
+    "verifier_tone_threshold",
+    "verifier_max_tokens",
+    "verifier_contract_retry_enabled",
+    "verifier_contract_retry_max_tokens",
+    "verifier_production_async",
+    "verifier_production_sample_rate",
+    "verifier_max_concurrent_jobs",
+    "harness_use_verifier",
+    "harness_min_accuracy",
+    "harness_min_avg_factuality",
+    "harness_min_avg_completeness",
+    "harness_min_avg_tone",
+    "harness_max_safety_violation_rate",
+    "harness_min_contract_compliance",
+    "harness_max_hallucination_rate",
+    "harness_max_dim_regression_pct",
+)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -416,6 +466,11 @@ _NON_MODEL_UI_KEYS = {
     "mcp_per_tool_enabled",      # flag do modo per-tool MCP (default OFF)
     "text_to_sql_enabled",       # flag do Tier 2 text-to-SQL governado (default OFF)
     "timezone",                  # timezone da plataforma (IANA); default Brasília
+    # Módulo Parâmetros (25.1.0): thresholds/flags do Verifier e harness NÃO
+    # são credencial/seleção de modelo — o .env continua valendo como
+    # fallback quando o banco não tem valor (retrocompat de instalações que
+    # já configuravam por env).
+    *PARAMETER_UI_KEYS,
 }
 
 # Cobre: Azure, OpenAI público, Maritaca, Ollama, GPT-OSS 120b/20b, embedding

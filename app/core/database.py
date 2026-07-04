@@ -1518,6 +1518,19 @@ class SettingsStore:
                 value,
             )
 
+    async def delete(self, key: str) -> bool:
+        """Remove uma chave (volta a herdar do .env/default). Retorna True se
+        havia linha. Usado pelo "restaurar padrão" do módulo Parâmetros."""
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            status = await con.execute(
+                "DELETE FROM platform_settings WHERE key=$1", key
+            )
+        try:
+            return int(status.split()[-1]) > 0  # "DELETE N"
+        except Exception:
+            return False
+
     async def set_many(self, data: dict):
         pool = _get_pool()
         async with pool.acquire() as con:

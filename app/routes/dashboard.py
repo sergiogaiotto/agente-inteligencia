@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.models.schemas import ReleaseCreate, GoldCaseCreate, KnowledgeSourceCreate, ToolCreate, ToolUpdate, RunEvalRequest
-from app.core.auth import require_user
+from app.core.auth import require_role, require_user
 from app.core.database import (
     releases_repo, gold_cases_repo, eval_runs_repo, knowledge_repo,
     tools_repo, agents_repo, skills_repo, interactions_repo,
@@ -2662,16 +2662,110 @@ class SettingsSave(BaseModel):
     # Densidade do vetor (Matryoshka). 0 = padrão do modelo. Mudar exige
     # re-embedar a collection do Qdrant.
     qwen3_dimensions: Optional[int] = 0
+    # ── Módulo Parâmetros (25.1.0): Verifier/juiz + gates do Harness ──
+    # Defaults None (exclude_unset): a aba envia SÓ o delta — valores herdados
+    # do .env/classe não viram linha no banco por acidente (lição do save por
+    # delta do Roteamento LLM, 24.8.0). Ranges validados aqui → 422 nomeado.
+    verifier_v2_enabled: Optional[bool] = None
+    verifier_factuality_threshold: Optional[float] = Field(default=None, ge=0, le=5)
+    verifier_completeness_threshold: Optional[float] = Field(default=None, ge=0, le=5)
+    verifier_tone_threshold: Optional[float] = Field(default=None, ge=0, le=5)
+    verifier_max_tokens: Optional[int] = Field(default=None, ge=100, le=8000)
+    verifier_contract_retry_enabled: Optional[bool] = None
+    verifier_contract_retry_max_tokens: Optional[int] = Field(default=None, ge=200, le=16000)
+    verifier_production_async: Optional[bool] = None
+    verifier_production_sample_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    verifier_max_concurrent_jobs: Optional[int] = Field(default=None, ge=1, le=200)
+    harness_use_verifier: Optional[bool] = None
+    harness_min_accuracy: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    harness_min_avg_factuality: Optional[float] = Field(default=None, ge=0, le=5)
+    harness_min_avg_completeness: Optional[float] = Field(default=None, ge=0, le=5)
+    harness_min_avg_tone: Optional[float] = Field(default=None, ge=0, le=5)
+    harness_max_safety_violation_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    harness_min_contract_compliance: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    harness_max_hallucination_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    harness_max_dim_regression_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
 
 @router.get("/settings")
-async def get_settings():
-    """Carrega configurações salvas."""
+async def get_settings(user: dict = Depends(require_role("root", "admin"))):
+    """Carrega configurações salvas.
+
+    Gate por ROLE (25.1.0): o store inclui credenciais (chaves de API,
+    endpoints) — só root/admin lê. Consumidores toleram 403 (settings.html é
+    root/admin de fato; observability cai no fallback do langfuse_host).
+    """
     data = await settings_store.get_all()
     return {"settings": data}
 
+
+@router.get("/settings/parameters")
+async def get_parameter_settings(
+    user: dict = Depends(require_role("root", "admin")),
+):
+    """Módulo Parâmetros (25.1.0): valores EFETIVOS (banco → env → default da
+    classe) dos parâmetros curados do Verifier/harness + a FONTE de cada um.
+
+    A aba Parâmetros carrega daqui (não do GET /settings, que só devolve o
+    banco — parâmetro nunca salvo apareceria vazio em vez do default real) e
+    salva via PUT /settings enviando SÓ o delta.
+    """
+    from app.core.config import PARAMETER_UI_KEYS, get_settings as _gs
+    s = _gs()
+    store = await settings_store.get_all()
+    params = []
+    for k in PARAMETER_UI_KEYS:
+        in_db = k in store and store.get(k) not in ("", None)
+        params.append({
+            "key": k,
+            "value": getattr(s, k, None),
+            "source": "banco" if in_db else "ambiente/padrão",
+        })
+    return {"parameters": params}
+
+
+@router.delete("/settings/parameters/{key}")
+async def reset_parameter_setting(
+    key: str, user: dict = Depends(require_role("root", "admin")),
+):
+    """"Restaurar padrão" do módulo Parâmetros (25.1.0): remove a chave do
+    banco para a plataforma voltar a herdar o `.env`/default do código.
+
+    Allowlist a PARAMETER_UI_KEYS — este endpoint NÃO desfaz credenciais nem
+    seleção de modelo (essas são seladas e vivem só na UI de propósito). Além
+    do DELETE no banco, remove a env var de os.environ (o apply_settings_to_env
+    só remove chaves SELADAS; as de parâmetro são não-seladas) e limpa o cache.
+    """
+    from app.core.config import (
+        PARAMETER_UI_KEYS, _UI_TO_ENV_MAP, apply_settings_to_env,
+    )
+    if key not in PARAMETER_UI_KEYS:
+        raise HTTPException(400, f"Parâmetro '{key}' não é redefinível por aqui.")
+    existed = await settings_store.delete(key)
+    # Remove o resíduo do os.environ (senão a chave DB apagada seguiria valendo
+    # até o próximo restart, pois é não-selada e apply não a poparia).
+    import os
+    os.environ.pop(_UI_TO_ENV_MAP[key], None)
+    try:
+        await apply_settings_to_env()  # cache_clear + reseala o resto
+    except Exception:
+        pass
+    await audit_repo.create({
+        "entity_type": "settings", "entity_id": "platform",
+        "action": "parameter_reset",
+        "details": json.dumps({"key": key, "existed": existed}),
+    })
+    return {"status": "ok", "key": key, "existed": existed}
+
 @router.put("/settings")
-async def save_settings(data: SettingsSave):
+async def save_settings(
+    data: SettingsSave,
+    user: dict = Depends(require_role("root", "admin")),
+):
     """Salva configurações na plataforma + aplica em runtime.
+
+    Gate por ROLE real (25.1.0): antes QUALQUER autenticado (inclusive role
+    comum ou X-API-Key) podia sobrescrever credenciais/config da plataforma —
+    o sumiço das abas no template era só cosmético. Agora root/admin.
 
     Após persistir em settings_store (Postgres), chama apply_settings_to_env()
     pra popular os.environ com os valores novos e invalidar o cache do

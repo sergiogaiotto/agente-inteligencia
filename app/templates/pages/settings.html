@@ -14,6 +14,8 @@
         {% if user_role in ['root', 'admin'] %}
         <button @click="tab='routing'; loadRouting()" data-testid="settings-tab-routing" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='routing' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Roteamento LLM</button>
+        <button @click="tab='params'; loadParams()" data-testid="settings-tab-params" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
+                :class="tab==='params' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Parâmetros</button>
         {% endif %}
         {% if user_role == 'root' %}
         <button @click="tab='prompts'; loadPrompts()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
@@ -25,6 +27,65 @@
         {% endif %}
         <button @click="tab='apikeys'; loadAPIKeys()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='apikeys' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">API Keys</button>
+    </div>
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB: PARÂMETROS (25.1.0)              -->
+    <!-- ══════════════════════════════════════ -->
+    <div x-show="tab==='params'" x-cloak class="max-w-3xl" data-testid="settings-params-tab">
+        <div class="rounded-xl border border-brand-100 bg-brand-50/30 p-4 mb-5">
+            <h3 class="text-[13px] font-semibold text-brand-900 mb-1">Parâmetros da plataforma</h3>
+            <p class="text-[11px] text-surface-500 leading-relaxed">
+                Thresholds do <strong>juiz</strong> (Verifier v2) e <strong>gates de release</strong> do Harness.
+                Mudanças valem em runtime, <strong>sem restart</strong>. Um valor herdado do
+                <em>ambiente/padrão</em> só vira registro no banco quando você o ALTERA e salva —
+                a partir daí o banco vence o <code>.env</code>. O <strong>modelo do juiz</strong> é
+                definido na aba Roteamento LLM (card "LLM como Juiz").
+            </p>
+        </div>
+
+        <div class="flex items-center justify-between mb-4">
+            <span class="text-[11px] text-surface-400" x-text="paramsDirty ? 'Alterações não salvas' : (paramsLastSaved ? 'Salvo em ' + paramsLastSaved : '')"></span>
+            <button @click="saveParams()" :disabled="paramsSaving || !paramsDirty"
+                    class="inline-flex items-center gap-2 rounded-lg px-5 py-2 text-[13px] font-semibold text-white transition-all"
+                    :class="paramsDirty ? 'bg-brand-500 hover:bg-brand-600 shadow-md' : 'bg-surface-300'">
+                <span x-text="paramsSaving ? 'Salvando...' : 'Salvar'"></span>
+            </button>
+        </div>
+
+        <template x-for="grp in paramGroups" :key="grp.title">
+            <div class="rounded-xl border border-surface-200 bg-white p-4 mb-3">
+                <h4 class="text-[13px] font-bold text-brand-900" x-text="grp.title"></h4>
+                <p class="text-[11px] text-surface-500 leading-relaxed mt-0.5 mb-2" x-text="grp.hint"></p>
+                <div class="divide-y divide-surface-50">
+                    <template x-for="p in grp.items" :key="p.key">
+                        <div class="flex items-center gap-3 py-2">
+                            <div class="flex-1 min-w-0">
+                                <div class="text-[12px] font-medium text-brand-900" x-text="p.label"></div>
+                                <div class="text-[10px] text-surface-400 leading-relaxed" x-text="p.desc"></div>
+                            </div>
+                            <span class="text-[9px] rounded-full px-1.5 py-0.5 shrink-0"
+                                  :class="paramSource[p.key] === 'banco' ? 'bg-brand-50 text-brand-700 font-semibold' : 'bg-surface-100 text-surface-400'"
+                                  :title="paramSource[p.key] === 'banco' ? 'Valor salvo na plataforma (vence o .env)' : 'Herdado do .env ou do padrão do código'"
+                                  x-text="paramSource[p.key] || ''"></span>
+                            <button x-show="paramSource[p.key] === 'banco'" @click="resetParam(p.key, p.label)"
+                                    type="button" data-testid="param-reset"
+                                    class="text-[10px] text-surface-400 hover:text-brand-600 shrink-0"
+                                    title="Restaurar ao padrão do ambiente (.env/código)">↺</button>
+                            <template x-if="p.type === 'bool'">
+                                <input type="checkbox" x-model="paramsForm[p.key]"
+                                       class="h-4 w-4 rounded border-surface-300 text-brand-600 focus:ring-brand-400 shrink-0">
+                            </template>
+                            <template x-if="p.type === 'number'">
+                                <input type="number" x-model.number="paramsForm[p.key]"
+                                       :min="p.min" :max="p.max" :step="p.step"
+                                       class="w-24 rounded border border-surface-200 px-2 py-1 text-[12px] text-right outline-none focus:border-brand-400 shrink-0">
+                            </template>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </template>
     </div>
 
     <!-- ══════════════════════════════════════ -->
@@ -1276,6 +1337,109 @@ function settingsPage() {
             return Math.floor(sec/86400) + 'd atrás';
         },
 
+        /* ── Módulo Parâmetros (25.1.0) ── */
+        paramsForm: {}, paramSource: {}, paramsDirty: false, paramsSaving: false,
+        paramsLastSaved: '', _paramsSnapshot: '{}',
+        paramGroups: [
+            { title: '⚖️ Juiz (Verifier v2)',
+              hint: 'Avalia cada resposta em 4 dimensões antes de aprovar. O modelo do juiz vem do Roteamento LLM (card "LLM como Juiz").',
+              items: [
+                {key:'verifier_v2_enabled', type:'bool', label:'Verifier v2 ligado', desc:'Juiz multi-dimensional + validador de contrato nas interações standard/rigorous. Desligado, a plataforma usa o verificador legado (binário).'},
+                {key:'verifier_factuality_threshold', type:'number', min:0, max:5, step:0.5, label:'Mínimo de factualidade (0–5)', desc:'Resposta com nota de suporte-em-evidências abaixo disso é reprovada.'},
+                {key:'verifier_completeness_threshold', type:'number', min:0, max:5, step:0.5, label:'Mínimo de completude (0–5)', desc:'Cobertura dos pontos pedidos na pergunta.'},
+                {key:'verifier_tone_threshold', type:'number', min:0, max:5, step:0.5, label:'Mínimo de tom (0–5)', desc:'Aderência ao tom e aos guardrails da skill.'},
+                {key:'verifier_max_tokens', type:'number', min:100, max:8000, step:100, label:'Tokens máx. do juiz', desc:'Cap da resposta do juiz (~800 cobre 4 dimensões + claims).'},
+                {key:'verifier_contract_retry_enabled', type:'bool', label:'Retry de contrato', desc:'Formato violado → re-chama o LLM 1× com instrução de correção (custo: 1 chamada extra na falha).'},
+                {key:'verifier_contract_retry_max_tokens', type:'number', min:200, max:16000, step:100, label:'Tokens máx. do retry', desc:'Maior que o do juiz — aqui o LLM regenera o texto inteiro.'},
+              ]},
+            { title: '🎲 Produção assíncrona (amostragem)',
+              hint: 'Julga só uma amostra das interações, em background — não bloqueia a resposta ao usuário. Bom para volume alto.',
+              items: [
+                {key:'verifier_production_async', type:'bool', label:'Modo assíncrono ligado', desc:'Requer Verifier v2 ligado. Steps rigorous de pipeline continuam síncronos (auditoria garantida).'},
+                {key:'verifier_production_sample_rate', type:'number', min:0, max:1, step:0.05, label:'Taxa de amostragem (0–1)', desc:'Fração das interações julgadas em background (0.10 = 10%).'},
+                {key:'verifier_max_concurrent_jobs', type:'number', min:1, max:200, step:1, label:'Julgamentos simultâneos (cap)', desc:'Acima disso, amostras são descartadas (backpressure).'},
+              ]},
+            { title: '🚦 Gates de release (Harness)',
+              hint: 'Critérios que uma avaliação precisa cumprir para a release ser aprovada (Avaliação → executar harness).',
+              items: [
+                {key:'harness_use_verifier', type:'bool', label:'Harness usa o juiz', desc:'Re-julga cada caso do Golden Dataset e combina accuracy com as dimensões abaixo.'},
+                {key:'harness_min_accuracy', type:'number', min:0, max:1, step:0.05, label:'Acurácia mínima (0–1)', desc:'Fração ponderada de casos que precisam passar.'},
+                {key:'harness_min_avg_factuality', type:'number', min:0, max:5, step:0.1, label:'Factualidade média mínima (0–5)', desc:''},
+                {key:'harness_min_avg_completeness', type:'number', min:0, max:5, step:0.1, label:'Completude média mínima (0–5)', desc:''},
+                {key:'harness_min_avg_tone', type:'number', min:0, max:5, step:0.1, label:'Tom médio mínimo (0–5)', desc:''},
+                {key:'harness_max_safety_violation_rate', type:'number', min:0, max:1, step:0.01, label:'Máx. violações de segurança (0–1)', desc:'Fração de casos com safety=0 tolerada.'},
+                {key:'harness_min_contract_compliance', type:'number', min:0, max:1, step:0.01, label:'Mín. conformidade de contrato (0–1)', desc:''},
+                {key:'harness_max_hallucination_rate', type:'number', min:0, max:1, step:0.01, label:'Máx. taxa de alucinação (0–1)', desc:'Fração de casos com afirmações sem respaldo.'},
+                {key:'harness_max_dim_regression_pct', type:'number', min:0, max:100, step:0.5, label:'Máx. regressão por dimensão (%)', desc:'Queda tolerada vs baseline em execuções de regressão.'},
+              ]},
+        ],
+        _paramMeta() {
+            // Achata paramGroups → {key: {min,max,label,type}} p/ validação.
+            const m = {};
+            for (const g of this.paramGroups) for (const p of g.items) m[p.key] = p;
+            return m;
+        },
+        async loadParams() {
+            try {
+                const r = await api.get('/api/v1/settings/parameters');
+                const form = {}, src = {};
+                for (const p of (r.parameters || [])) { form[p.key] = p.value; src[p.key] = p.source; }
+                this.paramsForm = form; this.paramSource = src;
+                this._paramsSnapshot = JSON.stringify(form);
+                this.paramsDirty = false;
+                // $watch UMA vez só (loadParams roda a cada clique de aba/save;
+                // sem guard, watchers acumulariam por sessão). O closure lê
+                // this.* na hora, então segue válido após reloads.
+                if (!this._paramsWatchInstalled) {
+                    this._paramsWatchInstalled = true;
+                    this.$watch('paramsForm', () => {
+                        this.paramsDirty = JSON.stringify(this.paramsForm) !== this._paramsSnapshot;
+                    }, {deep: true});
+                }
+            } catch(e) { showToast('Erro ao carregar parâmetros: ' + (e?.message || ''), 'error'); }
+        },
+        async saveParams() {
+            if (!this.paramsDirty) return;
+            // Valida faixa/campo-vazio ANTES do PUT — feedback imediato e claro
+            // (o 422 do servidor é a rede de segurança; aqui evita o round-trip).
+            const meta = this._paramMeta();
+            const snap = JSON.parse(this._paramsSnapshot || '{}');
+            for (const [k, v] of Object.entries(this.paramsForm)) {
+                if (v === snap[k]) continue;  // só valida o que mudou
+                const p = meta[k];
+                if (p && p.type === 'number') {
+                    if (v === '' || v === null || typeof v !== 'number' || isNaN(v)) {
+                        showToast(`"${p.label}" precisa de um número.`, 'error'); return;
+                    }
+                    if (v < p.min || v > p.max) {
+                        showToast(`"${p.label}" deve ficar entre ${p.min} e ${p.max}.`, 'error'); return;
+                    }
+                }
+            }
+            this.paramsSaving = true;
+            try {
+                // SÓ o delta vs snapshot: valores herdados do ambiente/padrão
+                // não viram registro no banco por acidente (o banco venceria o
+                // .env para sempre — mesma lição do save do Roteamento LLM).
+                const delta = Object.fromEntries(
+                    Object.entries(this.paramsForm).filter(([k, v]) => v !== snap[k])
+                );
+                await api.put('/api/v1/settings', delta);
+                this.paramsLastSaved = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+                showToast('Parâmetros salvos — já valem, sem restart');
+                await this.loadParams();
+            } catch(e) { showToast('Erro ao salvar: ' + (e?.message || ''), 'error'); }
+            this.paramsSaving = false;
+        },
+        async resetParam(key, label) {
+            if (!confirm(`Restaurar "${label}" ao padrão do ambiente? Remove o valor salvo na plataforma.`)) return;
+            try {
+                await api.del('/api/v1/settings/parameters/' + encodeURIComponent(key));
+                showToast('Voltou a herdar do ambiente — já vale, sem restart');
+                await this.loadParams();
+            } catch(e) { showToast('Erro ao restaurar: ' + (e?.message || ''), 'error'); }
+        },
+
         /* ── Roteamento LLM (Onda 7) ── */
         routingForm: {tool_calling:'', reasoning:'', instruct:'', classification:'', skill_generation:'', judge:'', multimodal_fallback:'', fallback_show_in_trace:true},
         routingDefaults: {},
@@ -1285,7 +1449,7 @@ function settingsPage() {
 
         async load() {
             const urlTab = new URLSearchParams(window.location.search).get('tab');
-            if (urlTab && ['platform','prompts','users','routing','apikeys'].includes(urlTab)) this.tab = urlTab;
+            if (urlTab && ['platform','prompts','users','routing','params','apikeys'].includes(urlTab)) this.tab = urlTab;
             try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship',multimodal:true}],maritaca:[{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship',multimodal:false}],ollama:[{id:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4Bi',context:'128K',tier:'efficient',multimodal:false}],'gpt-oss-120b':[{id:'openai/gpt-oss-120b',name:'GPT-OSS-120B (open-weight)',context:'128K',tier:'open-weight',multimodal:false}],'gpt-oss-20b':[{id:'openai/gpt-oss-20b',name:'GPT-OSS-20B (open-weight)',context:'128K',tier:'open-weight',multimodal:false}]};}
             try{const d=await api.get('/api/v1/settings');const s=d.settings||{};const _ints=['max_iterations','timeout','qwen3_dimensions'];const _bools=['grounding_strict','mcp_per_tool_enabled','text_to_sql_enabled'];for(const[k,v]of Object.entries(s)){if(!(k in this.config))continue;if(_ints.includes(k))this.config[k]=parseInt(v)||this.config[k];else if(_bools.includes(k))this.config[k]=(v===true||v==='true'||v==='True'||v==='1');else this.config[k]=v;}}catch{}
             // Sincroniza o dropdown de densidade com o valor persistido: se bate
@@ -1298,6 +1462,7 @@ function settingsPage() {
             if (this.tab === 'users') await this.loadUsers();
             if (this.tab === 'prompts') await this.loadPrompts();
             if (this.tab === 'routing') await this.loadRouting();
+            if (this.tab === 'params') await this.loadParams();
             if (this.tab === 'apikeys') await this.loadAPIKeys();
         },
 

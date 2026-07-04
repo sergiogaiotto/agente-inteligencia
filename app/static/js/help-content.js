@@ -1147,7 +1147,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         kind: 'concept',
         title: 'O que é',
         body: `
-          <p>Central de configurações da plataforma. Dividida em 5 abas: <strong>Plataforma</strong> (credenciais de providers + modelo primário + GPT-OSS + Qwen3 embedding), <strong>Roteamento LLM</strong> (mapa task_type → modelo), <strong>System Prompts</strong> (templates reutilizáveis), <strong>Usuários</strong> (gestão de contas, root), <strong>API Keys</strong> (chaves para acesso externo).</p>
+          <p>Central de configurações da plataforma. Dividida em 6 abas: <strong>Plataforma</strong> (credenciais de providers + modelo primário + GPT-OSS + Qwen3 embedding), <strong>Roteamento LLM</strong> (mapa task_type → modelo, inclui o card "LLM como Juiz"), <strong>Parâmetros</strong> (thresholds do juiz/Verifier + gates do Harness, root/admin), <strong>System Prompts</strong> (templates reutilizáveis), <strong>Usuários</strong> (gestão de contas, root), <strong>API Keys</strong> (chaves para acesso externo).</p>
           <p>Mudanças são aplicadas em runtime — sem restart. <code>apply_settings_to_env()</code> invalida caches e re-resolve.</p>
         `
       },
@@ -1173,7 +1173,8 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           { name: 'Plataforma > Azure OpenAI', body: 'API key, endpoint, api_version, deployments de chat e embeddings. Provider primário do projeto.', required: false },
           { name: 'Plataforma > Maritaca / Ollama / GPT-OSS', body: 'Outros providers OpenAI-compatible. Cada um com URL/key/model próprios. GPT-OSS suporta 2 sizes (20B/120B) com endpoints separados.' },
           { name: 'Plataforma > Embedding', body: 'Selector Azure | Qwen3. Qwen3 reusa o scheme://host do OSS-20B ou OSS-120B (só muda o path) e suporta densidade Matryoshka (128..1536). Há uma CADEIA DE RESILIÊNCIA: se o provider configurado não responde, a plataforma cai para o fallback (azure quando o primário não é azure; qwen3 caso contrário; ou o que você fixar em embedding_fallback_provider). O chip de Saúde dos Modelos no header fica âmbar quando esse fallback está ativo.' },
-          { name: 'Roteamento LLM', body: 'Mapa: tool_calling/reasoning/instruct/classification → provider/modelo. Define qual LLM cada "tipo de tarefa" usa. Configurar uma vez e todos os agents com task_type ficam alinhados.' },
+          { name: 'Roteamento LLM', body: 'Mapa: tool_calling/reasoning/instruct/classification/skill_generation → provider/modelo, mais o card "LLM como Juiz" (papel judge do Verifier) e o Multimodal Fallback. Define qual LLM cada "tipo de tarefa" usa. Configurar uma vez e todos os agents com task_type ficam alinhados.' },
+          { name: 'Parâmetros', body: 'Thresholds do juiz (Verifier v2) e gates de release do Harness — antes só editáveis por .env, agora na UI (root/admin), com efeito em runtime sem restart. Cada campo mostra a fonte (banco vs ambiente/padrão) e tem "↺ restaurar padrão". O MODELO do juiz não fica aqui — é o card "LLM como Juiz" no Roteamento LLM.' },
           { name: 'System Prompts', body: 'Templates de system prompts reutilizáveis. Quando criar um agent, você pode escolher um template salvo em vez de escrever do zero.' },
           { name: 'Usuários', body: 'Gestão de contas (root only). Roles: root (admin total), comum (uso normal), admin (gestão sem credenciais).' },
           { name: 'API Keys', body: 'Geração de chaves de API para acesso externo. Cada chave tem nome, escopo e data de expiração.' },

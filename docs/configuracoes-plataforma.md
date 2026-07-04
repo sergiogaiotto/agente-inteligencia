@@ -134,6 +134,13 @@ Configurado por ambiente (alguns também na UI). Defaults pensados para zero-ris
 | `OPA_TIMEOUT_SECONDS` | 2.0 | Timeout das chamadas OPA. |
 
 ### 3.4 Verifier v2 (juiz multidimensional) e harness
+
+> **Desde 25.1.0 estas opções (exceto `VERIFIER_JUDGE_MODEL`) são editáveis na
+> UI em Configurações → Parâmetros (root/admin), com efeito em runtime sem
+> restart.** O valor salvo na UI passa a vencer o `.env`; enquanto não salvo,
+> o `.env` continua valendo como default. O modelo do juiz é o papel `judge`
+> do Roteamento LLM (card "LLM como Juiz").
+
 | Variável | Default | Efeito |
 |---|---|---|
 | `VERIFIER_V2_ENABLED` | **false** | Juiz 4D (factuality/completeness/tone/safety) + ContractValidator. |
