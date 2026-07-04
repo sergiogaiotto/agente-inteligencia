@@ -16,7 +16,7 @@ import re
 from typing import Any
 
 from app.core.config import get_settings
-from app.core.llm_providers import get_provider
+from app.core.llm_providers import generate_with_hosted_fallback
 from app.core.otel import get_tracer
 
 logger = logging.getLogger(__name__)
@@ -132,15 +132,20 @@ class MultiDimJudge:
             span.set_attribute("judge.draft_length", len(draft or ""))
             span.set_attribute("judge.evidences_count", len(evidences))
 
-            provider = get_provider(provider_name, model=model)
-
-            resp = await provider.generate(
+            # Cadeia de resiliência do core (24.9.0): juiz inacessível/401 →
+            # re-tenta no multimodal_fallback hospedado (provider distinto).
+            # Ambos fora → exceção propaga e o Verifier degrada p/ heurística.
+            resp, used_provider, used_model = await generate_with_hosted_fallback(
                 [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_msg},
                 ],
-                max_tokens=settings.verifier_max_tokens,
+                provider_name, model,
+                purpose="verifier.judge",
+                gen_kwargs={"max_tokens": settings.verifier_max_tokens},
             )
+            judge_model_id = f"{used_provider}/{used_model}"
+            span.set_attribute("judge.used_model_id", judge_model_id)
             content = (resp.get("content") or "").strip()
             span.set_attribute("judge.response_length", len(content))
 

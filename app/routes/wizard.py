@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from app.core.llm_providers import (
     get_provider,
+    is_llm_auth_error,
     is_llm_param_rejection,
     is_llm_unreachable,
 )
@@ -156,29 +157,12 @@ def _is_llm_unreachable(exc: Exception) -> bool:
 
 
 def _is_llm_auth_error(exc: Exception) -> bool:
-    """Detecta erro de AUTENTICAÇÃO do provider (401 — chave inválida/expirada).
-
-    Distinto de "inacessível" (rede caiu): aqui o servidor RESPONDEU negando a
-    credencial. Justifica tentar o fallback hospedado tanto quanto o unreachable
-    — uma chave ruim em UM provider não deve derrubar o wizard se há outro
-    provider (multimodal_fallback) com credencial válida. Sem isso, um 401 vira
-    500 cru ("Erro no wizard: Error code: 401 — Incorrect API key").
+    """Wrapper fino — lógica canônica em
+    ``app.core.llm_providers.is_llm_auth_error`` (movida pra lá em 24.9.0,
+    compartilhada com ``generate_with_hosted_fallback`` do core). Mantido
+    como nome local pra não quebrar testes e call-sites do wizard.
     """
-    sc = getattr(exc, "status_code", None) or getattr(
-        getattr(exc, "response", None), "status_code", None
-    )
-    if sc == 401:
-        return True
-    name = type(exc).__name__.lower()
-    if "authenticationerror" in name or "permissiondenied" in name:
-        return True
-    s = str(exc).lower()
-    return (
-        "incorrect api key" in s
-        or "invalid_api_key" in s
-        or "invalid api key" in s
-        or ("401" in s and ("api key" in s or "unauthorized" in s or "authentication" in s))
-    )
+    return is_llm_auth_error(exc)
 
 
 def _wizard_unreachable_message(provider: str, model: str) -> str:
@@ -215,7 +199,8 @@ async def _wizard_hosted_fallback(
     hub interno inacessível — ex.: gpt-oss-20b → gpt-oss-120b só dobraria o
     timeout). (None, None) quando não há alternativa distinta.
     """
-    failed = (failed_provider or "").strip().lower()
+    from app.core.llm_providers import canonical_provider
+    failed = canonical_provider(failed_provider)
     try:
         routing = await load_routing()
     except Exception:
@@ -226,7 +211,9 @@ async def _wizard_hosted_fallback(
     fb_provider, fb_model = target.split("/", 1)
     fb_provider = fb_provider.strip().lower()
     fb_model = fb_model.strip()
-    if not fb_provider or fb_provider == failed:
+    # canonical: "openai" é alias de "azure" no get_provider — sem isso um
+    # fallback openai→azure re-tentaria o MESMO backend com a MESMA chave.
+    if not fb_provider or canonical_provider(fb_provider) == failed:
         return None, None
     return fb_provider, fb_model
 

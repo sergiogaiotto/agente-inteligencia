@@ -513,12 +513,18 @@ Responda em JSON:
 {{"ok": true/false, "confidence": 0.0-1.0, "issues": ["lista de problemas"], "risk_high": false, "fraud_suspected": false}}
 """
         try:
-            from app.core.llm_providers import get_provider
-            provider = get_provider("openai")
-            response = await provider.generate([
+            from app.core.llm_providers import generate_with_hosted_fallback
+            # Papel "judge" do Roteamento LLM (24.9.0) — antes hardcoded
+            # get_provider("openai"). Falha na leitura do roteamento → azure.
+            try:
+                from app.llm_routing import resolve_llm_for_task
+                provider_name, model = await resolve_llm_for_task("judge")
+            except Exception:
+                provider_name, model = "azure", None
+            response, _, _ = await generate_with_hosted_fallback([
                 {"role": "system", "content": "Verificador de evidência. Responda apenas em JSON válido."},
                 {"role": "user", "content": verification_prompt},
-            ])
+            ], provider_name, model, purpose="verifier.legacy")
             content = response.get("content", "")
             json_match = content
             if "```" in content:

@@ -132,10 +132,10 @@ def is_llm_unreachable(exc: BaseException, _depth: int = 0) -> bool:
     msg = str(exc).lower()
     # 3) provider sem URL/key configurada — inalcançável na prática.
     #    GPTOSSProvider.generate levanta "url não configurada"; Azure/OpenAI
-    #    público levantam "não configurado" em get_langchain_llm().
-    if isinstance(exc, RuntimeError) and (
-        "url não configurada" in msg or "não configurado" in msg
-    ):
+    #    público levantam "não configurado" em get_langchain_llm(); Maritaca
+    #    levanta "API key não configurada". O match SEM a última letra cobre
+    #    os dois gêneros (configurado/configurada).
+    if isinstance(exc, RuntimeError) and "não configurad" in msg:
         return True
     # 4) fallback por string — "Connection error." do SDK openai, caso o tipo
     #    escape (versões/wrappers diferentes do openai/langchain).
@@ -147,6 +147,105 @@ def is_llm_unreachable(exc: BaseException, _depth: int = 0) -> bool:
         if cause is not None and cause is not exc:
             return is_llm_unreachable(cause, _depth + 1)
     return False
+
+
+def is_llm_auth_error(exc: BaseException) -> bool:
+    """Detecta erro de AUTENTICAÇÃO do provider (401 — chave inválida/expirada).
+
+    Distinto de "inacessível" (rede caiu): aqui o servidor RESPONDEU negando a
+    credencial. Justifica fallback hospedado tanto quanto o unreachable — uma
+    chave ruim em UM provider não deve derrubar o caller se há outro provider
+    com credencial válida. Detector canônico (movido do wizard em 24.9.0);
+    ``app/routes/wizard.py`` mantém wrapper fino.
+    """
+    sc = getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "response", None), "status_code", None
+    )
+    if sc == 401:
+        return True
+    name = type(exc).__name__.lower()
+    if "authenticationerror" in name or "permissiondenied" in name:
+        return True
+    s = str(exc).lower()
+    return (
+        "incorrect api key" in s
+        or "invalid_api_key" in s
+        or "invalid api key" in s
+        or ("401" in s and ("api key" in s or "unauthorized" in s or "authentication" in s))
+    )
+
+
+# get_provider mapeia "openai" e "azure" pro MESMO AzureOpenAIProvider (alias
+# histórico) — comparações de "provider distinto" precisam canonicalizar,
+# senão um fallback openai→azure re-tenta o MESMO backend com a MESMA chave.
+_PROVIDER_ALIASES = {"openai": "azure"}
+
+
+def canonical_provider(name: str) -> str:
+    n = (name or "").strip().lower()
+    return _PROVIDER_ALIASES.get(n, n)
+
+
+async def generate_with_hosted_fallback(
+    messages: list[dict],
+    provider_name: str,
+    model: str | None,
+    *,
+    purpose: str,
+    prov_kwargs: dict | None = None,
+    gen_kwargs: dict | None = None,
+) -> tuple[dict, str, str]:
+    """Gera com o par dado; se INACESSÍVEL (rede/URL/timeout) ou 401, re-tenta
+    UMA vez no fallback HOSPEDADO (`multimodal_fallback` do Roteamento LLM —
+    o modelo "sempre disponível" da plataforma), desde que seja provider
+    DIFERENTE do que falhou.
+
+    Cadeia NEUTRA de core, para módulos que não podem depender de app/routes
+    (verifier/juiz). O wizard tem a sua própria (`_wizard_llm_complete`, com
+    UX de 503 acionável) e o runtime de agentes tem a `_run_llm_chain` por
+    candidatos — esta é a versão mínima compartilhável.
+
+    Returns (resp, used_provider, used_model). Sem fallback aplicável, a
+    exceção do PRIMÁRIO propaga; se o fallback também falhar, propaga a dele.
+    """
+    pk = dict(prov_kwargs or {})
+    gk = dict(gen_kwargs or {})
+    try:
+        llm = get_provider(provider_name, model=(model or None), **pk)
+        resp = await llm.generate(messages, **gk)
+        return resp, provider_name, (model or getattr(llm, "model", "") or "")
+    except Exception as exc:
+        primary_auth = is_llm_auth_error(exc)
+        if not (is_llm_unreachable(exc) or primary_auth):
+            raise
+        try:
+            from app.llm_routing import load_routing
+            routing = await load_routing()
+            target = (routing.get("multimodal_fallback") or "").strip()
+        except Exception:
+            target = ""
+        if "/" not in target:
+            raise
+        fb_provider, fb_model = target.split("/", 1)
+        fb_provider = fb_provider.strip().lower()
+        fb_model = fb_model.strip()
+        if not fb_provider or canonical_provider(fb_provider) == canonical_provider(provider_name):
+            raise
+        logger.warning(
+            "llm.fallback.hosted",
+            extra={
+                "event": "llm.fallback.hosted",
+                "purpose": purpose,
+                "failed_provider": provider_name,
+                "failed_model": model,
+                "failed_reason": "auth" if primary_auth else "unreachable",
+                "fallback_provider": fb_provider,
+                "fallback_model": fb_model,
+            },
+        )
+        fb_llm = get_provider(fb_provider, model=(fb_model or None), **pk)
+        resp = await fb_llm.generate(messages, **gk)
+        return resp, fb_provider, fb_model
 
 
 class LLMProvider(ABC):
@@ -254,6 +353,15 @@ class MaritacaProvider(LLMProvider):
         )
 
     async def generate(self, messages: list[dict], **kwargs) -> dict:
+        # Sem key, o header viraria "Bearer " (vazio) → httpx explode com
+        # LocalProtocolError "Illegal header value", que NÃO é classificado
+        # como inalcançável e escaparia das cadeias de fallback. Guard com
+        # RuntimeError "não configurada" (is_llm_unreachable classifica).
+        if not (self.api_key or "").strip():
+            raise RuntimeError(
+                "maritaca: API key não configurada. "
+                "Configure em /settings → Plataforma."
+            )
         # Path httpx direto preserva controle fino sobre headers/timeout.
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
@@ -456,7 +564,12 @@ def _parse_openai_compatible_response(response, provider: str, model: str) -> di
     if response.status_code >= 400:
         err = data.get("error") if isinstance(data, dict) else None
         msg = err.get("message") if isinstance(err, dict) else (err or data.get("message") or response.text[:300])
-        raise RuntimeError(f"{provider} HTTP {response.status_code}: {msg}")
+        exc = RuntimeError(f"{provider} HTTP {response.status_code}: {msg}")
+        # status_code na exceção: o fast-path do is_llm_auth_error (getattr)
+        # pega QUALQUER 401 dos providers httpx-diretos, independente da
+        # fraseologia do corpo (que varia por servidor/idioma).
+        exc.status_code = response.status_code
+        raise exc
 
     choices = data.get("choices") if isinstance(data, dict) else None
     if not choices:

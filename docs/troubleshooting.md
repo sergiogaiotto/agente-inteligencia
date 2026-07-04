@@ -108,6 +108,22 @@ docker compose logs app --since=24h | jq 'select(.event == "wizard.llm.resolved"
 
 ---
 
+### LLM — fallback hospedado (cadeia neutra do core)
+
+| Sintoma | Evento(s) | Causa típica |
+|---|---|---|
+| Juiz/verificação respondeu com provider/modelo DIFERENTE do roteado | `llm.fallback.hosted` (campos `purpose`, `failed_provider`, `failed_reason` auth\|unreachable, `fallback_provider`) | Provider roteado inacessível (VPN/hub fora) ou 401 — cadeia caiu no `multimodal_fallback` hospedado |
+| Verificações mais lentas que o normal | `llm.fallback.hosted` recorrente | Cada julgamento paga o timeout do primário morto antes do fallback — corrija o roteamento ou o acesso ao hub |
+
+**Query operacional:**
+
+```bash
+# "Quantas contingências de LLM por finalidade hoje?"
+docker compose logs app --since=24h | jq 'select(.event == "llm.fallback.hosted") | {ts, purpose, failed_provider, failed_reason, fallback_provider}'
+```
+
+---
+
 ### Ingestão de evidências
 
 | Sintoma | Evento(s) | Causa típica |
