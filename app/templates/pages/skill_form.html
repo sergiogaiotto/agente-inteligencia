@@ -2358,7 +2358,15 @@ ${outMap}`;
             if (resolved.api_count > 0) parts.push(`${resolved.api_count} API`);
             const bindings = parts.length ? ` (${parts.join(', ')})` : '';
             const profile = resolved.exec_mode ? ` · ${resolved.exec_mode}` : '';
-            return bindings + profile;
+            // Mostra QUAL LLM realmente gerou (pós-fallback). O backend já devolve
+            // llm_provider/llm_model/llm_fallback (resolved) — a UI ignorava, o que
+            // dava a impressão de "não sei qual provider foi usado".
+            let llm = '';
+            if (resolved.llm_model) {
+                llm = ` · ${resolved.llm_provider || '?'}/${resolved.llm_model}`;
+                if (resolved.llm_fallback) llm += ' ⚠ fallback (o modelo roteado estava inacessível/401)';
+            }
+            return bindings + profile + llm;
         },
 
         async parseSkill() {

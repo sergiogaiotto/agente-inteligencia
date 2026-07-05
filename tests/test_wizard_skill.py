@@ -27,6 +27,7 @@ from app.routes.wizard import (
     _build_wizard_prompt,
     _resolve_bindings_for_prompt,
     _resolve_wizard_llm,
+    _wizard_reasoning_effort,
 )
 
 
@@ -633,6 +634,40 @@ class TestResolveWizardLLM:
         await _resolve_wizard_llm(req, "rota-inexistente")
         # Default global do dicionário: reasoning
         assert captured["task_type"] == "reasoning"
+
+
+# ═════════════════════════════════════════════════════════════════
+# Esforço de raciocínio configurável (27.0.0) — _wizard_reasoning_effort
+# ═════════════════════════════════════════════════════════════════
+#
+# Antes era a constante hardcoded _WIZARD_REASONING_EFFORT="high"; agora vem do
+# setting wizard_reasoning_effort (aba Parâmetros). O gate por MODELO continua em
+# get_provider — este helper só LÊ e SANITIZA o valor.
+class TestWizardReasoningEffort:
+    @pytest.mark.parametrize("value,expected", [
+        ("high", "high"),
+        ("medium", "medium"),
+        ("low", "low"),
+        ("HIGH", "high"),        # case-insensitive
+        ("  high  ", "high"),    # trim
+        ("", None),               # vazio = desligado
+        ("off", None),            # valor inválido = desligado
+        ("altíssimo", None),      # sanitização de lixo
+        (None, None),             # ausência = desligado
+    ])
+    def test_reads_and_sanitizes_setting(self, monkeypatch, value, expected):
+        from app.routes import wizard as _wiz
+
+        class _Stub:
+            wizard_reasoning_effort = value
+
+        monkeypatch.setattr(_wiz, "get_settings", lambda: _Stub())
+        assert _wiz._wizard_reasoning_effort() == expected
+
+    def test_default_setting_is_high(self):
+        """O default do setting preserva o comportamento anterior (high)."""
+        from app.core.config import Settings
+        assert Settings().wizard_reasoning_effort == "high"
 
 
 # ═════════════════════════════════════════════════════════════════

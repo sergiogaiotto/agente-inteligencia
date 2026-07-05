@@ -81,6 +81,14 @@
                                        :min="p.min" :max="p.max" :step="p.step"
                                        class="w-24 rounded border border-surface-200 px-2 py-1 text-[12px] text-right outline-none focus:border-brand-400 shrink-0">
                             </template>
+                            <template x-if="p.type === 'select'">
+                                <select x-model="paramsForm[p.key]"
+                                        class="w-40 rounded border border-surface-200 px-2 py-1 text-[12px] outline-none focus:border-brand-400 shrink-0">
+                                    <template x-for="opt in p.options" :key="opt.value">
+                                        <option :value="opt.value" x-text="opt.label"></option>
+                                    </template>
+                                </select>
+                            </template>
                         </div>
                     </template>
                 </div>
@@ -1377,6 +1385,13 @@ function settingsPage() {
               items: [
                 {key:'query_topology_cache_enabled', type:'bool', label:'Cache de topologia/schema', desc:'Evita re-consultar o mesmo dado imutável (schema, arestas do mesh, agentes) durante um invoke — colapsa centenas de idas ao banco. Seguro; desligue só como válvula de rollback.'},
                 {key:'fast_routing_enabled', type:'bool', label:'Permitir roteamento rápido', desc:'Master switch: habilita pular a chamada LLM do agente de triagem (router) quando a rota é 100% decidida pelos args + pergunta. Sozinho não muda nada — cada pipeline ainda precisa ativar "Roteamento rápido" no Estúdio.'},
+              ]},
+            { title: '🪄 Geração no Wizard',
+              hint: 'Como a IA gera SKILL.md e agentes no Wizard. O esforço de raciocínio só tem efeito em modelos que suportam (gpt-oss sempre; Azure/OpenAI só o1/o3/o4/gpt-5 — gpt-4o/gpt-4.1 ignoram sem erro). Para usar reasoning alto, aponte "Skill Generation" no Roteamento LLM para um gpt-oss.',
+              items: [
+                {key:'wizard_reasoning_effort', type:'select', label:'Esforço de raciocínio do Wizard',
+                 options:[{value:'high',label:'Alto'},{value:'medium',label:'Médio'},{value:'low',label:'Baixo'},{value:'',label:'Desligado'}],
+                 desc:'Profundidade de raciocínio nas gerações de skill e agente. Alto = melhor qualidade estrutural do SKILL.md nos modelos que suportam. Descartado automaticamente (sem erro) em modelos que não aceitam.'},
               ]},
         ],
         _paramMeta() {
