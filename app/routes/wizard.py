@@ -33,6 +33,7 @@ from app.core.llm_providers import (
     is_llm_unreachable,
 )
 from app.llm_routing import resolve_llm_for_task, load_routing
+from app.core.config import get_settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,23 @@ _DEFAULT_TASK_TYPE = {
 # (gpt-4o), o parâmetro é descartado e a geração segue SEM reasoning em vez
 # de quebrar. Rotas leves (refine/mentor/compose) não o usam — latência de
 # chat importa mais que profundidade.
-_WIZARD_REASONING_EFFORT = "high"
+#
+# Configurável (27.0.0): antes era a constante hardcoded `_WIZARD_REASONING_EFFORT
+# = "high"`; agora vem do setting `wizard_reasoning_effort` (aba Parâmetros,
+# runtime sem restart). Default 'high' preserva o comportamento anterior.
+_REASONING_EFFORT_VALUES = frozenset({"high", "medium", "low"})
+
+
+def _wizard_reasoning_effort() -> Optional[str]:
+    """Esforço de raciocínio configurado para as gerações do Wizard.
+
+    Lê o setting `wizard_reasoning_effort` e sanitiza para {high,medium,low}
+    ou None (qualquer outro valor / vazio = desligado). O gate por MODELO
+    continua em get_provider — o valor só tem EFEITO em modelos que aceitam
+    (gpt-oss sempre); em gpt-4o/gpt-4.1 é descartado sem erro.
+    """
+    raw = (get_settings().wizard_reasoning_effort or "").strip().lower()
+    return raw if raw in _REASONING_EFFORT_VALUES else None
 
 
 async def _resolve_wizard_llm(data, route_name: str) -> tuple[str, str, str]:
@@ -425,7 +442,7 @@ Regras:
 - kind=subagent para tarefas atômicas e específicas
 - O system_prompt deve ser rico, com instruções claras, formato de saída e guardrails"""},
             {"role": "user", "content": data.description},
-        ], provider, model, route="agent", reasoning_effort=_WIZARD_REASONING_EFFORT)
+        ], provider, model, route="agent", reasoning_effort=_wizard_reasoning_effort())
         content = content.strip()
         if content.startswith("```"):
             import re
@@ -1368,7 +1385,7 @@ async def wizard_skill(data: WizardSkillRequest):
         skill_md, used_provider, used_model = await _wizard_llm_complete([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
-        ], provider, model, route="skill", reasoning_effort=_WIZARD_REASONING_EFFORT)
+        ], provider, model, route="skill", reasoning_effort=_wizard_reasoning_effort())
         # Contrato MCP (fix bug "tavily a", 2026-06-08): força o ## Inputs ao
         # `{operation, query}` quando há tool MCP e o LLM inventou inputs de
         # domínio. Antes de validar, pra o validador ver a versão corrigida.
@@ -1411,7 +1428,7 @@ async def wizard_skill(data: WizardSkillRequest):
                     {"role": "system", "content": system_prompt + retry_instruction},
                     {"role": "user", "content": user_prompt},
                 ], used_provider, used_model, route="skill",
-                    reasoning_effort=_WIZARD_REASONING_EFFORT)
+                    reasoning_effort=_wizard_reasoning_effort())
                 retry_skill_md = _ensure_mcp_inputs_contract(retry_skill_md, bindings.get("mcp_tools") or [])
                 # Re-valida o retry — se também violar, mantém o RETRY (geralmente
                 # melhor que o original) mas devolve warnings pro operador
