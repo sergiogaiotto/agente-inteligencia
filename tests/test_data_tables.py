@@ -331,6 +331,57 @@ class TestAnalyzeXlsxMultiSheet:
         assert result["columns"] == 4
 
 
+# ═══════════════════════════════════════════════════════════════
+# 3c. analyze_tabular — header PROFUNDO (linha 3+): título + categoria
+#     mergeados antes do cabeçalho real. Caso "Tabela de Preços Móvel"
+#     que a detecção antiga (só linhas 1-2) deixava com colunas column00..
+# ═══════════════════════════════════════════════════════════════
+
+
+def _build_deep_header_xlsx(path):
+    """XLSX com título mergeado na linha 1, faixa de categoria mergeada na
+    linha 2, e os headers REAIS só na linha 3 (+ dados a partir da 4)."""
+    openpyxl = pytest.importorskip("openpyxl")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Precos"
+    ws.merge_cells("A1:D1")
+    ws["A1"] = "Tabela de Precos Movel"          # linha 1: título
+    ws.merge_cells("A2:D2")
+    ws["A2"] = "Controle"                          # linha 2: categoria mergeada
+    headers = ["plano", "preco_mensal", "franquia_gb", "fidelidade_meses"]
+    for i, h in enumerate(headers, 1):             # linha 3: headers reais
+        ws.cell(row=3, column=i, value=h)
+    for r in range(4, 14):                         # linhas 4..13: dados
+        ws.cell(row=r, column=1, value=f"Plano {r - 3}")
+        ws.cell(row=r, column=2, value=50.0 + r)
+        ws.cell(row=r, column=3, value=r)
+        ws.cell(row=r, column=4, value=12)
+    wb.save(path)
+
+
+class TestAnalyzeXlsxDeepHeader:
+    def test_header_on_row_3_is_detected(self, tmp_path):
+        """A varredura profunda encontra o header na linha 3 e recupera os
+        nomes reais das colunas — a detecção antiga (linhas 1-2) deixaria
+        colunas genéricas column0/column00."""
+        xlsx = tmp_path / "precos.xlsx"
+        _build_deep_header_xlsx(xlsx)
+        result = asyncio.run(analyze_tabular(xlsx.read_bytes(), "precos.xlsx"))
+
+        names = [c["name"] for c in result["schema"]]
+        # Nomes reais recuperados...
+        assert "plano" in names and "preco_mensal" in names, names
+        # ...e NENHUM nome genérico column0/column00 remanescente.
+        assert not any(
+            str(n).startswith("column") and str(n)[6:].isdigit() for n in names
+        ), names
+        sheet = result["sheets"][0]
+        assert sheet["header_row"] == 3, sheet
+        assert sheet["header_row_auto_detected"] is True
+        assert result["tabular_ready"] is True
+
+
 class TestPatologicHeuristic:
     """Casos onde a heurística DEVE penalizar (sem usar XLSX real)."""
 
