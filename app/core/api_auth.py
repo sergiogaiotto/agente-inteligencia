@@ -20,6 +20,8 @@ redirect e os demais são públicos por natureza.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -51,9 +53,64 @@ def is_public_api_path(method: str, path: str) -> bool:
     return (method.upper(), path) in _PUBLIC
 
 
+# ── P0: Contenção de privilégio da API Key ──────────────────────────────────
+# Uma X-API-Key herda a IDENTIDADE do usuário dono (e o ROLE). Sem isto, uma key
+# entregue a um frontend externo alcança TODA a superfície autenticada
+# (~235 rotas): lê PII de /users, cunha novas keys, muda /settings, CRUD de
+# agents/skills. Aqui limitamos o que um principal-via-key pode alcançar.
+
+# SEMPRE negados a um principal-via-key (escalação / leitura de segredo). Não há
+# uso legítimo de INTEGRAÇÃO que precise cunhar credenciais, ler/gravar settings
+# da plataforma ou gerir usuários — isso é superfície de ADMIN (só cookie/UI).
+_APIKEY_ALWAYS_DENY_PREFIXES = (
+    "/api/v1/api-keys",   # cunhar/revogar/listar credenciais (persistência/escala)
+    "/api/v1/settings",   # ler segredos + mudar config/roteamento da plataforma
+    "/api/v1/users",      # PII de todos + gestão de usuários (guarded; /me é público)
+    "/api/v1/domains",    # gestão de domínios/tenancy
+)
+
+
+def _is_escalation_path(path: str) -> bool:
+    return any(
+        path == p or path.startswith(p + "/") for p in _APIKEY_ALWAYS_DENY_PREFIXES
+    )
+
+
+def _is_public_surface(method: str, path: str) -> bool:
+    """Superfície PÚBLICA de integração: descoberta + invoke de pipelines.
+
+    Um frontend externo só precisa disto. GET em /pipelines/* (list/detail/
+    inputs-schema) e POST no invoke[/stream]. Criar/mutar pipeline NÃO entra.
+    """
+    if path.startswith("/api/v1/pipelines"):
+        m = method.upper()
+        if m == "GET":
+            return True
+        if m == "POST" and (path.endswith("/invoke") or path.endswith("/invoke/stream")):
+            return True
+    return False
+
+
+def apikey_route_denied(method: str, path: str) -> Optional[str]:
+    """Retorna o MOTIVO (str) se um principal-via-key NÃO pode alcançar a rota;
+    None se pode. Escalação é SEMPRE negada; a restrição 'só superfície pública'
+    é opt-in via setting api_key_public_surface_only (default OFF)."""
+    if _is_escalation_path(path):
+        return "escalation_or_secret_route"
+    from app.core.config import get_settings
+    if get_settings().api_key_public_surface_only and not _is_public_surface(method, path):
+        return "public_surface_only_enabled"
+    return None
+
+
 def requires_auth(method: str, path: str) -> bool:
     """True se a rota está sob o gate default-deny (``/api/v1/*`` não-allowlistado)."""
     if not path.startswith(_GUARDED_PREFIX):
+        return False
+    # Preflight CORS (OPTIONS) NUNCA carrega credencial — é mecânica do browser.
+    # Isentar aqui evita 401 no preflight; o CORS middleware (mais externo) já
+    # responde os preflights de origens permitidas antes de chegar aqui.
+    if method.upper() == "OPTIONS":
         return False
     return not is_public_api_path(method, path)
 
@@ -75,6 +132,20 @@ class ApiAuthMiddleware(BaseHTTPMiddleware):
             # um 2º lookup. Se não propagar, require_user apenas re-executa —
             # correção preservada em qualquer caso.
             request.state.auth_user = user
+            # P0: contenção de privilégio quando o principal veio por API Key.
+            # require_user popula request.state.api_key_id no caminho da key.
+            if getattr(request.state, "api_key_id", None):
+                reason = apikey_route_denied(request.method, request.url.path)
+                if reason:
+                    return JSONResponse(
+                        {"detail": {
+                            "error": "api_key_forbidden_route",
+                            "reason": reason,
+                            "hint": "API keys só acessam descoberta + invoke de pipelines; "
+                                    "gestão de credenciais/settings/usuários é só pela UI.",
+                        }},
+                        status_code=403,
+                    )
         return await call_next(request)
 
 

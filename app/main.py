@@ -102,6 +102,13 @@ install_api_auth_middleware(app)
 from app.core.ratelimit import RateLimitMiddleware
 app.add_middleware(RateLimitMiddleware)
 
+# CORS (P0 — frontends externos no browser). Registrado por ÚLTIMO = middleware
+# MAIS EXTERNO: trata o preflight OPTIONS ANTES do ApiAuth (que devolvia 401 no
+# preflight). Origens lidas dinamicamente de platform_settings (cors_allowed_origins);
+# allowlist vazia = inerte (comportamento atual).
+from app.core.cors import install_cors_middleware
+install_cors_middleware(app)
+
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.state.templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # Versão do produto (PR-driven) disponível em todos os templates como

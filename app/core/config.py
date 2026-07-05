@@ -97,6 +97,20 @@ class Settings(BaseSettings):
     # humano via _LANGUAGE_LABELS em llm_providers (mapeamento futuro).
     default_response_language: str = "pt-BR"
 
+    # ── CORS (P0 — frontends externos no browser) ──
+    # Allowlist de origens (CSV) autorizadas a consumir a API cross-origin. VAZIO
+    # = CORS OFF (comportamento atual; browsers cross-origin bloqueados). Lido
+    # DINAMICAMENTE pelo middleware → mudar na UI vale sem restart. NUNCA usar '*'
+    # (a app autentica por cookie de sessão; refletir origem arbitrária com
+    # credenciais = CSRF-via-CORS). Ex.: "https://app.cliente.com,https://x.io".
+    cors_allowed_origins: str = ""
+    # ── Contenção de privilégio da API Key (P0) ──
+    # Quando True, um principal autenticado por X-API-Key/Bearer só alcança a
+    # SUPERFÍCIE PÚBLICA (invoke + descoberta) — todo o resto 403. Default OFF
+    # (comportamento atual). O bloqueio das rotas de ESCALAÇÃO/segredo (criar/gerir
+    # api-keys, settings, users) é SEMPRE aplicado, independente deste toggle.
+    api_key_public_surface_only: bool = False
+
     # ── Embedding provider (Qwen3 | Azure) ──
     # Default: Qwen3 (open-weight via hub interno). Reusa URL/key do OSS source
     # escolhido (oss20b ou oss120b), só muda o path. Endpoint efetivo:
@@ -391,6 +405,9 @@ _UI_TO_ENV_MAP = {
     "primary_model":    "PRIMARY_MODEL",
     # Idioma de resposta global (BCP-47: pt-BR, en-US, ...)
     "default_response_language": "DEFAULT_RESPONSE_LANGUAGE",
+    # CORS: allowlist de origens (CSV). Contenção da API Key: toggle de superfície pública.
+    "cors_allowed_origins": "CORS_ALLOWED_ORIGINS",
+    "api_key_public_surface_only": "API_KEY_PUBLIC_SURFACE_ONLY",
     # Timezone da plataforma (IANA: America/Sao_Paulo = GMT-3 Brasília, padrão).
     # Aplicado a os.environ['TZ'] + time.tzset() e exposto à UI (window.PLATFORM_TZ).
     "timezone": "TZ",
@@ -493,6 +510,8 @@ PARAMETER_UI_KEYS = (
 _NON_MODEL_UI_KEYS = {
     "grounding_strict",          # flag de comportamento anti-alucinação
     "default_response_language", # idioma de resposta global (BCP-47)
+    "cors_allowed_origins",      # allowlist CORS (não é credencial/modelo)
+    "api_key_public_surface_only",  # toggle de contenção da API Key
     "mcp_per_tool_enabled",      # flag do modo per-tool MCP (default OFF)
     "text_to_sql_enabled",       # flag do Tier 2 text-to-SQL governado (default OFF)
     "timezone",                  # timezone da plataforma (IANA); default Brasília
@@ -555,8 +574,15 @@ async def apply_settings_to_env() -> int:
         if val is not None and str(val).strip():
             os.environ[env_name] = str(val).strip()
             applied += 1
+        elif ui_key in data:
+            # Operador salvou a chave EXPLICITAMENTE vazia (ex.: zerar
+            # cors_allowed_origins para DESLIGAR o CORS). Honra a intenção
+            # limpando o env — sem isto, valor vazio era ignorado e o env
+            # antigo persistia no processo (a UI não conseguia desligar).
+            if os.environ.pop(env_name, None) is not None:
+                removed += 1
         elif env_name in _SEALED_ENV_VARS:
-            # Selada e sem valor no banco → remove resíduo do .env de os.environ
+            # Selada e AUSENTE do banco → remove resíduo do .env de os.environ
             # (injetado pelo docker env_file) pra cair no default da classe.
             if os.environ.pop(env_name, None) is not None:
                 removed += 1
