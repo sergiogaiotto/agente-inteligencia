@@ -1867,6 +1867,13 @@ async def execute_interaction(
     # do texto deixaria de sinalizar step de pipeline e o verifier dispararia
     # indevidamente. execute_pipeline passa True nos downstream (i>0).
     pipeline_step: bool = False,
+    # Postura de auditoria (26.1.0): 'inherit' (default) preserva o gate atual;
+    # 'sync'/'async'/'disabled' são escolha do dono do pipeline. Ver o gate do
+    # verifier abaixo. `master_interaction_id` é passado nos downstream p/ o
+    # dispatch async gravar a verification DIRETO no master (evita linha órfã
+    # quando a consolidação re-aponta e deleta as filhas).
+    audit_posture: str = "inherit",
+    master_interaction_id: str | None = None,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
 
@@ -2582,6 +2589,12 @@ async def execute_interaction(
         "has_pipeline_context": bool(pipeline_context),
     }
 
+    # Postura de auditoria (26.1.0): um step `rigorous`+v2 é auditado de forma
+    # SÍNCRONA independentemente da postura do pipeline. O rigor é opt-in POR
+    # AGENTE (sinal mais específico) — nem `disabled` nem `async` podem rebaixá-lo
+    # (removê-lo / jogá-lo pro background), só `sync`/`inherit` o mantêm síncrono.
+    _rigorous_locked = (exec_profile == "rigorous" and _pg_settings.verifier_v2_enabled)
+
     if _refuse_ungrounded:
         logger.warning(
             "grounding.refused",
@@ -2597,6 +2610,60 @@ async def execute_interaction(
             },
         )
         await fsm.run_verify_evidence({"ok": False, "confidence": 0.0})
+    elif audit_posture == "disabled" and not _rigorous_locked:
+        # Auditoria DESLIGADA por escolha do dono do pipeline → auto-passa sem
+        # juiz. NÃO desliga um step `rigorous`+v2 (`_rigorous_locked`): o rigor é
+        # opt-in POR AGENTE (sinal mais específico que o default do pipeline) — a
+        # postura larga não pode remover silenciosamente a auditoria de crédito/
+        # fraude. Rigorous cai no cascade → auditoria SÍNCRONA (segurança preservada).
+        await fsm.run_verify_evidence({"ok": True, "confidence": 1.0})
+    elif audit_posture == "sync" and _pg_settings.verifier_v2_enabled:
+        # Auditoria SÍNCRONA por escolha do dono: roda o juiz v2 em CADA step,
+        # mesmo os standard (que herdariam auto-pass). Persiste em verifications
+        # (1:1 com a interaction). Paga +1 chamada LLM por step — é a escolha.
+        from app.verifier import verifier as _verifier
+        try:
+            verification = await _verifier.verify(
+                draft=draft, evidences=evidences,
+                output_contract=skill_data.get("output_contract"),
+                guardrails=skill_data.get("guardrails", ""),
+                user_question=user_input, profile=exec_profile,
+                turn_id=None, interaction_id=ctx.interaction_id,
+                llm_provider_name=agent.get("llm_provider"), llm_model=agent.get("model"),
+                agent_id=agent_id, pipeline_id=pipeline_id,
+            )
+            await fsm.run_verify_evidence({
+                "ok": verification.ok, "confidence": verification.confidence,
+                "risk_high": verification.risk_high,
+                "fraud_suspected": verification.fraud_suspected,
+            })
+        except Exception as _e:
+            logger.warning(
+                f"Verifier v2 (audit sync) falhou ({type(_e).__name__}: {_e}); heurística")
+            verification = None
+            avg_score = (sum(e.relevance_score for e in evidences) / len(evidences)) if evidences else 0.5
+            await fsm.run_verify_evidence({"ok": avg_score >= _min_relevance, "confidence": avg_score})
+    elif audit_posture == "async" and _pg_settings.verifier_v2_enabled and not _rigorous_locked:
+        # Auditoria ASSÍNCRONA por escolha do dono: dispatch em background (não
+        # bloqueia a resposta). NÃO rebaixa `rigorous`+v2 (`_rigorous_locked`): esse
+        # cai no cascade → auditoria SÍNCRONA (o judge decide ANTES da resposta).
+        # Grava NO MASTER (`master_interaction_id`) p/ não
+        # virar linha órfã quando a consolidação re-aponta+deleta as filhas — o
+        # entry (master ainda None) usa o próprio ctx.interaction_id, que VIRA o
+        # master e sobrevive. FSM segue com heurística rasa (judge é pós-fato).
+        from app.verifier.async_dispatcher import dispatch as _dispatch_async
+        _audit_iid = master_interaction_id or ctx.interaction_id
+        _dispatch_async(
+            draft=draft, evidences=evidences,
+            output_contract=skill_data.get("output_contract") or "",
+            guardrails=skill_data.get("guardrails") or "",
+            user_question=user_input, profile=exec_profile,
+            interaction_id=_audit_iid,
+            max_concurrent=_pg_settings.verifier_max_concurrent_jobs,
+            agent_id=agent_id, pipeline_id=pipeline_id,
+        )
+        avg_score = (sum(e.relevance_score for e in evidences) / len(evidences)) if evidences else 0.5
+        await fsm.run_verify_evidence({"ok": avg_score >= _min_relevance, "confidence": avg_score})
     elif _verify_autopass(
         (pipeline_step or bool(pipeline_context)), skip_evidence, exec_profile,
         _pg_settings.verifier_v2_enabled,
@@ -3489,6 +3556,17 @@ async def execute_pipeline(
     except Exception:
         _fast_routing_active = False
 
+    # Postura de auditoria por pipeline (26.1.0): inherit|sync|async|disabled.
+    # Resolvida 1× do pipeline dono; passada a cada step (execute_interaction).
+    # Fora de pipeline selado (entry_pipeline None) → 'inherit' (comportamento atual).
+    _audit_posture = "inherit"
+    try:
+        _ap = (entry_pipeline or {}).get("audit_posture")
+        if _ap in ("inherit", "sync", "async", "disabled"):
+            _audit_posture = _ap
+    except Exception:
+        _audit_posture = "inherit"
+
     chain, parent_of = await _resolve_ordered_chain_with_parents(entry_agent_id, allowed_agent_ids)
     if not chain:
         chain = [entry_agent_id]
@@ -3946,6 +4024,10 @@ async def execute_pipeline(
                 # mesmo com upstream fast-routed (pipeline_context vazio). O entry
                 # (i==0) mantém o comportamento atual (sinal via pipeline_context).
                 pipeline_step=(i > 0),
+                # Postura de auditoria por pipeline (26.1.0) + master p/ o dispatch
+                # async gravar direto no master (evita órfã na consolidação).
+                audit_posture=_audit_posture,
+                master_interaction_id=master_interaction_id,
             )
             iid = result.get("interaction_id")
             # Primeiro agente executado (não pass-through) vira o master

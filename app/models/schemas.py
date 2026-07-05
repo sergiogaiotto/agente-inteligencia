@@ -183,6 +183,9 @@ class PipelineCreate(BaseModel):
     description: Optional[str] = None
     # Tuning 26.0.0: roteamento rápido opt-in (pula a chamada LLM do router).
     fast_routing: Optional[bool] = False
+    # Tuning 26.1.0: postura de auditoria (inherit|sync|async|disabled).
+    audit_posture: Optional[str] = Field(
+        default="inherit", pattern="^(inherit|sync|async|disabled)$")
 
 class PipelineUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
@@ -190,6 +193,8 @@ class PipelineUpdate(BaseModel):
     color: Optional[str] = None
     description: Optional[str] = None
     fast_routing: Optional[bool] = None
+    audit_posture: Optional[str] = Field(
+        default=None, pattern="^(inherit|sync|async|disabled)$")
 
 class PipelineStatusChange(BaseModel):
     status: str
