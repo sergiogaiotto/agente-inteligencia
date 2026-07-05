@@ -1141,7 +1141,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   settings: {
     title: 'Configurações',
-    summary: 'Credenciais de provedores, roteamento de LLM, modelo primário, prompts salvos, usuários e API keys — tudo em um lugar.',
+    summary: 'Credenciais de provedores, roteamento de LLM, modelo primário, prompts, usuários e API keys — e a aba Parâmetros, que calibra o juiz e os gates de release (onde uma configuração ruim tem grande impacto).',
     sections: [
       {
         kind: 'concept',
@@ -1174,7 +1174,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           { name: 'Plataforma > Maritaca / Ollama / GPT-OSS', body: 'Outros providers OpenAI-compatible. Cada um com URL/key/model próprios. GPT-OSS suporta 2 sizes (20B/120B) com endpoints separados.' },
           { name: 'Plataforma > Embedding', body: 'Selector Azure | Qwen3. Qwen3 reusa o scheme://host do OSS-20B ou OSS-120B (só muda o path) e suporta densidade Matryoshka (128..1536). Há uma CADEIA DE RESILIÊNCIA: se o provider configurado não responde, a plataforma cai para o fallback (azure quando o primário não é azure; qwen3 caso contrário; ou o que você fixar em embedding_fallback_provider). O chip de Saúde dos Modelos no header fica âmbar quando esse fallback está ativo.' },
           { name: 'Roteamento LLM', body: 'Mapa: tool_calling/reasoning/instruct/classification/skill_generation → provider/modelo, mais o card "LLM como Juiz" (papel judge do Verifier) e o Multimodal Fallback. Define qual LLM cada "tipo de tarefa" usa. Configurar uma vez e todos os agents com task_type ficam alinhados.' },
-          { name: 'Parâmetros', body: 'Thresholds do juiz (Verifier v2) e gates de release do Harness — antes só editáveis por .env, agora na UI (root/admin), com efeito em runtime sem restart. Cada campo mostra a fonte (banco vs ambiente/padrão) e tem "↺ restaurar padrão". O MODELO do juiz não fica aqui — é o card "LLM como Juiz" no Roteamento LLM.' },
+          { name: 'Parâmetros', body: 'Thresholds do juiz (Verifier v2), amostragem assíncrona, gates de release do Harness e performance do invoke — na UI (root/admin), com efeito em runtime sem restart. Cada campo mostra a fonte (banco vs ambiente/padrão) e tem "restaurar padrão". Detalhe campo a campo, com o impacto de errar a mão, nas abas "Parâmetros · o juiz" e "Parâmetros · release & performance" acima. O MODELO do juiz NÃO fica aqui — é o card "LLM como Juiz" no Roteamento LLM.', example: 'Calibração ruim aqui muda o que a plataforma aprova/recusa, quanto custa e quão rápido responde.' },
           { name: 'System Prompts', body: 'Templates de system prompts reutilizáveis. Quando criar um agent, você pode escolher um template salvo em vez de escrever do zero.' },
           { name: 'Usuários', body: 'Gestão de contas (root only). Roles: root (admin total), comum (uso normal), admin (gestão sem credenciais).' },
           { name: 'API Keys', body: 'Geração de chaves de API para acesso externo. Cada chave tem nome, escopo e data de expiração.' },
@@ -1182,9 +1182,59 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         ]
       },
       {
+        kind: 'parametros_juiz',
+        title: 'Parâmetros · o juiz',
+        body: `
+          <p>A aba <strong>Parâmetros</strong> (root/admin) calibra o <strong>juiz</strong> que avalia cada resposta em 4 dimensões — factualidade, completude, tom e segurança — antes de aprovar, além dos gates de release do Harness. Tudo vale em <strong>runtime, sem restart</strong>. <strong>Calibração ruim aqui muda diretamente o que a plataforma aprova ou recusa, quanto custa e quão rápido responde</strong> — ajuste pouco a pouco, com medição.</p>
+          <p><strong>⚖️ Verifier v2 — o interruptor-mestre</strong></p>
+          <ul>
+            <li><strong>Verifier v2 ligado</strong> <code>padrão: DESLIGADO</code> — ligado, roda o juiz multidimensional + o validador de contrato nas interações standard/rigorous; desligado, cai no verificador legado binário e <strong>todos os 6 campos abaixo ficam inertes</strong>. Ligar custa +1 chamada de LLM por resposta auditada (modo síncrono).</li>
+            <li><strong>Mínimo de factualidade</strong> <code>0–5 · padrão 3</code> — reprova respostas cuja nota de suporte-em-evidências fica abaixo do valor. <strong>Mais alto = mais rígido.</strong> Perto de 5, respostas boas mas inferenciais viram "Recusa controlada" no meio do pipeline; em 0, o agente pode inventar dados sem respaldo e ser aprovado. Sem evidências, a nota é nula e a dimensão é ignorada.</li>
+            <li><strong>Mínimo de completude</strong> <code>0–5 · padrão 3</code> — cobertura dos pontos pedidos na pergunta. <strong>Mais alto = mais rígido.</strong> Perto de 5 exige cobrir até os pontos secundários; em 0, respostas que desviam da pergunta passam.</li>
+            <li><strong>Mínimo de tom</strong> <code>0–5 · padrão 3</code> — aderência ao tom e aos guardrails da skill. <strong>Mais alto = mais rígido.</strong></li>
+            <li><strong>Tokens máx. do juiz</strong> <code>100–8000 · padrão 800</code> — cap da resposta JSON do juiz. <strong>⚠️ Pegadinha de segurança:</strong> se o JSON truncar, o parse falha e a resposta é <strong>aprovada sem nenhuma nota de dimensão</strong> (falha em ABERTO). Baixar este cap abaixo de ~600 desliga a proteção multidimensional em silêncio. Mantenha ≥ 600.</li>
+            <li><strong>Retry de contrato</strong> <code>padrão: LIGADO</code> — quando o formato viola o contrato de saída, re-chama o LLM 1× com instrução cirúrgica de correção. Ligado conserta vírgula/chave faltando sem operador (custo: +1 chamada só na falha); desligado, qualquer violação trivial de formato reprova a resposta de imediato.</li>
+            <li><strong>Tokens máx. do retry</strong> <code>200–16000 · padrão 2000</code> — cap da re-chamada de correção (regenera o rascunho inteiro, por isso maior que o do juiz). Baixo demais trunca o rascunho corrigido: a revalidação falha, a chamada extra é desperdiçada e ainda reprova. Dimensione acima do maior output esperado da skill.</li>
+          </ul>
+          <p><strong>🎲 Produção assíncrona (amostragem)</strong> — julga só uma <em>amostra</em> das interações <strong>fora de pipeline</strong>, em background, sem bloquear a resposta. É distinto do controle "Auditoria" <strong>por pipeline</strong> (no Estúdio): este é o sampling global, só para interações que não são etapas de pipeline.</p>
+          <ul>
+            <li><strong>Modo assíncrono ligado</strong> <code>padrão: DESLIGADO</code> — <strong>⚠️ requer o Verifier v2 ligado</strong>; sem ele, nada é amostrado (flag morto). Quando ativo, a resposta ao usuário deixa de trazer o veredito do juiz (segue por heurística rasa) e o julgamento vira observabilidade pós-fato.</li>
+            <li><strong>Taxa de amostragem</strong> <code>0–1 · padrão 0.10</code> — fração julgada em background (0.10 = 10%). <strong>Mais alto = mais cobertura + mais custo/carga de LLM.</strong> Acima de 0.5 (com o modo ligado) a plataforma emite aviso de custo no boot; em 0, nada é julgado mesmo com o modo ligado.</li>
+            <li><strong>Julgamentos simultâneos (cap)</strong> <code>1–200 · padrão 20</code> — teto de julgamentos concorrentes. <strong>⚠️ Acima do cap, as amostras são descartadas em silêncio</strong> (só log interno): um cap baixo demais faz a cobertura real ficar bem abaixo da taxa que você configurou. Alto demais gera rajada/rate-limit no provedor de LLM.</li>
+          </ul>
+        `
+      },
+      {
+        kind: 'parametros_release',
+        title: 'Parâmetros · release & performance',
+        body: `
+          <p><strong>🚦 Gates de release (Harness)</strong> — critérios que uma avaliação precisa cumprir para uma <strong>release</strong> ser aprovada (Avaliação → executar o Harness). <strong>São gates PRÉ-DEPLOY: mexer aqui não quebra a produção em runtime</strong> — mas apertar demais bloqueia releases legítimas, e afrouxar demais deixa regressões passarem.</p>
+          <ul>
+            <li><strong>Harness usa o juiz</strong> <code>padrão: LIGADO</code> — re-julga cada caso do Golden Dataset e adiciona 6 checagens dimensionais além da acurácia. <strong>⚠️ Só tem efeito se o Verifier v2 também estiver ligado</strong> (padrão desligado); com o padrão de fábrica, o modo multidimensional do Harness não roda. Custa +1 chamada de LLM por caso.</li>
+            <li><strong>Acurácia mínima</strong> <code>0–1 · padrão 0.80</code> — fração ponderada de casos que precisam passar (estado + saída + sem red flag). <strong>Mais alto = mais rígido.</strong> Sempre ativo. Perto de 1.0 bloqueia por poucas falhas em casos adversariais; perto de 0 vira decorativo.</li>
+            <li><strong>Factualidade / Completude / Tom médios mínimos</strong> <code>0–5 · padrão 3.5 / 3 / 3</code> — pisos das médias por dimensão. <strong>Mais alto = mais rígido.</strong> Cada um só dispara se o juiz avaliou aquela dimensão (senão é pulado em silêncio).</li>
+            <li><strong>Máx. violações de segurança</strong> <code>0–1 · padrão 0.05</code> — teto da fração de casos com falha de segurança. <strong>Menor = mais rígido</strong> (0 não tolera nenhuma). Para agentes de alto risco, considere 0.</li>
+            <li><strong>Mín. conformidade de contrato</strong> <code>0–1 · padrão 0.95</code> — piso da fração de casos conformes ao contrato de saída. <strong>Mais alto = mais rígido</strong> (1.0 reprova a release se um único caso violar).</li>
+            <li><strong>Máx. taxa de alucinação</strong> <code>0–1 · padrão 0.10</code> — teto da fração de casos com afirmação sem respaldo nas evidências. <strong>Menor = mais rígido.</strong></li>
+            <li><strong>Máx. regressão por dimensão</strong> <code>0–100% · padrão 5</code> — queda tolerada de uma dimensão vs o <em>baseline</em>, só em execuções de regressão. <strong>Menor = mais rígido.</strong> Perto de 0 reprova por ruído normal do juiz; alto deixa passar piora real. Vale para factualidade, completude e tom; a regressão de <em>acurácia</em> usa sempre 5% fixo, independente deste campo.</li>
+          </ul>
+          <p><strong>⚡ Performance do invoke</strong> — otimizações do caminho de execução do pipeline. Efeito em runtime, sem restart.</p>
+          <ul>
+            <li><strong>Cache de topologia/schema</strong> <code>padrão: LIGADO</code> — memoiza dados imutáveis (schema, arestas do mesh, agentes) durante um invoke, colapsando centenas de idas ao banco. É <strong>correção-neutro</strong>: nunca muda o resultado, só a latência. Deixe ligado; desligue apenas como válvula de rollback se suspeitar de bug.</li>
+            <li><strong>Permitir roteamento rápido</strong> <code>padrão: DESLIGADO</code> — master switch que habilita pular a chamada de LLM do agente de triagem quando a rota é 100% decidida por args + pergunta. <strong>Sozinho não muda nada</strong>: cada pipeline ainda precisa ativar "Roteamento rápido" no Estúdio (opt-in em 2 etapas). Quando ativo, o triador é pulado (0 ms) e o especialista recebe os args crus em vez da prosa do triador — por isso é opt-in por pipeline. Guardas de elegibilidade impedem que a rota mude.</li>
+          </ul>
+        `
+      },
+      {
         kind: 'pegadinhas',
         title: 'Pegadinhas',
         items: [
+          { title: 'Tokens do juiz baixos demais = proteção desligada em silêncio', severity: 'danger', body: 'Se o cap "Tokens máx. do juiz" truncar o JSON do juiz, o parse falha e a resposta é APROVADA sem nenhuma nota de dimensão (falha em ABERTO). Baixar esse cap abaixo de ~600 desliga a auditoria multidimensional sem avisar. Mantenha ≥ 600 (padrão 800).' },
+          { title: 'Verifier v2 é pré-requisito de quase tudo na aba', severity: 'warning', body: 'Com "Verifier v2 ligado" DESLIGADO (o padrão de fábrica), os thresholds, o retry de contrato, o modo assíncrono e o "Harness usa o juiz" ficam todos inertes. Ligue o Verifier v2 primeiro — senão a aba Parâmetros fica decorativa.' },
+          { title: 'Thresholds altos recusam no meio do pipeline', severity: 'warning', body: 'Subir os mínimos de factualidade/completude/tom para perto de 5 faz respostas corretas mas imperfeitas virarem "Recusa controlada" — e num pipeline uma etapa reprovada corta o fluxo. Suba pouco a pouco, com medição.' },
+          { title: 'Amostragem: cap baixo esconde a cobertura real', severity: 'warning', body: 'Com o modo assíncrono ligado, um "cap de julgamentos simultâneos" baixo descarta amostras em silêncio: a cobertura REAL fica abaixo da "taxa de amostragem" que você configurou. E taxa acima de 0.5 dispara aviso de custo no boot.' },
+          { title: 'Gates do Harness são pré-deploy, não runtime', severity: 'info', body: 'Os campos de "Gates de release" só valem quando você roda a Avaliação/Harness antes de uma release. Não afetam o invoke em produção. Apertar demais bloqueia releases legítimas; afrouxar deixa regressão passar para produção.' },
+          { title: 'Roteamento rápido troca o que o especialista recebe', severity: 'warning', body: 'Ativá-lo faz o especialista receber os args crus em vez da prosa do triador. Se o pipeline dependia da síntese do triador, ative por pipeline e valide o resultado — é opt-in de 2 etapas (master global aqui + toggle "Roteamento rápido" no Estúdio).' },
           { title: 'Mudar Roteamento muda todos os agents com task_type', severity: 'warning', body: 'Configuração em "Roteamento LLM" afeta todos os agents que usam aquele task_type. Não é específica de um agent. Mude com cuidado em produção.' },
           { title: 'Modelo Primário só vale para agents SEM task_type', severity: 'info', body: 'Se o agent declara task_type, o Roteamento ganha. Primário é só fallback para agents legacy ou sem declaração.' },
           { title: 'API key pública é vazamento', severity: 'danger', body: 'Não cole API keys em código frontend, repositórios públicos, ou logs. Use o gerador em "API Keys" e proteja como senha.' },
@@ -1192,7 +1242,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         ]
       }
     ],
-    related: ['agents', 'observability', 'evidence']
+    related: ['quality', 'observability', 'releases', 'harness', 'agents']
   },
 
   // ═════════════════════════════════════════════════════════════════
