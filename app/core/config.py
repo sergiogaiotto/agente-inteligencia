@@ -230,6 +230,12 @@ class Settings(BaseSettings):
     # neutro (só evita re-consultar dado imutável). Default ON; toggle na aba
     # Parâmetros como válvula de rollback.
     query_topology_cache_enabled: bool = True
+    # Roteamento rápido (26.0.0): MASTER global. Habilita pular a chamada LLM do
+    # agente ENTRY (router) de um pipeline quando as arestas de saída são 100%
+    # determinísticas (só args selados + pergunta, nunca o output do router).
+    # Sozinho não muda nada — cada pipeline ainda precisa optar (coluna
+    # pipelines.fast_routing). Default OFF (mudança de comportamento gated).
+    fast_routing_enabled: bool = False
 
     # ── Policy Engine (Onda 4a — OPA Policy as Code) ──
     # Quando True, decisões sensíveis (PolicyCheck, tool invocation) consultam o
@@ -432,6 +438,7 @@ _UI_TO_ENV_MAP = {
     "harness_max_dim_regression_pct": "HARNESS_MAX_DIM_REGRESSION_PCT",
     # Tuning de performance (25.2.0)
     "query_topology_cache_enabled": "QUERY_TOPOLOGY_CACHE_ENABLED",
+    "fast_routing_enabled": "FAST_ROUTING_ENABLED",
 }
 
 # Chaves do módulo Parâmetros — usadas pelo endpoint GET /settings/parameters
@@ -457,6 +464,7 @@ PARAMETER_UI_KEYS = (
     "harness_max_hallucination_rate",
     "harness_max_dim_regression_pct",
     "query_topology_cache_enabled",
+    "fast_routing_enabled",
 )
 
 

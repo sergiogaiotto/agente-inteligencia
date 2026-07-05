@@ -64,6 +64,8 @@ def _serialize(p: dict, agent_ids: list) -> dict:
         "domain": p.get("domain"),
         "color": p.get("color") or "teal",
         "description": p.get("description"),
+        # Tuning 26.0.0: int 0/1 no banco → bool na API.
+        "fast_routing": bool(p.get("fast_routing", 0)),
         "agent_ids": agent_ids,
         "agent_count": len(agent_ids),
         "entry_agent_id": p.get("entry_agent_id"),
@@ -389,6 +391,7 @@ async def create_pipeline(data: PipelineCreate):
         "domain": (data.domain or None),
         "color": (data.color or "teal"),
         "description": (data.description or None),
+        "fast_routing": 1 if data.fast_routing else 0,
     })
     await audit_repo.create({
         "entity_type": "pipeline",
@@ -470,6 +473,8 @@ async def update_pipeline(pid: str, data: PipelineUpdate):
         patch["color"] = data.color or "teal"
     if data.description is not None:
         patch["description"] = data.description or None
+    if data.fast_routing is not None:
+        patch["fast_routing"] = 1 if data.fast_routing else 0
     if patch:
         patch["updated_at"] = naive_utc_now()
         await pipelines_repo.update(pid, patch)

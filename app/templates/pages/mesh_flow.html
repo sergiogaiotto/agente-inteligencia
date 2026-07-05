@@ -173,6 +173,25 @@
                         <p class="mt-1 text-[9.5px] text-surface-400 leading-snug">Cria uma publicação (rascunho) no Catálogo; aprove e publique por lá.</p>
                     </div>
 
+                    <!-- Configurações do pipeline (26.0.0) -->
+                    <div class="rounded-lg border border-surface-200 bg-surface-50/50 p-2.5" data-testid="pipeline-config">
+                        <label class="flex items-start gap-2 cursor-pointer">
+                            <input type="checkbox" data-testid="pipeline-fast-routing"
+                                   :checked="!!selectedPipeline.fast_routing"
+                                   @change="setFastRouting($event.target.checked)"
+                                   class="mt-0.5 h-3.5 w-3.5 rounded border-surface-300 text-brand-600 focus:ring-brand-400 shrink-0">
+                            <span class="flex-1 min-w-0">
+                                <span class="block text-[11px] font-semibold text-brand-900">⚡ Roteamento rápido</span>
+                                <span class="block text-[9.5px] text-surface-500 leading-snug mt-0.5">
+                                    Pula a chamada LLM do agente de triagem quando a rota é 100% decidida pelos
+                                    args + pergunta (não pela resposta do triador) — invoke bem mais rápido.
+                                    Requer o master ligado em Configurações → Parâmetros. Se alguma conexão
+                                    depender da resposta do triador, a plataforma roda o LLM normalmente.
+                                </span>
+                            </span>
+                        </label>
+                    </div>
+
                     <!-- membros -->
                     <div>
                         <button @click="toggleSection('members')" class="w-full flex items-center gap-1.5 py-1 mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-surface-400 hover:text-surface-600">
@@ -1656,6 +1675,15 @@ function meshFlowPage() {
                 showToast('Status: ' + (this.PIPE_STATUS[to] ? this.PIPE_STATUS[to].label : to));
                 await this.loadPipelines();
             } catch (e) { showToast('Transição inválida: ' + e.message, 'error'); }
+        },
+        // Roteamento rápido (26.0.0): liga/desliga por pipeline via PUT.
+        async setFastRouting(on) {
+            if (!this.selectedPipeline) return;
+            try {
+                await api.put('/api/v1/pipelines/' + this.selectedPipeline.id, { fast_routing: !!on });
+                this.selectedPipeline.fast_routing = !!on;
+                showToast(on ? 'Roteamento rápido ligado' : 'Roteamento rápido desligado');
+            } catch (e) { showToast('Erro ao salvar: ' + (e?.message || ''), 'error'); }
         },
         // PR4 — publica o pipeline no Catálogo (cria entry kind=pipeline em rascunho;
         // o lifecycle submit/approve/publish acontece na página da entry).

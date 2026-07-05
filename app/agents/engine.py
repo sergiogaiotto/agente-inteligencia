@@ -98,6 +98,91 @@ async def _topo_agent(agent_id: str) -> Optional[dict]:
 
 
 # ═══════════════════════════════════════════════════
+# Roteamento rápido (26.0.0) — pula o LLM do router quando determinístico
+# ═══════════════════════════════════════════════════
+# Variáveis da classe-OUTPUT: uma expr condicional que as usa depende do
+# output do agente anterior (o router). Se NENHUMA aresta de saída do entry
+# depende do output, o draft do router é peso morto e pode ser pulado — a
+# rota é 100% decidida por args selados + pergunta. Espelha CONDITIONAL_VARS_META.
+_OUTPUT_CLASS_VARS = frozenset({
+    "output", "output_lower", "output_length", "has_output", "final_state",
+    "is_recommend", "is_refuse", "is_escalate",
+    "contains_image", "contains_url", "contains_pdf", "lines_count",
+})
+
+
+def _expr_uses_output(expr: str) -> bool:
+    """True se a expr condicional referencia QUALQUER variável derivada do
+    output do agente anterior. Fail-safe: erro de parse ⇒ True (assume que
+    depende, roda o LLM)."""
+    if not expr or not expr.strip():
+        return False
+    try:
+        from jinja2 import Environment, meta
+        ast = Environment().parse("{{ " + expr + " }}")
+        used = meta.find_undeclared_variables(ast)
+    except Exception:
+        return True
+    return bool(used & _OUTPUT_CLASS_VARS)
+
+
+async def _skill_emits_structured_target(skill_id: str | None) -> bool:
+    """True se o skill do router declara roteamento ESTRUTURADO (emite o bloco
+    ``{"target": ..., "inputs": {...}}`` — Fase B #316). Esse bloco é AUTORITATIVO
+    sobre a expr em `_should_skip_conditional` (`_extract_routed_target`), mas só
+    existe se o router RODAR. Fast-routing pula o LLM ⇒ o bloco some ⇒ a rota
+    cairia na expr e poderia divergir. Detectar isso mantém a equivalência mesmo
+    quando as arestas têm expr input-only. Fail-safe: sem skill / erro / contrato
+    ausente ⇒ False (não é router estruturado conhecido)."""
+    if not skill_id:
+        return False
+    try:
+        row = await skills_repo.find_by_id(skill_id)
+        raw = (row or {}).get("raw_content") or ""
+        if not raw:
+            return False
+        contract = (parse_skill_md(raw).output_contract or "").lower()
+    except Exception:
+        return False
+    # O contrato do roteador Fase B descreve o objeto {"target","inputs"}. Ambos
+    # os termos ⇒ tratamos como roteador estruturado (recusa conservadora: no pior
+    # caso perde só o speedup, nunca a correção da rota).
+    return "target" in contract and "inputs" in contract
+
+
+async def _entry_fast_routable(entry_id: str, entry_agent: dict | None = None) -> bool:
+    """True se o ENTRY (router) pode ser pulado com segurança: TODAS as arestas
+    de saída roteiam SÓ por args selados + pergunta + anexos (nunca pelo output
+    do router). Qualquer aresta ambígua ⇒ False (fail-safe: roda o LLM).
+
+    Também recusa se o router emite TARGET ESTRUTURADO (skill declara o bloco
+    ``{"target","inputs"}``): esse override é autoritativo sobre a expr e só
+    existe se o router rodar — pulá-lo mudaria a rota."""
+    conns = await _topo_mesh_out(entry_id, limit=100)
+    if not conns:
+        return False  # sem arestas: o entry É o trabalho (single-agent)
+    for c in conns:
+        ct = c.get("connection_type")
+        if ct not in ("conditional", "default"):
+            return False  # sequential/parallel: não roteia por keyword
+        if ct == "conditional":
+            cfg = c.get("config") or "{}"
+            try:
+                cfg_dict = json.loads(cfg) if isinstance(cfg, str) else (cfg or {})
+            except Exception:
+                return False
+            expr = ((cfg_dict or {}).get("expr") or "").strip()
+            if not expr or _expr_uses_output(expr):
+                return False  # sem expr OU depende do output ⇒ não pula
+    # Guard do roteador estruturado (equivalência de rota): se o entry declara
+    # emitir {"target","inputs"}, a decisão real vem do LLM, não da expr — não pula.
+    ag = entry_agent if entry_agent is not None else (await _topo_agent(entry_id) or {})
+    if await _skill_emits_structured_target(ag.get("skill_id")):
+        return False
+    return True
+
+
+# ═══════════════════════════════════════════════════
 # Helpers — Idioma de resposta (resolução em cascata)
 # ═══════════════════════════════════════════════════
 
@@ -1735,11 +1820,17 @@ async def _run_declarative_as_interaction(
 
 
 def _verify_autopass(
-    pipeline_context, skip_evidence, exec_profile: str, v2_enabled: bool
+    is_pipeline_step, skip_evidence, exec_profile: str, v2_enabled: bool
 ) -> bool:
     """True → fase VerifyEvidence auto-passa SEM rodar verifier.
 
-    Steps de pipeline (pipeline_context truthy) pulam o verifier — EXCETO no
+    `is_pipeline_step` é o SINAL (bool ou string) de que a interação roda dentro
+    de um pipeline. O caller passa `pipeline_step or bool(pipeline_context)`:
+    o flag explícito cobre o downstream cujo upstream foi fast-routed (contexto
+    vazio) sem deixar de ser step de pipeline; a string do contexto cobre o
+    caminho legado. `not is_pipeline_step` funciona igual p/ bool/str/None.
+
+    Steps de pipeline (is_pipeline_step truthy) pulam o verifier — EXCETO no
     profile `rigorous` COM Verifier v2 LIGADO (decisão 2026-07-04: auditoria
     por step só onde o operador pediu rigor; cada julgamento custa +1 chamada
     LLM por step). Com v2 OFF o step de pipeline auto-passa como sempre —
@@ -1749,7 +1840,7 @@ def _verify_autopass(
     """
     if skip_evidence:
         return True
-    if not pipeline_context:
+    if not is_pipeline_step:
         return False
     return exec_profile != "rigorous" or not v2_enabled
 
@@ -1770,6 +1861,12 @@ async def execute_interaction(
     # verifications (agregação por pipeline na página Qualidade). None fora
     # de pipeline.
     pipeline_id: str | None = None,
+    # Roteamento rápido (26.0.0): sinal EXPLÍCITO de "sou step de pipeline"
+    # p/ o gate do verifier. Necessário porque com fast-routing o entry é
+    # pulado e o downstream recebe pipeline_context="" (vazio) — a veracidade
+    # do texto deixaria de sinalizar step de pipeline e o verifier dispararia
+    # indevidamente. execute_pipeline passa True nos downstream (i>0).
+    pipeline_step: bool = False,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
 
@@ -2501,7 +2598,7 @@ async def execute_interaction(
         )
         await fsm.run_verify_evidence({"ok": False, "confidence": 0.0})
     elif _verify_autopass(
-        pipeline_context, skip_evidence, exec_profile,
+        (pipeline_step or bool(pipeline_context)), skip_evidence, exec_profile,
         _pg_settings.verifier_v2_enabled,
     ):
         # Steps de pipeline auto-passam SEM verifier — EXCETO rigorous com
@@ -2511,7 +2608,7 @@ async def execute_interaction(
     elif (
         _pg_settings.verifier_v2_enabled
         and _pg_settings.verifier_production_async
-        and not pipeline_context
+        and not (pipeline_step or bool(pipeline_context))
     ):
         # `not pipeline_context`: step rigorous de pipeline NÃO entra no
         # sampling async — o judge async persistiria DEPOIS da consolidação
@@ -3379,6 +3476,19 @@ async def execute_pipeline(
             except Exception:
                 _pipeline_members = None
 
+    # Roteamento rápido (26.0.0): ativo só se o MASTER global permitir E o
+    # pipeline optou (coluna fast_routing). Elegibilidade estática das arestas
+    # é checada no loop (i==0) — fail-safe cai no LLM quando ambígua.
+    _fast_routing_active = False
+    try:
+        from app.core.config import get_settings as _gs_fr
+        if _gs_fr().fast_routing_enabled and entry_pipeline and int(
+            entry_pipeline.get("fast_routing") or 0
+        ):
+            _fast_routing_active = True
+    except Exception:
+        _fast_routing_active = False
+
     chain, parent_of = await _resolve_ordered_chain_with_parents(entry_agent_id, allowed_agent_ids)
     if not chain:
         chain = [entry_agent_id]
@@ -3440,6 +3550,64 @@ async def execute_pipeline(
                 "agent_name": agent.get("name", "?") if agent else "?",
                 "reason": "inativo",
             })
+            continue
+
+        # ══════════════════════════════════════════════════════
+        # ROTEAMENTO RÁPIDO (26.0.0): pula a chamada LLM do ENTRY (router)
+        # quando o pipeline optou E as arestas de saída são 100%
+        # determinísticas (só args selados + pergunta). A rota downstream
+        # fica IDÊNTICA (as arestas não leem o output do router); o
+        # especialista recebe user_input + args em vez da prosa do router.
+        # Fail-safe: _entry_fast_routable=False ⇒ roda o LLM normalmente.
+        # ══════════════════════════════════════════════════════
+        if (
+            i == 0
+            and _fast_routing_active
+            and len(chain) > 1
+            and await _entry_fast_routable(agent_id, entry_agent=agent)
+        ):
+            logger.info(
+                "pipeline.fast_routing",
+                extra={"event": "pipeline.fast_routing", "entry_agent_id": agent_id,
+                       "pipeline_id": pipeline_id},
+            )
+            steps.append({
+                "agent_id": agent_id,
+                "agent_name": agent.get("name", ""),
+                "agent_kind": agent.get("kind", ""),
+                "agent_model": agent.get("model", ""),
+                "status_message": (agent.get("processing_message") or "").strip(),
+                "status": "fast_routed",
+                "output": "",
+                "final_state": "FastRouted",
+                "duration_ms": 0,
+                "evidence_score": 0,
+                "transitions": [],
+                "trace": {
+                    "total_steps": 0, "evidence_count": 0, "evidence_sources": [],
+                    "diagnostics": [{"level": "info", "text": (
+                        f"Roteamento rápido: {agent.get('name','')} (router) pulado — "
+                        "rota decidida pelos args + pergunta, sem chamada LLM (0ms).")}],
+                    "agent_name": agent.get("name", ""),
+                    "agent_kind": agent.get("kind", ""),
+                    "agent_model": agent.get("model", ""),
+                    "execution_log": [{"cat": "agent", "icon": "⚡",
+                        "title": f"Roteamento rápido: {agent.get('name','')}",
+                        "detail": "Arestas determinísticas → router pulado (0ms).",
+                        "level": "info"}],
+                },
+            })
+            # Propaga como se o router tivesse output vazio: downstream roteia
+            # pelos args+pergunta (have_upstream=True, output=""). Set em AMBOS
+            # os caminhos de parent-resolution (linear via last_result;
+            # fan-out via outputs_by_id).
+            outputs_by_id[agent_id] = ""
+            final_states_by_id[agent_id] = "FastRouted"
+            names_by_id[agent_id] = agent.get("name", "")
+            last_result = {"output": "", "final_state": "FastRouted",
+                           "interaction_id": None, "agent_id": agent_id}
+            await _emit({"type": "agent_fast_routed", "step_index": i,
+                         "agent_id": agent_id, "agent_name": agent.get("name", "")})
             continue
 
         # ══════════════════════════════════════════════════════
@@ -3774,6 +3942,10 @@ async def execute_pipeline(
                     if (_pipeline_members is None or agent_id in _pipeline_members)
                     else None
                 ),
+                # Todo downstream (i>0) É step de pipeline p/ o gate do verifier,
+                # mesmo com upstream fast-routed (pipeline_context vazio). O entry
+                # (i==0) mantém o comportamento atual (sinal via pipeline_context).
+                pipeline_step=(i > 0),
             )
             iid = result.get("interaction_id")
             # Primeiro agente executado (não pass-through) vira o master
