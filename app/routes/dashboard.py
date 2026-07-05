@@ -2706,6 +2706,9 @@ class SettingsSave(BaseModel):
     # Esforço de raciocínio das gerações do Wizard (27.0.0): 'high'|'medium'|
     # 'low'|'' (desligado). Gate por modelo em get_provider. Default 'high'.
     wizard_reasoning_effort: Optional[str] = None
+    # P0 API externa: CORS allowlist (CSV de origens) + contenção da API Key.
+    cors_allowed_origins: Optional[str] = None
+    api_key_public_surface_only: Optional[bool] = None
 
 @router.get("/settings")
 async def get_settings(user: dict = Depends(require_role("root", "admin"))):
