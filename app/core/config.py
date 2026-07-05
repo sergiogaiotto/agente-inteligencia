@@ -237,6 +237,14 @@ class Settings(BaseSettings):
     # pipelines.fast_routing). Default OFF (mudança de comportamento gated).
     fast_routing_enabled: bool = False
 
+    # Esforço de raciocínio das GERAÇÕES do Wizard (SKILL.md + agente). O gate por
+    # MODELO vive em get_provider: 'high' só CHEGA ao modelo que aceita (gpt-oss
+    # sempre; Azure/OpenAI só o1/o3/o4/gpt-5 — gpt-4o/gpt-4.1 descartam sem erro,
+    # sem 400). 'high'|'medium'|'low' ou '' (desligado). Default 'high' = o
+    # comportamento anterior (constante hardcoded no wizard). Editável na aba
+    # Parâmetros, runtime sem restart.
+    wizard_reasoning_effort: str = "high"
+
     # ── Policy Engine (Onda 4a — OPA Policy as Code) ──
     # Quando True, decisões sensíveis (PolicyCheck, tool invocation) consultam o
     # OPA em opa_url e seguem a decisão. Auditoria via audit_log.
@@ -439,6 +447,9 @@ _UI_TO_ENV_MAP = {
     # Tuning de performance (25.2.0)
     "query_topology_cache_enabled": "QUERY_TOPOLOGY_CACHE_ENABLED",
     "fast_routing_enabled": "FAST_ROUTING_ENABLED",
+    # Esforço de raciocínio das gerações do Wizard (skill/agente) — gate por
+    # modelo em get_provider. 'high'|'medium'|'low'|'' (desligado). Default 'high'.
+    "wizard_reasoning_effort": "WIZARD_REASONING_EFFORT",
 }
 
 # Chaves do módulo Parâmetros — usadas pelo endpoint GET /settings/parameters
@@ -465,6 +476,7 @@ PARAMETER_UI_KEYS = (
     "harness_max_dim_regression_pct",
     "query_topology_cache_enabled",
     "fast_routing_enabled",
+    "wizard_reasoning_effort",
 )
 
 

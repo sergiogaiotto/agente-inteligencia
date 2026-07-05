@@ -1264,7 +1264,7 @@ async def get_llm_routing():
             "reasoning": "Texto com raciocínio. Pra tarefas que exigem análise/explicação em PT-BR. Default: GPT-OSS-120B (open-weight via hub interno).",
             "instruct": "Apenas texto (instruction following). Inferência comum. **Aceita imagens** — quando input é multimodal, plataforma roteia automaticamente pro multimodal_fallback. Default: GPT-OSS-20B (open-weight via hub interno).",
             "classification": "Classificação e categorização. Estruturação de informações em labels/buckets fixos. Default: GPT-OSS-20B (open-weight via hub interno).",
-            "skill_generation": "Criação e alteração de SKILL.md no Wizard. Como o SKILL.md precisa respeitar um formato rígido, escolha um modelo forte em seguir instruções e gerar saída estruturada (JSON). Default: o modelo global da plataforma (Modelo Primário) — você pode trocar aqui a qualquer momento.",
+            "skill_generation": "Criação e alteração de SKILL.md no Wizard. Como o SKILL.md precisa respeitar um formato rígido, escolha um modelo forte em seguir instruções e gerar saída estruturada (JSON). Default: o modelo global da plataforma (Modelo Primário) — você pode trocar aqui a qualquer momento. O esforço de raciocínio dessa geração é configurável em Parâmetros → 'Esforço de raciocínio do Wizard' e só se aplica a modelos que suportam (gpt-oss sempre; Azure/OpenAI só o1/o3/o4/gpt-5 — gpt-4o/gpt-4.1 ignoram sem erro).",
             "judge": "LLM como Juiz (Verifier): avalia cada resposta dos agentes em 4 dimensões — factualidade, completude, tom e segurança — e alimenta as páginas Qualidade e o gate de release do Harness. Escolha um modelo forte em análise e saída JSON. Default: Azure GPT-4o (ou a variável VERIFIER_JUDGE_MODEL, se configurada no ambiente).",
             "multimodal_fallback": "Modelo usado quando o input contém imagem mas o modelo da task escolhida é text-only. Default: Azure GPT-4o (único multimodal nativo pronto pra produção).",
         },
@@ -2688,6 +2688,9 @@ class SettingsSave(BaseModel):
     # Tuning de performance do invoke (25.2.0)
     query_topology_cache_enabled: Optional[bool] = None
     fast_routing_enabled: Optional[bool] = None
+    # Esforço de raciocínio das gerações do Wizard (27.0.0): 'high'|'medium'|
+    # 'low'|'' (desligado). Gate por modelo em get_provider. Default 'high'.
+    wizard_reasoning_effort: Optional[str] = None
 
 @router.get("/settings")
 async def get_settings(user: dict = Depends(require_role("root", "admin"))):
