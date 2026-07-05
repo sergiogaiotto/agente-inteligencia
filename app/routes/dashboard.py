@@ -979,6 +979,21 @@ async def list_eval_runs(release_id: str = None, limit: int = 20):
     return {"runs": runs}
 
 
+@router.delete("/eval-runs/{run_id}")
+async def delete_eval_run(run_id: str):
+    """Remove uma execução de avaliação (housekeeping). Fecha o gap achado no
+    E2E 2026-06-23 ("não há DELETE de eval_runs"): runs órfãos — ex.: agente
+    deletado → accuracy 0.0 espúria — não podiam ser apagados via API.
+
+    Gating: mantido no MESMO nível dos irmãos do módulo (delete_gold_case e
+    /eval-runs/execute são ungated). Role-gating dos mutadores de Avaliação/
+    Qualidade é item cross-cutting do backlog de segurança — não introduzido
+    aqui isolado (seria inconsistente com o irmão aberto)."""
+    if not await eval_runs_repo.delete(run_id):
+        raise HTTPException(404, "Execução de avaliação não encontrada")
+    return {"message": "Execução removida"}
+
+
 # ── Comparação side-by-side (§9.5) — Onda 5 ───────────────────────
 
 # Direção de cada métrica: 'up' = maior é melhor; 'down' = menor é melhor.
