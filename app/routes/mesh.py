@@ -32,6 +32,31 @@ def _fanout_roots(edges: list[dict]) -> list[str]:
     return [src for src, n in counts.items() if n >= 2]
 
 
+def _conditional_without_expr(edges: list[dict]) -> list[str]:
+    """IDs de arestas ``conditional`` SEM regra (``expr`` vazia/ausente).
+
+    No engine, uma condicional sem ``expr`` é tratada como "sempre passa"
+    (idêntica a ``sequential``, ver engine.py::_should_skip_conditional) — a
+    pegadinha que faz um roteador com fan-out rodar TODOS os destinos em vez de
+    escolher 1-de-N. `get_topology` expõe isto pra UI avisar o operador a
+    preencher a regra antes de publicar. Sem falso-positivo: só sinaliza o
+    padrão (tipo condicional + expr em branco), não julga a intenção.
+    """
+    flagged: list[str] = []
+    for e in edges:
+        if e.get("type") != "conditional":
+            continue
+        cfg = e.get("config") or {}
+        if isinstance(cfg, str):
+            try:
+                cfg = json.loads(cfg) or {}
+            except Exception:
+                cfg = {}
+        if not str((cfg or {}).get("expr") or "").strip():
+            flagged.append(e.get("id"))
+    return flagged
+
+
 def _detect_roots(edges: list[dict]) -> list[str]:
     """Raízes do mesh = sources que NUNCA são target (entrada de uma cadeia).
 
@@ -99,6 +124,7 @@ async def get_topology():
         "nodes": nodes,
         "edges": edges,
         "fanout_roots": _fanout_roots(edges),
+        "conditional_no_expr": _conditional_without_expr(edges),
         "roots": _detect_roots(edges),
     }
 
