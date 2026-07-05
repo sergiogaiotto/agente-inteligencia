@@ -72,6 +72,30 @@ class TestWritesUseNaiveUtc:
         self._assert_utc_naive(captured["ended_at"])
 
     @pytest.mark.asyncio
+    async def test_fsm_transition_timestamp_is_utc(self):
+        """O timestamp do transition_log (que vira result['transitions'] e
+        pipeline_steps[].transitions[].timestamp) deve ser UTC — antes usava
+        time.strftime() sem gmtime = hora LOCAL (BRT), divergindo do ended_at
+        UTC e produzindo "terminou antes de começar" no dashboard."""
+        from app.agents.state_machine import (
+            InteractionStateMachine,
+            InteractionContext,
+            State,
+        )
+
+        # interaction_id None → transition NÃO persiste (pula repos), só popula
+        # o transition_log em memória, que é o que a UI consome.
+        ctx = InteractionContext()
+        ctx.current_state = State.INTAKE
+        fsm = InteractionStateMachine(ctx)
+        await fsm.transition(State.POLICY_CHECK)  # 1ª transição válida (§15)
+
+        assert ctx.transition_log, "transition_log deveria ter 1 entrada"
+        ts = ctx.transition_log[-1]["timestamp"]
+        parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
+        self._assert_utc_naive(parsed)
+
+    @pytest.mark.asyncio
     async def test_declarative_finalize_ended_at(self, monkeypatch):
         from app.agents import declarative_engine
 
@@ -94,8 +118,15 @@ class TestConventionNoLocalNowInWrites:
     reincidência deve usar naive_utc_now()."""
 
     FORBIDDEN = re.compile(
-        r"\"(?:ended_at|started_at|created_at|updated_at)\":\s*datetime\.(?:now|utcnow)\(\)"
+        r"\"(?:ended_at|started_at|created_at|updated_at|last_updated|timestamp)\":"
+        r"\s*datetime\.(?:now|utcnow)\(\)"
     )
+
+    # time.strftime(fmt) SEM 2º argumento usa time.localtime() implícito = hora
+    # LOCAL do container. Para persistir, use naive_utc_now().strftime(...) ou,
+    # se precisar de time, time.strftime(fmt, time.gmtime()). Este padrão só casa
+    # a forma de-um-argumento (a de dois args, com gmtime, tem vírgula e escapa).
+    LOCAL_STRFTIME = re.compile(r"time\.strftime\(\s*[\"'][^\"']*[\"']\s*\)")
 
     def test_no_forbidden_timestamp_writes(self):
         offenders = []
@@ -107,4 +138,20 @@ class TestConventionNoLocalNowInWrites:
         assert not offenders, (
             "Writes de TIMESTAMP com datetime.now()/utcnow() — use "
             "app.core.datetime_utils.naive_utc_now():\n" + "\n".join(offenders)
+        )
+
+    def test_no_local_strftime_without_gmtime(self):
+        """time.strftime(fmt) sem gmtime grava hora LOCAL — regressão do
+        transition_log em BRT (state_machine.py). Use naive_utc_now().strftime()
+        ou time.strftime(fmt, time.gmtime())."""
+        offenders = []
+        for path in Path("app").rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for m in self.LOCAL_STRFTIME.finditer(text):
+                line = text[: m.start()].count("\n") + 1
+                offenders.append(f"{path}:{line} → {m.group(0)}")
+        assert not offenders, (
+            "time.strftime(fmt) sem 2º argumento grava hora LOCAL — use "
+            "naive_utc_now().strftime(...) ou time.strftime(fmt, time.gmtime()):\n"
+            + "\n".join(offenders)
         )
