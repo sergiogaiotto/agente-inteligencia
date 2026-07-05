@@ -199,10 +199,17 @@ class TestEngineEWorkspaceInvariantes:
     def test_ramo_async_exclui_steps_de_pipeline(self):
         """Finding MEDIUM da revisão: o judge async persistiria DEPOIS da
         consolidação (que re-aponta e deleta as filhas) → linha órfã. Step
-        rigorous de pipeline deve cair no ramo SÍNCRONO."""
+        rigorous de pipeline deve cair no ramo SÍNCRONO.
+
+        26.0.0 (fast-routing): o sinal virou `pipeline_step or bool(ctx)` —
+        downstream com upstream pulado (pipeline_context vazio) TAMBÉM é step
+        de pipeline e continua fora do async."""
         from pathlib import Path
         src = Path("app/agents/engine.py").read_text(encoding="utf-8")
-        assert "verifier_production_async\n        and not pipeline_context" in src
+        assert (
+            "verifier_production_async\n"
+            "        and not (pipeline_step or bool(pipeline_context))"
+        ) in src
 
     def test_pipeline_id_inferido_filtra_por_membership(self):
         """Finding LOW da revisão: run de mesh LIVRE pode percorrer agentes

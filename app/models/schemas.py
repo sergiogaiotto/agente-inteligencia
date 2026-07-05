@@ -181,12 +181,15 @@ class PipelineCreate(BaseModel):
     domain: Optional[str] = None
     color: Optional[str] = "teal"
     description: Optional[str] = None
+    # Tuning 26.0.0: roteamento rápido opt-in (pula a chamada LLM do router).
+    fast_routing: Optional[bool] = False
 
 class PipelineUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     domain: Optional[str] = None
     color: Optional[str] = None
     description: Optional[str] = None
+    fast_routing: Optional[bool] = None
 
 class PipelineStatusChange(BaseModel):
     status: str

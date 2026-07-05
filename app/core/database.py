@@ -856,6 +856,10 @@ CREATE TABLE IF NOT EXISTS pipelines (
     domain TEXT,
     color TEXT DEFAULT 'teal',
     description TEXT,
+    -- Tuning (26.0.0): roteamento rápido (pula a chamada LLM do router)
+    -- opt-in por pipeline. Coluna também em _IDEMPOTENT_MIGRATIONS p/ DBs
+    -- existentes.
+    fast_routing INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now()
 );
@@ -1065,6 +1069,8 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS contract_version INTEGER",
     "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS contract_hash TEXT",
     "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS contract_sealed_at TIMESTAMP",
+    # Tuning 26.0.0: roteamento rápido opt-in por pipeline.
+    "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS fast_routing INTEGER DEFAULT 0",
     # Onda Tabular: kb_mode declara o tipo de conteúdo da KS.
     # - 'text': só RAG (textos, FAQs, contratos). Upload de planilha vira chunks markdown.
     # - 'tabular': só Tabelas DuckDB. Rejeita formatos não-estruturados. ZERO chunks no Qdrant/Postgres.

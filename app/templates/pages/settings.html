@@ -1376,6 +1376,7 @@ function settingsPage() {
               hint: 'Otimizações do caminho de execução de pipeline. Efeito em runtime, sem restart.',
               items: [
                 {key:'query_topology_cache_enabled', type:'bool', label:'Cache de topologia/schema', desc:'Evita re-consultar o mesmo dado imutável (schema, arestas do mesh, agentes) durante um invoke — colapsa centenas de idas ao banco. Seguro; desligue só como válvula de rollback.'},
+                {key:'fast_routing_enabled', type:'bool', label:'Permitir roteamento rápido', desc:'Master switch: habilita pular a chamada LLM do agente de triagem (router) quando a rota é 100% decidida pelos args + pergunta. Sozinho não muda nada — cada pipeline ainda precisa ativar "Roteamento rápido" no Estúdio.'},
               ]},
         ],
         _paramMeta() {
