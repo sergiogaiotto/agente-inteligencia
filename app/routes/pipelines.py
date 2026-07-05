@@ -84,6 +84,30 @@ async def _require(pid: str) -> dict:
     return p
 
 
+def _guard_api_key_published_only(request, p: dict) -> None:
+    """P1: quando o principal veio por API Key e o toggle
+    ``api_key_invoke_published_only`` está ligado, só permite invocar pipelines
+    PUBLICADOS (contrato SELADO). Rascunho → 403. Cookie/UI segue livre para
+    testar rascunhos. Default OFF (comportamento atual)."""
+    if not getattr(request.state, "api_key_id", None):
+        return  # cookie/UI ou não-autenticado por key → não gateia
+    if p.get("status") == "publicado":
+        return
+    from app.core.config import get_settings
+    if not get_settings().api_key_invoke_published_only:
+        return
+    raise HTTPException(
+        403,
+        {
+            "error": "pipeline_not_published",
+            "reason": "api_key_invoke_published_only",
+            "hint": f"A API Key só invoca pipelines PUBLICADOS; "
+                    f"'{p.get('name')}' está em '{p.get('status')}'. "
+                    f"Publique-o ou use a sessão de UI.",
+        },
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Args estruturados do invoke (D1/D2) — campo `args` opcional no contrato.
 # Reusa o schema que o `/inputs-schema` já publica (## Inputs do agente-raiz) +
@@ -642,6 +666,7 @@ async def invoke_pipeline(
     p = await _require(pid)
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
+    _guard_api_key_published_only(request, p)
     user_input = (data.message or data.input or "").strip()
     # `dry` dispensa entrada (resolve o que houver, até defaults). `args` presente
     # — MESMO `{}` — engaja o contrato (defaults podem preencher); por isso o guard
@@ -773,6 +798,7 @@ async def invoke_pipeline_stream(
     p = await _require(pid)
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
+    _guard_api_key_published_only(request, p)
     user_input = (data.message or data.input or "").strip()
     # `is None` (não `not data.args`): `args:{}` engaja o contrato — paridade com o
     # /invoke sync e com o gatilho de fold abaixo.

@@ -155,13 +155,26 @@ limiter = RateLimiter()
 
 
 def _client_identity(request: Request) -> str:
-    """Retorna user:<uid> se autenticado, ip:<addr> caso contrário.
+    """Retorna key:<hash> (API key), user:<uid> (cookie) ou ip:<addr>.
 
     Lê o user_id do cookie de sessão ASSINADO (read_session_uid) — um cookie
     forjado não vira uma identidade `user:` (cai no bucket por IP), evitando
     que um atacante escape do rate-limit com cookies arbitrários.
+
+    API key (integração): balde PRÓPRIO por key (F5) — dois frontends atrás do
+    MESMO IP não competem pelo mesmo balde. O rate-limit roda ANTES do auth
+    (sem api_key_id no state ainda), então a identidade vem do HASH do valor da
+    key (sync, sem ida ao banco); a validação real acontece depois no auth. Uma
+    key inválida ganha seu próprio balde de 401s BARATOS (sem LLM) — o caminho
+    caro (invoke) exige key válida, então o floor de custo permanece protegido.
     """
-    from app.core.auth import read_session_uid
+    from app.core.auth import read_session_uid, _extract_api_key_from_headers
+
+    api_key = _extract_api_key_from_headers(request)
+    if api_key:
+        import hashlib
+        return "key:" + hashlib.sha256(api_key.encode()).hexdigest()[:16]
+
     uid = read_session_uid(request)
     if uid:
         return f"user:{uid}"

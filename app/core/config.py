@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     # (comportamento atual). O bloqueio das rotas de ESCALAÇÃO/segredo (criar/gerir
     # api-keys, settings, users) é SEMPRE aplicado, independente deste toggle.
     api_key_public_surface_only: bool = False
+    # Quando True, um principal-via-API-Key só invoca pipelines PUBLICADOS (o
+    # contrato SELADO); rascunho/aposentado → 403. Sessão de UI (cookie) continua
+    # invocando rascunhos p/ testar. Default OFF (comportamento atual).
+    api_key_invoke_published_only: bool = False
 
     # ── Embedding provider (Qwen3 | Azure) ──
     # Default: Qwen3 (open-weight via hub interno). Reusa URL/key do OSS source
@@ -408,6 +412,7 @@ _UI_TO_ENV_MAP = {
     # CORS: allowlist de origens (CSV). Contenção da API Key: toggle de superfície pública.
     "cors_allowed_origins": "CORS_ALLOWED_ORIGINS",
     "api_key_public_surface_only": "API_KEY_PUBLIC_SURFACE_ONLY",
+    "api_key_invoke_published_only": "API_KEY_INVOKE_PUBLISHED_ONLY",
     # Timezone da plataforma (IANA: America/Sao_Paulo = GMT-3 Brasília, padrão).
     # Aplicado a os.environ['TZ'] + time.tzset() e exposto à UI (window.PLATFORM_TZ).
     "timezone": "TZ",
@@ -512,6 +517,7 @@ _NON_MODEL_UI_KEYS = {
     "default_response_language", # idioma de resposta global (BCP-47)
     "cors_allowed_origins",      # allowlist CORS (não é credencial/modelo)
     "api_key_public_surface_only",  # toggle de contenção da API Key
+    "api_key_invoke_published_only",  # toggle published-only p/ invoke via key
     "mcp_per_tool_enabled",      # flag do modo per-tool MCP (default OFF)
     "text_to_sql_enabled",       # flag do Tier 2 text-to-SQL governado (default OFF)
     "timezone",                  # timezone da plataforma (IANA); default Brasília
