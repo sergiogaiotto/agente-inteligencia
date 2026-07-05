@@ -52,3 +52,45 @@ def test_runs_when_both_exist(monkeypatch):
     r = _client().post("/api/v1/eval-runs/execute", json=_BODY)
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "completed"
+
+
+# ── DELETE /eval-runs/{id} (housekeeping — 27.1.0) ────────────────
+
+def test_delete_eval_run_ok(monkeypatch):
+    monkeypatch.setattr(dash.eval_runs_repo, "delete", _async(True))
+    r = _client().delete("/api/v1/eval-runs/some-id")
+    assert r.status_code == 200, r.text
+    assert "removida" in r.json()["message"].lower()
+
+
+def test_delete_eval_run_404_when_missing(monkeypatch):
+    monkeypatch.setattr(dash.eval_runs_repo, "delete", _async(False))
+    r = _client().delete("/api/v1/eval-runs/ghost")
+    assert r.status_code == 404, r.text
+
+
+# ── run_evaluation com agente deletado → invalid_agent (27.1.0) ───
+
+@pytest.mark.asyncio
+async def test_run_evaluation_invalid_agent(monkeypatch):
+    """Agente deletado → run encerra como 'invalid_agent'/skipped SEM avaliar
+    caso algum (não polui accuracy). Antes: cada caso caía no except do engine
+    e virava 'failed', gerando accuracy 0.0 espúria."""
+    monkeypatch.setattr(evaluator.eval_runs_repo, "create", _async(None))
+    monkeypatch.setattr(evaluator.eval_runs_repo, "update", _async(None))
+    # HÁ casos no dataset (passa o guard no_cases)...
+    monkeypatch.setattr(
+        evaluator.gold_cases_repo, "find_all",
+        _async([{"input_text": "x", "weight": 1.0}]),
+    )
+    # ...mas o agente NÃO existe:
+    monkeypatch.setattr(evaluator.agents_repo, "find_by_id", _async(None))
+
+    # execute_interaction NÃO pode ser chamado (nenhum caso avaliado).
+    def _boom(*a, **k):
+        raise AssertionError("execute_interaction não deveria rodar com agente inválido")
+    monkeypatch.setattr(evaluator, "execute_interaction", _boom)
+
+    out = await evaluator.run_evaluation("r1", "ghost-agent", "latest", "baseline")
+    assert out["status"] == "invalid_agent", out
+    assert "não existe" in out["message"]

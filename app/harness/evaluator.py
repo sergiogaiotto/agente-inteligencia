@@ -25,7 +25,7 @@ import time
 import logging
 from collections import Counter
 
-from app.core.database import gold_cases_repo, eval_runs_repo, releases_repo
+from app.core.database import gold_cases_repo, eval_runs_repo, releases_repo, agents_repo
 from app.core.config import get_settings
 from app.agents.engine import execute_interaction
 
@@ -202,6 +202,22 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
     if not cases:
         await eval_runs_repo.update(eval_id, {"status": "no_cases", "gate_result": "skipped"})
         return {"eval_id": eval_id, "status": "no_cases", "message": "Nenhum caso no Golden Dataset"}
+
+    # Resolve o agente UMA vez, ANTES do loop. Se ele não existe mais (deletado),
+    # cada caso cairia no except "Agente não encontrado" (engine.py) e seria
+    # contado como FAILED → accuracy 0.0 espúria (não é a plataforma ruim, é o
+    # alvo que sumiu). Em vez disso, encerra o run como 'invalid_agent'/skipped
+    # (espelha o caminho no_cases acima) SEM avaliar nenhum caso. Também fecha a
+    # janela de corrida do guard da rota /execute (agente deletado entre a
+    # validação e este ponto — resoluções independentes).
+    if not await agents_repo.find_by_id(agent_id):
+        await eval_runs_repo.update(eval_id, {"status": "invalid_agent", "gate_result": "skipped"})
+        return {
+            "eval_id": eval_id,
+            "status": "invalid_agent",
+            "message": f"Agente {agent_id} não existe — execução não realizada "
+                       f"(nenhum caso avaliado; accuracy não computada).",
+        }
 
     total = len(cases)
     passed = 0
