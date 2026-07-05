@@ -2709,6 +2709,8 @@ class SettingsSave(BaseModel):
     # P0 API externa: CORS allowlist (CSV de origens) + contenção da API Key.
     cors_allowed_origins: Optional[str] = None
     api_key_public_surface_only: Optional[bool] = None
+    # P1: invoke via key só em pipelines publicados (contrato selado).
+    api_key_invoke_published_only: Optional[bool] = None
 
 @router.get("/settings")
 async def get_settings(user: dict = Depends(require_role("root", "admin"))):
