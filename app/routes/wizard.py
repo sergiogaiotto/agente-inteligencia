@@ -34,6 +34,7 @@ from app.core.llm_providers import (
 )
 from app.llm_routing import resolve_llm_for_task, load_routing
 from app.core.config import get_settings
+from app.skill_parser.parser import strip_code_fence
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1386,6 +1387,10 @@ async def wizard_skill(data: WizardSkillRequest):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ], provider, model, route="skill", reasoning_effort=_wizard_reasoning_effort())
+        # Descasca a cerca de código (```markdown … ```) que o LLM às vezes
+        # embrulha — o RETORNO (skill_md) ia com o wrapper mesmo o parser
+        # tolerando internamente. Mesma lógica do parser (helper compartilhado).
+        skill_md = strip_code_fence(skill_md)
         # Contrato MCP (fix bug "tavily a", 2026-06-08): força o ## Inputs ao
         # `{operation, query}` quando há tool MCP e o LLM inventou inputs de
         # domínio. Antes de validar, pra o validador ver a versão corrigida.
@@ -1429,6 +1434,7 @@ async def wizard_skill(data: WizardSkillRequest):
                     {"role": "user", "content": user_prompt},
                 ], used_provider, used_model, route="skill",
                     reasoning_effort=_wizard_reasoning_effort())
+                retry_skill_md = strip_code_fence(retry_skill_md)
                 retry_skill_md = _ensure_mcp_inputs_contract(retry_skill_md, bindings.get("mcp_tools") or [])
                 # Re-valida o retry — se também violar, mantém o RETRY (geralmente
                 # melhor que o original) mas devolve warnings pro operador

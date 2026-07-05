@@ -4,11 +4,30 @@ import uuid, json, hashlib
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import SkillCreateRaw, SkillCreateManual
 from app.core.database import skills_repo
-from app.skill_parser.parser import parse_skill_md, skill_to_db_dict
+from app.skill_parser.parser import (
+    parse_skill_md, skill_to_db_dict, REQUIRED_SECTIONS, OPTIONAL_SECTIONS,
+)
 from app.skill_parser.linter import lint_skill
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"])
+
+# Nomes de seção conhecidos (H2) — um nome de skill NUNCA deve ser um desses.
+_KNOWN_SECTION_NAMES = {s.strip().lower() for s in (REQUIRED_SECTIONS + OPTIONAL_SECTIONS)}
+
+
+def _reject_bad_skill_name(name: str) -> None:
+    """422 quando o nome extraído é um heading/seção vazado — ex.: SKILL.md sem
+    título H1 cujo primeiro conteúdo era '## Evidence Policy'. Defense-in-depth
+    com o parser (que já pula headings): barra também quem chega por outra via."""
+    n = (name or "").strip()
+    if n.startswith("#") or n.lstrip("#").strip().lower() in _KNOWN_SECTION_NAMES:
+        raise HTTPException(
+            422,
+            detail="Nome inválido: a SKILL.md precisa de um título H1 (ex.: "
+                   "'# Verificador de Número Primo') na primeira linha. O valor "
+                   "extraído parece um cabeçalho de seção.",
+        )
 
 
 def _raise_for_db_error(e: Exception, urn: str) -> None:
@@ -181,6 +200,7 @@ async def create_skill(data: SkillCreateRaw):
     Salva mesmo com avisos de validação (seções faltantes).
     Rejeita apenas se não houver frontmatter ou nome."""
     parsed = parse_skill_md(data.raw_content)
+    _reject_bad_skill_name(parsed.name)
 
     if not parsed.name or parsed.name == "Skill sem nome" and len(data.raw_content.strip()) < 20:
         raise HTTPException(422, detail="Conteúdo insuficiente para criar skill")
@@ -224,6 +244,7 @@ async def update_skill(skill_id: str, data: SkillCreateRaw):
     existing = await skills_repo.find_by_id(skill_id)
     if not existing: raise HTTPException(404)
     parsed = parse_skill_md(data.raw_content)
+    _reject_bad_skill_name(parsed.name)
     db_data = skill_to_db_dict(parsed)
     db_data["version"] = _bump_version(existing.get("version", "0.1.0"))
     db_data["tags"] = data.tags or existing.get("tags", "[]")

@@ -92,15 +92,24 @@ class ParsedSkill:
     is_valid: bool = True
 
 
+def strip_code_fence(text: str) -> str:
+    """Remove a cerca de código markdown (```markdown/md/yaml … ```) que o wizard
+    às vezes embrulha na saída do LLM. Idempotente: sem cerca, é no-op.
+
+    Fonte ÚNICA dessa lógica — o wizard reusa isto (antes o parser limpava só
+    numa cópia interna e o raw voltava COM a cerca)."""
+    t = (text or "").strip()
+    t = re.sub(r'^```(?:markdown|md|yaml)?\s*\n', '', t)
+    t = re.sub(r'\n```\s*$', '', t)
+    return t.strip()
+
+
 def parse_skill_md(content: str) -> ParsedSkill:
     """Faz parsing completo de um SKILL.md conforme anatomia canônica §5.
     Resiliente: remove code fences, busca frontmatter em qualquer posição,
     gera defaults quando ausente."""
-    # ── Pré-processamento: remove code fences do wizard ──
-    cleaned = content.strip()
-    cleaned = re.sub(r'^```(?:markdown|md|yaml)?\s*\n', '', cleaned)
-    cleaned = re.sub(r'\n```\s*$', '', cleaned)
-    cleaned = cleaned.strip()
+    # ── Pré-processamento: remove code fences do wizard (helper compartilhado) ──
+    cleaned = strip_code_fence(content)
 
     result = ParsedSkill(raw_content=content)
     result.content_hash = hashlib.sha256(content.encode()).hexdigest()
@@ -140,7 +149,11 @@ def parse_skill_md(content: str) -> ParsedSkill:
     else:
         for line in cleaned.split("\n"):
             line = line.strip()
-            if line and not line.startswith("---") and not line.startswith("```"):
+            # Pula frontmatter, cercas e QUALQUER heading markdown: um "## Seção"
+            # NÃO é nome de skill — foi assim que "## Evidence Policy" vazou pro
+            # campo `name`. Sem H1 real, prefere "Skill sem nome" a um cabeçalho.
+            if (line and not line.startswith("---") and not line.startswith("```")
+                    and not re.match(r"^#{1,6}\s", line)):
                 result.name = line[:100]
                 break
         if not result.name:
