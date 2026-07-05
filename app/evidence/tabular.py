@@ -515,6 +515,12 @@ def _analyze_one_sheet(
         con.close()
 
 
+# Profundidade da varredura de header: título + linhas de categoria mergeadas
+# (típico de tabelas de preço) podem empurrar o cabeçalho real para a linha 3+.
+# Testa header_row=1.._MAX e fica com o de melhor score.
+_MAX_HEADER_ROW_PROBE = 5
+
+
 def _analyze_one_sheet_with_retry(
     duckdb,
     tmp_path: str,
@@ -547,30 +553,53 @@ def _analyze_one_sheet_with_retry(
         "título mergeado" in w or "linha 1 do XLSX" in w
         for w in attempt1["warnings"]
     )
+    # Colunas genéricas (column0, column1...) = DuckDB não achou header na linha 1.
+    # Sinal DIRETO do caso real (a "Tabela de Preços" virou column00..column05):
+    # a linha 1 era título/categoria e o header real está mais fundo. Sem isto, um
+    # arquivo TODO-genérico não disparava o auto-retry — nenhum dos sinais acima
+    # cobre "nenhuma coluna tem nome".
+    has_generic_cols = any(
+        str(c["name"]).startswith("column") and str(c["name"])[6:].isdigit()
+        for c in attempt1.get("schema", [])
+    )
     from app.data_tables.types import TABULAR_READY_THRESHOLD
+    # NB: NÃO gatear por `tabular_ready` — uma planilha com título mergeado pode
+    # pontuar alto (dados abaixo bem-tipados) e AINDA ter o header errado (colunas
+    # genéricas). O que protege arquivos bem-formados é a varredura só TROCAR por
+    # um header de score ESTRITAMENTE maior; um probe que não melhora é inócuo.
     looks_patho = (
         has_title_like_col
         or has_single_varchar_warning
+        or has_generic_cols
         or (attempt1["score"] < TABULAR_READY_THRESHOLD and has_merged_title_warning)
     )
     if not looks_patho:
         attempt1["header_row_auto_detected"] = False
         return attempt1
 
-    # Retry com header_row=2 (best-effort: se falhar, devolve attempt1)
-    try:
-        attempt2 = _analyze_one_sheet(duckdb, tmp_path, ext, sheet_name, header_row=2)
-    except Exception:
-        attempt1["header_row_auto_detected"] = False
-        return attempt1
-
-    if attempt2["score"] > attempt1["score"]:
-        attempt2["header_row_auto_detected"] = True
-        attempt2["warnings"].insert(
+    # Varredura PROFUNDA do header: testa header_row=2.._MAX e fica com o de MELHOR
+    # score. Best-effort por candidato: leitura que estoura (header além dos dados)
+    # encerra a varredura; para cedo ao achar um schema tabular_ready. Só SUBSTITUI
+    # quando um header mais fundo pontua ESTRITAMENTE melhor — nunca piora o attempt1.
+    best = attempt1
+    best_row = 1
+    for hr in range(2, _MAX_HEADER_ROW_PROBE + 1):
+        try:
+            cand = _analyze_one_sheet(duckdb, tmp_path, ext, sheet_name, header_row=hr)
+        except Exception:
+            break
+        if cand["score"] > best["score"]:
+            best, best_row = cand, hr
+            if best.get("tabular_ready"):
+                break
+    if best_row > 1:
+        best["header_row_auto_detected"] = True
+        best["warnings"].insert(
             0,
-            "Auto-detect: linha 1 parecia título mergeado, header foi recalculado a partir da linha 2."
+            f"Auto-detect: a linha 1 parecia título/cabeçalho mergeado; o header "
+            f"foi recalculado a partir da linha {best_row}.",
         )
-        return attempt2
+        return best
     attempt1["header_row_auto_detected"] = False
     return attempt1
 
