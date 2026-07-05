@@ -21,6 +21,7 @@ from typing import Optional
 
 from app.core.config import get_settings
 from app.core.database import _get_pool, evidence_chunks_repo, knowledge_repo
+from app.core.datetime_utils import naive_utc_now
 from app.core.otel import get_tracer
 from app.evidence.chunker import chunk_text
 from app.evidence.embedder import embed_texts, embeddings_unavailable_detail
@@ -251,7 +252,7 @@ async def ingest_text(
 
         # 6. Atualiza metadados da source
         await knowledge_repo.update(source_id, {
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": naive_utc_now().isoformat(),
             "index_version": f"v3-{int(time.time())}",
         })
 

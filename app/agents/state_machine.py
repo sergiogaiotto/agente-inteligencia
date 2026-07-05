@@ -125,7 +125,10 @@ class InteractionStateMachine:
                 "from": from_state.value,
                 "to": target.value,
                 "condition": condition.name if condition else "",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                # UTC-naive (não hora local): alinha com o ended_at/started_at das
+                # tabelas (naive_utc_now) — antes `time.strftime` sem gmtime gravava
+                # BRT e o dashboard exibia "terminou antes de começar".
+                "timestamp": naive_utc_now().strftime("%Y-%m-%dT%H:%M:%S"),
             }
             self.ctx.transition_log.append(entry)
 
