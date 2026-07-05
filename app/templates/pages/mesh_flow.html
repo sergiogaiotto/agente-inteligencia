@@ -190,6 +190,24 @@
                                 </span>
                             </span>
                         </label>
+                        <div class="mt-2.5 pt-2.5 border-t border-surface-200">
+                            <label class="block text-[11px] font-semibold text-brand-900 mb-1">🔎 Auditoria da resposta</label>
+                            <select data-testid="pipeline-audit-posture"
+                                    :value="selectedPipeline.audit_posture || 'inherit'"
+                                    @change="setAuditPosture($event.target.value)"
+                                    class="w-full rounded-lg border border-surface-300 bg-white px-2 py-1.5 text-[11px] text-surface-700 focus:ring-brand-400 focus:border-brand-400">
+                                <option value="inherit">Herdar (padrão da plataforma)</option>
+                                <option value="sync">Síncrona — juiz em cada etapa (audita, + lento)</option>
+                                <option value="async">Assíncrona — juiz em segundo plano (não atrasa)</option>
+                                <option value="disabled">Desligada — sem juiz</option>
+                            </select>
+                            <span class="block text-[9.5px] text-surface-500 leading-snug mt-1">
+                                Quem avalia a qualidade de cada etapa. <b>Síncrona</b> registra um julgamento por
+                                etapa (para crédito/fraude); <b>assíncrona</b> julga sem atrasar a resposta;
+                                <b>desligada</b> pula o juiz. <b>Herdar</b> mantém o comportamento atual.
+                                Agentes marcados como <b>rigorosos</b> seguem auditados em qualquer opção (segurança).
+                            </span>
+                        </div>
                     </div>
 
                     <!-- membros -->
@@ -1683,6 +1701,16 @@ function meshFlowPage() {
                 await api.put('/api/v1/pipelines/' + this.selectedPipeline.id, { fast_routing: !!on });
                 this.selectedPipeline.fast_routing = !!on;
                 showToast(on ? 'Roteamento rápido ligado' : 'Roteamento rápido desligado');
+            } catch (e) { showToast('Erro ao salvar: ' + (e?.message || ''), 'error'); }
+        },
+        // Postura de auditoria (26.1.0): inherit|sync|async|disabled via PUT.
+        async setAuditPosture(posture) {
+            if (!this.selectedPipeline) return;
+            const AUDIT_LABEL = { inherit: 'Herdar', sync: 'Síncrona', async: 'Assíncrona', disabled: 'Desligada' };
+            try {
+                await api.put('/api/v1/pipelines/' + this.selectedPipeline.id, { audit_posture: posture });
+                this.selectedPipeline.audit_posture = posture;
+                showToast('Auditoria: ' + (AUDIT_LABEL[posture] || posture));
             } catch (e) { showToast('Erro ao salvar: ' + (e?.message || ''), 'error'); }
         },
         // PR4 — publica o pipeline no Catálogo (cria entry kind=pipeline em rascunho;

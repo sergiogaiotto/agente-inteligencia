@@ -860,6 +860,13 @@ CREATE TABLE IF NOT EXISTS pipelines (
     -- opt-in por pipeline. Coluna também em _IDEMPOTENT_MIGRATIONS p/ DBs
     -- existentes.
     fast_routing INTEGER DEFAULT 0,
+    -- Tuning (26.1.0): postura de auditoria por pipeline.
+    --   inherit  = comportamento atual (_verify_autopass decide)
+    --   sync     = juiz síncrono v2 em cada step (audita, +latência)
+    --   async    = juiz em background (não bloqueia; grava no master)
+    --   disabled = sem juiz (auto-passa sempre)
+    audit_posture TEXT DEFAULT 'inherit'
+        CHECK (audit_posture IN ('inherit','sync','async','disabled')),
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now()
 );
@@ -1071,6 +1078,8 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS contract_sealed_at TIMESTAMP",
     # Tuning 26.0.0: roteamento rápido opt-in por pipeline.
     "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS fast_routing INTEGER DEFAULT 0",
+    # Tuning 26.1.0: postura de auditoria por pipeline (inherit/sync/async/disabled).
+    "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS audit_posture TEXT DEFAULT 'inherit'",
     # Onda Tabular: kb_mode declara o tipo de conteúdo da KS.
     # - 'text': só RAG (textos, FAQs, contratos). Upload de planilha vira chunks markdown.
     # - 'tabular': só Tabelas DuckDB. Rejeita formatos não-estruturados. ZERO chunks no Qdrant/Postgres.
