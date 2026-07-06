@@ -2711,6 +2711,8 @@ class SettingsSave(BaseModel):
     api_key_public_surface_only: Optional[bool] = None
     # P1: invoke via key só em pipelines publicados (contrato selado).
     api_key_invoke_published_only: Optional[bool] = None
+    # F6: quota de custo por API Key (débito + bloqueio 402 ao estourar o teto).
+    api_key_cost_budget_enabled: Optional[bool] = None
 
 @router.get("/settings")
 async def get_settings(user: dict = Depends(require_role("root", "admin"))):

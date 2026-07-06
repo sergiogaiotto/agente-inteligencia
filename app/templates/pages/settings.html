@@ -370,6 +370,32 @@
             </p>
         </div>
 
+        <!-- Quota de custo por API Key (F6) — teto de gasto de LLM por chave de
+             integração. Débito real do cost_usd + bloqueio 402 ao estourar. -->
+        <div class="rounded-xl border-2 border-amber-300 bg-gradient-to-br from-amber-50 to-white p-5 mb-5">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="text-lg">💳</span>
+                <div>
+                    <div class="text-[13px] font-semibold text-brand-900">Quota de custo por API Key — governança de gasto</div>
+                    <div class="text-[11px] text-surface-500">Quando <strong>ligado</strong>, cada <code class="text-[10px]">invoke</code> feito por uma <strong>API Key</strong> é debitado do orçamento da chave (custo real de LLM). Ao atingir o teto da janela (dia/mês/acumulado), novos invokes recebem <strong>HTTP 402</strong>. Sessões de UI (cookie) não são afetadas.</div>
+                </div>
+            </div>
+            <label class="flex items-start gap-2 cursor-pointer">
+                <input type="checkbox" x-model="config.api_key_cost_budget_enabled" data-testid="setting-api-key-cost-budget"
+                       class="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-400">
+                <span class="flex-1 min-w-0">
+                    <span class="block text-[12px] font-bold text-amber-900">Aplicar tetos de custo por API Key</span>
+                    <span class="block text-[10px] text-amber-700 leading-relaxed mt-0.5">
+                        Default <strong>desligado</strong> (sem débito, sem bloqueio). O teto por chave é definido na aba
+                        <strong>API Keys</strong>. Chaves sem teto nunca são bloqueadas — só têm o gasto registrado quando isto está ligado.
+                    </span>
+                </span>
+            </label>
+            <p class="text-[10px] text-amber-700 mt-2 flex items-center gap-1">
+                <span>ⓘ</span> Mudança vale em runtime (sem restart). Defina o orçamento por chave em <button type="button" @click="tab='apikeys'; loadAPIKeys()" class="underline hover:text-amber-900">API Keys</button>. NB: modelos gpt-oss custam US$ 0 — só Azure/OpenAI acumulam custo.
+            </p>
+        </div>
+
         <!-- Tier 2 — text-to-SQL governado (RAG-Tabela) — flag avançada/experimental.
              A IA compila a pergunta em PT-BR numa consulta estruturada; o humano cura;
              o runtime só executa o curado (bancada "Perguntar à Tabela"). -->
@@ -1041,7 +1067,7 @@
         </div>
 
         <div class="flex justify-end mb-3">
-            <button @click="apiKeyFormOpen = true" class="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600">
+            <button @click="apiKeyForm = { name:'', expires_at:'', cost_budget_usd:'', cost_budget_window:'month' }; apiKeyFormOpen = true" class="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
                 Gerar nova key
             </button>
@@ -1072,11 +1098,31 @@
                                 <span x-show="!k.last_used_at" class="text-surface-300">nunca usada</span>
                                 <span x-show="k.expires_at">expira <span x-text="agoApi(k.expires_at)"></span></span>
                             </div>
+                            <!-- F6: orçamento de custo / gasto da janela corrente -->
+                            <div class="flex items-center gap-2 mt-1 text-[10px]">
+                                <template x-if="k.cost_budget_usd !== null && k.cost_budget_usd !== undefined">
+                                    <span class="inline-flex items-center gap-1">
+                                        <span class="rounded px-1.5 py-0.5 font-semibold"
+                                              :class="(k.spent_usd||0) >= k.cost_budget_usd ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'">
+                                            💳 <span x-text="fmtMoney(k.spent_usd)"></span> / <span x-text="fmtMoney(k.cost_budget_usd)"></span>
+                                            <span x-text="'· ' + windowLabel(k.cost_budget_window)"></span>
+                                        </span>
+                                        <span x-show="!budgetEnabled" class="text-surface-300" title="A quota de custo está desligada em Plataforma → Quota de custo por API Key">(não aplicado)</span>
+                                    </span>
+                                </template>
+                                <span x-show="(k.cost_budget_usd === null || k.cost_budget_usd === undefined) && k.active" class="text-surface-300">sem teto de custo</span>
+                            </div>
                         </div>
-                        <button x-show="k.active" @click="revokeAPIKey(k.id, k.name)"
-                                class="rounded-md border border-rose-200 px-2.5 py-1 text-[10px] font-semibold text-rose-600 hover:bg-rose-50">
-                            Revogar
-                        </button>
+                        <div x-show="k.active" class="flex items-center gap-1.5 shrink-0">
+                            <button @click="openBudget(k)" data-testid="apikey-edit-budget"
+                                    class="rounded-md border border-amber-200 px-2.5 py-1 text-[10px] font-semibold text-amber-700 hover:bg-amber-50">
+                                Orçamento
+                            </button>
+                            <button @click="revokeAPIKey(k.id, k.name)"
+                                    class="rounded-md border border-rose-200 px-2.5 py-1 text-[10px] font-semibold text-rose-600 hover:bg-rose-50">
+                                Revogar
+                            </button>
+                        </div>
                     </div>
                 </div>
             </template>
@@ -1107,6 +1153,23 @@
                                class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none focus:border-brand-400">
                         <p class="text-[10px] text-surface-400 mt-1">Vazio = sem expiração. Recomendado: 90-180 dias pra integrações de produção.</p>
                     </div>
+                    <div class="border-t border-surface-100 pt-3">
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Orçamento de custo (opcional)</label>
+                        <div class="flex gap-2">
+                            <div class="relative flex-1">
+                                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-surface-400">US$</span>
+                                <input type="number" min="0" step="0.01" x-model="apiKeyForm.cost_budget_usd" placeholder="ex: 5.00" data-testid="apikey-budget-usd"
+                                       class="w-full rounded-lg border border-surface-200 bg-white pl-9 pr-3 py-2 text-[12px] outline-none focus:border-brand-400">
+                            </div>
+                            <select x-model="apiKeyForm.cost_budget_window"
+                                    class="rounded-lg border border-surface-200 bg-white px-2 py-2 text-[12px] outline-none focus:border-brand-400">
+                                <option value="day">por dia</option>
+                                <option value="month">por mês</option>
+                                <option value="total">acumulado</option>
+                            </select>
+                        </div>
+                        <p class="text-[10px] text-surface-400 mt-1">Vazio = sem teto. O bloqueio (402) só vale com a <strong>quota de custo</strong> ligada em Plataforma. gpt-oss custa US$ 0 — só Azure/OpenAI acumulam.</p>
+                    </div>
                 </div>
                 <div class="border-t border-surface-100 px-5 py-3 flex items-center justify-end gap-2">
                     <button @click="apiKeyFormOpen = false" :disabled="apiKeyCreating"
@@ -1116,6 +1179,53 @@
                     <button @click="createAPIKey()" :disabled="apiKeyCreating || !apiKeyForm.name.trim()"
                             class="rounded-lg bg-brand-500 px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
                         <span x-text="apiKeyCreating ? 'Gerando...' : 'Gerar key'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- ══ MODAL: Editar orçamento de custo da key (F6) ══ -->
+    <template x-if="budgetModal.open">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
+            <div class="fixed inset-0 bg-black/40" @click="!budgetModal.saving && (budgetModal.open = false)"></div>
+            <div class="relative z-10 w-full max-w-md rounded-2xl bg-white shadow-2xl border border-surface-200 overflow-hidden">
+                <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3">
+                    <h3 class="text-[14px] font-bold text-brand-900">Orçamento de custo — <span x-text="budgetModal.name"></span></h3>
+                    <button @click="!budgetModal.saving && (budgetModal.open = false)" class="p-1 rounded hover:bg-surface-100 text-surface-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <div class="px-5 py-4 space-y-3">
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Teto de custo</label>
+                        <div class="flex gap-2">
+                            <div class="relative flex-1">
+                                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-surface-400">US$</span>
+                                <input type="number" min="0" step="0.01" x-model="budgetModal.cost_budget_usd" placeholder="ex: 5.00" data-testid="apikey-budget-modal-usd"
+                                       class="w-full rounded-lg border border-surface-200 bg-white pl-9 pr-3 py-2 text-[12px] outline-none focus:border-brand-400">
+                            </div>
+                            <select x-model="budgetModal.cost_budget_window"
+                                    class="rounded-lg border border-surface-200 bg-white px-2 py-2 text-[12px] outline-none focus:border-brand-400">
+                                <option value="day">por dia</option>
+                                <option value="month">por mês</option>
+                                <option value="total">acumulado</option>
+                            </select>
+                        </div>
+                        <p class="text-[10px] text-surface-400 mt-1">Deixe <strong>vazio</strong> e salve pra <strong>remover</strong> o teto (key volta a ilimitada).</p>
+                    </div>
+                    <div x-show="!budgetEnabled" class="rounded-lg border border-amber-100 bg-amber-50/50 px-3 py-2 text-[10px] text-amber-700 leading-relaxed">
+                        A quota de custo está <strong>desligada</strong> em Plataforma — este teto fica gravado mas só será <strong>aplicado</strong> (bloqueio 402) quando você ligar "Aplicar tetos de custo por API Key".
+                    </div>
+                </div>
+                <div class="border-t border-surface-100 px-5 py-3 flex items-center justify-end gap-2">
+                    <button @click="budgetModal.open = false" :disabled="budgetModal.saving"
+                            class="rounded-lg border border-surface-200 px-3 py-1.5 text-[12px] font-medium text-surface-500 hover:bg-surface-50">
+                        Cancelar
+                    </button>
+                    <button @click="saveBudget()" :disabled="budgetModal.saving" data-testid="apikey-budget-save"
+                            class="rounded-lg bg-brand-500 px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+                        <span x-text="budgetModal.saving ? 'Salvando...' : 'Salvar'"></span>
                     </button>
                 </div>
             </div>
@@ -1225,6 +1335,8 @@ function settingsPage() {
             mcp_per_tool_enabled: false,
             // Tier 2 — text-to-SQL governado (RAG-Tabela) — default OFF (experimental)
             text_to_sql_enabled: false,
+            // Quota de custo por API Key (F6) — default OFF (sem débito/bloqueio)
+            api_key_cost_budget_enabled: false,
             // GPT-OSS (Onda 4 plataforma)
             oss120b_url:'', oss120b_model:'openai/gpt-oss-120b', oss120b_api_key:'not-needed',
             oss20b_url:'',  oss20b_model:'openai/gpt-oss-20b',   oss20b_api_key:'not-needed',
@@ -1253,9 +1365,12 @@ function settingsPage() {
         apiKeys: [],
         apiKeysLoading: false,
         apiKeyFormOpen: false,
-        apiKeyForm: { name: '', expires_at: '' },
+        apiKeyForm: { name: '', expires_at: '', cost_budget_usd: '', cost_budget_window: 'month' },
         apiKeyCreating: false,
         apiKeyJustCreated: null,  // {id, key, prefix, name, expires_at} — mostrado UMA vez
+        // F6 — quota de custo por key
+        budgetEnabled: false,     // estado do toggle global (vem do GET /api-keys)
+        budgetModal: { open:false, saving:false, keyId:null, name:'', cost_budget_usd:'', cost_budget_window:'month' },
         exShell: 'bash',          // shell do exemplo de cURL na revelação da key
         CURL_AUTH_SHELLS: window.CURL_AUTH_SHELLS,  // de curl_auth.js
 
@@ -1275,11 +1390,29 @@ function settingsPage() {
                 showToast('Não consegui copiar — selecione e Ctrl+C', 'error');
         },
 
+        // F6 — helpers de orçamento de custo.
+        // Retorna: null = campo VAZIO (sem teto / remover); NaN = valor INVÁLIDO
+        // (não-numérico, não-finito, <= 0) → o caller mostra erro em vez de
+        // silenciosamente virar "sem teto"; número positivo = teto válido.
+        _parseBudget(v) {
+            if (v === '' || v === null || v === undefined) return null;  // vazio = sem teto
+            const n = parseFloat(v);
+            return (isNaN(n) || !isFinite(n) || n <= 0) ? NaN : n;       // inválido
+        },
+        fmtMoney(v) {
+            const n = (v === null || v === undefined) ? 0 : parseFloat(v);
+            return 'US$ ' + (isNaN(n) ? 0 : n).toFixed(n && Math.abs(n) < 0.01 ? 4 : 2);
+        },
+        windowLabel(w) {
+            return { day:'dia', month:'mês', total:'acumulado' }[w] || 'mês';
+        },
+
         async loadAPIKeys() {
             this.apiKeysLoading = true;
             try {
                 const d = await api.get('/api/v1/api-keys');
                 this.apiKeys = d.keys || [];
+                this.budgetEnabled = !!d.budget_enabled;
             } catch(e) {
                 showToast('Erro ao carregar API keys: ' + (e?.message || ''), 'error');
                 this.apiKeys = [];
@@ -1297,15 +1430,55 @@ function settingsPage() {
                     // datetime-local não tem timezone — assume horário local, converte pra ISO
                     payload.expires_at = new Date(this.apiKeyForm.expires_at).toISOString();
                 }
+                const budget = this._parseBudget(this.apiKeyForm.cost_budget_usd);
+                if (Number.isNaN(budget)) {
+                    showToast('Orçamento inválido — informe um valor positivo em US$ ou deixe vazio (sem teto).', 'error');
+                    this.apiKeyCreating = false;
+                    return;
+                }
+                if (budget !== null) {  // vazio = sem teto → não envia
+                    payload.cost_budget_usd = budget;
+                    payload.cost_budget_window = this.apiKeyForm.cost_budget_window || 'month';
+                }
                 const r = await api.post('/api/v1/api-keys', payload);
                 this.apiKeyJustCreated = r;
                 this.apiKeyFormOpen = false;
-                this.apiKeyForm = { name: '', expires_at: '' };
+                this.apiKeyForm = { name: '', expires_at: '', cost_budget_usd: '', cost_budget_window: 'month' };
                 await this.loadAPIKeys();
             } catch(e) {
                 showToast('Erro: ' + (e?.message || 'falha desconhecida'), 'error');
             }
             this.apiKeyCreating = false;
+        },
+
+        openBudget(k) {
+            this.budgetModal = {
+                open: true, saving: false, keyId: k.id, name: k.name,
+                cost_budget_usd: (k.cost_budget_usd === null || k.cost_budget_usd === undefined) ? '' : k.cost_budget_usd,
+                cost_budget_window: k.cost_budget_window || 'month',
+            };
+        },
+
+        async saveBudget() {
+            const budget = this._parseBudget(this.budgetModal.cost_budget_usd);  // null = remover; NaN = inválido
+            if (Number.isNaN(budget)) {
+                showToast('Orçamento inválido — informe um valor positivo em US$ ou deixe vazio para remover o teto.', 'error');
+                return;
+            }
+            this.budgetModal.saving = true;
+            try {
+                const payload = {
+                    cost_budget_usd: budget,  // null = remover teto ; número > 0 = novo teto
+                    cost_budget_window: this.budgetModal.cost_budget_window || 'month',
+                };
+                await api.put('/api/v1/api-keys/' + this.budgetModal.keyId + '/budget', payload);
+                showToast(budget === null ? 'Teto removido' : 'Orçamento atualizado');
+                this.budgetModal.open = false;
+                await this.loadAPIKeys();
+            } catch(e) {
+                showToast('Erro: ' + (e?.message || 'falha desconhecida'), 'error');
+            }
+            this.budgetModal.saving = false;
         },
 
         async revokeAPIKey(id, name) {
@@ -1472,7 +1645,7 @@ function settingsPage() {
             const urlTab = new URLSearchParams(window.location.search).get('tab');
             if (urlTab && ['platform','prompts','users','routing','params','apikeys'].includes(urlTab)) this.tab = urlTab;
             try{this.models=await api.get('/api/v1/wizard/models')}catch{this.models={openai:[{id:'gpt-4.1',name:'GPT-4.1',context:'128K',tier:'flagship',multimodal:true}],maritaca:[{id:'sabia-4',name:'Sabiá-4',context:'128K',tier:'flagship',multimodal:false}],ollama:[{id:'hf.co/Althayr/Gemma-3-Gaia-PT-BR-4b-it-GGUF:latest',name:'Gaia 4Bi',context:'128K',tier:'efficient',multimodal:false}],'gpt-oss-120b':[{id:'openai/gpt-oss-120b',name:'GPT-OSS-120B (open-weight)',context:'128K',tier:'open-weight',multimodal:false}],'gpt-oss-20b':[{id:'openai/gpt-oss-20b',name:'GPT-OSS-20B (open-weight)',context:'128K',tier:'open-weight',multimodal:false}]};}
-            try{const d=await api.get('/api/v1/settings');const s=d.settings||{};const _ints=['max_iterations','timeout','qwen3_dimensions'];const _bools=['grounding_strict','mcp_per_tool_enabled','text_to_sql_enabled'];for(const[k,v]of Object.entries(s)){if(!(k in this.config))continue;if(_ints.includes(k))this.config[k]=parseInt(v)||this.config[k];else if(_bools.includes(k))this.config[k]=(v===true||v==='true'||v==='True'||v==='1');else this.config[k]=v;}}catch{}
+            try{const d=await api.get('/api/v1/settings');const s=d.settings||{};const _ints=['max_iterations','timeout','qwen3_dimensions'];const _bools=['grounding_strict','mcp_per_tool_enabled','text_to_sql_enabled','api_key_cost_budget_enabled'];for(const[k,v]of Object.entries(s)){if(!(k in this.config))continue;if(_ints.includes(k))this.config[k]=parseInt(v)||this.config[k];else if(_bools.includes(k))this.config[k]=(v===true||v==='true'||v==='True'||v==='1');else this.config[k]=v;}}catch{}
             // Sincroniza o dropdown de densidade com o valor persistido: se bate
             // num preset conhecido, seleciona; senão cai em "Customizada".
             const _dimPresets = ['0','1536','1024','768','512','256','128'];
