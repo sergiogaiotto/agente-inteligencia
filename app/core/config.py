@@ -114,6 +114,15 @@ class Settings(BaseSettings):
     # contrato SELADO); rascunho/aposentado → 403. Sessão de UI (cookie) continua
     # invocando rascunhos p/ testar. Default OFF (comportamento atual).
     api_key_invoke_published_only: bool = False
+    # ── Quota de custo por API Key (F6) ──
+    # Quando True, cada invoke via X-API-Key/Bearer é DEBITADO no ledger de custo
+    # da key (soma do cost_usd REAL dos steps) e, se a key tiver orçamento definido
+    # (api_keys.cost_budget_usd), novos invokes são BLOQUEADOS com 402 assim que o
+    # gasto da janela corrente (dia/mês/acumulado) atinge o teto. Default OFF
+    # (comportamento atual: sem débito, sem bloqueio). Keys SEM orçamento nunca são
+    # bloqueadas — só têm o gasto registrado (observabilidade) quando o toggle ON.
+    # NB: gpt-oss custa 0 (só Azure/OpenAI têm cost_usd>0) — o débito reflete isso.
+    api_key_cost_budget_enabled: bool = False
 
     # ── Embedding provider (Qwen3 | Azure) ──
     # Default: Qwen3 (open-weight via hub interno). Reusa URL/key do OSS source
@@ -413,6 +422,7 @@ _UI_TO_ENV_MAP = {
     "cors_allowed_origins": "CORS_ALLOWED_ORIGINS",
     "api_key_public_surface_only": "API_KEY_PUBLIC_SURFACE_ONLY",
     "api_key_invoke_published_only": "API_KEY_INVOKE_PUBLISHED_ONLY",
+    "api_key_cost_budget_enabled": "API_KEY_COST_BUDGET_ENABLED",
     # Timezone da plataforma (IANA: America/Sao_Paulo = GMT-3 Brasília, padrão).
     # Aplicado a os.environ['TZ'] + time.tzset() e exposto à UI (window.PLATFORM_TZ).
     "timezone": "TZ",
@@ -518,6 +528,7 @@ _NON_MODEL_UI_KEYS = {
     "cors_allowed_origins",      # allowlist CORS (não é credencial/modelo)
     "api_key_public_surface_only",  # toggle de contenção da API Key
     "api_key_invoke_published_only",  # toggle published-only p/ invoke via key
+    "api_key_cost_budget_enabled",  # toggle de quota de custo por API Key (F6)
     "mcp_per_tool_enabled",      # flag do modo per-tool MCP (default OFF)
     "text_to_sql_enabled",       # flag do Tier 2 text-to-SQL governado (default OFF)
     "timezone",                  # timezone da plataforma (IANA); default Brasília

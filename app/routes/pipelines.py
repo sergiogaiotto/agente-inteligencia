@@ -154,6 +154,31 @@ async def _attribute_interaction_to_key(request, interaction_id: Optional[str]) 
         )
 
 
+async def _guard_api_key_cost_budget(request) -> None:
+    """F6: pré-checa o teto de custo da API Key (402 quando a janela estourou).
+    No-op p/ sessão de UI (cookie), key sem orçamento, ou toggle OFF."""
+    api_key_id = getattr(request.state, "api_key_id", None)
+    if not api_key_id:
+        return  # cookie/UI ou não-autenticado por key → sem quota
+    from app.core.api_key_budget import enforce_budget
+    await enforce_budget(api_key_id)
+
+
+async def _debit_api_key_cost(request, pid: str, result: dict) -> None:
+    """F6: debita o custo REAL da invocação (soma dos steps) no ledger da key.
+    Best-effort e gated pelo toggle — nunca derruba a resposta (já executou)."""
+    api_key_id = getattr(request.state, "api_key_id", None)
+    if not api_key_id:
+        return
+    from app.core.api_key_budget import cost_and_tokens_from_result, record_cost
+    cost, tokens = cost_and_tokens_from_result(result)
+    await record_cost(
+        api_key_id, cost, tokens,
+        pipeline_id=pid,
+        interaction_id=(result or {}).get("interaction_id"),
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Args estruturados do invoke (D1/D2) — campo `args` opcional no contrato.
 # Reusa o schema que o `/inputs-schema` já publica (## Inputs do agente-raiz) +
@@ -735,6 +760,10 @@ async def invoke_pipeline(
     if data.dry:
         return await _plan_args(pid, p, root, data.args or {})
 
+    # F6: teto de custo por API Key — DEPOIS do dry (que é grátis) e ANTES de
+    # executar. 402 quando a janela corrente já atingiu o orçamento da key.
+    await _guard_api_key_cost_budget(request)
+
     # Args estruturados (D1/D2): `args` presente (mesmo {}) engaja o contrato —
     # coage/aplica defaults/valida contra o ## Inputs do agente-raiz (422 nomeando
     # cada campo) e SEPARA em prosa + envelope `param` selado. `args` omitido (None)
@@ -806,6 +835,8 @@ async def invoke_pipeline(
         }, ensure_ascii=False),
     })
     await _attribute_interaction_to_key(request, result.get("interaction_id"))
+    # F6: debita o custo real desta invocação no ledger da key (best-effort).
+    await _debit_api_key_cost(request, pid, result)
     payload = {
         "pipeline_id": pid,
         "status": result.get("status", "completed"),
@@ -857,6 +888,9 @@ async def invoke_pipeline_stream(
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
     _guard_api_key_published_only(request, p)
+    # F6: teto de custo por API Key — 402 ANTES de abrir o stream (o cliente vê o
+    # erro estruturado limpo, sem SSE meia-boca). Stream não tem modo dry.
+    await _guard_api_key_cost_budget(request)
     user_input = (data.message or data.input or "").strip()
     # `is None` (não `not data.args`): `args:{}` engaja o contrato — paridade com o
     # /invoke sync e com o gatilho de fold abaixo.
@@ -955,6 +989,8 @@ async def invoke_pipeline_stream(
                 pass
             # F12: atribuição por-key na metadata da interação (paridade c/ /invoke).
             await _attribute_interaction_to_key(request, (result or {}).get("interaction_id"))
+            # F6: débito do custo real no ledger da key (paridade c/ /invoke sync).
+            await _debit_api_key_cost(request, pid, result or {})
         except Exception as e:
             await queue.put({"type": "stream_error", "error": str(e)[:300]})
         finally:

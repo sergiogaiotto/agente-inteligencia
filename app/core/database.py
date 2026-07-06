@@ -391,6 +391,23 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash) WHERE revoked_at IS NULL;
 
+-- Ledger de custo por API Key (F6 — quota de custo por key). Uma linha por
+-- invoke via X-API-Key/Bearer (best-effort, só quando api_key_cost_budget_enabled
+-- está ON): grava o cost_usd/tokens REAIS (soma dos steps do pipeline). O gasto
+-- da janela corrente é SUM(cost_usd) filtrado por created_at; comparado ao teto
+-- api_keys.cost_budget_usd para bloquear (402) novos invokes. created_at é UTC
+-- naive (igual ao resto do app) — inserido explicitamente pelo repositório.
+CREATE TABLE IF NOT EXISTS api_key_cost_ledger (
+    id TEXT PRIMARY KEY,
+    api_key_id TEXT NOT NULL,
+    pipeline_id TEXT,
+    interaction_id TEXT,
+    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_api_key_cost_ledger_key ON api_key_cost_ledger(api_key_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS api_connectors (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -1086,6 +1103,12 @@ _IDEMPOTENT_MIGRATIONS = [
     # - 'hybrid' (default): comportamento legacy — aceita tudo, oferece promote a tabela.
     # Backfill = hybrid para KS existentes (preserva comportamento).
     "ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS kb_mode TEXT DEFAULT 'hybrid'",
+    # ─── Quota de custo por API Key (F6) ────────────────────────
+    # Orçamento por key (nullable = SEM teto = comportamento atual) + janela
+    # (dia|mês|acumulado, default mês). A tabela-ledger api_key_cost_ledger nasce
+    # do SCHEMA base (idempotente); estas ALTERs cobrem DBs já existentes.
+    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS cost_budget_usd DOUBLE PRECISION",
+    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS cost_budget_window TEXT DEFAULT 'month'",
     # Onda Tabular — coluna `data_tables` na tabela skills.
     # Bug reportado: criar skill nova pela UI estourava 500 com
     # `UndefinedColumnError: column "data_tables" of relation "skills"
@@ -1506,6 +1529,7 @@ api_connectors_repo = Repository("api_connectors")
 api_endpoints_repo = Repository("api_endpoints")
 api_call_logs_repo = Repository("api_call_logs")
 api_keys_repo = Repository("api_keys")
+api_key_cost_ledger_repo = Repository("api_key_cost_ledger")  # F6: ledger de custo por key
 
 # Catálogo / Marketplace (Onda 1)
 catalog_entries_repo = Repository("catalog_entries")
