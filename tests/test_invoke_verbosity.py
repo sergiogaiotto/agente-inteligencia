@@ -74,13 +74,20 @@ _FULL = {
 
 class TestProject:
     def test_full_eh_passthrough(self):
-        assert project_pipeline_result(_FULL, "full") is _FULL  # verbatim, mesmo objeto
+        out = project_pipeline_result(_FULL, "full")
+        # full preserva TODO o payload legado (verbatim) + campos ADITIVOS do
+        # envelope (schema_version/verbosity/data). Não muta o dict de entrada.
+        for k, v in _FULL.items():
+            assert out[k] == v
+        assert out["schema_version"] == "1" and out["verbosity"] == "full"
 
     def test_minimal_so_resposta(self):
         out = project_pipeline_result(_FULL, "minimal")
         assert out == {
+            "schema_version": "1",
             "pipeline_id": "p1", "interaction_id": "int1",
-            "status": "completed", "output": "resposta final", "verbosity": "minimal",
+            "status": "completed", "output": "resposta final",
+            "data": None, "output_is_json": False, "verbosity": "minimal",
         }
         assert "pipeline_steps" not in out and "steps" not in out
 
@@ -147,7 +154,10 @@ class TestRouteVerbosity:
         # full mantém o contrato legado (pipeline_steps com agent_id + trace)
         assert body["pipeline_steps"][0]["agent_id"] == "r"
         assert "trace" in body["pipeline_steps"][0]
-        assert "verbosity" not in body   # full é verbatim, sem marcador
+        # Envelope auto-descritivo (P1-B): full também carrega schema_version +
+        # verbosity + data (aditivo; o payload legado segue verbatim).
+        assert body["verbosity"] == "full"
+        assert body["schema_version"] == "1"
 
     def test_body_minimal(self, stub_engine):
         r = _client().post("/api/v1/pipelines/p1/invoke", json={"message": "oi", "verbosity": "minimal"})

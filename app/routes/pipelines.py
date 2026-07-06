@@ -16,6 +16,7 @@ execuções que gastam tokens de LLM. Mesmo padrão do `POST /api/v1/workspace/c
 import uuid
 import json
 import hashlib
+import logging
 from datetime import datetime
 
 from app.core.datetime_utils import naive_utc_now
@@ -46,6 +47,18 @@ from app.agents.pipeline_lifecycle import (
     PIPELINE_STATES,
 )
 from app.agents.result_view import resolve_verbosity, project_pipeline_result
+
+logger = logging.getLogger(__name__)
+
+
+def _current_request_id() -> Optional[str]:
+    """request_id do request atual (contextvar) p/ correlação em erros — sem vazar
+    detalhe interno ao cliente. None se fora de um request."""
+    try:
+        from app.core.logging_setup import request_id_var
+        return request_id_var.get()
+    except Exception:
+        return None
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 
@@ -728,7 +741,18 @@ async def invoke_pipeline(
     except ValueError as e:
         raise HTTPException(409, str(e))
     except Exception as e:
-        raise HTTPException(500, f"Erro na execução do pipeline: {e}")
+        # NÃO vazar str(e) do engine ao cliente externo (info-leak). Loga o erro
+        # completo (com traceback) e devolve código estável + request_id p/ o
+        # operador correlacionar no log sem expor internals.
+        rid = _current_request_id()
+        logger.exception(
+            "event=pipeline_invoke_failed pipeline_id=%s request_id=%s", pid, rid
+        )
+        raise HTTPException(500, {
+            "error": "pipeline_execution_failed",
+            "request_id": rid,
+            "hint": "Falha ao executar o pipeline. Cite o request_id ao suporte.",
+        })
 
     api_key_id = getattr(request.state, "api_key_id", None)
     await audit_repo.create({

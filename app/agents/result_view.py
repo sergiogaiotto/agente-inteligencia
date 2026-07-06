@@ -20,10 +20,37 @@ e o custo por chamada. Ver ``docs/backlog-teste-e2e.md``.
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 VERBOSITY_LEVELS = ("full", "summary", "minimal")
 DEFAULT_VERBOSITY = "full"
+#: Versão do ENVELOPE de resposta do invoke (contrato externo). Presente em TODAS
+#: as verbosidades para o cliente detectar mudanças sem inspecionar as chaves.
+SCHEMA_VERSION = "1"
+
+
+def _output_data(output) -> tuple:
+    """Devolve (data, output_is_json).
+
+    O `output` do invoke é uma STRING (prosa OU JSON serializado — ex.: agente
+    declarativo devolve a resposta da API via json.dumps). Isso força o consumidor
+    a JSON.parse duas vezes E adivinhar se é JSON. Aqui pré-parseamos: quando o
+    output É um JSON (objeto/lista), `data` traz o objeto pronto e `output_is_json`
+    = True; senão `data`=None. `output` (string) é preservado p/ retrocompat.
+    """
+    if isinstance(output, (dict, list)):
+        return output, True
+    if isinstance(output, str):
+        s = output.strip()
+        if s and s[0] in "{[":
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, (dict, list)):
+                    return parsed, True
+            except Exception:
+                pass
+    return None, False
 #: default semeado p/ chamadas via X-API-Key (sobrescrevível em platform_settings)
 API_KEY_DEFAULT_VERBOSITY = "summary"
 
@@ -90,14 +117,28 @@ def project_pipeline_result(result: dict, verbosity: str) -> dict:
     devolvido VERBATIM (retrocompatível). ``summary``/``minimal`` recortam.
     """
     v = normalize_verbosity(verbosity)
+    data, output_is_json = _output_data(result.get("output"))
     if v == "full":
-        return result
+        # full é retrocompatível (todo o payload legado preservado) + campos
+        # ADITIVOS do envelope. Cópia rasa (não muta o dict do chamador); full é
+        # o default de DEBUG/sessão, não o caminho de alto volume (X-API-Key →
+        # summary), então o custo da cópia é irrelevante.
+        return {
+            **result,
+            "schema_version": result.get("schema_version", SCHEMA_VERSION),
+            "verbosity": result.get("verbosity", "full"),
+            "data": result.get("data", data),
+            "output_is_json": result.get("output_is_json", output_is_json),
+        }
 
     base = {
+        "schema_version": SCHEMA_VERSION,
         "pipeline_id": result.get("pipeline_id"),
         "interaction_id": result.get("interaction_id"),
         "status": result.get("status", "completed"),
         "output": result.get("output", ""),
+        "data": data,
+        "output_is_json": output_is_json,
         "verbosity": v,
     }
     if v == "minimal":
