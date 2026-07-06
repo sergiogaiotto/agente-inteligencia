@@ -40,6 +40,7 @@ from app.core.database import (
     agents_repo,
     audit_repo,
     settings_store,
+    interactions_repo,
 )
 from app.agents.pipeline_lifecycle import (
     can_transition_pipeline,
@@ -119,6 +120,38 @@ def _guard_api_key_published_only(request, p: dict) -> None:
                     f"Publique-o ou use a sessão de UI.",
         },
     )
+
+
+async def _attribute_interaction_to_key(request, interaction_id: Optional[str]) -> None:
+    """F12: propaga a atribuição por-key à metadata da interação.
+
+    A auditoria (audit_log) já registra o api_key_id, mas a OBSERVABILIDADE/UI lê
+    a tabela `interactions` — cujo metadata vinha VAZIO p/ chamadas via key (não
+    dava pra saber QUAL frontend disparou o quê). Faz MERGE (não clobbera) e é
+    best-effort: falha aqui NÃO derruba a resposta (o invoke já executou)."""
+    api_key_id = getattr(request.state, "api_key_id", None)
+    if not (api_key_id and interaction_id):
+        return  # só chamadas via key; sessão de UI não precisa
+    try:
+        row = await interactions_repo.find_by_id(interaction_id) or {}
+        md = row.get("metadata")
+        if isinstance(md, str):
+            md = json.loads(md) if md.strip() else {}
+        if not isinstance(md, dict):
+            md = {}
+        md.update({
+            "via": "api_key",
+            "api_key_id": api_key_id,
+            "api_key_name": getattr(request.state, "api_key_name", None),
+        })
+        await interactions_repo.update(
+            interaction_id, {"metadata": json.dumps(md, ensure_ascii=False)}
+        )
+    except Exception as e:
+        logger.warning(
+            "event=interaction_attribution_failed interaction_id=%s error=%s",
+            interaction_id, e,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -772,6 +805,7 @@ async def invoke_pipeline(
             "arg_keys": sorted(data.args.keys()) if isinstance(data.args, dict) else [],
         }, ensure_ascii=False),
     })
+    await _attribute_interaction_to_key(request, result.get("interaction_id"))
     payload = {
         "pipeline_id": pid,
         "status": result.get("status", "completed"),
@@ -919,6 +953,8 @@ async def invoke_pipeline_stream(
                 })
             except Exception:
                 pass
+            # F12: atribuição por-key na metadata da interação (paridade c/ /invoke).
+            await _attribute_interaction_to_key(request, (result or {}).get("interaction_id"))
         except Exception as e:
             await queue.put({"type": "stream_error", "error": str(e)[:300]})
         finally:
