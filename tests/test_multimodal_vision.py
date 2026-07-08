@@ -133,6 +133,27 @@ class TestDecodeAttachmentsPreservesImageBytes:
         assert accepted[0]["content"] == "relatorio trimestral"
 
 
+class TestStepEffectiveModel:
+    """O card de Rastreabilidade deve mostrar o modelo PÓS-swap (real), não o
+    snapshot pré-swap. Um SA de visão reroteado pro multimodal_fallback rodou em
+    azure/gpt-4o mesmo que o snapshot do agent seja gpt-oss."""
+
+    def test_prefers_trace_model_over_snapshot(self):
+        from app.agents.engine import _step_effective_model
+        result = {"trace": {"agent_model": "gpt-4o"}}
+        agent = {"model": "openai/gpt-oss-20b"}
+        assert _step_effective_model(result, agent) == "gpt-4o"
+
+    def test_falls_back_to_snapshot_when_no_trace(self):
+        from app.agents.engine import _step_effective_model
+        assert _step_effective_model({}, {"model": "openai/gpt-oss-120b"}) == "openai/gpt-oss-120b"
+        assert _step_effective_model({"trace": {}}, {"model": "x"}) == "x"
+
+    def test_empty_when_nothing_known(self):
+        from app.agents.engine import _step_effective_model
+        assert _step_effective_model(None, None) == ""
+
+
 class TestWiringSourceSmoke:
     def test_workspace_passes_abs_path(self):
         src = (_ROOT / "app" / "routes" / "workspace.py").read_text(encoding="utf-8")
