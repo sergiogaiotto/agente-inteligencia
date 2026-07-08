@@ -44,7 +44,7 @@ opentelemetry-instrumentation-redis>=0.64b0
 opentelemetry-instrumentation-logging>=0.64b0
 
 # === Utilities ===
-pydantic>=2.0.0
+pydantic>=2.13.4
 pydantic-settings>=2.14.2
 pyyaml>=6.0.0
 websockets>=16.0
