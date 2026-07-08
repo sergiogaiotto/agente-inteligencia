@@ -26,6 +26,8 @@ from app.skill_parser.parser import (
     _extract_fenced_yaml_body,
     _parse_api_bindings,
     _parse_data_tables,
+    _parse_evidence_policy,
+    _parse_output_shape,
     parse_skill_md,
 )
 
@@ -140,6 +142,63 @@ class TestDataTablesWithTrailingContent:
         assert out[0]["table_ref"] == "urn:table:abcd1234:vendas-q4:1"
 
 
+# ─── _parse_evidence_policy: MESMO bug (achado no teste E2E do Cenário A) ──
+# Este parser ficou de FORA da migração de 2026-06-01 (só api_bindings e
+# data_tables foram migrados). Consequência real (2026-07-08): TODA skill do
+# wizard "IA, me ajude" com Fontes RAG tinha o `sources` descartado em silêncio
+# → `_declares_sources=False` → especialista PULAVA o RAG em pipeline
+# (evidence_count=0) → não usava o KB. Ver engine._pipeline_should_self_retrieve.
+
+
+class TestEvidencePolicyWithTrailingContent:
+    def test_evidence_sources_with_trailing_hr_is_parsed(self):
+        """Formato EXATO gerado pelo wizard: fence + HR `---` antes da próxima
+        seção. Antes: `sources` sumia (ScannerError silencioso)."""
+        section = (
+            "```yaml\n"
+            "sources:\n"
+            "  - ee1b4458-5237-433c-b099-8ba3dc3737bd   # Acolhimento (internal)\n"
+            "```\n"
+            "\n---\n\n"
+        )
+        out = _parse_evidence_policy(section)
+        assert out.get("sources") == ["ee1b4458-5237-433c-b099-8ba3dc3737bd"], (
+            f"sources sumiu por causa do HR/fence. out={out!r}"
+        )
+
+    def test_evidence_min_relevance_survives_trailing_content(self):
+        section = (
+            "```yaml\n"
+            "sources:\n  - ks-1\n"
+            "min_relevance: 0.25\n"
+            "```\n\n---\n"
+        )
+        out = _parse_evidence_policy(section)
+        assert out.get("sources") == ["ks-1"]
+        assert out.get("min_relevance") == 0.25
+
+    def test_evidence_no_fence_stays_legacy_raw(self):
+        """Sem fence → legacy {raw} (sem governance) preservado."""
+        out = _parse_evidence_policy("Consulte as bases internas antes de responder.")
+        assert "sources" not in out
+        assert out.get("raw")
+
+    def test_evidence_fence_at_absolute_end_still_works(self):
+        section = "```yaml\nsources:\n  - ks-9\n```"
+        assert _parse_evidence_policy(section).get("sources") == ["ks-9"]
+
+
+# ─── _parse_output_shape: mesmo bug, mesma migração ──────────────────
+
+
+class TestOutputShapeWithTrailingContent:
+    def test_length_preset_with_trailing_hr_is_parsed(self):
+        section = "```yaml\nlength_preset: digest\n```\n\n---\n\n"
+        out = _parse_output_shape(section)
+        assert out.get("length_preset") == "digest", f"preset sumiu. out={out!r}"
+        assert out.get("max_chars")
+
+
 # ─── E2E: SKILL.md exato como o user reportou ──────────────────────
 
 
@@ -197,3 +256,36 @@ class TestEndToEndSkillFromUserReport:
             assert "exige ## API Bindings OU ## Data Tables" not in err, (
                 f"erro de declarative-sem-bindings ainda aparece: {err}"
             )
+
+    def test_wizard_skill_evidence_policy_sources_survive(self):
+        """SKILL.md como o wizard "IA, me ajude" gera para um Especialista com
+        Fontes RAG (achado do teste E2E do Cenário A, 2026-07-08): `## Evidence
+        Policy` com fence YAML + HR `---` antes de `## Execution Profile`. Antes
+        do fix, `evidence_policy_parsed.sources` vinha vazio → o especialista
+        pulava o RAG em pipeline. Agora deve trazer o KB declarado."""
+        md = (
+            "---\n"
+            "id: urn:skill:atendimento:subagent:acolhimento-sentimento-negativo\n"
+            "version: 0.1.0\n"
+            "kind: subagent\n"
+            "---\n\n"
+            "# Especialista de Acolhimento\n\n"
+            "## Purpose\nAcolhe clientes com sentimento negativo.\n\n"
+            "## Evidence Policy\n"
+            "```yaml\n"
+            "sources:\n"
+            "  - ee1b4458-5237-433c-b099-8ba3dc3737bd   # Acolhimento (internal)\n"
+            "```\n\n"
+            "---\n\n"
+            "## Execution Profile\n"
+            "```yaml\n"
+            "mode: standard\n"
+            "```\n"
+        )
+        result = parse_skill_md(md)
+        assert result.evidence_policy_parsed.get("sources") == [
+            "ee1b4458-5237-433c-b099-8ba3dc3737bd"
+        ], (
+            "evidence_policy.sources sumiu no SKILL.md do wizard — o RAG do "
+            f"especialista NÃO dispararia em pipeline. parsed={result.evidence_policy_parsed!r}"
+        )

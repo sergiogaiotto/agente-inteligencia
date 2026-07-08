@@ -398,12 +398,11 @@ def _parse_output_shape(section_text: str) -> dict:
     if not section_text or not section_text.strip():
         return {}
 
-    fence_open = re.search(r"```(?:yaml|yml)?\s*\n", section_text)
-    if fence_open:
-        body = section_text[fence_open.end():]
-        body = re.sub(r"\n```\s*$", "", body)
-    else:
-        body = section_text
+    # Extrai o corpo do fenced yaml via helper robusto (ignora `---`/texto após
+    # o fence de fechamento). Sem fence: devolve o texto inteiro (YAML inline).
+    # Antes usava `re.sub(r"\n```\s*$", ...)` — só removia o fence no fim
+    # absoluto e quebrava quando o wizard injetava `---` entre seções.
+    body = _extract_fenced_yaml_body(section_text)
 
     try:
         data = yaml.safe_load(body)
@@ -463,13 +462,16 @@ def _parse_evidence_policy(section_text: str) -> dict:
     if not section_text or not section_text.strip():
         return {}
 
-    # Procura bloco fenced (yaml/yml). Sem fence → legacy mode.
-    fence_open = re.search(r"```(?:yaml|yml)?\s*\n", section_text)
-    if not fence_open:
+    # Sem fence → legacy mode (texto cru, sem governance ativa).
+    if not re.search(r"```(?:yaml|yml)?\s*\n", section_text):
         return {"raw": section_text}
 
-    body = section_text[fence_open.end():]
-    body = re.sub(r"\n```\s*$", "", body)
+    # Extrai o corpo ENTRE as fences via helper robusto — ignora o HR `---` que
+    # o wizard/LLM injeta após o fence de fechamento (antes o ``` literal + `---`
+    # vazavam pro body → yaml.safe_load estourava ScannerError → `sources`
+    # silenciosamente perdido → RAG em pipeline nunca disparava). Ver
+    # _extract_fenced_yaml_body e o achado do teste E2E do Cenário A.
+    body = _extract_fenced_yaml_body(section_text)
 
     try:
         data = yaml.safe_load(body)
