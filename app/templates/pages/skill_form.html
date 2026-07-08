@@ -552,8 +552,18 @@
                     </div>
                 </div>
             </div>
-            <textarea x-model="form.raw_content" data-testid="skill-raw" rows="24" placeholder="---&#10;id: urn:skill:dominio:tipo:slug&#10;version: 0.1.0&#10;kind: subagent&#10;owner: equipe&#10;stability: alpha&#10;---&#10;&#10;# Nome da Skill&#10;&#10;## Purpose&#10;..."
-                      class="w-full rounded-xl border border-surface-200 bg-white px-4 py-3 text-[12px] font-mono text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition resize-none leading-relaxed"></textarea>
+            <div class="relative">
+                <textarea x-model="form.raw_content" data-testid="skill-raw" rows="24" :disabled="wizardLoading" placeholder="---&#10;id: urn:skill:dominio:tipo:slug&#10;version: 0.1.0&#10;kind: subagent&#10;owner: equipe&#10;stability: alpha&#10;---&#10;&#10;# Nome da Skill&#10;&#10;## Purpose&#10;..."
+                          class="w-full rounded-xl border border-surface-200 bg-white px-4 py-3 text-[12px] font-mono text-brand-900 placeholder:text-surface-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition resize-none leading-relaxed"></textarea>
+                <!-- Overlay durante a geração pelo wizard: o SKILL.md chega vazio→populado,
+                     e sem isto o editor PISCAVA com o template de 0 chars (parecia falha).
+                     Mantém um estado "Gerando…" até o conteúdo chegar. -->
+                <div x-show="wizardLoading" x-transition.opacity style="display:none" data-testid="skill-raw-generating"
+                     class="absolute inset-0 rounded-xl bg-white/85 flex flex-col items-center justify-center gap-2 text-[12px] text-surface-500">
+                    <svg class="w-6 h-6 animate-spin text-brand-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <span>Gerando SKILL.md…</span>
+                </div>
+            </div>
 
             <!-- ══════════ STATS: chars / tokens / custo estimado ══════════
                  Mostra abaixo do textarea contagem em tempo real e estimativa
