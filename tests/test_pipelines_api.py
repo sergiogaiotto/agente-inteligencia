@@ -422,6 +422,22 @@ class TestPipelineEntry:
         r = c.post("/api/v1/pipelines/nope/entry", json={"agent_id": "a1"})
         assert r.status_code == 404
 
+    def test_resolved_entry_exposed_when_auto_detected(self, storage):
+        """entry_agent_id=null (entrada auto) mas resolved_entry_agent_id mostra a raiz
+        REAL — fim da confusão de observabilidade (o campo antes ficava só null)."""
+        c = make_client()
+        pid = _create(c, "P-resolved")
+        self._add(c, pid, "a1"); self._add(c, pid, "a2")
+        body = c.get(f"/api/v1/pipelines/{pid}").json()
+        assert body["entry_agent_id"] is None
+        assert body["resolved_entry_agent_id"] in ("a1", "a2")  # raiz detectada, não null
+        # entrada EXPLÍCITA → resolved segue o explícito (em get E em list)
+        c.post(f"/api/v1/pipelines/{pid}/entry", json={"agent_id": "a2"})
+        got = c.get(f"/api/v1/pipelines/{pid}").json()
+        assert got["entry_agent_id"] == "a2" and got["resolved_entry_agent_id"] == "a2"
+        listed = c.get("/api/v1/pipelines").json()["pipelines"]
+        assert next(p for p in listed if p["id"] == pid)["resolved_entry_agent_id"] == "a2"
+
 
 class TestBuildSubgraphEntry:
     """_build_subgraph respeita entry_agent_id (prioridade sobre a raiz topológica)."""

@@ -69,7 +69,7 @@ def _iso(v):
     return v.isoformat() if isinstance(v, datetime) else v
 
 
-def _serialize(p: dict, agent_ids: list) -> dict:
+def _serialize(p: dict, agent_ids: list, resolved_entry: Optional[str] = None) -> dict:
     status = p.get("status", "rascunho")
     return {
         "id": p["id"],
@@ -84,11 +84,44 @@ def _serialize(p: dict, agent_ids: list) -> dict:
         "audit_posture": p.get("audit_posture") or "inherit",
         "agent_ids": agent_ids,
         "agent_count": len(agent_ids),
+        # entry_agent_id = escolha EXPLÍCITA do usuário (null quando auto-detectada).
         "entry_agent_id": p.get("entry_agent_id"),
+        # resolved_entry_agent_id = a raiz REAL que o invoke usa (explícita se houver,
+        # senão a raiz topológica do mesh). Antes o cliente via só entry_agent_id=null
+        # p/ entrada automática e não sabia QUAL nó era a entrada (confundia a
+        # observabilidade). Materializado nos paths de leitura (list/get).
+        "resolved_entry_agent_id": resolved_entry or p.get("entry_agent_id"),
         "next_states": list(next_pipeline_states(status)),
         "created_at": _iso(p.get("created_at")),
         "updated_at": _iso(p.get("updated_at")),
     }
+
+
+async def _resolve_entry(p: dict, agent_ids: list, conns: Optional[list] = None) -> Optional[str]:
+    """Raiz REAL do pipeline: entry_agent_id explícito (se membro) OU a raiz
+    topológica do mesh (source-never-target) entre os membros. Mesma lógica que o
+    invoke usa p/ auto-detectar a entrada — ver catalog.pipeline_defs._build_subgraph.
+    `conns` pode ser pré-buscado (evita N queries ao serializar a lista)."""
+    member_set = set(agent_ids or [])
+    explicit = p.get("entry_agent_id")
+    if explicit and explicit in member_set:
+        return explicit
+    if not member_set:
+        return None
+    if conns is None:
+        try:
+            from app.core.database import mesh_repo
+            conns = await mesh_repo.find_all(limit=1000)
+        except Exception:
+            conns = []
+    edges = [
+        {"source": c.get("source_agent_id"), "target": c.get("target_agent_id")}
+        for c in conns
+        if c.get("source_agent_id") in member_set and c.get("target_agent_id") in member_set
+    ]
+    from app.routes.mesh import _detect_roots
+    roots = _detect_roots(edges)
+    return roots[0] if roots else (agent_ids[0] if agent_ids else None)
 
 
 async def _require(pid: str) -> dict:
@@ -472,7 +505,21 @@ async def list_pipelines(status: Optional[str] = None, domain: Optional[str] = N
     by_pipeline: dict = {}
     for m in membership:
         by_pipeline.setdefault(m["pipeline_id"], []).append(m["agent_id"])
-    return {"pipelines": [_serialize(p, by_pipeline.get(p["id"], [])) for p in pipelines]}
+    # Uma ÚNICA busca de conexões p/ resolver a entrada de todos os pipelines
+    # (evita N queries — resolve a raiz topológica em memória por pipeline).
+    # Fail-soft: falha ao buscar o mesh NÃO derruba a lista (resolved cai no
+    # entry explícito / 1º membro).
+    try:
+        from app.core.database import mesh_repo
+        conns = await mesh_repo.find_all(limit=2000)
+    except Exception:
+        conns = []
+    out = []
+    for p in pipelines:
+        aids = by_pipeline.get(p["id"], [])
+        resolved = await _resolve_entry(p, aids, conns=conns)
+        out.append(_serialize(p, aids, resolved_entry=resolved))
+    return {"pipelines": out}
 
 
 @router.post("", status_code=201)
@@ -517,7 +564,8 @@ async def create_pipeline(data: PipelineCreate):
 async def get_pipeline(pid: str):
     p = await _require(pid)
     agent_ids = await pipeline_membership.agents_of(pid)
-    return _serialize(p, agent_ids)
+    resolved = await _resolve_entry(p, agent_ids)
+    return _serialize(p, agent_ids, resolved_entry=resolved)
 
 
 @router.get("/{pid}/inputs-schema")
