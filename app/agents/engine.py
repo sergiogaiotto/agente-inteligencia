@@ -3424,6 +3424,22 @@ def _step_cost_and_tokens(result: dict, agent: dict) -> tuple:
     return float(cost or 0.0), (int(tok.get("total") or 0) or (ti + to))
 
 
+def _step_effective_model(result: dict, agent: dict) -> str:
+    """Modelo REALMENTE usado no step, para o card de Rastreabilidade.
+
+    O engine pode rerotear por ``task_type`` numa cópia local do agent (ex.: input
+    multimodal força ``multimodal_fallback`` → azure/gpt-4o em runtime). O snapshot
+    ``agent['model']`` é só o valor PRÉ-swap; o modelo de fato usado vive em
+    ``result['trace']['agent_model']`` — mesmo princípio do `_step_cost_and_tokens`.
+    Sem isto, um SA de visão que rodou em gpt-4o aparecia como "gpt-oss" no trace,
+    mascarando o roteamento multimodal (confundiu o diagnóstico do bug de imagem)."""
+    return (
+        ((result or {}).get("trace") or {}).get("agent_model")
+        or (agent or {}).get("model", "")
+        or ""
+    )
+
+
 async def execute_pipeline(
     entry_agent_id: str,
     user_input: str,
@@ -4042,7 +4058,8 @@ async def execute_pipeline(
                 "agent_id": agent_id,
                 "agent_name": agent.get("name",""),
                 "agent_kind": agent.get("kind",""),
-                "agent_model": agent.get("model",""),
+                # Modelo REALMENTE usado (pós-swap multimodal), não o snapshot.
+                "agent_model": _step_effective_model(result, agent),
                 # Narrativa humanizada (💬) exposta por step p/ a projeção 'summary'
                 # da resposta de invoke — antes só vivia dentro de trace.execution_log.
                 "status_message": (agent.get("processing_message") or "").strip(),
