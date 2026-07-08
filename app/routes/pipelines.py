@@ -480,6 +480,18 @@ async def create_pipeline(data: PipelineCreate):
     name = (data.name or "").strip()
     if not name:
         raise HTTPException(422, "name é obrigatório")
+    if len(name) > 120:
+        raise HTTPException(422, "name muito longo (máx 120 caracteres)")
+    # Nome ÚNICO (case-insensitive): sem isto, dois pipelines "Cobrança" coexistiam
+    # e o modal in-page do Estúdio não tinha como validar antes de criar. 422 nomeado
+    # p/ a UI exibir "já existe". (O antigo window.prompt não validava nada — ver o
+    # modal in-page que substituiu o prompt nativo.)
+    existing = await pipelines_repo.find_all(limit=1000)
+    if any((e.get("name") or "").strip().lower() == name.lower() for e in existing):
+        raise HTTPException(422, {
+            "error": "name_duplicate",
+            "message": f"Já existe um pipeline chamado “{name}”. Escolha outro nome.",
+        })
     pid = str(uuid.uuid4())
     await pipelines_repo.create({
         "id": pid,

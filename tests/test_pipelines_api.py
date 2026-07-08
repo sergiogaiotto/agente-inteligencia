@@ -147,6 +147,32 @@ class TestCRUD:
         # só espaços → handler retorna 422
         assert c.post("/api/v1/pipelines", json={"name": "   "}).status_code == 422
 
+    def test_create_rejects_duplicate_name(self, storage):
+        """Nome ÚNICO (case-insensitive) — o modal in-app do Estúdio depende disto p/
+        barrar duplicata antes de criar (o antigo prompt() nativo não validava nada)."""
+        c = make_client()
+        assert c.post("/api/v1/pipelines", json={"name": "Cobrança"}).status_code == 201
+        # mesmo nome, outra caixa → 422 nomeado name_duplicate
+        r = c.post("/api/v1/pipelines", json={"name": "cobrança"})
+        assert r.status_code == 422, r.text
+        detail = r.json()["detail"]
+        assert isinstance(detail, dict) and detail.get("error") == "name_duplicate"
+        # nome distinto segue criando
+        assert c.post("/api/v1/pipelines", json={"name": "Cobrança 2"}).status_code == 201
+
+    def test_mesh_flow_template_uses_modal_not_native_prompt(self):
+        """O Estúdio (mesh_flow.html) não pode mais chamar window.prompt() para nomear
+        pipeline — deve usar o modal in-app (pipeNameModal) com validação."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent / "app" / "templates" / "pages" / "mesh_flow.html").read_text(encoding="utf-8")
+        # nenhuma CHAMADA prompt( de verdade (só comentários mencionando o legado)
+        import re
+        calls = [ln for ln in src.splitlines() if re.search(r"(?<![\w.])prompt\s*\(", ln) and "//" not in ln.split("prompt(")[0] and "<!--" not in ln]
+        assert not calls, f"window.prompt() ainda chamado: {calls[:3]}"
+        # o modal e o fluxo in-app existem
+        assert 'pipeNameModal' in src and 'submitPipeName' in src
+        assert 'data-testid="pipeline-name-input"' in src
+
     def test_get_and_404(self, storage):
         c = make_client()
         pid = _create(c)
