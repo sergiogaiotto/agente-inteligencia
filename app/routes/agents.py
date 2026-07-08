@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from app.models.schemas import (
     AgentCreate, AgentUpdate, AgentInvokeRequest, AgentInvokeResponse,
     PreflightReport,
@@ -112,6 +112,56 @@ def _decode_attachments(items: list) -> tuple[list, list]:
             item["content_base64"] = base64.b64encode(raw).decode()
         accepted.append(item)
     return accepted, rejected
+
+async def _enforce_apikey_budget(request: Request) -> None:
+    """F6: pré-checa o teto de custo da API Key (402 quando a janela estourou).
+
+    Fecha o gap: o débito/quota F6 estava wired SÓ no invoke de PIPELINE
+    (/pipelines/{id}/invoke). O invoke de AGENTE (/agents/{id}/invoke) — que a
+    contenção P0 PERMITE a uma key — não tinha quota: com o multimodal roteando
+    pro azure/gpt-4o (custo real), uma key gastava sem teto por aqui. No-op p/
+    cookie/UI, key sem orçamento, ou toggle OFF."""
+    api_key_id = getattr(request.state, "api_key_id", None)
+    if not api_key_id:
+        return
+    from app.core.api_key_budget import enforce_budget
+    await enforce_budget(api_key_id)
+
+
+async def _debit_and_attribute_apikey(request: Request, result: dict) -> None:
+    """F6+F12: debita o custo REAL da invocação no ledger da key E atribui a
+    interação à key (metadata.via). Best-effort e gated pelo toggle — NUNCA
+    derruba a resposta (o invoke já executou). No-op p/ cookie/UI."""
+    api_key_id = getattr(request.state, "api_key_id", None)
+    if not api_key_id:
+        return
+    interaction_id = (result or {}).get("interaction_id")
+    # F6 — débito (gated pelo toggle dentro de record_cost).
+    try:
+        from app.core.api_key_budget import cost_and_tokens_from_result, record_cost
+        cost, tokens = cost_and_tokens_from_result(result)
+        await record_cost(api_key_id, cost, tokens, interaction_id=interaction_id)
+    except Exception as e:  # noqa: BLE001 — débito nunca derruba o invoke
+        logger.warning("event=apikey_cost_record_failed error=%s", e)
+    # F12 — atribuição por-key na metadata da interação (observabilidade).
+    if not interaction_id:
+        return
+    try:
+        row = await interactions_repo.find_by_id(interaction_id) or {}
+        md = row.get("metadata")
+        if isinstance(md, str):
+            md = json.loads(md) if md.strip() else {}
+        if not isinstance(md, dict):
+            md = {}
+        md.update({
+            "via": "api_key",
+            "api_key_id": api_key_id,
+            "api_key_name": getattr(request.state, "api_key_name", None),
+        })
+        await interactions_repo.update(interaction_id, {"metadata": json.dumps(md, ensure_ascii=False)})
+    except Exception as e:  # noqa: BLE001 — atribuição nunca derruba o invoke
+        logger.warning("event=apikey_attribution_failed interaction_id=%s error=%s", interaction_id, e)
+
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
@@ -494,7 +544,7 @@ async def _resolve_agent(ref: str) -> dict | None:
 
 
 @router.post("/{agent_id}/invoke", response_model=AgentInvokeResponse)
-async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeResponse:
+async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request) -> AgentInvokeResponse:
     from app.agents.engine import execute_interaction
     from app.agents.declarative_engine import execute_declarative
     from app.routes.workspace import _filter_attachments_by_agent
@@ -564,6 +614,11 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
 
     start = time.time()
 
+    # F6: pré-check de quota de custo por API Key (402 se a janela já estourou),
+    # ANTES de qualquer execução com custo de LLM. Dry-run é isento (não gasta).
+    if not (data.options and data.options.dry_run):
+        await _enforce_apikey_budget(request)
+
     if is_declarative:
         dry_run = bool(data.options and data.options.dry_run)
         try:
@@ -614,6 +669,9 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
         if dry_run:
             outputs_dict["plans"] = result.get("dry_run_plans") or []
             outputs_dict["dry_run"] = True
+        else:
+            # F12: atribui a interação declarativa à key (débito ~$0 — sem LLM).
+            await _debit_and_attribute_apikey(request, result)
         return AgentInvokeResponse(
             session_id=result.get("interaction_id"),
             agent_id=agent_id,
@@ -692,6 +750,10 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
             }, ensure_ascii=False),
         })
 
+        # F6/F12: debita o custo real (soma dos steps) no ledger da key + atribui
+        # a interação à key. Best-effort; gated pelo toggle. Só via X-API-Key.
+        await _debit_and_attribute_apikey(request, pipe_result)
+
         return AgentInvokeResponse(
             session_id=pipe_result.get("interaction_id"),
             agent_id=agent_id,
@@ -752,6 +814,9 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
             "duration_ms": duration,
         }, ensure_ascii=False),
     })
+
+    # F6/F12: débito do custo real (do trace, agente single) + atribuição à key.
+    await _debit_and_attribute_apikey(request, result)
 
     return AgentInvokeResponse(
         session_id=result.get("interaction_id"),

@@ -76,6 +76,38 @@ class TestCostFromResult:
         assert bud.cost_and_tokens_from_result({"pipeline_steps": []}) == (0.0, 0)
         assert bud.cost_and_tokens_from_result(None) == (0.0, 0)
 
+    def test_fallback_agente_single_do_trace(self):
+        """Agente single (execute_interaction, SEM pipeline_steps): custo deriva
+        do trace (tokens + provider/model REAIS). Sem isto, invoke de subagente
+        via key debitava 0 (furava a quota F6 no /agents/{id}/invoke). azure/gpt-4o
+        tem preço em llm_pricing (0.0125 / 1k in + 1k out)."""
+        result = {"trace": {
+            "agent_provider": "azure", "agent_model": "gpt-4o",
+            "tokens": {"input": 1000, "output": 1000, "total": 2000},
+        }}
+        cost, tokens = bud.cost_and_tokens_from_result(result)
+        assert cost > 0.0                      # gpt-4o é pago → não é mais 0
+        assert round(cost, 6) == 0.0125
+        assert tokens == 2000
+
+    def test_fallback_trace_sem_tokens_e_gptoss_zero(self):
+        # trace vazio → 0/0
+        assert bud.cost_and_tokens_from_result({"trace": {}}) == (0.0, 0)
+        # gpt-oss é $0 no pricing, mas os tokens ainda contam
+        r = {"trace": {"agent_provider": "openai", "agent_model": "gpt-oss-120b",
+                       "tokens": {"input": 10, "output": 5, "total": 15}}}
+        cost, tokens = bud.cost_and_tokens_from_result(r)
+        assert cost == 0.0 and tokens == 15
+
+    def test_pipeline_steps_tem_precedencia_sobre_trace(self):
+        # quando há steps, usa os steps (não o trace) — preserva o comportamento
+        # do invoke de pipeline.
+        result = {"pipeline_steps": [{"cost_usd": 0.02, "tokens_used": 50}],
+                  "trace": {"agent_provider": "azure", "agent_model": "gpt-4o",
+                            "tokens": {"input": 9999, "output": 9999}}}
+        cost, tokens = bud.cost_and_tokens_from_result(result)
+        assert round(cost, 6) == 0.02 and tokens == 50
+
 
 # ─────────────────────────── enforce_budget ───────────────────────────
 def _set_enabled(monkeypatch, enabled: bool):
