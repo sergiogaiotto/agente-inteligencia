@@ -175,3 +175,28 @@ class TestDefaultAgentUI:
         assert "bg-rose-100 text-rose-700" in html
         for forbidden in ("bg-violet", "bg-fuchsia", "bg-purple", "text-violet", "text-fuchsia", "text-purple"):
             assert forbidden not in html, f"tom de roxo proibido: {forbidden}"
+
+
+class TestFanoutDefaultHint:
+    """Guia p/ criar rota default/else quando o fan-out condicional é incompleto —
+    senão um valor não coberto (ex.: sentimento NEUTRO) fica órfão (dead-end)."""
+
+    def test_hint_banner_present(self, html):
+        assert 'data-testid="fanout-default-hint"' in html
+        assert "Fan-out incompleto" in html
+
+    def test_hint_gated_by_getter(self, html):
+        idx = html.index('data-testid="fanout-default-hint"')
+        assert 'x-if="missionShouldSuggestDefault"' in html[idx - 260: idx]
+
+    def test_getters_defined(self, html):
+        assert "get missionConditionalCount()" in html
+        assert "get missionShouldSuggestDefault()" in html
+        assert "missionConditionalCount >= 2" in html   # heurística: ≥2 condicionais + default vazio
+
+    def test_hint_uses_amber_not_purple(self, html):
+        idx = html.index('data-testid="fanout-default-hint"')
+        block = html[idx: idx + 200]
+        assert "amber" in block
+        for forbidden in ("violet", "fuchsia", "purple"):
+            assert forbidden not in block
