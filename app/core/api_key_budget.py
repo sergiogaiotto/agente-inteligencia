@@ -57,23 +57,53 @@ def _window_start(window: str, now: datetime) -> Optional[datetime]:
 
 
 def cost_and_tokens_from_result(result: dict) -> tuple[float, int]:
-    """Soma o custo/tokens REAIS dos steps do pipeline. Cada step traz
-    ``cost_usd``/``tokens_used`` já calculados no engine (_step_cost_and_tokens).
-    Defensivo: step malformado é ignorado (não derruba o débito)."""
+    """Custo/tokens REAIS de um result do engine — cobre PIPELINE e AGENTE SINGLE.
+
+    - **Pipeline / orquestrador** (execute_pipeline): soma o ``cost_usd``/
+      ``tokens_used`` de cada step (já calculados no engine, _step_cost_and_tokens).
+    - **Agente single** (execute_interaction, sem ``pipeline_steps``): o custo não
+      vem pré-somado; deriva de ``result['trace']`` (tokens + provider/model REAIS,
+      pós-swap) via ``compute_cost`` — MESMO princípio do _step_cost_and_tokens.
+      Sem este fallback, um invoke de subagente via API Key debitaria SEMPRE 0
+      (furando a quota F6 no /agents/{id}/invoke).
+
+    Defensivo: step/trace malformado é ignorado (nunca derruba o débito)."""
     steps = (result or {}).get("pipeline_steps") or []
+    if steps:
+        cost = 0.0
+        tokens = 0
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            try:
+                cost += float(s.get("cost_usd") or 0.0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                tokens += int(s.get("tokens_used") or 0)
+            except (TypeError, ValueError):
+                pass
+        return cost, tokens
+    # Fallback: agente single (sem pipeline_steps) — custo derivado do trace.
+    trace = (result or {}).get("trace") or {}
+    tok = trace.get("tokens") or {}
+    try:
+        ti = int(tok.get("input") or 0)
+        to = int(tok.get("output") or 0)
+    except (TypeError, ValueError):
+        ti = to = 0
     cost = 0.0
-    tokens = 0
-    for s in steps:
-        if not isinstance(s, dict):
-            continue
-        try:
-            cost += float(s.get("cost_usd") or 0.0)
-        except (TypeError, ValueError):
-            pass
-        try:
-            tokens += int(s.get("tokens_used") or 0)
-        except (TypeError, ValueError):
-            pass
+    try:
+        from app.core.llm_pricing import compute_cost
+        cost = float(compute_cost(
+            trace.get("agent_provider"), trace.get("agent_model"), ti, to,
+        ) or 0.0)
+    except Exception:
+        cost = 0.0
+    try:
+        tokens = int(tok.get("total") or 0) or (ti + to)
+    except (TypeError, ValueError):
+        tokens = ti + to
     return cost, tokens
 
 
