@@ -92,12 +92,25 @@ def _decode_attachments(items: list) -> tuple[list, list]:
                     },
                 )
                 # mantém content="" — engine descarta (comportamento legado)
-        accepted.append({
+        item = {
             "name": filename,
             "type": ctype,
             "size": len(raw),
             "content": text_content,
-        })
+        }
+        # Imagem vai ao LLM multimodal como image_url (base64), NÃO como o texto
+        # markitdown (só "ImageSize: LxA", ruído). `_attachment_image_data_url`
+        # (engine) lê `content_base64`/`image_b64`/`abs_path`. Este decoder da API
+        # só carregava `content` (texto), então a imagem era DESCARTADA no invoke
+        # via /agents/{id}/invoke e /pipelines/{id}/invoke — mesmo com o modelo
+        # roteado corretamente pro multimodal_fallback (azure/gpt-4o): sem base64,
+        # `_build_user_message_content` cai no caminho text-only e o SA de visão
+        # respondia "nenhuma imagem enviada". O caminho workspace/UI não sofria
+        # porque grava o arquivo e passa `abs_path`. Só p/ imagem (documentos
+        # usam `content` textual; anexar base64 dobraria a memória à toa).
+        if ctype.startswith("image/"):
+            item["content_base64"] = base64.b64encode(raw).decode()
+        accepted.append(item)
     return accepted, rejected
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])

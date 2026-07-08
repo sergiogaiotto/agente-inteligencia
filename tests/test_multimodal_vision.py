@@ -86,11 +86,64 @@ class TestBuildUserMessageContent:
         assert content == "oi"
 
 
+class TestDecodeAttachmentsPreservesImageBytes:
+    """Regressão do bug 'invoke via API descartava a imagem' (2026-07-08).
+
+    `_decode_attachments` (rota /agents e /pipelines invoke) montava o anexo
+    interno só com `content` (texto markitdown = "ImageSize: LxA"), SEM o base64.
+    Como `_attachment_image_data_url` lê `content_base64`/`image_b64`/`abs_path`,
+    a imagem era DESCARTADA em `_build_user_message_content` mesmo com o modelo
+    roteado pro multimodal_fallback (azure/gpt-4o) → o SA de visão respondia
+    'nenhuma imagem enviada'. O caminho workspace/UI não sofria (passa `abs_path`).
+    Fix: o decoder passa a incluir `content_base64` para anexos de imagem.
+    """
+
+    def _mk(self, filename, ctype, b64):
+        from app.models.schemas import AttachmentInput
+        return AttachmentInput(filename=filename, content_type=ctype, content_base64=b64)
+
+    def test_image_attachment_carries_base64(self):
+        from app.routes.agents import _decode_attachments
+        from app.agents.engine import _attachment_image_data_url
+        accepted, rejected = _decode_attachments([self._mk("foto.png", "image/png", _PNG_1x1_B64)])
+        assert rejected == []
+        assert len(accepted) == 1
+        att = accepted[0]
+        # o base64 dos pixels sobrevive ao decode…
+        assert att.get("content_base64"), "imagem deve carregar content_base64 (bug: era descartado)"
+        # …e o engine consegue montar o data URL a partir do dict interno.
+        assert _attachment_image_data_url(att) is not None
+
+    def test_image_reaches_multimodal_message_end_to_end(self):
+        """Cadeia completa: decode da API → mensagem multimodal com image_url."""
+        from app.routes.agents import _decode_attachments
+        from app.agents.engine import _build_user_message_content
+        accepted, _ = _decode_attachments([self._mk("foto.png", "image/png", _PNG_1x1_B64)])
+        content = _build_user_message_content("descreva", accepted, "azure", "gpt-4o")
+        assert isinstance(content, list), "imagem decodificada pela API deve virar conteúdo multimodal"
+        assert any(p.get("type") == "image_url" for p in content)
+
+    def test_document_attachment_does_not_carry_base64(self):
+        """Documento usa `content` textual — não anexa base64 (evita dobrar memória)."""
+        from app.routes.agents import _decode_attachments
+        # 'texto simples' decodifica como UTF-8 → content textual, type text/plain.
+        b64 = base64.b64encode("relatorio trimestral".encode()).decode()
+        accepted, _ = _decode_attachments([self._mk("nota.txt", "text/plain", b64)])
+        assert accepted and "content_base64" not in accepted[0]
+        assert accepted[0]["content"] == "relatorio trimestral"
+
+
 class TestWiringSourceSmoke:
     def test_workspace_passes_abs_path(self):
         src = (_ROOT / "app" / "routes" / "workspace.py").read_text(encoding="utf-8")
         assert "abs_path" in src
         assert "UPLOAD_DIR / Path(att.get(\"path\"" in src
+
+    def test_api_decoder_preserves_image_base64(self):
+        """O decoder da API deve preservar o base64 da imagem (guarda a regressão
+        no nível do source, além do teste funcional acima)."""
+        src = (_ROOT / "app" / "routes" / "agents.py").read_text(encoding="utf-8")
+        assert 'content_base64' in src and 'startswith("image/")' in src
 
     def test_engine_uses_multimodal_builder(self):
         src = (_ROOT / "app" / "agents" / "engine.py").read_text(encoding="utf-8")
