@@ -128,6 +128,17 @@ def test_content_and_size_cards_use_real_vars(html: str):
     assert "output_length < " in html and "output_length > " in html
 
 
+def test_content_card_renamed_and_points_to_keyword(html: str):
+    """O card 'content' foi renomeado p/ 'Tipo de mídia' (era 'Conteúdo', que o
+    operador confundia com 'contém o texto X') e aponta o match textual p/ o card
+    'Palavra-chave'. O intent interno 'content' permanece (sem mudar runtime)."""
+    assert "<span>Tipo de mídia</span>" in html
+    assert "<span>Conteúdo</span>" not in html
+    assert "selectIntent('content')" in html          # intent/runtime inalterado
+    # o corpo do card cross-referencia o card de texto
+    assert "Palavra-chave" in html and "texto específico" in html
+
+
 def test_did_you_mean_wired(html: str):
     """did-you-mean (Levenshtein) ataca o typo que falha em silêncio."""
     assert "exprWarnings()" in html
