@@ -145,6 +145,14 @@ class TestWiringSourceSmoke:
         src = (_ROOT / "app" / "routes" / "agents.py").read_text(encoding="utf-8")
         assert 'content_base64' in src and 'startswith("image/")' in src
 
+    def test_api_invoke_prunes_by_chain_not_entry_only(self):
+        """O invoke via API deve podar anexos pela UNIÃO da cadeia (include_chain=True),
+        não só pelo agente de entrada — senão um orquestrador que não aceita imagens
+        poda a imagem antes do SA de visão downstream (bug do dead-end 'Doc Analise')."""
+        src = (_ROOT / "app" / "routes" / "agents.py").read_text(encoding="utf-8")
+        # a chamada de poda no handler de invoke usa include_chain=True
+        assert "include_chain=True" in src
+
     def test_engine_uses_multimodal_builder(self):
         src = (_ROOT / "app" / "agents" / "engine.py").read_text(encoding="utf-8")
         assert "_build_user_message_content(" in src

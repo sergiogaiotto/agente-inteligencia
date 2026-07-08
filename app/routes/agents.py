@@ -549,7 +549,17 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest) -> AgentInvokeRe
                 "hint": "Use um agente em modo LLM para enviar arquivos, ou inclua os dados em 'inputs'.",
             })
         decoded, rejected_decode = _decode_attachments(data.attachments)
-        attachments_internal, rejected_filter = await _filter_attachments_by_agent(decoded, agent["id"])
+        # include_chain=True: a poda da porta decide pela UNIÃO das capacidades da
+        # CADEIA do mesh (entrada + downstream), não só do agente de entrada. Sem
+        # isto, invocar um ORQUESTRADOR que não aceita imagens (accepts_images=0)
+        # PODAVA a imagem na porta ANTES de ela chegar ao especialista de visão
+        # downstream → o SA recebia has_image=False, ficava no modelo text-only e a
+        # imagem sumia (SA de visão respondia "nenhuma imagem enviada"). O caminho
+        # workspace/UI já usa include_chain=True (workspace.py) — o invoke via API
+        # ficou pra trás. Agente-folha sem downstream → união = próprias flags.
+        attachments_internal, rejected_filter = await _filter_attachments_by_agent(
+            decoded, agent["id"], include_chain=True
+        )
         rejected_attachments = rejected_decode + rejected_filter
 
     start = time.time()
