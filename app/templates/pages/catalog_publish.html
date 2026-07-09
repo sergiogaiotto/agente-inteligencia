@@ -615,7 +615,7 @@ function publishWizard() {
 
         previewUrn() {
             if (!this.form.kind || !this.form.name || !this.form.version) return 'urn:maestro:default:<kind>:<slug>:<version>';
-            const slug = (this.form.name || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+            const slug = (this.form.name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
             return `urn:maestro:default:${this.form.kind}:${slug || 'noslug'}:${this.form.version}`;
         },
 
