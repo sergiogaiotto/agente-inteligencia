@@ -3722,7 +3722,61 @@ async def execute_pipeline(
                     return src, True
         return first_live, False
 
-    for i, agent_id in enumerate(chain):
+    # ── N1b (29.1.14): decisão de skip sem dependência da ordem BFS ──
+    # A chain segue a ordem de descoberta da BFS, que segue a ordem de
+    # retorno de `_topo_mesh_out` (arestas mais recentes primeiro) — ou
+    # seja, a ORDEM DE CRIAÇÃO das conexões. Um alvo preterido que aparece
+    # ANTES da sua source de cadeia (cross-edge pra frente, só possível
+    # entre nós do mesmo nível BFS) era decidido cedo demais:
+    # `_alt_inbound_upstream` só enxerga sources já processadas e a
+    # reativação (29.1.13) nunca tinha chance — deletar e recriar a MESMA
+    # aresta mudava o resultado do pipeline. Em vez de marcar o skip, a
+    # decisão é ADIADA: o nó vai UMA vez pro fim da fila de trabalho e é
+    # reavaliado quando as sources inbound já têm status. Máx. 1 requeue
+    # por nó ⇒ termina sempre (ciclos degradam pro comportamento antigo,
+    # fail-open). `chain` fica intacta (total_agents/contagens não inflam).
+    work_queue = list(chain)
+    requeued_ids: set = set()
+
+    def _undecided_inbound_srcs(target_id: str) -> list:
+        """Sources inbound do alvo (membros da chain) ainda SEM decisão
+        nesta execução — nem executaram, nem foram puladas, nem são
+        transparentes (passthrough/inativo)."""
+        pend = []
+        for c in inbound_by_target.get(target_id, []):
+            src = c.get("source_agent_id", "")
+            if not src or src == target_id:
+                continue
+            if src in outputs_by_id or src in skipped_ids or src in transparent_ids:
+                continue
+            pend.append(src)
+        return pend
+
+    def _defer(target_id: str, target_agent: dict, at_index: int, context: str) -> bool:
+        """Adia a decisão de skip do nó pro fim da fila (UMA única vez).
+        True = adiado (caller dá `continue`); False = decide agora."""
+        if target_id in requeued_ids:
+            return False
+        pend = _undecided_inbound_srcs(target_id)
+        if not pend:
+            return False
+        requeued_ids.add(target_id)
+        work_queue.append(target_id)
+        chain_pos[target_id] = len(work_queue) - 1
+        logger.info(
+            "mesh.chain.deferred",
+            extra={
+                "event": "mesh.chain.deferred",
+                "agent_id": target_id,
+                "agent_name": target_agent.get("name", ""),
+                "undecided_sources": pend,
+                "at_index": at_index,
+                "context": context,
+            },
+        )
+        return True
+
+    for i, agent_id in enumerate(work_queue):
         agent = await _topo_agent(agent_id)
         if not agent or agent.get("status") != "active":
             transparent_ids.add(agent_id)
@@ -3876,6 +3930,10 @@ async def execute_pipeline(
             _alt_src, _alt_fired = await _alt_inbound_upstream(
                 agent_id, agent, i, exclude=parent_id
             )
+            # N1b: nenhuma alternativa disparou AINDA, mas há source inbound
+            # sem decisão (cross-edge pra frente) — adiar em vez de pular.
+            if not _alt_fired and _defer(agent_id, agent, i, "upstream_skipped"):
+                continue
             if _alt_src is None:
                 # Nenhuma source EXECUTADA viva — mas se alguma inbound vem de
                 # source transparente (passthrough/inativo), a cadeia está viva:
@@ -3951,7 +4009,7 @@ async def execute_pipeline(
         elif (
             parent_id is not None
             and i > 0
-            and parent_id != chain[i - 1]
+            and parent_id != work_queue[i - 1]
             and parent_id in outputs_by_id
         ):
             upstream_id = parent_id
@@ -3960,7 +4018,7 @@ async def execute_pipeline(
             upstream_name = names_by_id.get(parent_id, "")
             have_upstream = True
         elif i > 0 and last_result:
-            upstream_id = chain[i - 1]
+            upstream_id = work_queue[i - 1]
             upstream_output = last_result.get("output", "")
             upstream_final_state = last_result.get("final_state", "")
             upstream_name = steps[-1].get("agent_name", "") if steps else ""
@@ -4028,6 +4086,10 @@ async def execute_pipeline(
                         "via_source_id": _alt_src,
                         "via_source_name": upstream_name,
                     })
+                elif _defer(agent_id, agent, i, "conditional_false"):
+                    # N1b: decisão prematura — há source de cadeia inbound ainda
+                    # não processada nesta execução; reavalia no fim da fila.
+                    continue
                 else:
                     # Rastreabilidade do MOTIVO (Fatia 3a — 2026-06-07): distinguir
                     # "preterido pelo roteador" de "condição não satisfeita". O override
@@ -4125,6 +4187,10 @@ async def execute_pipeline(
                         "via_source_id": _alt_src,
                         "via_source_name": upstream_name,
                     })
+                elif _defer(agent_id, agent, i, "default_suppressed"):
+                    # N1b: simétrico ao gate condicional — adia antes de suprimir
+                    # o "else" se ainda há source de cadeia inbound sem decisão.
+                    continue
                 else:
                     skipped_ids.add(agent_id)
                     names_by_id[agent_id] = agent.get("name", "")
