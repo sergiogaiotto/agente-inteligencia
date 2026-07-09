@@ -1609,7 +1609,9 @@ function agentForm(editId) {
         // sem persona/instruções adicionais (anti-passthrough sem reescrever
         // tudo do zero). `{{USER_INPUT}}` é a variável que o engine substitui
         // em runtime pela mensagem do usuário.
-        applyEmpowerSkillTemplate() {
+        // async por causa do await uiConfirm (F2: confirm nativo → modal in-app);
+        // callers são @click, ninguém depende do retorno síncrono.
+        async applyEmpowerSkillTemplate() {
             const skill = this.selectedSkillPreview;
             if (!skill) {
                 showToast('Selecione uma skill no passo Básico antes', 'error');
@@ -1620,7 +1622,7 @@ function agentForm(editId) {
             // controlado por Alpine, mas o user pode editar manualmente.
             const current = (this.form.system_prompt || '').trim();
             if (current && current !== 'Você é um agente inteligente.' && current !== 'Você é um agente inteligente e especializado.') {
-                if (!confirm('O System Prompt atual será substituído pelo template de empoderar skill. Continuar?')) {
+                if (!await uiConfirm({message: 'O System Prompt atual será substituído pelo template de empoderar skill. Continuar?', danger: true})) {
                     return;
                 }
             }
@@ -1672,13 +1674,15 @@ function agentForm(editId) {
             if (this.form.kind === 'router') return 'Critérios de triagem: categorias e para onde encaminhar cada uma. Dica: clique em "Estrutura da Triagem".';
             return 'Instruções detalhadas para o agente...';
         },
-        applyScaffold() {
+        // async por causa do await uiConfirm; callers (@click e mentorAct)
+        // não usam o retorno — fire-and-forget é seguro.
+        async applyScaffold() {
             // Mesmo guard do "Empoderar skill": confirma antes de sobrescrever
             // conteúdo real (não-vazio e não-genérico), pra não perder trabalho.
             const current = (this.form.system_prompt || '').trim();
             const generic = ['', 'Você é um agente inteligente.', 'Você é um agente inteligente e especializado.'];
             if (current && !generic.includes(current)) {
-                if (!confirm('O System Prompt atual será substituído pela estrutura inicial desta camada. Continuar?')) return;
+                if (!await uiConfirm({message: 'O System Prompt atual será substituído pela estrutura inicial desta camada. Continuar?', danger: true})) return;
             }
             this.form.system_prompt = this.scaffoldForKind();
             showToast('Estrutura aplicada — preencha os campos e use "IA, refine" para lapidar');
@@ -1881,7 +1885,8 @@ function agentForm(editId) {
             }
             return out.join('\n');
         },
-        applyMissionComposer() {
+        // async por causa do await uiConfirm; caller é @click (retorno não usado).
+        async applyMissionComposer() {
             // Validação: missão é obrigatória; 0 regras só avisa (não bloqueia).
             const stmt = (this.mission.statement || '').trim();
             if (!stmt) { showToast('Informe a missão antes de aplicar', 'error'); return; }
@@ -1890,7 +1895,7 @@ function agentForm(editId) {
             const current = (this.form.system_prompt || '').trim();
             const generic = ['', 'Você é um agente inteligente.', 'Você é um agente inteligente e especializado.'];
             if (current && !generic.includes(current)) {
-                if (!confirm('O System Prompt atual será substituído pela missão composta. Continuar?')) return;
+                if (!await uiConfirm({message: 'O System Prompt atual será substituído pela missão composta. Continuar?', danger: true})) return;
             }
             this.form.system_prompt = this.composeMissionPrompt();
             this.composerOpen = false;

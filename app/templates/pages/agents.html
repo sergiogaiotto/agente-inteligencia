@@ -649,7 +649,7 @@ function agentsPage() {
 
         async toggleStatus(agent) {
             const newStatus = agent.status === 'active' ? 'inactive' : 'active';
-            if (!confirm(`${newStatus === 'active' ? 'Ativar' : 'Desativar'} agente "${agent.name}"?`)) return;
+            if (!await uiConfirm({message: `${newStatus === 'active' ? 'Ativar' : 'Desativar'} agente "${agent.name}"?`, danger: false})) return;
             try {
                 await fetch(`/api/v1/agents/${agent.id}/status?status=${newStatus}`, {method:'PATCH'});
                 agent.status = newStatus;
@@ -662,7 +662,7 @@ function agentsPage() {
         },
 
         async deleteAgent(id, name) {
-            if (!confirm(`Remover agente "${name}" permanentemente?`)) return;
+            if (!await uiConfirm({message: `Remover agente "${name}" permanentemente?`, danger: true})) return;
             try {
                 await api.del(`/api/v1/agents/${id}`);
                 this.allAgents = this.allAgents.filter(a => a.id !== id);

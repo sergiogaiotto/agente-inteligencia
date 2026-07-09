@@ -2242,7 +2242,7 @@ function workspacePage() {
             try{await fetch(`/api/v1/workspace/sessions/${sid}?title=${encodeURIComponent(this.renameValue.trim())}`,{method:'PATCH'});const s=this.sessions.find(x=>x.id===sid);if(s)s.title=this.renameValue.trim();this.renamingId=null;showToast('Sessão renomeada')}catch{showToast('Erro','error')}
         },
         async deleteSession(sid,title){
-            if(!confirm(`Excluir sessão "${title||'Nova sessão'}"?`)) return;
+            if(!await uiConfirm({message: `Excluir sessão "${title||'Nova sessão'}"?`, danger: true})) return;
             try{await api.del(`/api/v1/workspace/sessions/${sid}`);this.sessions=this.sessions.filter(s=>s.id!==sid);if(this.currentSessionId===sid){this.currentSessionId=null;this.messages=[];this.lastTrace=null;this.liveLog=[]}showToast('Sessão excluída')}catch{showToast('Erro','error')}
         },
         async handleFileSelect(ev){

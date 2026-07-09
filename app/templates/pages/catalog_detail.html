@@ -1313,7 +1313,7 @@ function catalogDetailPage(entryId) {
 
         // ── Actions ─────────────────────────────────────────
         async submit() {
-            if (!confirm('Submeter esta entry para revisão Root?')) return;
+            if (!await uiConfirm({message: 'Submeter esta entry para revisão Root?', danger: false})) return;
             try {
                 const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/submit', {
                     method: 'POST',
@@ -1327,7 +1327,7 @@ function catalogDetailPage(entryId) {
         },
 
         async publish() {
-            if (!confirm('Publicar esta entry agora?')) return;
+            if (!await uiConfirm({message: 'Publicar esta entry agora?', danger: false})) return;
             try {
                 const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/publish', {method: 'POST'});
                 if (!r.ok) throw new Error((await r.json()).detail || 'erro');
@@ -1337,7 +1337,7 @@ function catalogDetailPage(entryId) {
         },
 
         async deprecate() {
-            if (!confirm('Marcar como depreciada? Consumers verão aviso.')) return;
+            if (!await uiConfirm({message: 'Marcar como depreciada? Consumers verão aviso.', danger: true})) return;
             try {
                 const r = await fetch('/api/v1/catalog/entries/' + this.entryId + '/deprecate', {method: 'POST'});
                 if (!r.ok) throw new Error((await r.json()).detail || 'erro');

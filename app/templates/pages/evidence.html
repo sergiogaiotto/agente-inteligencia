@@ -1155,7 +1155,7 @@ function evidencePage() {
             // Recria a coluna de vetores na dimensão do modelo ATIVO e re-embeda
             // todos os chunks a partir do texto no Postgres (source-of-truth) —
             // os vetores antigos são descartados, nenhum documento é perdido.
-            if (!confirm('Reindexar o vector store?\n\nOs vetores atuais são recriados na dimensão do modelo de embedding ativo, re-embedando todos os chunks a partir do texto já salvo. Nenhum documento é perdido. Pode levar alguns minutos.')) return;
+            if (!await uiConfirm({message: 'Reindexar o vector store?\n\nOs vetores atuais são recriados na dimensão do modelo de embedding ativo, re-embedando todos os chunks a partir do texto já salvo. Nenhum documento é perdido. Pode levar alguns minutos.', danger: false})) return;
             this.reindexRunning = true;
             try {
                 const r = await api.post('/api/v1/evidence/reindex', { recreate_collection: true, batch_size: 64 });
@@ -1212,7 +1212,7 @@ function evidencePage() {
         },
 
         async deleteSource(id, name) {
-            if (!confirm(`Remover base "${name}"? Evidências vinculadas perderão a referência.`)) return;
+            if (!await uiConfirm({message: `Remover base "${name}"? Evidências vinculadas perderão a referência.`, danger: true})) return;
             try { await api.del('/api/v1/knowledge-sources/' + id); showToast('Base removida'); await this.load(); } catch { showToast('Erro', 'error'); }
         },
 
@@ -1761,7 +1761,7 @@ function evidencePage() {
         },
 
         async clearChunks(s) {
-            if (!confirm(`Apagar todo o conteúdo indexado de "${s.name}"? A fonte permanece registrada (você pode re-ingerir depois).`)) return;
+            if (!await uiConfirm({message: `Apagar todo o conteúdo indexado de "${s.name}"? A fonte permanece registrada (você pode re-ingerir depois).`, danger: true})) return;
             try {
                 await api.del('/api/v1/knowledge-sources/' + s.id + '/chunks');
                 showToast('Conteúdo apagado');
@@ -1775,7 +1775,7 @@ function evidencePage() {
         async clearTables(s) {
             const n = this.statsBy[s.id]?.tables_count || 0;
             if (!n) return;
-            if (!confirm(`Apagar TODAS as ${n} tabela(s) estruturada(s) de "${s.name}"? Os arquivos .duckdb são apagados em disco. A fonte permanece registrada.`)) return;
+            if (!await uiConfirm({message: `Apagar TODAS as ${n} tabela(s) estruturada(s) de "${s.name}"? Os arquivos .duckdb são apagados em disco. A fonte permanece registrada.`, danger: true})) return;
             try {
                 const r = await api.del('/api/v1/knowledge-sources/' + s.id + '/tables');
                 showToast(`${r.deleted} tabela(s) apagada(s)`);
@@ -1791,7 +1791,7 @@ function evidencePage() {
 
         // ── Delete de uma tabela individual no painel direito — PR #226 ──
         async deleteTable(t) {
-            if (!confirm(`Excluir tabela "${t.name}"? O arquivo .duckdb é apagado em disco e a metadata é removida do banco. Operação irreversível.`)) return;
+            if (!await uiConfirm({message: `Excluir tabela "${t.name}"? O arquivo .duckdb é apagado em disco e a metadata é removida do banco. Operação irreversível.`, danger: true})) return;
             try {
                 await api.del('/api/v1/data-tables/' + t.id);
                 showToast('Tabela excluída');
@@ -1839,7 +1839,7 @@ function evidencePage() {
         async deleteDocument(d) {
             if (!d?.source_doc_id) return;
             const label = d.source_filename || (d.is_legacy ? 'documento legado' : 'documento');
-            if (!confirm(`Excluir "${label}"? ${d.chunks_count} chunk(s) serão apagados. Os outros documentos da KB permanecem intactos.`)) return;
+            if (!await uiConfirm({message: `Excluir "${label}"? ${d.chunks_count} chunk(s) serão apagados. Os outros documentos da KB permanecem intactos.`, danger: true})) return;
             try {
                 const r = await api.del('/api/v1/knowledge-sources/' + encodeURIComponent(this.inspectSource.id) + '/documents/' + encodeURIComponent(d.source_doc_id));
                 showToast(`${r.chunks_deleted} chunk(s) apagado(s)`);
