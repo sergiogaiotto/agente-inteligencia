@@ -1,61 +1,66 @@
 # ══════════════════════════════════════════
 # Maestro — Dependências
 # Instalar: pip install -r requirements.txt
+#
+# ⚠️ Versões PINADAS (==) para builds REPRODUZÍVEIS. Refletem o conjunto
+# resolvido e validado em runtime (app healthy) em 2026-07-09. O Dependabot
+# continua propondo bumps destes pins via PR (revisáveis + CI) — a diferença é
+# que agora o build usa exatamente a versão testada, não "a mais nova que casa".
 # ══════════════════════════════════════════
 
 # === Core ===
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-python-dotenv>=1.0.0
-python-multipart>=0.0.9
-jinja2>=3.1.0
-aiofiles>=25.1.0
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+python-dotenv==1.2.2
+python-multipart==0.0.32
+jinja2==3.1.6
+aiofiles==25.1.0
 
 # === Database (PostgreSQL) ===
-asyncpg>=0.29.0
+asyncpg==0.31.0
 
 # === Cache / Memória de Contexto ===
-redis[hiredis]>=5.0.0
+redis[hiredis]==8.0.1
 
 # === LangChain / LangGraph ===
-langgraph>=0.2.0
-langchain>=0.3.0
-langchain-openai>=0.2.0
-langchain-community>=0.3.0
-langchain-core>=1.4.8
+langgraph==1.2.2
+langchain==1.3.2
+langchain-openai==1.3.4
+langchain-community==0.4.2
+langchain-core==1.4.9
 
 # === LLM Providers ===
-openai>=1.40.0
-httpx>=0.28.1
+openai==2.44.0
+httpx==0.28.1
 
 # === Observabilidade ===
-langfuse>=2.0.0
+langfuse==4.13.2
 
 # === Observabilidade self-hosted (Onda 2 — OTel + Tempo + Loki + Grafana) ===
 # Habilitada em runtime apenas quando OTEL_ENABLED=true. Caso contrário,
 # init_otel() retorna no-op e nada destas libs é exercitado.
-opentelemetry-api>=1.27.0
-opentelemetry-sdk>=1.27.0
-opentelemetry-exporter-otlp-proto-grpc>=1.27.0
-opentelemetry-instrumentation-fastapi>=0.48b0
-opentelemetry-instrumentation-asyncpg>=0.64b0
-opentelemetry-instrumentation-httpx>=0.64b0
-opentelemetry-instrumentation-redis>=0.64b0
-opentelemetry-instrumentation-logging>=0.64b0
+opentelemetry-api==1.43.0
+opentelemetry-sdk==1.43.0
+opentelemetry-exporter-otlp-proto-grpc==1.43.0
+opentelemetry-instrumentation-fastapi==0.64b0
+opentelemetry-instrumentation-asyncpg==0.64b0
+opentelemetry-instrumentation-httpx==0.64b0
+opentelemetry-instrumentation-redis==0.64b0
+opentelemetry-instrumentation-logging==0.64b0
 
 # === Utilities ===
-pydantic>=2.13.4
-pydantic-settings>=2.14.2
-pyyaml>=6.0.0
-websockets>=16.0
-passlib[bcrypt]>=1.7.4
-bcrypt>=4.0.1,<4.1   # passlib 1.7.4 quebra com bcrypt 4.1+ (sem __about__.__version__)
-cryptography>=49.0.0
-itsdangerous>=2.2.0
+pydantic==2.13.4
+pydantic-settings==2.14.2
+pyyaml==6.0.3
+websockets==16.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1   # passlib 1.7.4 quebra com bcrypt 4.1+ (sem __about__.__version__); o pin honra o teto <4.1
+cryptography==49.0.0
+itsdangerous==2.2.0
 
 # === Declarative API Bindings ===
-jsonpath-ng>=1.6.0
-jinja2>=3.1.0
+jsonpath-ng==1.8.0
+jinja2==3.1.6
 
 # === RAG (Onda Q: backend único pgvector) ===
 # tiktoken: tokenizer da OpenAI/Azure (cl100k_base) para chunking preciso.
@@ -64,13 +69,13 @@ jinja2>=3.1.0
 # asyncpg automático (register_vector).
 #
 # Onda Q (2026-05-30): qdrant-client REMOVIDO. Qdrant deletado da plataforma.
-tiktoken>=0.7.0
-pgvector>=0.5.0
+tiktoken==0.13.0
+pgvector==0.5.0
 
 # === Verifier v2 (§14.2 — judge multi-dim + ContractValidator) ===
 # jsonschema: validação determinística de output_contract da SKILL.md.
 # Opcional em runtime — ContractValidator tem fallback manual se não instalado.
-jsonschema>=4.21.0
+jsonschema==4.26.0
 
 
 # === RAG ingestão multi-formato (Onda 6) ===
@@ -78,7 +83,7 @@ jsonschema>=4.21.0
 # Outlook .msg/ZIP/audio/imagens) → markdown limpo. Wrapper unificado de parsers,
 # evita 6+ libs separadas.  https://github.com/microsoft/markitdown
 # [all] inclui audio-transcription (precisa ffmpeg no sistema) + outras opcionais.
-markitdown[all]>=0.1.5
+markitdown[all]==0.1.6
 
 # === Tabular Ingestion (Onda Tabular) ===
 # DuckDB embarcado para promover CSV/XLSX em tabela consultável via SQL
@@ -86,21 +91,21 @@ markitdown[all]>=0.1.5
 # via seção `## Data Tables` no SKILL.md, paridade declarativa com API
 # Bindings. read_csv_auto + read_xlsx nativos: tipos inferidos sem pandas.
 # Arquivo .duckdb por tabela em data/tabular/<ks_id>/<table_id>.duckdb.
-duckdb>=1.5.4
+duckdb==1.5.4
 
 # === Testing (dev) ===
 # Testes de lógica pura (Pydantic, parsers, state machines) +
 # integration tests com Postgres real (tests/integration/, requer docker).
-pytest>=9.1.1
-pytest-asyncio>=1.4.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
 # Cobertura de código — reporta % no CI sem bloquear merge.
 # Roda com: pytest --cov=app --cov-report=term-missing
 # Útil pra ver módulos sem teste (não pra atingir 100% — alvo realista: 70-80%).
-pytest-cov>=7.1.0
+pytest-cov==7.1.0
 # Pre-commit framework — orquestra hooks locais antes de cada commit.
 # Setup: pre-commit install (1x por clone). Config em .pre-commit-config.yaml.
-pre-commit>=3.5.0
+pre-commit==4.6.0
 # E2E de interface — Playwright dirige o app REAL num browser headless.
 # Testes em tests/e2e/ (marker `e2e`), PULAM se o app não estiver de pé.
 # Setup do browser (1x): python -m playwright install chromium
-pytest-playwright>=0.5.0
+pytest-playwright==0.8.0
