@@ -1967,6 +1967,13 @@ ${outMap}`;
                         this._normalizeEvidencePolicyHumanReadable();
                     }
                 } catch(e) { showToast('Erro ao carregar skill', 'error'); }
+            } else if (!this.form.raw_content) {
+                // Novo skill: pré-preenche um scaffold com TODAS as seções
+                // obrigatórias (fonte da verdade: app/skill_parser/parser.py
+                // REQUIRED_SECTIONS) para o usuário não descobrir as faltantes
+                // só ao clicar em Validar. Guard !raw_content evita sobrescrever;
+                // o wizard de IA regera raw_content depois, se acionado.
+                this.form.raw_content = this._newSkillScaffold();
             }
 
             const mcpParam = new URLSearchParams(window.location.search).get('mcp');
@@ -1979,6 +1986,46 @@ ${outMap}`;
                     showToast('MCP "' + tool.name + '" selecionado — descreva a skill e gere');
                 }
             }
+        },
+
+        // Scaffold pré-preenchido ao criar nova skill: as 7 seções OBRIGATÓRIAS
+        // na ordem de app/skill_parser/parser.REQUIRED_SECTIONS, cada uma com uma
+        // linha-guia. Deixa a validação (POST /api/v1/skills/parse) verde de
+        // saída, em vez de o usuário só descobrir as faltantes ao Validar.
+        _newSkillScaffold() {
+            return [
+                '---',
+                'id: urn:skill:dominio:tipo:slug',
+                'version: 0.1.0',
+                'kind: subagent',
+                'owner: equipe',
+                'stability: alpha',
+                '---',
+                '',
+                '# Nome da Skill',
+                '',
+                '## Purpose',
+                'Em 1-2 frases: o que esta skill faz e quando usá-la.',
+                '',
+                '## Activation Criteria',
+                '- Quando acionar esta skill (gatilhos, intenções, tipos de pedido).',
+                '',
+                '## Inputs',
+                '- entrada: descreva cada input esperado.',
+                '',
+                '## Workflow',
+                '1. Passo a passo do que a skill executa.',
+                '',
+                '## Tool Bindings',
+                '- Ferramentas/APIs/MCP que a skill usa (ou "nenhuma").',
+                '',
+                '## Output Contract',
+                '- Formato e conteúdo da resposta esperada.',
+                '',
+                '## Failure Modes',
+                '- O que fazer sem dado, em erro, ou fora do escopo.',
+                '',
+            ].join('\n');
         },
 
         _parseOps(ops) {
