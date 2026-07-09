@@ -317,6 +317,139 @@ class TestChainOfExecutedNodeStillRuns:
         assert _statuses(res)["C"] == "skipped_conditional"
 
 
+# ─── N1b (29.1.14): independência da ORDEM de descoberta (requeue) ──
+#
+# A chain segue a ordem de retorno de `_topo_mesh_out` (arestas mais
+# recentes primeiro = ordem de criação das conexões). Residual comprovado
+# em runtime pós-#541: alvo preterido que aparece ANTES da sua source de
+# cadeia na chain era decidido cedo demais e a reativação nunca ocorria —
+# deletar e recriar a MESMA aresta mudava o resultado. Agora a decisão de
+# skip é adiada (1 requeue) até as sources inbound terem status.
+
+
+class TestOrderIndependentDeferral:
+    @pytest.mark.asyncio
+    async def test_reactivation_when_preempted_target_precedes_chain_source(self, monkeypatch):
+        """Espelho DESFAVORÁVEL do teste N1: mesma topologia (T→S cond casa,
+        T→F cond não casa, S→F sequential), mas a BFS descobre F ANTES de S
+        (aresta T→F devolvida primeiro). Sem o requeue, F era decidido antes
+        de S rodar → skipped_conditional; a MESMA modelagem com outra ordem
+        de criação dava outro resultado. Agora F é adiado e a cadeia viva o
+        reativa com o contexto de S."""
+        from app.agents import engine as eng
+        _patch_agents(monkeypatch, {
+            "T": _agent("T", "Triagem"),
+            "S": _agent("S", "Tecnico"),
+            "F": _agent("F", "Faturamento"),
+        })
+        _patch_topology(monkeypatch, {
+            "T": [
+                _conn("T", "F", ctype="conditional", expr="'fatura' in input_lower"),
+                _conn("T", "S", ctype="conditional", expr="'tecnico' in input_lower"),
+            ],
+            "S": [_conn("S", "F")],  # sequential — source vem DEPOIS na chain
+        })
+        invoked = _patch_executions(monkeypatch)
+
+        res = await eng.execute_pipeline(entry_agent_id="T", user_input="problema tecnico no inversor")
+
+        by_id = {x["agent_id"]: x for x in invoked}
+        assert "F" in by_id, "requeue deve permitir a reativação independente da ordem BFS"
+        assert by_id["F"]["pipeline_context"] == "output-of-S"
+        assert _statuses(res)["F"] == "completed"
+        # display honesto preservado: a aresta que disparou é a sequencial
+        mesh = {m["id"]: m for m in res["trace"]["mesh_chain"]}
+        assert mesh["F"]["connection"] == "sequential"
+
+    @pytest.mark.asyncio
+    async def test_dead_chain_defers_once_then_skips_with_reason(self, monkeypatch):
+        """Ordem desfavorável + cadeia MORTA: T→F (não casa) descoberto antes
+        de T→A (não casa), A→F sequential. F é adiado UMA vez; na reavaliação
+        A já foi pulado → F fecha como skipped_conditional (havia aresta viva
+        de T que só não casou) — e o loop termina (anti-loop do requeue)."""
+        from app.agents import engine as eng
+        _patch_agents(monkeypatch, {
+            "T": _agent("T", "Triagem"), "A": _agent("A", "A"), "F": _agent("F", "F"),
+        })
+        _patch_topology(monkeypatch, {
+            "T": [
+                _conn("T", "F", ctype="conditional", expr="'nunca2' in input_lower"),
+                _conn("T", "A", ctype="conditional", expr="'nunca1' in input_lower"),
+            ],
+            "A": [_conn("A", "F")],
+        })
+        invoked = _patch_executions(monkeypatch)
+
+        res = await eng.execute_pipeline(entry_agent_id="T", user_input="pergunta fora de escopo")
+
+        assert [x["agent_id"] for x in invoked] == ["T"]
+        st = _statuses(res)
+        assert st["A"] == "skipped_conditional"
+        assert st["F"] == "skipped_conditional"
+        assert _step(res, "F")["skip_reason"] == "conditional_false"
+        # o step de F existe UMA vez só (requeue não duplica steps)
+        assert sum(1 for s in res["pipeline_steps"] if s["agent_id"] == "F") == 1
+
+    @pytest.mark.asyncio
+    async def test_upstream_skip_defers_until_late_chain_source_decides(self, monkeypatch):
+        """Propagação de skip com alternativa TARDIA: E→P (não casa; P pulado),
+        P→X sequential (parent de X é P) e W→X sequential, onde W é do MESMO
+        nível de X e aparece DEPOIS dele na chain (descoberto por A). Sem o
+        requeue, X viraria skipped_upstream com W ainda indecidido; W executa
+        logo depois e a aresta viva ficaria ignorada. Agora X adia, W roda e
+        X é disparado pela cadeia de W."""
+        from app.agents import engine as eng
+        _patch_agents(monkeypatch, {
+            "E": _agent("E", "Entry"), "P": _agent("P", "Preterido"),
+            "A": _agent("A", "Ativo"), "X": _agent("X", "Alvo"),
+            "W": _agent("W", "Fonte tardia"),
+        })
+        _patch_topology(monkeypatch, {
+            "E": [
+                _conn("E", "P", ctype="conditional", expr="'nunca' in input_lower"),
+                _conn("E", "A", ctype="conditional", expr="'sim' in input_lower"),
+            ],
+            "P": [_conn("P", "X")],  # X descoberto por P (nível 2, antes de W)
+            "A": [_conn("A", "W")],  # W descoberto por A (nível 2, depois de X)
+            "W": [_conn("W", "X")],  # cross-edge pra frente na chain
+        })
+        invoked = _patch_executions(monkeypatch)
+
+        res = await eng.execute_pipeline(entry_agent_id="E", user_input="sim, prossiga")
+
+        by_id = {x["agent_id"]: x for x in invoked}
+        assert "X" in by_id, "X deve rodar via cadeia de W (decidida após o defer)"
+        assert by_id["X"]["pipeline_context"] == "output-of-W"
+        st = _statuses(res)
+        assert st["P"] == "skipped_conditional"
+        assert st["X"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_default_gate_defers_with_undecided_chain_source(self, monkeypatch):
+        """Simétrico no gate default: T→F (default, suprimido pois um irmão
+        casou) descoberto antes de T→S (cond casa), S→F sequential. F adia e
+        a cadeia de S o dispara — o "else" suprimido não mata a cadeia viva."""
+        from app.agents import engine as eng
+        _patch_agents(monkeypatch, {
+            "T": _agent("T", "Triagem"), "S": _agent("S", "Casado"), "F": _agent("F", "Else"),
+        })
+        _patch_topology(monkeypatch, {
+            "T": [
+                _conn("T", "F", ctype="default"),
+                _conn("T", "S", ctype="conditional", expr="'sim' in input_lower"),
+            ],
+            "S": [_conn("S", "F")],
+        })
+        invoked = _patch_executions(monkeypatch)
+
+        res = await eng.execute_pipeline(entry_agent_id="T", user_input="sim, quero")
+
+        by_id = {x["agent_id"]: x for x in invoked}
+        assert "S" in by_id and "F" in by_id
+        assert by_id["F"]["pipeline_context"] == "output-of-S"
+        assert _statuses(res)["F"] == "completed"
+
+
 # ─── aviso de modelagem: _mixed_inbound (topologia → editor de fluxo) ─
 
 
