@@ -15,7 +15,14 @@ from app.catalog.urn import (
 
 class TestSlugify:
     def test_simple_lowercase(self):
-        assert slugify("Análise Fiscal") == "an-lise-fiscal"
+        # Acentos são TRANSLITERADOS (não removidos): 'Análise' → 'analise'.
+        assert slugify("Análise Fiscal") == "analise-fiscal"
+
+    def test_transliterates_accents(self):
+        # Regressão do bug em que 'Órbita' virava 'rbita' (acento sumia).
+        assert slugify("Maestro Órbita") == "maestro-orbita"
+        assert slugify("Coração & Ação") == "coracao-acao"
+        assert slugify("Inteligência Ártificial João") == "inteligencia-artificial-joao"
 
     def test_collapses_spaces(self):
         assert slugify("agente   de   compras") == "agente-de-compras"
@@ -38,6 +45,11 @@ class TestMakeUrn:
     def test_canonical_form(self):
         urn = make_urn("agent", "Consulta Fiscal", "1.0.0")
         assert urn == f"urn:maestro:{DEFAULT_WORKSPACE}:agent:consulta-fiscal:1.0.0"
+
+    def test_transliterates_accents(self):
+        # "Maestro Órbita" gerava 'maestro-rbita' (acento perdido) — agora 'maestro-orbita'.
+        urn = make_urn("agent", "Maestro Órbita", "1.0.0")
+        assert urn == f"urn:maestro:{DEFAULT_WORKSPACE}:agent:maestro-orbita:1.0.0"
 
     def test_custom_workspace(self):
         urn = make_urn("skill", "Helper", "0.1.0", workspace="finance")

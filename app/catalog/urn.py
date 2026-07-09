@@ -7,6 +7,7 @@ Onda 1 fixa workspace='default'. Onda 2+ pode aceitar workspace real.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Optional, TypedDict
 
 DEFAULT_WORKSPACE = "default"
@@ -31,14 +32,19 @@ def slugify(name: str) -> str:
     """Normaliza nome humano em slug seguro.
 
     'Análise Fiscal v2' → 'analise-fiscal-v2'
-    Não usa unidecode (evita dep extra) — caracteres acentuados viram '-'.
-    Em produção, o publisher pode override o slug se quiser preservar acentos
-    via campo dedicado (não implementado na Onda 1).
+    'Maestro Órbita'    → 'maestro-orbita'  (acentos TRANSLITERADOS, não removidos)
+
+    Translitera via unicodedata NFKD + remoção de combining marks — mesmo padrão
+    de app/data_tables/queries.py e app/agents/engine._no_accents, sem dep extra.
+    Antes desta correção, 'Órbita' virava 'rbita' (o char acentuado caía no
+    _SLUG_RE e virava '-', perdendo a letra base em vez de transliterá-la).
     """
     if not name:
         return ""
-    # Normalização básica: lowercase + remove acento aproximado por mapping
-    s = name.lower().strip()
+    # Translitera acentos preservando a letra base: 'ó'→'o', 'ç'→'c', 'ã'→'a'.
+    nfkd = unicodedata.normalize("NFKD", name)
+    s = "".join(ch for ch in nfkd if not unicodedata.combining(ch))
+    s = s.lower().strip()
     s = s.replace(" ", "-")
     s = _SLUG_RE.sub("-", s)
     s = re.sub(r"-+", "-", s).strip("-")
