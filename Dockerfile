@@ -27,6 +27,12 @@ WORKDIR /build
 
 COPY requirements.txt .
 
+# O pip do base image (24.0) é velho demais p/ os metadados (Metadata-Version 2.4)
+# gerados pelos setuptools/packaging novos que os bumps do Dependabot trouxeram —
+# a instalação sai corrompida (arquivos vazios, "invalid metadata entry 'name'").
+# Subir o toolchain de build antes de gerar/instalar wheels resolve.
+RUN pip install --upgrade pip setuptools wheel
+
 # Compila tudo num wheelhouse local — copiado depois para o runtime
 RUN pip wheel --wheel-dir=/wheels -r requirements.txt
 
@@ -61,6 +67,8 @@ WORKDIR ${APP_HOME}
 # Instala wheels pré-compiladas
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
+# Mesmo motivo do builder: pip novo p/ instalar wheels com metadados modernos sem corromper.
+RUN pip install --upgrade pip
 RUN pip install --no-index --find-links=/wheels -r requirements.txt && rm -rf /wheels
 
 # Copia código do app
