@@ -1482,7 +1482,7 @@ function settingsPage() {
         },
 
         async revokeAPIKey(id, name) {
-            if (!confirm(`Revogar a key "${name}"?\n\nClientes que usam essa key vão receber 401 imediatamente.\nA ação é irreversível — pra reabilitar, gere uma nova.`)) return;
+            if (!await uiConfirm({message: `Revogar a key "${name}"?\n\nClientes que usam essa key vão receber 401 imediatamente.\nA ação é irreversível — pra reabilitar, gere uma nova.`, danger: true})) return;
             try {
                 await api.del('/api/v1/api-keys/' + id);
                 showToast('Key revogada');
@@ -1626,7 +1626,7 @@ function settingsPage() {
             this.paramsSaving = false;
         },
         async resetParam(key, label) {
-            if (!confirm(`Restaurar "${label}" ao padrão do ambiente? Remove o valor salvo na plataforma.`)) return;
+            if (!await uiConfirm({message: `Restaurar "${label}" ao padrão do ambiente? Remove o valor salvo na plataforma.`, danger: true})) return;
             try {
                 await api.del('/api/v1/settings/parameters/' + encodeURIComponent(key));
                 showToast('Voltou a herdar do ambiente — já vale, sem restart');
@@ -1781,8 +1781,9 @@ function settingsPage() {
             }
         },
 
-        resetRoutingDefaults() {
-            if (!confirm('Aplicar padrões recomendados (sobrescreve seleções atuais)?')) return;
+        // async por causa do await uiConfirm (F2); caller é @click (retorno não usado).
+        async resetRoutingDefaults() {
+            if (!await uiConfirm({message: 'Aplicar padrões recomendados (sobrescreve seleções atuais)?', danger: false})) return;
             this.routingForm = {
                 tool_calling: this.routingDefaults.tool_calling || 'azure/gpt-4o',
                 reasoning: this.routingDefaults.reasoning || 'maritaca/sabia-4',
@@ -1912,7 +1913,7 @@ function settingsPage() {
         },
 
         async deletePrompt(id,name) {
-            if(!confirm(`Remover prompt "${name}"?`)) return;
+            if(!await uiConfirm({message: `Remover prompt "${name}"?`, danger: true})) return;
             try{await api.del('/api/v1/system-prompts/'+id);showToast('Prompt removido');await this.loadPrompts()}catch{showToast('Erro','error')}
         },
 
@@ -1978,7 +1979,7 @@ function settingsPage() {
         },
 
         async deleteUser(u) {
-            if (!confirm(`Remover usuário "${u.display_name || u.username}"?`)) return;
+            if (!await uiConfirm({message: `Remover usuário "${u.display_name || u.username}"?`, danger: true})) return;
             try { await api.del('/api/v1/users/' + u.id); showToast('Usuário removido'); await this.loadUsers(); } catch(e) { showToast(e.message, 'error'); }
         },
     }

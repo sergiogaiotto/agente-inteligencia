@@ -1733,7 +1733,7 @@ function meshFlowPage() {
             catch (e) { showToast('Falha ao renomear: ' + e.message, 'error'); }
         },
         async deletePipeline(p) {
-            if (!confirm('Remover o pipeline "' + p.name + '"? As conexões e os agentes continuam no mesh.')) return;
+            if (!await uiConfirm({message: 'Remover o pipeline "' + p.name + '"? As conexões e os agentes continuam no mesh.', danger: true})) return;
             try {
                 await api.del('/api/v1/pipelines/' + p.id);
                 showToast('Pipeline removido');
@@ -2059,7 +2059,7 @@ function meshFlowPage() {
 
         async deleteConn() {
             if (!this.editor || this.editor.mode !== 'edit') return;
-            if (!confirm('Remover esta conexão?')) return;
+            if (!await uiConfirm({message: 'Remover esta conexão?', danger: true})) return;
             try {
                 await api.del('/api/v1/mesh/connections/' + this.editor.id);
                 showToast('Conexão removida');

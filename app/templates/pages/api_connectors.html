@@ -1356,7 +1356,7 @@ function apiConnectorsPage() {
         async deleteConnectorById(connId) {
             const node = this.tree.find(n => n.id === connId);
             if (!node) return;
-            if (!confirm('Excluir conector "' + node.name + '" e todos seus endpoints?')) return;
+            if (!await uiConfirm({message: 'Excluir conector "' + node.name + '" e todos seus endpoints?', danger: true})) return;
             try {
                 await api.del('/api/v1/api-connectors/' + connId);
                 // Limpa seleção se o deletado era o selecionado
@@ -1368,7 +1368,7 @@ function apiConnectorsPage() {
         },
 
         async deleteEndpointById(connId, ep) {
-            if (!confirm('Excluir endpoint "' + ep.name + '"?')) return;
+            if (!await uiConfirm({message: 'Excluir endpoint "' + ep.name + '"?', danger: true})) return;
             try {
                 await api.del('/api/v1/api-connectors/' + connId + '/endpoints/' + ep.id);
                 if (this.selected?.id === ep.id) this.selected = null;
@@ -1692,7 +1692,7 @@ function apiConnectorsPage() {
             this.savingEp = false;
         },
         async deleteEndpoint() {
-            if (!this.selected || !this.selectedConnector || !confirm('Excluir endpoint "' + this.selected.name + '"?')) return;
+            if (!this.selected || !this.selectedConnector || !await uiConfirm({message: 'Excluir endpoint "' + this.selected.name + '"?', danger: true})) return;
             try { await api.del('/api/v1/api-connectors/' + this.selectedConnector.id + '/endpoints/' + this.selected.id); this.selected = null; await this.load(); showToast('Endpoint removido'); } catch { showToast('Erro', 'error'); }
         },
     }

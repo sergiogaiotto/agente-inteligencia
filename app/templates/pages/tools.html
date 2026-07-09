@@ -1293,7 +1293,7 @@ function toolsPage() {
         },
 
         async deleteTool(id,name) {
-            if(!confirm(`Remover "${name}"?`))return;
+            if(!await uiConfirm({message: `Remover "${name}"?`, danger: true}))return;
             try{await api.del('/api/v1/tools/'+id);this.allTools=this.allTools.filter(t=>t.id!==id);this.applySearch();if(this.previewId===id){this.previewId=null;this.previewTool=null;}showToast('Removida');}catch{showToast('Erro','error');}
         },
     }

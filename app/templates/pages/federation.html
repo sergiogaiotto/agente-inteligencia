@@ -241,7 +241,7 @@ function federationPage() {
       } catch (e) { showToast(e.message, 'error'); }
     },
     async revokePeer(p) {
-      if (!confirm('Revogar o peer ' + p.workspace + '?')) return;
+      if (!await uiConfirm({message: 'Revogar o peer ' + p.workspace + '?', danger: true})) return;
       try { await api.del('/api/v1/federation/peers/' + p.id); await this.loadPeers(); showToast('Peer revogado', 'info'); }
       catch (e) { showToast(e.message, 'error'); }
     },

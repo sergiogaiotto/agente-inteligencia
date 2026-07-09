@@ -171,7 +171,7 @@ function skillsPage() {
         },
 
         async deleteSkill(id, name) {
-            if (!confirm(`Remover skill "${name}"?`)) return;
+            if (!await uiConfirm({message: `Remover skill "${name}"?`, danger: true})) return;
             try {
                 await api.del(`/api/v1/skills/${id}`);
                 this.allSkills = this.allSkills.filter(s => s.id !== id);

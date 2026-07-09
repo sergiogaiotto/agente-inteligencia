@@ -130,5 +130,6 @@ class TestUISmokeDriftBanner:
         assert 'data-testid="rag-reindex-btn"' in html
         assert "runReindex()" in html
         assert "/api/v1/evidence/reindex" in html
-        # destrutivo → confirm() nativo, convenção da página
-        assert "confirm('Reindexar o vector store?" in html
+        # confirmação in-app (F2 do E2E: uiConfirm no lugar do confirm nativo,
+        # ver tests/test_no_native_confirm_dialogs.py)
+        assert "uiConfirm({message: 'Reindexar o vector store?" in html

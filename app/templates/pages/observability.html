@@ -1179,7 +1179,7 @@ function observabilityPage() {
         },
 
         async confirmClear(name) {
-            if (!confirm(`Truncar ${name}.log? O conteúdo atual será apagado (preserva o arquivo). Apenas role=root.`)) return;
+            if (!await uiConfirm({message: `Truncar ${name}.log? O conteúdo atual será apagado (preserva o arquivo). Apenas role=root.`, danger: true})) return;
             try {
                 const r = await api.post('/api/v1/observability/logs/clear/' + encodeURIComponent(name), {});
                 showToast(`${r.file} truncado (${(r.size_before/1024).toFixed(1)} KB liberados)`, 'success');
@@ -1188,7 +1188,7 @@ function observabilityPage() {
         },
 
         async forceRotate() {
-            if (!confirm('Forçar rotação de todos os arquivos? Backups com data atual serão criados e os atuais serão zerados. Apenas role=root.')) return;
+            if (!await uiConfirm({message: 'Forçar rotação de todos os arquivos? Backups com data atual serão criados e os atuais serão zerados. Apenas role=root.', danger: false})) return;
             try {
                 const r = await api.post('/api/v1/observability/logs/rotate', {});
                 showToast(`${r.rotated_count} arquivo(s) rotacionados`, 'success');
@@ -1199,7 +1199,7 @@ function observabilityPage() {
         async confirmDeleteArchives() {
             const total = this.logs.totals?.archives_size_human || '0 B';
             const count = this.logs.totals?.archives_count || 0;
-            if (!confirm(`Apagar TODOS os ${count} arquivos rotacionados (${total} liberados)? Os arquivos atuais (app.log etc) NÃO são afetados. Apenas role=root.`)) return;
+            if (!await uiConfirm({message: `Apagar TODOS os ${count} arquivos rotacionados (${total} liberados)? Os arquivos atuais (app.log etc) NÃO são afetados. Apenas role=root.`, danger: true})) return;
             try {
                 const r = await api.del('/api/v1/observability/logs/archives');
                 showToast(`${r.deleted_count} archive(s) apagados (${r.freed_human})`, 'success');
