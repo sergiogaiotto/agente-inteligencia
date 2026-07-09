@@ -1,6 +1,6 @@
 """Pre-flight checks para agent create/edit — Onda 4.
 
-10 checks ortogonais. Cada um retorna CheckResult ou None (passou).
+11 checks ortogonais. Cada um retorna CheckResult ou None (passou).
 run_preflight() orquestra e produz PreflightReport.
 
 Filosofia:
@@ -229,6 +229,42 @@ def check_temperature_sane(payload: dict) -> Optional[PreflightCheckResult]:
             field="temperature",
         )
     return None
+
+
+def check_grounding_starvation(payload: dict, settings) -> Optional[PreflightCheckResult]:
+    """C11 — agente que RECUSA toda entrada por falta de evidência no invoke direto.
+
+    Dispara para um agente NÃO-triagem (Especialista/Maestro) que: (a) não tem
+    Skill/base (RAG) vinculada — `skill_id` vazio; (b) está com 'Permitir
+    conhecimento geral do LLM' desligado (`allow_general_knowledge`); e (c) o
+    'Exigir evidências' global (`grounding_strict`) está ligado. Nesse arranjo o
+    engine recusa por falta de evidência em vez de responder. Triagem (`router`)
+    é ISENTA da recusa por design (engine._router_grounding_exempt) — fica de fora.
+    É warning: não bloqueia o save, mas avisa o operador do dead-end silencioso.
+    """
+    if payload.get("kind") == "router":
+        return None
+    if payload.get("skill_id"):
+        return None
+    if payload.get("allow_general_knowledge"):
+        return None
+    if not bool(getattr(settings, "grounding_strict", True)):
+        return None
+    kind_label = {"aobd": "Maestro", "subagent": "Especialista"}.get(
+        payload.get("kind"), "agente"
+    )
+    return _check(
+        "C11_grounding_starvation", "warning",
+        "Sem fonte de evidência — vai recusar tudo no invoke direto",
+        f"Este {kind_label} não tem Skill/base (RAG) vinculada, 'Permitir "
+        "conhecimento geral do LLM' está desligado e 'Exigir evidências' (global) "
+        "está ligado — no invoke direto ele RECUSA toda entrada por falta de "
+        "evidência, em vez de responder.",
+        fix_hint="Vincule uma Skill/base (RAG), OU ligue 'Permitir conhecimento "
+                 "geral do LLM' neste agente, OU desligue 'Exigir evidências' "
+                 "global em Configurações.",
+        field="allow_general_knowledge",
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -480,7 +516,7 @@ async def _resolve_effective_payload(payload: dict) -> dict:
 
 
 async def run_preflight(payload: dict) -> PreflightReport:
-    """Roda os 9 checks contra `payload` (dict no formato AgentCreate).
+    """Roda os 11 checks contra `payload` (dict no formato AgentCreate).
     Retorna PreflightReport com lista ordenada (errors → warnings → infos).
 
     Síncronos rodam serial; async com gather. Quando `task_type` está setado,
@@ -502,6 +538,7 @@ async def run_preflight(payload: dict) -> PreflightReport:
         ("check_model_known", lambda: check_model_known(payload)),
         ("check_version_semver", lambda: check_version_semver(payload)),
         ("check_temperature_sane", lambda: check_temperature_sane(payload)),
+        ("check_grounding_starvation", lambda: check_grounding_starvation(payload, settings)),
     )
     for name, runner in sync_runs:
         try:
