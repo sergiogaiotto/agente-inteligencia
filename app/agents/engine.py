@@ -3633,9 +3633,99 @@ async def execute_pipeline(
     final_states_by_id: dict = {}
     names_by_id: dict = {}
 
+    # ══════════════════════════════════════════════════════
+    # Semântica multi-inbound (29.1.13 — achados N1 "Hélios" + N2 "Arca"):
+    # um nó downstream roda se PELO MENOS UMA aresta inbound disparou.
+    #   • sequential/parallel de source EXECUTADA → dispara sempre;
+    #   • conditional → dispara se a expr/override casar (gate existente);
+    #   • default → dispara se nenhum irmão condicional casou;
+    #   • aresta de source PULADA nunca dispara.
+    # Antes, só a aresta do parent BFS (primeiro-marca-vence) era avaliada:
+    #   N1: nó com inbound misto (conditional não-casada + sequential de nó
+    #       executado) ficava skipped_conditional — a cadeia não o reativava.
+    #   N2: nó cujo único inbound é sequential de nó PULADO caía no fallback
+    #       linear e RODAVA com o output de um nó não conectado a ele; sendo
+    #       o último da ordem topológica, o output dele sobrepunha a resposta
+    #       correta do especialista roteado.
+    # `inbound_by_target`: arestas entre membros da chain (ordenadas pela
+    # posição da source, pois iteramos a chain em ordem). `skipped_ids`:
+    # nós pulados por gate (conditional/default/upstream) — passthrough,
+    # fast_routed e inativos ficam FORA (são "transparentes", como antes).
+    chain_pos = {aid: idx for idx, aid in enumerate(chain)}
+    inbound_by_target: dict = {}
+    if len(chain) > 1:
+        for _src in chain:
+            try:
+                for _conn in await _topo_mesh_out(_src, limit=20):
+                    _tgt = _conn.get("target_agent_id", "")
+                    if _tgt in chain_pos and _tgt != _src:
+                        inbound_by_target.setdefault(_tgt, []).append(_conn)
+            except Exception:
+                pass  # fail-open: sem o mapa, o nó cai no fluxo histórico
+    skipped_ids: set = set()
+    # Sources "transparentes" (passthrough / inativo): não produzem output mas
+    # a cadeia delas está VIVA — não bloqueiam nem reativam; o alvo cai no
+    # fallback linear histórico (fail-open), nunca em skipped_upstream.
+    transparent_ids: set = set()
+    reactivated_edge_by_id: dict = {}
+
+    async def _alt_inbound_upstream(
+        target_id: str, target_agent: dict, pos: int, exclude: str | None
+    ) -> tuple:
+        """Procura, entre as DEMAIS arestas inbound de `target_id` (sources já
+        processadas na chain), uma que DISPARE. Devolve `(source_id, fired)`:
+        primeira aresta que dispara em ordem de chain; se nenhuma dispara,
+        `(primeira source executada viva, False)` — pro gate normal marcar o
+        skip com a razão certa; `(None, False)` se não há source viva (todas
+        as inbound processadas foram puladas → candidato a skipped_upstream).
+        Sources transparentes (passthrough, sem output) não reativam."""
+        first_live = None
+        for conn in inbound_by_target.get(target_id, []):
+            src = conn.get("source_agent_id", "")
+            if not src or src == exclude:
+                continue
+            if chain_pos.get(src, 1 << 30) >= pos:
+                continue  # source ainda não processada (cross-edge) não conta
+            if src in skipped_ids or src not in outputs_by_id:
+                continue
+            if first_live is None:
+                first_live = src
+            ctype = conn.get("connection_type", "sequential")
+            if ctype in ("sequential", "parallel"):
+                return src, True
+            if ctype == "conditional":
+                if not await _should_skip_conditional(
+                    source_id=src,
+                    target_id=target_id,
+                    last_output=outputs_by_id[src],
+                    last_final_state=final_states_by_id.get(src, ""),
+                    user_input=user_input,
+                    target_name=target_agent.get("name", ""),
+                    attachments=attachments,
+                    session_text=session_text,
+                    target_accepts_documents=bool(target_agent.get("accepts_documents") or 0),
+                    target_accepts_images=bool(target_agent.get("accepts_images") or 0),
+                    inputs=sealed_inputs,
+                ):
+                    return src, True
+            elif ctype == "default":
+                if not await _should_skip_default(
+                    source_id=src,
+                    target_id=target_id,
+                    last_output=outputs_by_id[src],
+                    last_final_state=final_states_by_id.get(src, ""),
+                    user_input=user_input,
+                    attachments=attachments,
+                    session_text=session_text,
+                    inputs=sealed_inputs,
+                ):
+                    return src, True
+        return first_live, False
+
     for i, agent_id in enumerate(chain):
         agent = await _topo_agent(agent_id)
         if not agent or agent.get("status") != "active":
+            transparent_ids.add(agent_id)
             steps.append({"agent_id": agent_id, "agent_name": agent.get("name","?") if agent else "?", "status": "skipped", "reason": "inativo"})
             await _emit({
                 "type": "agent_skipped",
@@ -3757,6 +3847,7 @@ async def execute_pipeline(
             })
             # current_input e last_result permanecem inalterados
             # O próximo agente receberá o input original
+            transparent_ids.add(agent_id)
             continue
 
         # ══════════════════════════════════════════════════════
@@ -3771,7 +3862,93 @@ async def execute_pipeline(
         # (passthrough/inativo): fail-safe, nunca pior que o antigo.
         # ══════════════════════════════════════════════════════
         parent_id = parent_of.get(agent_id)
-        if (
+
+        # ── Propagação de skip pela cadeia (29.1.13 — achado N2 "Arca") ──
+        # Parent BFS foi PULADO → este nó NÃO pode cair no fallback linear
+        # (que o fazia rodar com o output do último executado, um nó NÃO
+        # conectado a ele — e o output dele virava a resposta final do
+        # pipeline). Antes de pular junto, procura OUTRA aresta inbound viva:
+        # se alguma source executada alcança este nó, ela vira o upstream e
+        # os gates normais decidem (achado N1: cadeia válida reativa o nó).
+        _upstream_forced = False
+        _skip_propagates = False
+        if parent_id is not None and i > 0 and parent_id in skipped_ids:
+            _alt_src, _alt_fired = await _alt_inbound_upstream(
+                agent_id, agent, i, exclude=parent_id
+            )
+            if _alt_src is None:
+                # Nenhuma source EXECUTADA viva — mas se alguma inbound vem de
+                # source transparente (passthrough/inativo), a cadeia está viva:
+                # fail-open pro fallback linear histórico (nó roda como antes).
+                _skip_propagates = not any(
+                    c.get("source_agent_id") in transparent_ids
+                    and chain_pos.get(c.get("source_agent_id", ""), 1 << 30) < i
+                    for c in inbound_by_target.get(agent_id, [])
+                )
+            if _alt_src is None and _skip_propagates:
+                _agent_nm = agent.get("name", "")
+                _parent_nm = names_by_id.get(parent_id, "") or "o nó anterior"
+                skip_text = (
+                    f"Upstream pulado — «{_parent_nm}» não rodou e nenhuma outra "
+                    f"entrada viva dispara «{_agent_nm}»; o skip propaga pela "
+                    f"cadeia (o nó não roda nem sobrescreve a resposta final)"
+                )
+                skipped_ids.add(agent_id)
+                names_by_id[agent_id] = _agent_nm
+                logger.info(
+                    "mesh.chain.skip_propagated",
+                    extra={
+                        "event": "mesh.chain.skip_propagated",
+                        "agent_id": agent_id,
+                        "agent_name": _agent_nm,
+                        "skipped_parent_id": parent_id,
+                    },
+                )
+                steps.append({
+                    "agent_id": agent_id,
+                    "agent_name": _agent_nm,
+                    "agent_kind": agent.get("kind", ""),
+                    "agent_model": agent.get("model", ""),
+                    "status_message": (agent.get("processing_message") or "").strip(),
+                    "status": "skipped_upstream",
+                    "skip_reason": "upstream_skipped",
+                    "output": "",
+                    "final_state": "SkippedUpstream",
+                    "duration_ms": 0,
+                    "evidence_score": 0,
+                    "transitions": [],
+                    "trace": {
+                        "diagnostics": [
+                            {"level": "info", "text": skip_text}
+                        ],
+                    },
+                })
+                await _emit({
+                    "type": "agent_skipped",
+                    "step_index": i,
+                    "agent_id": agent_id,
+                    "agent_name": _agent_nm,
+                    "reason": "upstream_skipped",
+                    "reason_text": skip_text,
+                })
+                # last_result NÃO muda — o skip não vira resposta
+                continue
+            if _alt_src is not None:
+                # source viva alcança este nó → ela é o upstream real; os gates
+                # abaixo reavaliam a aresta dela (idempotentes) e decidem.
+                upstream_id = _alt_src
+                upstream_output = outputs_by_id[_alt_src]
+                upstream_final_state = final_states_by_id.get(_alt_src, "")
+                upstream_name = names_by_id.get(_alt_src, "")
+                have_upstream = True
+                _upstream_forced = True
+                reactivated_edge_by_id[agent_id] = _alt_src
+            # _alt_src None + source transparente inbound → segue pro fluxo
+            # histórico abaixo (fallback linear) — fail-open.
+
+        if _upstream_forced:
+            pass  # upstream já resolvido acima (aresta inbound viva)
+        elif (
             parent_id is not None
             and i > 0
             and parent_id != chain[i - 1]
@@ -3818,52 +3995,88 @@ async def execute_pipeline(
                 inputs=sealed_inputs,
             )
             if skip_by_conditional:
-                # Rastreabilidade do MOTIVO (Fatia 3a — 2026-06-07): distinguir
-                # "preterido pelo roteador" de "condição não satisfeita". O override
-                # de target estruturado roda ANTES da expr em _should_skip_conditional
-                # → skip COM bloco {"target": OUTRO} ⟺ preterido (1-de-N); skip SEM
-                # bloco ⟺ a expr de keyword não casou. Re-derivamos barato aqui (sem
-                # refatorar o gate, que é chamado direto por dezenas de testes).
-                _agent_nm = agent.get("name", "")
-                _routed = _extract_routed_target(upstream_output)
-                if _routed is not None and _norm_routing_name(_routed) != _norm_routing_name(_agent_nm):
-                    skip_reason = "structured_target_not_chosen"
-                    skip_text = (
-                        f"Roteador selecionou «{_routed}» (target estruturado) — "
-                        f"{_agent_nm} preterido"
+                # Reativação por cadeia válida (29.1.13 — achado N1 "Hélios"):
+                # a aresta do upstream primário não casou, mas OUTRA aresta
+                # inbound viva pode disparar (ex.: sequential de nó que
+                # EXECUTOU). O primeiro-marca-vence do parent_of era artefato
+                # da ordem de descoberta da BFS, não intenção de modelagem —
+                # aresta sequential significa "roda sempre que a origem rodar".
+                _alt_src, _alt_fired = await _alt_inbound_upstream(
+                    agent_id, agent, i, exclude=upstream_id
+                )
+                if _alt_fired:
+                    logger.info(
+                        "mesh.chain.reactivated",
+                        extra={
+                            "event": "mesh.chain.reactivated",
+                            "agent_id": agent_id,
+                            "agent_name": agent.get("name", ""),
+                            "preempted_source_id": upstream_id,
+                            "via_source_id": _alt_src,
+                        },
                     )
+                    upstream_id = _alt_src
+                    upstream_output = outputs_by_id[_alt_src]
+                    upstream_final_state = final_states_by_id.get(_alt_src, "")
+                    upstream_name = names_by_id.get(_alt_src, "")
+                    reactivated_edge_by_id[agent_id] = _alt_src
+                    await _emit({
+                        "type": "agent_reactivated",
+                        "step_index": i,
+                        "agent_id": agent_id,
+                        "agent_name": agent.get("name", ""),
+                        "via_source_id": _alt_src,
+                        "via_source_name": upstream_name,
+                    })
                 else:
-                    skip_reason = "conditional_false"
-                    skip_text = f"Condição não satisfeita — {_agent_nm} pulado (passthrough)"
-                steps.append({
-                    "agent_id": agent_id,
-                    "agent_name": _agent_nm,
-                    "agent_kind": agent.get("kind", ""),
-                    "agent_model": agent.get("model", ""),
-                    "status_message": (agent.get("processing_message") or "").strip(),
-                    "status": "skipped_conditional",
-                    "skip_reason": skip_reason,
-                    "output": upstream_output,
-                    "final_state": "SkippedConditional",
-                    "duration_ms": 0,
-                    "evidence_score": 0,
-                    "transitions": [],
-                    "trace": {
-                        "diagnostics": [
-                            {"level": "info", "text": skip_text}
-                        ],
-                    },
-                })
-                await _emit({
-                    "type": "agent_skipped",
-                    "step_index": i,
-                    "agent_id": agent_id,
-                    "agent_name": _agent_nm,
-                    "reason": skip_reason,
-                    "reason_text": skip_text,
-                })
-                # last_result NÃO muda — próximo agente recebe output do anterior
-                continue
+                    # Rastreabilidade do MOTIVO (Fatia 3a — 2026-06-07): distinguir
+                    # "preterido pelo roteador" de "condição não satisfeita". O override
+                    # de target estruturado roda ANTES da expr em _should_skip_conditional
+                    # → skip COM bloco {"target": OUTRO} ⟺ preterido (1-de-N); skip SEM
+                    # bloco ⟺ a expr de keyword não casou. Re-derivamos barato aqui (sem
+                    # refatorar o gate, que é chamado direto por dezenas de testes).
+                    _agent_nm = agent.get("name", "")
+                    _routed = _extract_routed_target(upstream_output)
+                    if _routed is not None and _norm_routing_name(_routed) != _norm_routing_name(_agent_nm):
+                        skip_reason = "structured_target_not_chosen"
+                        skip_text = (
+                            f"Roteador selecionou «{_routed}» (target estruturado) — "
+                            f"{_agent_nm} preterido"
+                        )
+                    else:
+                        skip_reason = "conditional_false"
+                        skip_text = f"Condição não satisfeita — {_agent_nm} pulado (passthrough)"
+                    skipped_ids.add(agent_id)
+                    names_by_id[agent_id] = _agent_nm
+                    steps.append({
+                        "agent_id": agent_id,
+                        "agent_name": _agent_nm,
+                        "agent_kind": agent.get("kind", ""),
+                        "agent_model": agent.get("model", ""),
+                        "status_message": (agent.get("processing_message") or "").strip(),
+                        "status": "skipped_conditional",
+                        "skip_reason": skip_reason,
+                        "output": upstream_output,
+                        "final_state": "SkippedConditional",
+                        "duration_ms": 0,
+                        "evidence_score": 0,
+                        "transitions": [],
+                        "trace": {
+                            "diagnostics": [
+                                {"level": "info", "text": skip_text}
+                            ],
+                        },
+                    })
+                    await _emit({
+                        "type": "agent_skipped",
+                        "step_index": i,
+                        "agent_id": agent_id,
+                        "agent_name": _agent_nm,
+                        "reason": skip_reason,
+                        "reason_text": skip_text,
+                    })
+                    # last_result NÃO muda — próximo agente recebe output do anterior
+                    continue
 
             # Aresta default / "else" (2026-06-06): se a conexão parent→current
             # é `default` (catch-all) e ALGUM irmão condicional do mesmo parent
@@ -3881,36 +4094,71 @@ async def execute_pipeline(
                 inputs=sealed_inputs,
             )
             if skip_by_default:
-                steps.append({
-                    "agent_id": agent_id,
-                    "agent_name": agent.get("name", ""),
-                    "agent_kind": agent.get("kind", ""),
-                    "agent_model": agent.get("model", ""),
-                    "status_message": (agent.get("processing_message") or "").strip(),
-                    "status": "skipped_default",
-                    "output": upstream_output,
-                    "final_state": "SkippedDefault",
-                    "duration_ms": 0,
-                    "evidence_score": 0,
-                    "transitions": [],
-                    "trace": {
-                        "diagnostics": [
-                            {
-                                "level": "info",
-                                "text": f"Aresta default — {agent.get('name','')} pulado porque um ramo condicional casou (passthrough)",
-                            }
-                        ],
-                    },
-                })
-                await _emit({
-                    "type": "agent_skipped",
-                    "step_index": i,
-                    "agent_id": agent_id,
-                    "agent_name": agent.get("name", ""),
-                    "reason": "default_sibling_matched",
-                })
-                # last_result NÃO muda — próximo agente recebe output do anterior
-                continue
+                # Reativação por cadeia válida (29.1.13): simétrico ao gate
+                # condicional — o "else" foi suprimido por um irmão que casou,
+                # mas outra aresta inbound viva (ex.: sequential de nó que
+                # executou) ainda pode disparar este nó.
+                _alt_src, _alt_fired = await _alt_inbound_upstream(
+                    agent_id, agent, i, exclude=upstream_id
+                )
+                if _alt_fired:
+                    logger.info(
+                        "mesh.chain.reactivated",
+                        extra={
+                            "event": "mesh.chain.reactivated",
+                            "agent_id": agent_id,
+                            "agent_name": agent.get("name", ""),
+                            "preempted_source_id": upstream_id,
+                            "via_source_id": _alt_src,
+                        },
+                    )
+                    upstream_id = _alt_src
+                    upstream_output = outputs_by_id[_alt_src]
+                    upstream_final_state = final_states_by_id.get(_alt_src, "")
+                    upstream_name = names_by_id.get(_alt_src, "")
+                    reactivated_edge_by_id[agent_id] = _alt_src
+                    await _emit({
+                        "type": "agent_reactivated",
+                        "step_index": i,
+                        "agent_id": agent_id,
+                        "agent_name": agent.get("name", ""),
+                        "via_source_id": _alt_src,
+                        "via_source_name": upstream_name,
+                    })
+                else:
+                    skipped_ids.add(agent_id)
+                    names_by_id[agent_id] = agent.get("name", "")
+                    steps.append({
+                        "agent_id": agent_id,
+                        "agent_name": agent.get("name", ""),
+                        "agent_kind": agent.get("kind", ""),
+                        "agent_model": agent.get("model", ""),
+                        "status_message": (agent.get("processing_message") or "").strip(),
+                        "status": "skipped_default",
+                        "skip_reason": "default_sibling_matched",
+                        "output": upstream_output,
+                        "final_state": "SkippedDefault",
+                        "duration_ms": 0,
+                        "evidence_score": 0,
+                        "transitions": [],
+                        "trace": {
+                            "diagnostics": [
+                                {
+                                    "level": "info",
+                                    "text": f"Aresta default — {agent.get('name','')} pulado porque um ramo condicional casou (passthrough)",
+                                }
+                            ],
+                        },
+                    })
+                    await _emit({
+                        "type": "agent_skipped",
+                        "step_index": i,
+                        "agent_id": agent_id,
+                        "agent_name": agent.get("name", ""),
+                        "reason": "default_sibling_matched",
+                    })
+                    # last_result NÃO muda — próximo agente recebe output do anterior
+                    continue
 
         # Context scope (2026-06-01): aplica política inherit/scoped/isolated
         # ao output do agente anterior ANTES de montar o prompt do próximo.
@@ -4181,7 +4429,9 @@ async def execute_pipeline(
     conn_type_by_id: dict = {}
     for s in steps:
         _aid = s.get("agent_id", "")
-        _pid = parent_of.get(_aid)
+        # Nó reativado por aresta inbound alternativa (29.1.13): o display
+        # aponta a aresta que DE FATO disparou, não a do parent BFS preterido.
+        _pid = reactivated_edge_by_id.get(_aid) or parent_of.get(_aid)
         if not _pid:
             continue
         try:

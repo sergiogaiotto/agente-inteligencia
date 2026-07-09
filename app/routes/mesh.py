@@ -72,6 +72,30 @@ def _fanout_missing_default(edges: list[dict]) -> list[str]:
     return [src for src in fanout if src not in has_default]
 
 
+def _mixed_inbound(edges: list[dict]) -> list[str]:
+    """IDs de alvos com entrada MISTA: ≥1 aresta ``conditional`` E ≥1 aresta
+    ``sequential``/``parallel`` chegando no MESMO nó.
+
+    Semântica no engine (29.1.13, achados N1 "Hélios"/N2 "Arca"): o nó roda se
+    QUALQUER aresta inbound disparar — a cadeia sequencial de um nó que EXECUTOU
+    reativa o alvo mesmo quando a condicional não casou. É um padrão legítimo
+    ("roda quando roteado OU após o nó X"), mas sutil: quem queria "só roda
+    quando a condição casar" precisa remover a aresta sequencial. `get_topology`
+    expõe isto pra UI informar o operador no painel do nó (estilo F5/fan-out).
+    Sem falso-positivo: só o padrão estrutural, não julga intenção.
+    """
+    cond_targets: set = set()
+    chain_targets: set = set()
+    for e in edges:
+        t = e.get("target")
+        ty = e.get("type")
+        if ty == "conditional":
+            cond_targets.add(t)
+        elif ty in ("sequential", "parallel"):
+            chain_targets.add(t)
+    return [t for t in cond_targets & chain_targets if t]
+
+
 def _detect_roots(edges: list[dict]) -> list[str]:
     """Raízes do mesh = sources que NUNCA são target (entrada de uma cadeia).
 
@@ -141,6 +165,7 @@ async def get_topology():
         "fanout_roots": _fanout_roots(edges),
         "conditional_no_expr": _conditional_without_expr(edges),
         "fanout_missing_default": _fanout_missing_default(edges),
+        "mixed_inbound": _mixed_inbound(edges),
         "roots": _detect_roots(edges),
     }
 

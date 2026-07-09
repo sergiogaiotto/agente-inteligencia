@@ -461,6 +461,12 @@
                             <span class="font-semibold">Sem rota default·else:</span> este fan-out condicional não tem uma saída <code class="text-[10px]">default</code> — se a resposta do roteador não casar com nenhuma regra, o pipeline PARA aqui. Adicione uma conexão "Default (else)" para o caso não previsto.
                         </div>
                     </template>
+                    <!-- 29.1.13: aviso entrada mista (condição + cadeia no mesmo nó) -->
+                    <template x-if="isMixedInbound(selected.id)">
+                        <div class="mt-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-[10.5px] text-sky-700 leading-relaxed">
+                            <span class="font-semibold">Entrada mista (condição + cadeia):</span> este agente recebe uma aresta condicional E uma cadeia sequencial. Ele roda quando a condição casa OU quando o agente de origem da cadeia rodar — a cadeia reativa o nó mesmo com a condição não casada. Se a intenção era "só roda quando a condição casar", remova a aresta sequencial de entrada.
+                        </div>
+                    </template>
                     <!-- PR-F: aviso condicional SEM regra (= roda sempre) -->
                     <template x-if="hasEmptyConditionalRule(selected.id)">
                         <div class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[10.5px] text-rose-700 leading-relaxed">
@@ -1412,6 +1418,12 @@ function meshFlowPage() {
         // saída): se a resposta do roteador não casar com nenhuma regra, o ramo
         // vira dead-end. Marca o AGENTE de origem.
         isFanoutMissingDefault(id) { return (this.topology.fanout_missing_default || []).includes(id); },
+        // 29.1.13 — aviso entrada MISTA (condição + cadeia chegando no mesmo nó).
+        // /topology devolve mixed_inbound (alvos com ≥1 aresta conditional E ≥1
+        // sequential/parallel de entrada). No engine, o nó roda se QUALQUER
+        // aresta inbound disparar: a cadeia sequencial reativa o nó mesmo com a
+        // condicional não casada. Marca o AGENTE alvo.
+        isMixedInbound(id) { return (this.topology.mixed_inbound || []).includes(id); },
         // PR-F — aviso de conexão condicional SEM regra. O /topology devolve
         // conditional_no_expr (ids de arestas condicionais com expr vazia). No
         // engine, condicional-sem-regra = "sempre passa" (roda sempre) — causa do
