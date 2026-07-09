@@ -57,6 +57,21 @@ def _conditional_without_expr(edges: list[dict]) -> list[str]:
     return flagged
 
 
+def _fanout_missing_default(edges: list[dict]) -> list[str]:
+    """IDs de origens em fan-out condicional (≥2 arestas ``conditional``) que NÃO
+    têm uma aresta ``default`` de saída.
+
+    Sem a rota default·else, se a resposta do roteador não casar com NENHUMA
+    ``expr``, não há fallback — o pipeline vira dead-end naquele ramo. Consumido
+    por `get_topology` → o Fluxograma avisa no painel do nó (o selo ⚠ fan-out
+    sozinho não distingue "tem default" de "não tem"). Sem falso-positivo: só o
+    padrão estrutural (fan-out condicional sem aresta default), não julga intenção.
+    """
+    fanout = set(_fanout_roots(edges))
+    has_default = {e.get("source") for e in edges if e.get("type") == "default"}
+    return [src for src in fanout if src not in has_default]
+
+
 def _detect_roots(edges: list[dict]) -> list[str]:
     """Raízes do mesh = sources que NUNCA são target (entrada de uma cadeia).
 
@@ -125,6 +140,7 @@ async def get_topology():
         "edges": edges,
         "fanout_roots": _fanout_roots(edges),
         "conditional_no_expr": _conditional_without_expr(edges),
+        "fanout_missing_default": _fanout_missing_default(edges),
         "roots": _detect_roots(edges),
     }
 

@@ -455,6 +455,12 @@
                             <span class="font-semibold">Fan-out 1-de-N:</span> este agente tem 2+ saídas condicionais — o roteador escolhe UMA. Se um destino precisa do resultado de outro, encadeie em sequência (A→B), não como irmãos.
                         </div>
                     </template>
+                    <!-- F5: aviso fan-out SEM rota default·else (fallback ausente) -->
+                    <template x-if="isFanoutMissingDefault(selected.id)">
+                        <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[10.5px] text-amber-700 leading-relaxed">
+                            <span class="font-semibold">Sem rota default·else:</span> este fan-out condicional não tem uma saída <code class="text-[10px]">default</code> — se a resposta do roteador não casar com nenhuma regra, o pipeline PARA aqui. Adicione uma conexão "Default (else)" para o caso não previsto.
+                        </div>
+                    </template>
                     <!-- PR-F: aviso condicional SEM regra (= roda sempre) -->
                     <template x-if="hasEmptyConditionalRule(selected.id)">
                         <div class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[10.5px] text-rose-700 leading-relaxed">
@@ -1401,6 +1407,11 @@ function meshFlowPage() {
         // PR-B1 — aviso fan-out × cadeia (portado da Topologia): raiz com ≥2 saídas
         // condicionais (o /topology já devolve fanout_roots).
         isFanoutRoot(id) { return (this.topology.fanout_roots || []).includes(id); },
+        // F5 — aviso fan-out SEM rota default·else. /topology devolve
+        // fanout_missing_default (fan-out roots sem aresta type='default' de
+        // saída): se a resposta do roteador não casar com nenhuma regra, o ramo
+        // vira dead-end. Marca o AGENTE de origem.
+        isFanoutMissingDefault(id) { return (this.topology.fanout_missing_default || []).includes(id); },
         // PR-F — aviso de conexão condicional SEM regra. O /topology devolve
         // conditional_no_expr (ids de arestas condicionais com expr vazia). No
         // engine, condicional-sem-regra = "sempre passa" (roda sempre) — causa do
