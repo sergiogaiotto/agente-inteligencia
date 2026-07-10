@@ -507,6 +507,18 @@ async def decide_submission(
             f"Entry em status '{entry.get('status')}' não pode transitar para '{new_entry_status}'",
         )
 
+    # Gate R6.3 (achado A2A-1): aprovar EXIGE Capability Disclosure declarada.
+    # O precheck já sinaliza (capability_disclosure_present, severity=error) e a
+    # UI promete "obrigatória para Root aprovar" — sem este gate, Root aprovava
+    # mesmo assim. Disclosure só é editável em draft → o caminho de correção é
+    # 'changes_requested' devolver a entry ao publisher.
+    if data.decision == "approved" and await get_disclosure(sub["entry_id"]) is None:
+        raise HTTPException(
+            422,
+            "Divulgação de Capacidade (R6.3) ausente — obrigatória para aprovar. "
+            "Use 'Pedir Mudanças' para o publisher declarar em draft.",
+        )
+
     now = _naive_utc_now()
     await catalog_submissions_repo.update(sub_id, {
         "review_status": data.decision,
@@ -1775,6 +1787,13 @@ async def bulk_decide(
                 failed.append({
                     "submission_id": sub_id,
                     "reason": f"entry em '{entry.get('status')}' não pode ir para '{new_entry_status}'",
+                })
+                continue
+            # Mesmo gate R6.3 do decide individual — bulk não pode ser bypass.
+            if data.decision == "approved" and await get_disclosure(sub["entry_id"]) is None:
+                failed.append({
+                    "submission_id": sub_id,
+                    "reason": "Divulgação de Capacidade (R6.3) ausente — obrigatória para aprovar",
                 })
                 continue
 

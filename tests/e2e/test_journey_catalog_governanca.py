@@ -19,7 +19,9 @@ pytestmark = pytest.mark.e2e
 
 @pytest.fixture
 def submitted_entry(api):
-    """Cria agente → entry → submit (gera submissão pendente). Limpa no fim."""
+    """Cria agente → entry → disclosure → submit (gera submissão pendente).
+    A disclosure R6.3 é obrigatória para o Aprovar da jornada passar (gate no
+    decide) e só é editável em draft — declare antes do submit. Limpa no fim."""
     name = f"E2E Gov {uuid.uuid4().hex[:8]}"
     ag = api.post("/api/v1/agents", json={
         "name": name, "kind": "subagent", "task_type": "instruct",
@@ -33,6 +35,8 @@ def submitted_entry(api):
     })
     assert entry.status_code in (200, 201), entry.text
     entry_id = entry.json()["id"]
+    cap = api.put(f"/api/v1/catalog/entries/{entry_id}/capability", json={})
+    assert cap.status_code == 200, cap.text
     sub = api.post(f"/api/v1/catalog/entries/{entry_id}/submit", json={"notes": ""})
     assert sub.status_code in (200, 201), sub.text
 

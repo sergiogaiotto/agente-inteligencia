@@ -545,6 +545,14 @@ def _create_draft(client, fake_storage, owner_id: str) -> str:
     return r.json()["id"]
 
 
+def _declare_disclosure(client, entry_id: str) -> None:
+    """Helper: declara a Capability Disclosure R6.3 mínima (defaults).
+    Obrigatória para Root APROVAR (gate no decide/bulk-decide) — e só
+    editável em draft, então declare ANTES de submeter."""
+    r = client.put(f"/api/v1/catalog/entries/{entry_id}/capability", json={})
+    assert r.status_code == 200
+
+
 # ─── POST /entries/{id}/submit ────────────────────────────────────
 
 
@@ -622,9 +630,11 @@ class TestSubmit:
 
 class TestDecide:
     def _submit_one(self, fake_storage) -> tuple[str, str]:
-        """Cria entry, submete, retorna (entry_id, submission_id)."""
+        """Cria entry (com disclosure R6.3 — sem ela Root não aprova),
+        submete, retorna (entry_id, submission_id)."""
         c = make_client({"id": "u1", "role": "comum"})
         eid = _create_draft(c, fake_storage, "u1")
+        _declare_disclosure(c, eid)
         body = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={}).json()
         return eid, body["submission_id"]
 
@@ -692,6 +702,36 @@ class TestDecide:
             json={"decision": "maybe"},
         )
         assert r.status_code == 422
+
+    def test_approve_blocked_without_disclosure_r63(self, fake_storage):
+        """Gate R6.3 (achado A2A-1): sem Capability Disclosure, aprovar → 422.
+        A UI e o precheck prometem a obrigatoriedade; o gate a garante."""
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")  # SEM disclosure
+        sid = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={}).json()["submission_id"]
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "approved"},
+        )
+        assert r.status_code == 422
+        assert "R6.3" in r.json()["detail"]
+        # Nada mudou: submissão segue pendente, entry segue submitted
+        assert fake_storage["submissions"][sid]["review_status"] == "pending"
+        assert fake_storage["entries"][eid]["status"] == "submitted"
+
+    def test_changes_requested_allowed_without_disclosure(self, fake_storage):
+        """Sem disclosure o caminho é devolver — rejeitar/pedir mudanças passa."""
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")  # SEM disclosure
+        sid = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={}).json()["submission_id"]
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "changes_requested", "notes": "declare a R6.3"},
+        )
+        assert r.status_code == 200
+        assert r.json()["entry_status"] == "draft"
 
 
 # ─── POST /entries/{id}/publish ───────────────────────────────────
@@ -764,11 +804,13 @@ class TestQueue:
         assert r.status_code == 403
 
     def test_filter_by_status(self, fake_storage):
-        # 2 entries: 1 pending, 1 approved
+        # 2 entries: 1 pending, 1 approved (disclosure R6.3 exigida p/ aprovar)
         c = make_client({"id": "u1", "role": "comum"})
         e1 = _create_draft(c, fake_storage, "u1")
+        _declare_disclosure(c, e1)
         c.post(f"/api/v1/catalog/entries/{e1}/submit", json={})
         e2 = _create_draft(c, fake_storage, "u1")
+        _declare_disclosure(c, e2)
         c.post(f"/api/v1/catalog/entries/{e2}/submit", json={})
 
         # Aprova a primeira
@@ -1556,14 +1598,35 @@ class TestReassign:
 
 class TestBulkDecide:
     def _setup_two_pending(self, fake_storage):
-        """Cria 2 entries draft → submete cada uma → retorna lista de submission_ids."""
+        """Cria 2 entries draft (com disclosure R6.3) → submete cada uma →
+        retorna lista de submission_ids."""
         c = make_client({"id": "u1", "role": "comum"})
         ids = []
         for i in range(2):
             eid = _create_draft(c, fake_storage, "u1")
+            _declare_disclosure(c, eid)
             body = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={}).json()
             ids.append(body["submission_id"])
         return ids
+
+    def test_bulk_approve_blocked_without_disclosure(self, fake_storage):
+        """Gate R6.3 no bulk (mesmo do decide individual — bulk não é bypass):
+        item sem disclosure falha com a razão; item com disclosure aprova."""
+        c = make_client({"id": "u1", "role": "comum"})
+        e1 = _create_draft(c, fake_storage, "u1")
+        _declare_disclosure(c, e1)
+        s1 = c.post(f"/api/v1/catalog/entries/{e1}/submit", json={}).json()["submission_id"]
+        e2 = _create_draft(c, fake_storage, "u1")  # SEM disclosure
+        s2 = c.post(f"/api/v1/catalog/entries/{e2}/submit", json={}).json()["submission_id"]
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.post("/api/v1/catalog/submissions/bulk-decide",
+                        json={"submission_ids": [s1, s2], "decision": "approved"})
+        body = r.json()
+        assert body["succeeded_count"] == 1 and body["failed_count"] == 1
+        assert body["failed"][0]["submission_id"] == s2
+        assert "R6.3" in body["failed"][0]["reason"]
+        assert fake_storage["entries"][e1]["status"] == "approved"
+        assert fake_storage["entries"][e2]["status"] == "submitted"
 
     def test_non_root_forbidden(self, fake_storage):
         sids = self._setup_two_pending(fake_storage)
