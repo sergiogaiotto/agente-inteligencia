@@ -243,6 +243,27 @@ class TestGetJsonErrorReason:
         assert "x" * egress._MAX_ERROR_DETAIL_CHARS in msg          # detail presente…
         assert "x" * (egress._MAX_ERROR_DETAIL_CHARS + 1) not in msg  # …mas capado
 
+    def test_non_200_detail_ctrl_chars_flattened(self, monkeypatch):
+        # detail do peer vai para log/UI: caracteres de controle (newline, ESC)
+        # viram espaço — conteúdo textual preservado, sem quebrar linha
+        self._fake_httpx(
+            monkeypatch, 503,
+            b'{"detail": "linha real\\n2026-07-10 FAKE forjada\\u001b[31mansi"}')
+        with pytest.raises(ValueError) as exc:
+            asyncio.run(egress._get_json("GET", "https://peer.example/x", allow_http=False))
+        msg = str(exc.value)
+        assert "\n" not in msg and "\x1b" not in msg
+        assert "linha real" in msg and "forjada" in msg
+
+    def test_non_200_detail_non_string_ignored(self, monkeypatch):
+        # detail array (422 de validação FastAPI) não vira lixo na mensagem
+        self._fake_httpx(
+            monkeypatch, 422,
+            b'{"detail": [{"loc": ["body"], "msg": "field required"}]}')
+        with pytest.raises(ValueError) as exc:
+            asyncio.run(egress._get_json("GET", "https://peer.example/x", allow_http=False))
+        assert str(exc.value) == "peer respondeu HTTP 422"
+
 
 # ── rota sync (root-only) ──
 class TestSyncRoute:

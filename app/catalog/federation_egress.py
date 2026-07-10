@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -34,6 +35,11 @@ _MAX_RESPONSE_BYTES = 2_000_000  # 2 MB — cap de manifesto/resposta de peer
 _MAX_CAPABILITIES = 2000         # cap de capabilities por manifesto (anti-bloat)
 _MAX_ERROR_BODY_BYTES = 4096     # cap do corpo de ERRO lido só p/ extrair o detail
 _MAX_ERROR_DETAIL_CHARS = 300    # cap do detail do peer repassado na mensagem
+# Caracteres de controle (incl. \n, \r, ESC) do detail viram espaço: higiene de
+# input não-confiável antes de ir a log/UI (os arquivos de log já escapam via
+# JsonFormatter; isto evita depender desse detalhe e mantém o card de erro da
+# UI em linha única).
+_CTRL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 async def _dev_allow_http() -> bool:
@@ -57,7 +63,7 @@ async def _peer_error_reason(resp) -> str:
     try:
         parsed = json.loads(body[:_MAX_ERROR_BODY_BYTES].decode("utf-8", "replace") or "{}")
         if isinstance(parsed, dict) and isinstance(parsed.get("detail"), str):
-            detail = parsed["detail"].strip()
+            detail = _CTRL_CHARS_RE.sub(" ", parsed["detail"]).strip()
     except (ValueError, TypeError):
         pass
     base = f"peer respondeu HTTP {resp.status_code}"
