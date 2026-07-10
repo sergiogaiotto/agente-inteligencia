@@ -163,6 +163,12 @@
             <span class="text-[10px] font-semibold text-surface-400" x-text="'status: ' + (e._result?.status || '?')"></span>
             <p class="mt-1 whitespace-pre-wrap" x-text="e._result?.output"></p>
           </div>
+          <!-- Erro PERSISTENTE na linha (achado A2A-2): o toast some em segundos;
+               sem trilha aqui o usuário fica sem saber o que houve nem a causa. -->
+          <div x-show="e._error" class="mt-2 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2 text-[12px] text-rose-700">
+            <span class="text-[10px] font-semibold text-rose-400 uppercase tracking-wider">erro no invoke</span>
+            <p class="mt-1 whitespace-pre-wrap" x-text="e._error"></p>
+          </div>
         </div>
       </template>
     </div>
@@ -211,7 +217,7 @@ function federationPage() {
     async loadRemote() {
       try {
         const list = (await api.get('/api/v1/federation/remote-entries')).entries || [];
-        this.remote = list.map(e => ({ ...e, _open: false, _input: '', _busy: false, _result: null }));
+        this.remote = list.map(e => ({ ...e, _open: false, _input: '', _busy: false, _result: null, _error: null }));
       } catch (e) { this.remote = []; }
     },
     async registerPeer() {
@@ -246,9 +252,9 @@ function federationPage() {
       catch (e) { showToast(e.message, 'error'); }
     },
     async invokeRemote(e) {
-      e._busy = true; e._result = null;
+      e._busy = true; e._result = null; e._error = null;
       try { e._result = await api.post('/api/v1/federation/remote/' + e.id + '/invoke', { input: e._input }); }
-      catch (err) { showToast(err.message, 'error'); }
+      catch (err) { e._error = err.message; showToast(err.message, 'error'); }
       finally { e._busy = false; }
     },
     async copySecret() {

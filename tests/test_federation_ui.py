@@ -123,3 +123,28 @@ class TestRemoteEntries:
         assert e["name"] == "Remote X"
         assert e["peer_workspace"] == "acme"
         assert e["remote_urn"] == "urn:maestro:acme:pipeline:x:1.0.0"
+
+
+class TestInvokeErrorFeedbackTemplate:
+    """A2A-2: erro de invoke precisa de feedback PERSISTENTE na linha da
+    capability (o toast some em segundos; sem trilha o usuário não sabe o
+    que houve nem a causa do 502)."""
+
+    def _page(self) -> str:
+        from pathlib import Path
+        page = (Path(__file__).resolve().parents[1]
+                / "app" / "templates" / "pages" / "federation.html")
+        return page.read_text(encoding="utf-8")
+
+    def test_template_has_inline_error_box(self):
+        content = self._page()
+        assert 'x-show="e._error"' in content, "caixa de erro inline ausente"
+        assert 'x-text="e._error"' in content, "texto do erro inline ausente"
+
+    def test_invoke_catch_persists_error_and_toasts(self):
+        content = self._page()
+        assert "e._error = err.message" in content, (
+            "catch do invokeRemote deve persistir err.message em e._error")
+        # estado _error nasce zerado no map do loadRemote (senão x-show quebra
+        # com undefined em entries recém-sincronizadas)
+        assert "_error: null" in content

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -32,6 +33,41 @@ _INVOKE_PATH = "/api/v1/federation/invoke"
 _TIMEOUT_S = 30.0
 _MAX_RESPONSE_BYTES = 2_000_000  # 2 MB — cap de manifesto/resposta de peer
 _MAX_CAPABILITIES = 2000         # cap de capabilities por manifesto (anti-bloat)
+_MAX_ERROR_BYTES = 4096          # corpo de ERRO do peer: só o bastante p/ o detail
+
+
+async def _read_capped(resp, cap: int) -> bytes:
+    """Lê o corpo em streaming até `cap` bytes (corpo de peer é não-confiável)."""
+    buf = b""
+    async for chunk in resp.aiter_bytes():
+        buf += chunk
+        if len(buf) >= cap:
+            break
+    return buf[:cap]
+
+
+# Caracteres de controle (incl. \n, \r, ESC) do detail do peer viram espaço:
+# higiene de input não-confiável antes de ir a log/UI (os arquivos de log já
+# escapam via JsonFormatter; isto evita depender desse detalhe e mantém o card
+# de erro da UI em linha única).
+_CTRL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _peer_error(status: int, raw: bytes) -> str:
+    """Mensagem de erro com a CAUSA do peer (achado A2A-2): "peer respondeu
+    HTTP 502" sem o detail remoto esconde diagnósticos óbvios — ex.: provider
+    503 "MAESTRO_SECRET_KEY ausente". Decode tolerante + truncagem + limpeza de
+    caracteres de controle porque o corpo vem de FORA da instância (peer
+    não-confiável)."""
+    detail = ""
+    try:
+        body = json.loads(raw.decode("utf-8", "replace") or "{}")
+        if isinstance(body, dict) and isinstance(body.get("detail"), str):
+            detail = _CTRL_CHARS_RE.sub(" ", body["detail"]).strip()
+    except (ValueError, TypeError):
+        detail = ""
+    msg = f"peer respondeu HTTP {status}"
+    return f"{msg}: {detail[:300]}" if detail else msg
 
 
 async def _dev_allow_http() -> bool:
@@ -46,7 +82,9 @@ async def _get_json(method: str, url: str, *, allow_http: bool, json_body: Optio
     async with httpx.AsyncClient(timeout=_TIMEOUT_S, follow_redirects=False) as client:
         async with client.stream(method, url, json=json_body) as resp:
             if resp.status_code != 200:
-                raise ValueError(f"peer respondeu HTTP {resp.status_code}")
+                raise ValueError(
+                    _peer_error(resp.status_code, await _read_capped(resp, _MAX_ERROR_BYTES))
+                )
             total = 0
             chunks: list[bytes] = []
             async for chunk in resp.aiter_bytes():

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import socket as _socket
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -95,6 +96,80 @@ class TestSSRF:
         monkeypatch.setattr(ssrf.socket, "getaddrinfo", boom)
         with pytest.raises(SSRFError):
             ssrf.validate_public_url("https://nope.invalid")
+
+
+# ── _get_json: erro do peer carrega a CAUSA (achado A2A-2) ──
+class TestGetJsonPeerErrorDetail:
+    """Antes: peer != 200 virava ValueError("peer respondeu HTTP N") e o corpo
+    era DESCARTADO — no E2E, o provider 503 "MAESTRO_SECRET_KEY ausente" chegava
+    ao consumer como um 502 genérico e custou um ciclo de diagnóstico."""
+
+    def _mock_transport(self, monkeypatch, handler):
+        transport = httpx.MockTransport(handler)
+        real_client = httpx.AsyncClient
+
+        def make_client(**kw):
+            kw["transport"] = transport
+            return real_client(**kw)
+
+        monkeypatch.setattr(egress.httpx, "AsyncClient", make_client)
+        # bypass do DNS/SSRF — o alvo aqui é o tratamento de resposta
+        monkeypatch.setattr(egress, "validate_public_url",
+                            lambda url, allow_http=False: url)
+
+    def test_non_200_surfaces_peer_detail(self, monkeypatch):
+        def handler(request):
+            return httpx.Response(
+                503, json={"detail": "Federação indisponível (MAESTRO_SECRET_KEY ausente)"})
+        self._mock_transport(monkeypatch, handler)
+        with pytest.raises(ValueError) as ei:
+            asyncio.run(egress._get_json(
+                "POST", "https://peer.example/api/v1/federation/invoke",
+                allow_http=False, json_body={}))
+        assert "HTTP 503" in str(ei.value)
+        assert "MAESTRO_SECRET_KEY ausente" in str(ei.value)
+
+    def test_non_200_body_not_json_keeps_generic(self, monkeypatch):
+        def handler(request):
+            return httpx.Response(502, content=b"<html>bad gateway</html>")
+        self._mock_transport(monkeypatch, handler)
+        with pytest.raises(ValueError) as ei:
+            asyncio.run(egress._get_json("GET", "https://peer.example/x", allow_http=False))
+        assert str(ei.value) == "peer respondeu HTTP 502"
+
+    def test_non_200_detail_truncated(self, monkeypatch):
+        # detail de 500 chars (dentro do cap de leitura) → detail capado em 300:
+        # a asserção pega a REMOÇÃO do [:300] (500 chars passariam num limite
+        # frouxo de tamanho total)
+        def handler(request):
+            return httpx.Response(500, json={"detail": "x" * 500})
+        self._mock_transport(monkeypatch, handler)
+        with pytest.raises(ValueError) as ei:
+            asyncio.run(egress._get_json("GET", "https://peer.example/x", allow_http=False))
+        assert "x" * 300 in str(ei.value)
+        assert "x" * 301 not in str(ei.value)
+
+    def test_non_200_giant_body_capped_to_generic(self, monkeypatch):
+        # corpo maior que _MAX_ERROR_BYTES → JSON truncado não parseia → genérico
+        def handler(request):
+            return httpx.Response(500, json={"detail": "y" * 10_000})
+        self._mock_transport(monkeypatch, handler)
+        with pytest.raises(ValueError) as ei:
+            asyncio.run(egress._get_json("GET", "https://peer.example/x", allow_http=False))
+        assert str(ei.value) == "peer respondeu HTTP 500"
+
+    def test_peer_error_ignores_non_string_detail(self):
+        # detail array (422 de validação) não vira lixo na mensagem
+        raw = b'{"detail": [{"loc": ["body"], "msg": "field required"}]}'
+        assert egress._peer_error(422, raw) == "peer respondeu HTTP 422"
+
+    def test_peer_error_strips_control_chars(self):
+        # detail do peer vai para LOG e UI: newline forjaria linha de log
+        # inteira (log injection) e ESC manipula terminal de quem faz tail
+        raw = b'{"detail": "linha real\\n2026-07-10 FAKE forjada\\u001b[31mansi"}'
+        msg = egress._peer_error(503, raw)
+        assert "\n" not in msg and "\x1b" not in msg
+        assert "linha real" in msg and "forjada" in msg  # conteúdo preservado
 
 
 # ── pull_manifest ──
@@ -233,6 +308,18 @@ class TestSyncRoute:
         r = self._client({"id": "r", "role": "root"}).post("/api/v1/federation/peers/p1/sync")
         assert r.status_code == 400
 
+    def test_sync_502_surfaces_known_cause(self, monkeypatch):
+        """A2A-2 (simetria com o invoke): causa conhecida no detail do sync."""
+        monkeypatch.setattr(fed_routes, "federation_enabled", _async(True))
+        monkeypatch.setattr(fed_routes.federation_peers_repo, "find_by_id",
+                            _async({"id": "p1", "status": "active", "workspace": "r"}))
+        async def boom(*a, **k):
+            raise ValueError("peer respondeu HTTP 500: manifesto quebrado")
+        monkeypatch.setattr(fed_routes.egress, "sync_remote_entries", boom)
+        r = self._client({"id": "r", "role": "root"}).post("/api/v1/federation/peers/p1/sync")
+        assert r.status_code == 502
+        assert "manifesto quebrado" in r.json()["detail"]
+
 
 # ── rota remote-invoke ──
 class TestRemoteInvokeRoute:
@@ -306,6 +393,41 @@ class TestRemoteInvokeRoute:
         monkeypatch.setattr(fed_routes.egress, "invoke_remote", boom)
         assert self._client({"id": "u", "role": "member"}).post(
             "/api/v1/federation/remote/e1/invoke", json={"input": "oi"}).status_code == 502
+
+    def test_502_surfaces_known_cause(self, monkeypatch):
+        """A2A-2: ValueError do egress (peer != 200) aparece no detail do 502."""
+        self._happy(monkeypatch)
+        async def boom(*a, **k):
+            raise ValueError(
+                "peer respondeu HTTP 503: Federação indisponível (MAESTRO_SECRET_KEY ausente)")
+        monkeypatch.setattr(fed_routes.egress, "invoke_remote", boom)
+        r = self._client({"id": "u", "role": "member"}).post(
+            "/api/v1/federation/remote/e1/invoke", json={"input": "oi"})
+        assert r.status_code == 502
+        assert "MAESTRO_SECRET_KEY ausente" in r.json()["detail"]
+
+    def test_502_network_error_names_class(self, monkeypatch):
+        """Erro httpx sem texto → pelo menos o NOME da classe no detail."""
+        self._happy(monkeypatch)
+        async def boom(*a, **k):
+            raise httpx.ConnectError("")
+        monkeypatch.setattr(fed_routes.egress, "invoke_remote", boom)
+        r = self._client({"id": "u", "role": "member"}).post(
+            "/api/v1/federation/remote/e1/invoke", json={"input": "oi"})
+        assert r.status_code == 502
+        assert "ConnectError" in r.json()["detail"]
+
+    def test_502_unexpected_error_stays_generic(self, monkeypatch):
+        """Erro INESPERADO não vaza internals — corpo continua genérico."""
+        self._happy(monkeypatch)
+        async def boom(*a, **k):
+            raise RuntimeError("stack interno sensivel")
+        monkeypatch.setattr(fed_routes.egress, "invoke_remote", boom)
+        r = self._client({"id": "u", "role": "member"}).post(
+            "/api/v1/federation/remote/e1/invoke", json={"input": "oi"})
+        assert r.status_code == 502
+        assert r.json()["detail"] == "Falha ao invocar o peer"
+        assert "sensivel" not in r.json()["detail"]
 
 
 class TestExecutePipelineRejectsFederated:
