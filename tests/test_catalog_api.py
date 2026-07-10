@@ -693,6 +693,58 @@ class TestDecide:
         )
         assert r.status_code == 422
 
+    # ── R6.3: warning NÃO-bloqueante ao aprovar sem disclosure (A2A-1) ──
+
+    def test_approve_without_disclosure_returns_warning(self, fake_storage):
+        _, sid = self._submit_one(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        r = c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "approved"},
+        )
+        # NÃO bloqueia: aprova E devolve o warning para a UI exibir
+        assert r.status_code == 200
+        body = r.json()
+        assert body["entry_status"] == "approved"
+        assert body["disclosure_warning"]
+        assert "R6.3" in body["disclosure_warning"]
+
+    def test_approve_with_disclosure_has_no_warning(self, fake_storage):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        c.put(f"/api/v1/catalog/entries/{eid}/capability", json={})
+        sid = c.post(f"/api/v1/catalog/entries/{eid}/submit", json={}).json()["submission_id"]
+        c_root = make_client({"id": "root1", "role": "root"})
+        body = c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "approved"},
+        ).json()
+        assert body["disclosure_warning"] is None
+
+    def test_reject_without_disclosure_has_no_warning(self, fake_storage):
+        # O warning é específico do APPROVE — rejeitar já resolve a lacuna
+        _, sid = self._submit_one(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        body = c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "rejected"},
+        ).json()
+        assert body["disclosure_warning"] is None
+
+    def test_approve_without_disclosure_audits_missing_flag(self, fake_storage):
+        _, sid = self._submit_one(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        c_root.post(
+            f"/api/v1/catalog/submissions/{sid}/decide",
+            json={"decision": "approved"},
+        )
+        audits = [a for a in fake_storage["audit"] if a["action"] == "review_approved"]
+        assert audits
+        details = audits[0]["details"]
+        if not isinstance(details, dict):
+            details = json.loads(details)
+        assert details.get("disclosure_missing") is True
+
 
 # ─── POST /entries/{id}/publish ───────────────────────────────────
 
@@ -1641,6 +1693,28 @@ class TestBulkDecide:
         for a in approved_actions:
             details = a["details"] if isinstance(a["details"], dict) else _json.loads(a["details"])
             assert details.get("bulk") is True
+
+    # ── R6.3: bulk approve relata (sem bloquear) as sem disclosure (A2A-1) ──
+
+    def test_bulk_approve_reports_missing_disclosures(self, fake_storage):
+        sids = self._setup_two_pending(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        body = c_root.post(
+            "/api/v1/catalog/submissions/bulk-decide",
+            json={"submission_ids": sids, "decision": "approved"},
+        ).json()
+        # Nenhuma declarou disclosure → ambas aprovadas E relatadas no warning
+        assert body["succeeded_count"] == 2
+        assert sorted(body["approved_without_disclosure"]) == sorted(sids)
+
+    def test_bulk_reject_reports_no_missing_disclosures(self, fake_storage):
+        sids = self._setup_two_pending(fake_storage)
+        c_root = make_client({"id": "root1", "role": "root"})
+        body = c_root.post(
+            "/api/v1/catalog/submissions/bulk-decide",
+            json={"submission_ids": sids, "decision": "rejected"},
+        ).json()
+        assert body["approved_without_disclosure"] == []
 
 
 # ═════════════════════════════════════════════════════════════════
