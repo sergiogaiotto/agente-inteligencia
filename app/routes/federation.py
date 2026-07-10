@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 import asyncpg
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
@@ -47,6 +48,18 @@ _DEV_ALLOW_HTTP_KEY = "federation.dev_allow_http"
 
 def _truthy(raw: str) -> bool:
     return (raw or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _peer_failure_cause(e: Exception) -> str:
+    """Causa curta e segura p/ o corpo do 502 (achado A2A-2). ValueError já
+    carrega a mensagem montada no egress (inclui o detail do peer, capado);
+    erros httpx usam o nome da classe porque o str() pode vir vazio
+    (ex.: ConnectError sem texto)."""
+    if isinstance(e, ValueError):
+        return str(e)[:400]
+    text = str(e)
+    return f"{type(e).__name__}: {text[:300]}" if text else type(e).__name__
+
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +317,10 @@ async def sync_peer_route(peer_id: str, user: dict = Depends(require_user)):
         res = await egress.sync_remote_entries(peer, user["id"])
     except SSRFError as e:
         raise HTTPException(400, f"base_url do peer rejeitada (SSRF): {e}")
+    except (ValueError, httpx.HTTPError) as e:
+        # Mesmo tratamento do invoke (A2A-2): causa conhecida surfa no corpo.
+        logger.warning("sync_peer: peer %s recusou/falhou: %s", peer_id, e)
+        raise HTTPException(502, f"Falha ao sincronizar com o peer: {_peer_failure_cause(e)}")
     except Exception:
         logger.warning("sync_peer: falha ao sincronizar peer %s", peer_id, exc_info=True)
         raise HTTPException(502, "Falha ao sincronizar com o peer")
@@ -347,6 +364,11 @@ async def remote_invoke_route(
         result = await egress.invoke_remote(entry, user_input, peer)
     except SSRFError as e:
         raise HTTPException(400, f"base_url do peer rejeitada (SSRF): {e}")
+    except (ValueError, httpx.HTTPError) as e:
+        # Causa CONHECIDA (status+detail do peer, segredo inutilizável, rede) —
+        # surfar: o 502 mudo escondia p.ex. o 503 fail-closed do peer (A2A-2).
+        logger.warning("remote_invoke: peer recusou/falhou na entry %s: %s", entry_id, e)
+        raise HTTPException(502, f"Falha ao invocar o peer: {_peer_failure_cause(e)}")
     except Exception:
         logger.warning("remote_invoke: falha ao invocar peer da entry %s", entry_id, exc_info=True)
         raise HTTPException(502, "Falha ao invocar o peer")
