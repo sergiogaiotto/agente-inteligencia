@@ -1274,7 +1274,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
             <li><strong>archived</strong> — fora de uso</li>
           </ol>
           <p>Tipos (<code>kind</code>): <code>agent</code>, <code>skill</code>, <code>recipe</code> (composição declarativa), <code>pipeline</code> (grafo publicado pelo Fluxo de agentes) e <code>external_platform</code> (ChatGPT/etc).</p>
-          <p><strong>Divulgação de Capacidade</strong> (etiqueta nutricional R6.3) é obrigatória: flags de dados + soberania + retenção. Quem consome o agent sabe exatamente o que ele faz com os dados.</p>
+          <p><strong>Divulgação de Capacidade</strong> (etiqueta nutricional R6.3): flags de dados + soberania + retenção. Quem consome o agent sabe exatamente o que ele faz com os dados. Declare enquanto rascunho — sem ela, o Root vê um aviso ao aprovar e a entry exibe um alerta permanente aos consumers.</p>
         `
       },
       {

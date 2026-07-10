@@ -482,7 +482,12 @@ async def decide_submission(
 ):
     """Root decide sobre uma submissão. approved → entry vai para 'approved'
     (publisher publica em seguida). rejected/changes_requested → entry volta
-    para 'draft' para iteração."""
+    para 'draft' para iteração.
+
+    Aprovar sem Capability Disclosure (R6.3) NÃO bloqueia — a política é
+    warning-não-bloqueante (achado A2A-1): a resposta carrega
+    `disclosure_warning` para a UI exibir e o audit registra
+    `disclosure_missing`, deixando rastro de que o Root aprovou ciente."""
     if not is_root(user):
         raise HTTPException(403, "Apenas Root pode decidir submissões")
 
@@ -507,6 +512,17 @@ async def decide_submission(
             f"Entry em status '{entry.get('status')}' não pode transitar para '{new_entry_status}'",
         )
 
+    # R6.3: aprovação sem disclosure gera warning (não bloqueia)
+    disclosure_warning = None
+    if data.decision == "approved":
+        disclosure = await get_disclosure(sub["entry_id"])
+        if disclosure is None:
+            disclosure_warning = (
+                "Entry aprovada SEM Divulgação de Capacidade (R6.3) — consumers "
+                "não verão a etiqueta nutricional (flags de dados, soberania, "
+                "retenção). Considere pedir mudanças para o publisher declarar."
+            )
+
     now = _naive_utc_now()
     await catalog_submissions_repo.update(sub_id, {
         "review_status": data.decision,
@@ -522,11 +538,20 @@ async def decide_submission(
         f"review_{data.decision}",
         sub["entry_id"],
         user["id"],
-        {"submission_id": sub_id, "new_entry_status": new_entry_status, "notes": data.notes or ""},
+        {
+            "submission_id": sub_id,
+            "new_entry_status": new_entry_status,
+            "notes": data.notes or "",
+            "disclosure_missing": disclosure_warning is not None,
+        },
     )
 
     updated_sub = await catalog_submissions_repo.find_by_id(sub_id)
-    return {"submission": updated_sub, "entry_status": new_entry_status}
+    return {
+        "submission": updated_sub,
+        "entry_status": new_entry_status,
+        "disclosure_warning": disclosure_warning,
+    }
 
 
 @router.post("/entries/{entry_id}/publish")
@@ -1754,6 +1779,8 @@ async def bulk_decide(
 
     succeeded: list[str] = []
     failed: list[dict] = []
+    # R6.3: sub_ids aprovadas sem disclosure — warning não-bloqueante no resumo
+    approved_without_disclosure: list[str] = []
 
     for sub_id in data.submission_ids:
         try:
@@ -1778,6 +1805,12 @@ async def bulk_decide(
                 })
                 continue
 
+            disclosure_missing = False
+            if data.decision == "approved":
+                disclosure_missing = (await get_disclosure(sub["entry_id"])) is None
+                if disclosure_missing:
+                    approved_without_disclosure.append(sub_id)
+
             await catalog_submissions_repo.update(sub_id, {
                 "review_status": data.decision,
                 "reviewed_by": user["id"],
@@ -1797,6 +1830,7 @@ async def bulk_decide(
                     "new_entry_status": new_entry_status,
                     "notes": data.notes or "",
                     "bulk": True,
+                    "disclosure_missing": disclosure_missing,
                 },
             )
             succeeded.append(sub_id)
@@ -1811,6 +1845,7 @@ async def bulk_decide(
         "failed_count": len(failed),
         "succeeded": succeeded,
         "failed": failed,
+        "approved_without_disclosure": approved_without_disclosure,
     }
 
 
