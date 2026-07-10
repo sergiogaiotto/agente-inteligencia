@@ -214,6 +214,14 @@
                             </div>
                         </details>
 
+                        <!-- Sem disclosure (R6.3): warning não-bloqueante — Root decide ciente (A2A-1) -->
+                        <div x-show="!item.disclosure && item.review_status === 'pending'" data-testid="queue-no-disclosure"
+                             class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 mb-3">
+                            <p class="text-[11px] text-amber-800">
+                                ⚠️ <strong>Sem Divulgação de Capacidade (R6.3)</strong> — o publisher não declarou a etiqueta nutricional (flags de dados, soberania, retenção). Aprovar não é bloqueado, mas fica registrado no audit; considere <strong>Pedir Mudanças</strong>.
+                            </p>
+                        </div>
+
                         <!-- Capability disclosure quick view (se entry tem disclosure declarada) -->
                         <div x-show="item.disclosure" class="rounded-lg bg-brand-50/40 border border-brand-100 px-3 py-2 mb-3">
                             <p class="text-[10px] font-semibold text-brand-700 uppercase tracking-wider mb-1">Capability declarada</p>
@@ -262,6 +270,11 @@
             </p>
             <p class="text-[11px] text-surface-500 mb-3"
                x-text="decideAction === 'approved' ? 'A entrada irá para o status aprovada. O Dono publica em seguida.' : 'A entrada voltará para rascunho. O Dono pode iterar e re-submeter.'"></p>
+            <!-- Warning R6.3 não-bloqueante (achado A2A-1, sintoma 2) -->
+            <div x-show="decideAction === 'approved' && decideTarget && !decideTarget.disclosure" data-testid="decide-disclosure-warning"
+                 class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 mb-3 text-[11px] text-amber-800">
+                ⚠️ <strong>Sem Divulgação de Capacidade (R6.3).</strong> A aprovação não é bloqueada, mas a entry seguirá sem etiqueta nutricional visível aos consumers e o audit registra a ausência. Alternativa: <strong>Pedir Mudanças</strong> para o publisher declarar.
+            </div>
             <textarea x-model="decideNotes" rows="3"
                       placeholder="Notas para o publisher (recomendado, especialmente em rejected/changes_requested)..."
                       class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[11px] outline-none focus:border-brand-400"></textarea>
@@ -294,6 +307,11 @@
                 <p class="font-semibold text-brand-900">
                     <span x-text="bulkResult?.succeeded_count"></span> ok ·
                     <span class="text-rose-700" x-text="bulkResult?.failed_count"></span> falharam
+                </p>
+                <!-- Warning R6.3 do bulk approve (não-bloqueante) -->
+                <p x-show="(bulkResult?.approved_without_disclosure || []).length > 0"
+                   class="mt-1 rounded bg-amber-50 border border-amber-200 px-2 py-1 text-amber-800">
+                    ⚠️ <span x-text="(bulkResult?.approved_without_disclosure || []).length"></span> aprovada(s) <strong>sem Divulgação de Capacidade (R6.3)</strong> — registrado no audit.
                 </p>
                 <template x-if="bulkResult?.failed_count > 0">
                     <div class="mt-1 max-h-[120px] overflow-y-auto bg-rose-50 border border-rose-100 rounded p-2 space-y-0.5">
@@ -530,7 +548,10 @@ function queuePage() {
                     body: JSON.stringify({decision: this.decideAction, notes: this.decideNotes}),
                 });
                 if (!r.ok) throw new Error((await r.json()).detail || 'erro');
-                showToast('Decisão registrada');
+                const resp = await r.json();
+                // Warning R6.3 do backend: aprovou sem disclosure (não-bloqueante)
+                if (resp.disclosure_warning) showToast('⚠️ ' + resp.disclosure_warning, 'info');
+                else showToast('Decisão registrada');
                 this.decideModalOpen = false;
                 await this.load();
             } catch (e) {

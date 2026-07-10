@@ -2,7 +2,7 @@
 
 Visão geral do módulo de catálogo entregue em **25 PRs incrementais**
 (10 Onda 1 + 6 Onda 2 + 4 Onda 3 + 5 Onda 4). Etiqueta nutricional R6.3
-obrigatória, governança Root, lifecycle explícito, External Platforms
+com warning não-bloqueante na aprovação, governança Root, lifecycle explícito, External Platforms
 catalogadas, inventário regulatório com CSV export, stewardship
 descentralizado a stewards de área, cost & consumption com chargeback
 real, recipes **executáveis** (chain sequencial), sandbox, e detecção
@@ -158,6 +158,14 @@ Etiqueta nutricional inspirada em iOS App Privacy Labels. 12 flags + soberania +
 - 🧠 **Modelo**: trains_on_input, output_is_deterministic
 
 Soberania: BR | EU | US | global | NULL.
+
+**Política (achado A2A-1, 29.1.15)**: a disclosure é *warning não-bloqueante* —
+precheck `capability_disclosure_present` marca error no submit, mas o Root PODE
+aprovar sem ela. Nesse caso o `POST /submissions/{id}/decide` devolve
+`disclosure_warning`, o audit grava `disclosure_missing=true`, a fila e o modal
+de aprovação exibem aviso âmbar e a entry mostra banner permanente. Edição é
+draft-only (PUT /capability responde 409 fora de rascunho — a UI explica em vez
+de quebrar).
 
 ## Visibilidade por role
 
