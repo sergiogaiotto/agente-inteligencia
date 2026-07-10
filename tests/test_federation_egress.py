@@ -190,6 +190,60 @@ class TestInvokeRemote:
             asyncio.run(egress.invoke_remote({"urn": "u", "remote_urn": "u"}, "hi", peer))
 
 
+# ── _get_json: não-200 inclui o detail do peer na razão (A2A-2) ──
+class TestGetJsonErrorReason:
+    def _fake_httpx(self, monkeypatch, status, body: bytes):
+        import httpx as _httpx
+
+        class FakeResp:
+            status_code = status
+
+            async def aiter_bytes(self):
+                yield body
+
+        class FakeStream:
+            async def __aenter__(self):
+                return FakeResp()
+
+            async def __aexit__(self, *a):
+                return False
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def stream(self, method, url, json=None): return FakeStream()
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+
+        monkeypatch.setattr(egress, "validate_public_url",
+                            lambda url, allow_http=False: url)
+        monkeypatch.setattr(_httpx, "AsyncClient", FakeClient)
+
+    def test_non_200_includes_peer_detail(self, monkeypatch):
+        self._fake_httpx(
+            monkeypatch, 503,
+            b'{"detail": "Federa\xc3\xa7\xc3\xa3o indispon\xc3\xadvel (MAESTRO_SECRET_KEY ausente)"}')
+        with pytest.raises(ValueError) as exc:
+            asyncio.run(egress._get_json("POST", "https://peer.example/x", allow_http=False))
+        assert "peer respondeu HTTP 503" in str(exc.value)
+        assert "MAESTRO_SECRET_KEY" in str(exc.value)
+
+    def test_non_200_body_not_json_keeps_status_only(self, monkeypatch):
+        self._fake_httpx(monkeypatch, 500, b"<html>Internal Server Error</html>")
+        with pytest.raises(ValueError) as exc:
+            asyncio.run(egress._get_json("GET", "https://peer.example/x", allow_http=False))
+        assert str(exc.value) == "peer respondeu HTTP 500"
+
+    def test_non_200_long_detail_truncated(self, monkeypatch):
+        import json as _json
+        self._fake_httpx(monkeypatch, 503,
+                         _json.dumps({"detail": "x" * 400}).encode())
+        with pytest.raises(ValueError) as exc:
+            asyncio.run(egress._get_json("GET", "https://peer.example/x", allow_http=False))
+        msg = str(exc.value)
+        assert "x" * egress._MAX_ERROR_DETAIL_CHARS in msg          # detail presente…
+        assert "x" * (egress._MAX_ERROR_DETAIL_CHARS + 1) not in msg  # …mas capado
+
+
 # ── rota sync (root-only) ──
 class TestSyncRoute:
     def _client(self, user):
@@ -232,6 +286,18 @@ class TestSyncRoute:
         monkeypatch.setattr(fed_routes.egress, "sync_remote_entries", boom)
         r = self._client({"id": "r", "role": "root"}).post("/api/v1/federation/peers/p1/sync")
         assert r.status_code == 400
+
+    def test_502_sync_surfaces_known_reason(self, monkeypatch):
+        """A2A-2 também no sync: peer != 200 / manifesto inválido surfa a causa."""
+        monkeypatch.setattr(fed_routes, "federation_enabled", _async(True))
+        monkeypatch.setattr(fed_routes.federation_peers_repo, "find_by_id",
+                            _async({"id": "p1", "status": "active", "workspace": "r"}))
+        async def boom(*a, **k):
+            raise ValueError("peer respondeu HTTP 500: erro interno")
+        monkeypatch.setattr(fed_routes.egress, "sync_remote_entries", boom)
+        r = self._client({"id": "r", "role": "root"}).post("/api/v1/federation/peers/p1/sync")
+        assert r.status_code == 502
+        assert "HTTP 500" in r.json()["detail"]
 
 
 # ── rota remote-invoke ──
@@ -304,8 +370,48 @@ class TestRemoteInvokeRoute:
         async def boom(*a, **k):
             raise RuntimeError("peer down")
         monkeypatch.setattr(fed_routes.egress, "invoke_remote", boom)
-        assert self._client({"id": "u", "role": "member"}).post(
-            "/api/v1/federation/remote/e1/invoke", json={"input": "oi"}).status_code == 502
+        r = self._client({"id": "u", "role": "member"}).post(
+            "/api/v1/federation/remote/e1/invoke", json={"input": "oi"})
+        # erro DESCONHECIDO continua genérico (não vaza traceback/detalhe interno)
+        assert r.status_code == 502
+        assert r.json()["detail"] == "Falha ao invocar o peer"
+
+    def test_502_surfaces_known_reason(self, monkeypatch):
+        """A2A-2: a razão conhecida (status+detail do peer) chega à UI — o 502
+        mudo escondia p.ex. o 503 fail-closed do peer (MAESTRO_SECRET_KEY)."""
+        self._happy(monkeypatch)
+        async def boom(*a, **k):
+            raise ValueError(
+                "peer respondeu HTTP 503: Federação indisponível (MAESTRO_SECRET_KEY ausente)")
+        monkeypatch.setattr(fed_routes.egress, "invoke_remote", boom)
+        r = self._client({"id": "u", "role": "member"}).post(
+            "/api/v1/federation/remote/e1/invoke", json={"input": "oi"})
+        assert r.status_code == 502
+        assert "HTTP 503" in r.json()["detail"]
+        assert "MAESTRO_SECRET_KEY" in r.json()["detail"]
+
+    def test_502_surfaces_transport_error(self, monkeypatch):
+        import httpx
+        self._happy(monkeypatch)
+        async def boom(*a, **k):
+            raise httpx.ConnectTimeout("timed out")
+        monkeypatch.setattr(fed_routes.egress, "invoke_remote", boom)
+        r = self._client({"id": "u", "role": "member"}).post(
+            "/api/v1/federation/remote/e1/invoke", json={"input": "oi"})
+        assert r.status_code == 502
+        assert "ConnectTimeout" in r.json()["detail"]
+
+    def test_502_transport_error_without_text_names_class(self, monkeypatch):
+        """str() vazio (ex.: ConnectError sem texto) não pode virar detail vazio."""
+        import httpx
+        self._happy(monkeypatch)
+        async def boom(*a, **k):
+            raise httpx.ConnectError("")
+        monkeypatch.setattr(fed_routes.egress, "invoke_remote", boom)
+        r = self._client({"id": "u", "role": "member"}).post(
+            "/api/v1/federation/remote/e1/invoke", json={"input": "oi"})
+        assert r.status_code == 502
+        assert r.json()["detail"] == "Falha ao invocar o peer: ConnectError"
 
 
 class TestExecutePipelineRejectsFederated:
