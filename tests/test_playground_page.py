@@ -150,6 +150,35 @@ def test_receita_conversa_multiturno():
     assert "os especialistas não lembram" in src
 
 
+def test_conversa_ao_vivo_multiturno():
+    """Modo 'Conversa (multi-turn ao vivo)': uma conversa REAL na tela que reusa a
+    sessão — cada turno chama o /invoke (sync, X-API-Key) e reenvia o interaction_id
+    como session_id. É o 'assistir funcionar' da receita de código. Aditivo: o
+    builder (grid) some quando ligado; single-shot/compare/código ficam intactos."""
+    src = PG.read_text(encoding="utf-8")
+    # estado da thread + sessão
+    assert "chatMode: false, chat: [], chatInput: '', chatSessionId: null, chatBusy: false" in src
+    # toggle (mutuamente exclusivo com o A/B) + painel + input + envio
+    assert 'data-testid="pg-chat-toggle"' in src
+    assert "if (chatMode) compareMode = false" in src
+    assert 'data-testid="pg-chat"' in src and 'data-testid="pg-chat-thread"' in src
+    assert 'data-testid="pg-chat-input"' in src and 'data-testid="pg-chat-send"' in src
+    # o grid do builder some no modo conversa (assume a tela); painel gated por chatMode
+    assert 'class="grid lg:grid-cols-2 gap-0" x-show="!chatMode"' in src
+    assert 'x-show="chatMode"' in src
+    # chatSend: /invoke SYNC (não /stream), sem cookie, com X-API-Key + session_id no corpo
+    assert "async chatSend()" in src
+    assert "+ this.selectedId + '/invoke'," in src
+    assert "session_id: this.chatSessionId, verbosity: this.verbosity" in src
+    # o FIO da sessão: guarda o interaction_id p/ reenviar como session_id
+    assert "if (data.interaction_id) this.chatSessionId = data.interaction_id" in src
+    # nova conversa reseta a sessão; Enter envia (Shift+Enter quebra linha)
+    assert "chatReset()" in src and "this.chatSessionId = null" in src
+    assert "if (!$event.shiftKey) { $event.preventDefault(); chatSend() }" in src
+    # ressalva honesta de escopo por camada (não superpromete memória)
+    assert "os especialistas não lembram" in src
+
+
 def test_console_tem_abas_tempo_e_trace():
     src = PG.read_text(encoding="utf-8")
     # abas novas
