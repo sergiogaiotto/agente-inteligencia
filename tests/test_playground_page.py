@@ -106,16 +106,48 @@ def test_curl_tem_opcoes_de_notacao_por_shell():
     A sintaxe do curl muda por shell: continuação de linha + aspas/escape. No
     PowerShell `curl` é alias de Invoke-WebRequest → o snippet usa `curl.exe`."""
     src = PG.read_text(encoding="utf-8")
-    # estado + toggle visível só no curl
+    # estado + toggle visível só no curl (e só na receita de chamada única — a
+    # conversa em curl é bash+jq, sem escolha de notação)
     assert "curlShell" in src
     assert 'data-testid="pg-curl-shell"' in src
-    assert 'x-show="lang === \'curl\'"' in src
+    assert 'x-show="lang === \'curl\' && recipe===\'single\'"' in src
     # os três alvos
     assert "Bash (Linux/macOS)" in src and "PowerShell" in src and "CMD (Windows)" in src
     assert "curlShell='bash'" in src and "curlShell='powershell'" in src and "curlShell='cmd'" in src
     # mecânica por shell: curl.exe (PS) + escaping próprio (_psq dobra a aspa simples)
     assert "curl.exe" in src
     assert "_psq(" in src and "s.replace(/'/g, \"''\")" in src
+
+
+def test_receita_conversa_multiturno():
+    """Receita 'Conversa (multi-turn)' no painel Código: gera um exemplo de sessão
+    que reusa o interaction_id da resposta como session_id no próximo turno.
+    Sync-only (o SSE não devolve o id de forma limpa); a chamada única fica intacta."""
+    src = PG.read_text(encoding="utf-8")
+    # estado + seletor de receita
+    assert "recipe: 'single'" in src
+    assert 'data-testid="pg-code-recipe"' in src
+    assert "recipe='single'" in src and "recipe='conversa'" in src
+    # branch de codegen: conversa desvia pro _mtSnippet ANTES do single-call
+    assert "if (this.recipe === 'conversa') return this._mtSnippet();" in src
+    assert "_mtSnippet()" in src and "_mtSpec()" in src
+    # sync-only: o spec da conversa aponta pro /invoke (não /invoke/stream)
+    assert "+ (this.selectedId || '{pipeline_id}') + '/invoke'," in src
+    # 1 formatador multi-turn por linguagem (paridade com o single-call)
+    for m in ("_mtCurl(", "_mtPy(", "_mtHttpx(", "_mtJs(", "_mtAxios(",
+              "_mtGo(", "_mtPhp(", "_mtRuby(", "_mtCsharp(", "_mtJava("):
+        assert m in src, f"falta o formatador multi-turn {m}"
+    # o ENSINAMENTO central: interaction_id -> session_id, em todas as vertentes
+    assert 'r["interaction_id"]' in src                  # python/httpx
+    assert "data.interaction_id" in src                  # js/axios/csharp
+    assert "jq -r '.interaction_id'" in src              # curl bash
+    assert 'InteractionID string `json:"interaction_id"`' in src  # go
+    assert "session_id" in src
+    # a receita e o modo sync/streaming são mutuamente cientes (streaming só na única)
+    assert "x-show=\"recipe==='single'\"" in src
+    # nota do padrão + ressalva de escopo por camada (não superpromete memória)
+    assert 'data-testid="pg-recipe-note"' in src
+    assert "os especialistas não lembram" in src
 
 
 def test_console_tem_abas_tempo_e_trace():
