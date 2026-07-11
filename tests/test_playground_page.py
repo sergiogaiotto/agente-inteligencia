@@ -152,9 +152,10 @@ def test_receita_conversa_multiturno():
 
 def test_conversa_ao_vivo_multiturno():
     """Modo 'Conversa (multi-turn ao vivo)': uma conversa REAL na tela que reusa a
-    sessão — cada turno chama o /invoke (sync, X-API-Key) e reenvia o interaction_id
-    como session_id. É o 'assistir funcionar' da receita de código. Aditivo: o
-    builder (grid) some quando ligado; single-shot/compare/código ficam intactos."""
+    sessão. Cada turno CONSOME o /invoke/stream (SSE) — o mesmo que um app externo
+    em streaming veria: passo-a-passo por agente ao vivo + texto final; e reenvia o
+    interaction_id como session_id. Aditivo: o builder (grid) some quando ligado;
+    single-shot/compare/código ficam intactos."""
     src = PG.read_text(encoding="utf-8")
     # estado da thread + sessão
     assert "chatMode: false, chat: [], chatInput: '', chatSessionId: null, chatBusy: false" in src
@@ -168,12 +169,21 @@ def test_conversa_ao_vivo_multiturno():
     # o grid do builder some no modo conversa (assume a tela); painel gated por chatMode
     assert 'class="grid lg:grid-cols-2 gap-0" x-show="!chatMode"' in src
     assert 'x-show="chatMode"' in src
-    # chatSend: /invoke SYNC (não /stream), sem cookie, com X-API-Key + session_id no corpo
+    # chatSend consome o /invoke/stream via _stream, com o TURNO como sink (liveSteps
+    # ao vivo) e session_id no corpo — o mesmo stream que um app externo veria
     assert "async chatSend()" in src
-    assert "+ this.selectedId + '/invoke'," in src
-    assert "session_id: this.chatSessionId, verbosity: this.verbosity" in src
-    # o FIO da sessão: guarda o interaction_id p/ reenviar como session_id
-    assert "if (data.interaction_id) this.chatSessionId = data.interaction_id" in src
+    assert "await this._stream(this.selectedId, this.verbosity, turn, { message: msg, sessionId: this.chatSessionId })" in src
+    assert 'data-testid="pg-chat-steps"' in src   # passo-a-passo por agente renderizado no balão
+    # REATIVIDADE (footgun Alpine): o turno é mutado via a referência REATIVA
+    # (this.chat[i]), não o objeto cru — senão o balão fica preso em "respondendo…"
+    assert "const turn = this.chat[this.chat.length - 1];" in src
+    # _stream estendido (retrocompatível): opts.message + opts.sessionId; o builder
+    # (Executar/comparar) segue sem opts → comportamento idêntico (args/anexos)
+    assert "async _stream(pipelineId, verbosity, sink, opts = {})" in src
+    assert "if (opts.sessionId) _body.session_id = opts.sessionId" in src
+    assert "opts.message == null" in src          # args/anexos só no fluxo do builder
+    # o FIO da sessão: interaction_id do result (pipeline_done) → session_id
+    assert "if (turn.result && turn.result.interaction_id) this.chatSessionId = turn.result.interaction_id" in src
     # nova conversa reseta a sessão; Enter envia (Shift+Enter quebra linha)
     assert "chatReset()" in src and "this.chatSessionId = null" in src
     assert "if (!$event.shiftKey) { $event.preventDefault(); chatSend() }" in src
@@ -317,8 +327,9 @@ def test_compara_dois_pipelines_lado_a_lado():
     assert 'data-testid="pg-compare-toggle"' in src
     assert 'data-testid="pg-pipeline-b"' in src
     assert "compareMode" in src and "compareKind" in src and "verbosityB" in src
-    # núcleo de streaming reaproveitável (sink-aware) + slots A/B
-    assert "async _stream(pipelineId, verbosity, sink)" in src
+    # núcleo de streaming reaproveitável (sink-aware) + slots A/B (opts opcional
+    # p/ o modo Conversa — retrocompatível: sem opts é o fluxo do builder)
+    assert "async _stream(pipelineId, verbosity, sink, opts = {})" in src
     assert "_ev(buf.slice(0, i), sink)" in src       # parser SSE escreve no sink
     assert "async runCompare()" in src and "_runSlot(" in src
     assert "Promise.all([this._runSlot(this.cmp.A), this._runSlot(this.cmp.B)])" in src
