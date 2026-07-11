@@ -228,24 +228,26 @@
                 </div>
             </div>
 
-            <!-- Conversa ao vivo (multi-turn): abre uma conversa REAL com o destino,
-                 reusando a sessão (o interaction_id vira o session_id do próximo turno).
-                 É o "assistir funcionar" da receita Conversa da aba Código. -->
-            <div>
-                <label class="flex items-center gap-2 text-[11px] font-medium text-surface-600 cursor-pointer">
-                    <input type="checkbox" x-model="chatMode" @change="if (chatMode) compareMode = false" data-testid="pg-chat-toggle" class="rounded border-surface-300 text-brand-500 focus:ring-brand-400">
-                    <span>Conversa (multi-turn ao vivo)</span>
-                </label>
-                <p class="text-[9.5px] text-surface-400 leading-snug mt-0.5">Uma conversa real com o pipeline, reusando a sessão — pra ver o contexto funcionar (e conferir a receita da aba Código).</p>
+            <!-- Duas formas de rodar o mesmo pipeline, lado a lado: Executar (uma
+                 chamada — PRIMÁRIO) e Conversar (multi-turn ao vivo — SECUNDÁRIO;
+                 abre um chat que reusa a sessão, o "assistir funcionar" da receita
+                 Conversa da aba Código). Conversar sai do modo A/B ao entrar. -->
+            <div class="flex items-stretch gap-2">
+                <button @click="compareMode ? runCompare() : run()" data-testid="pg-run" :disabled="!canRun"
+                        title="Uma chamada, como o seu app faria — /invoke/stream via X-API-Key (sem cookie)."
+                        class="flex-1 min-w-0 inline-flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+                    <svg x-show="!running" class="w-4 h-4 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.25 5.65v12.7c0 .61.66 1 1.18.69l10.5-6.35a.8.8 0 000-1.38L6.43 4.96A.8.8 0 005.25 5.65z"/></svg>
+                    <svg x-show="running" class="w-4 h-4 animate-spin flex-none" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+                    <span class="truncate" x-text="running ? 'Executando…' : (compareMode ? 'Comparar A · B' : 'Executar como integração')"></span>
+                </button>
+                <button @click="chatMode = true; compareMode = false" data-testid="pg-chat-toggle" :disabled="running || !selectedId"
+                        title="Abre uma conversa real reusando a sessão (multi-turn) — pra ver o contexto funcionar e conferir a receita da aba Código."
+                        class="flex-none inline-flex items-center justify-center gap-1.5 rounded-lg border border-brand-300 bg-white px-3.5 py-2.5 text-[13px] font-semibold text-brand-700 hover:bg-brand-50 disabled:opacity-50">
+                    <svg class="w-4 h-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M8.25 8.25h7.5M8.25 12h4.5m-8.06 6.44a9.06 9.06 0 01-1.94-2.69A8.94 8.94 0 012.25 12C2.25 7.03 6.61 3 12 3s9.75 4.03 9.75 9-4.36 9-9.75 9a10.7 10.7 0 01-3.06-.44l-4.94 1.19 1.19-3.31z"/></svg>
+                    Conversar
+                </button>
             </div>
-
-            <button @click="compareMode ? runCompare() : run()" data-testid="pg-run" :disabled="!canRun"
-                    class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
-                <svg x-show="!running" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.25 5.65v12.7c0 .61.66 1 1.18.69l10.5-6.35a.8.8 0 000-1.38L6.43 4.96A.8.8 0 005.25 5.65z"/></svg>
-                <svg x-show="running" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
-                <span x-text="running ? 'Executando…' : (compareMode ? 'Comparar A · B' : 'Executar como integração')"></span>
-            </button>
-            <p class="text-[10px] text-surface-400 -mt-2 leading-snug">Roda o endpoint real <span class="font-mono">/invoke/stream</span> via <span class="font-mono">X-API-Key</span> (sem cookie) — fidelidade total ao que o app recebe.</p>
+            <p class="text-[10px] text-surface-400 -mt-2 leading-snug">Roda o endpoint real <span class="font-mono">/invoke/stream</span> via <span class="font-mono">X-API-Key</span> (sem cookie) — fidelidade total ao que o app recebe. <strong>Conversar</strong> encadeia turnos reusando a sessão (multi-turn).</p>
 
             <!-- Histórico da sessão (persiste no navegador) -->
             <div x-show="history.length" class="pt-3 border-t border-surface-100" data-testid="pg-history">
@@ -482,6 +484,31 @@
                     <span x-show="recipe==='conversa'">Dois turnos encadeados via <span class="font-mono">session_id</span> (sync).</span>
                     <span x-show="!apiKey">Gere uma chave pra embutir o segredo.</span>
                 </p>
+                <!-- Exportar: artefatos "código pronto" pra levar embora. A coleção
+                     Postman já traz o multi-turn cabeado (script de teste captura o
+                     interaction_id e reusa como session_id); o SDK .py é um cliente
+                     tipado com invoke() + conversa; o OpenAPI documenta o contrato.
+                     Tudo gerado no cliente e baixado como arquivo. -->
+                <div class="flex items-center gap-1.5 pt-2 mt-1 border-t border-surface-100 text-[11px]" data-testid="pg-export">
+                    <span class="text-surface-400">Exportar:</span>
+                    <button @click="exportPostman()" type="button" data-testid="pg-export-postman"
+                            class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2 py-0.5 text-surface-600 hover:bg-surface-50"
+                            title="Coleção Postman v2.1: Invoke (uma chamada) + Conversa (multi-turn) — o script de teste captura o interaction_id e reusa como session_id.">
+                        <svg class="w-3 h-3 flex-none" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+                        Postman
+                    </button>
+                    <button @click="exportSdkPy()" type="button" data-testid="pg-export-sdk"
+                            class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2 py-0.5 text-surface-600 hover:bg-surface-50"
+                            title="Módulo Python (.py): cliente tipado com invoke() e uma classe de conversa que encadeia a sessão (multi-turn).">
+                        SDK .py
+                    </button>
+                    <button @click="exportOpenApi()" type="button" data-testid="pg-export-openapi"
+                            class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2 py-0.5 text-surface-600 hover:bg-surface-50"
+                            title="Fragmento OpenAPI 3.1 do invoke deste pipeline — documenta message/session_id/args e o interaction_id na resposta.">
+                        OpenAPI
+                    </button>
+                    <span x-show="apiKey" class="ml-auto text-[9.5px] text-surface-300">baixa um arquivo (contém a chave)</span>
+                </div>
             </div>
 
             <!-- COMPARAR A/B (F2): 2 execuções reais lado a lado + deltas B vs A -->
@@ -1683,6 +1710,176 @@ function playgroundPage() {
             ].join('\n');
         },
         async copyCode() { if (await window.copyText(this.snippet())) showToast(this.apiKey ? 'Código copiado — contém um segredo' : 'Código copiado', this.apiKey ? 'info' : 'success'); },
+
+        // ── Exportar (artefatos "código pronto") ──  Gerados no CLIENTE a partir do
+        // estado atual (pipeline, chave, verbosidade) e baixados como arquivo — sem
+        // backend. Cada gerador é separado do download pra ser testável isolado.
+        _slug() {
+            return (this.selectedName || 'pipeline').toLowerCase()
+                .normalize('NFD').replace(/[̀-ͯ]/g, '')
+                .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'pipeline';
+        },
+        _download(filename, text, mime) {
+            const blob = new Blob([text], { type: mime || 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        },
+        // Coleção Postman v2.1: variáveis (base_url/api_key/pipeline_id/session_id) +
+        // 2 requests. "Conversa · turno" tem um script de TESTE que captura o
+        // interaction_id e o grava em session_id — rodar de novo continua o multi-turn.
+        _postmanCollection() {
+            const pid = this.selectedId || '{pipeline_id}';
+            const name = this.selectedName || 'Pipeline';
+            const v = this.verbosity;
+            // Variável Postman no formato mustache (chaves duplas) montada por
+            // concatenacao: um par de chaves literais no fonte seria interpretado
+            // pelo Jinja (este arquivo e um template Jinja) e renderizaria vazio.
+            // Separar as chaves impede o Jinja de casar a expressao; o navegador
+            // recebe o mustache ja montado por M(nome).
+            const M = (nm) => '{' + '{' + nm + '}' + '}';
+            const invokeUrl = { raw: M('base_url') + '/api/v1/pipelines/' + M('pipeline_id') + '/invoke', host: [M('base_url')], path: ['api', 'v1', 'pipelines', M('pipeline_id'), 'invoke'] };
+            const header = [{ key: 'Content-Type', value: 'application/json' }, { key: 'X-API-Key', value: M('api_key') }];
+            return {
+                info: {
+                    name: 'Maestro · ' + name,
+                    _postman_id: pid,
+                    description: 'Console de integração do pipeline "' + name + '" (Maestro / AI Mesh). Defina a variável api_key. "Invoke" faz uma chamada; "Conversa · turno" encadeia multi-turn — o script de teste captura o interaction_id e o reusa como session_id (rode de novo para continuar; a 1ª vez abre a sessão).',
+                    schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+                },
+                variable: [
+                    { key: 'base_url', value: window.location.origin },
+                    { key: 'api_key', value: this.apiKey || 'SUA_API_KEY' },
+                    { key: 'pipeline_id', value: pid },
+                    { key: 'session_id', value: '' },
+                ],
+                item: [
+                    {
+                        name: 'Invoke (uma chamada)',
+                        request: {
+                            method: 'POST', header, url: invokeUrl,
+                            body: { mode: 'raw', raw: JSON.stringify({ message: 'o que temos aqui?', verbosity: v }, null, 2), options: { raw: { language: 'json' } } },
+                        },
+                    },
+                    {
+                        name: 'Conversa · turno (multi-turn)',
+                        event: [{
+                            listen: 'test',
+                            script: {
+                                type: 'text/javascript',
+                                exec: [
+                                    '// Multi-turn: captura o interaction_id e o reusa como session_id no proximo turno.',
+                                    'const d = pm.response.json();',
+                                    "if (d.interaction_id) pm.collectionVariables.set('session_id', d.interaction_id);",
+                                ],
+                            },
+                        }],
+                        request: {
+                            method: 'POST', header, url: invokeUrl,
+                            body: { mode: 'raw', raw: JSON.stringify({ message: 'e sobre o segundo ponto?', session_id: M('session_id'), verbosity: v }, null, 2), options: { raw: { language: 'json' } } },
+                        },
+                    },
+                ],
+            };
+        },
+        // Cliente Python tipado: invoke() + classe Conversation que encadeia a sessao.
+        _sdkPySource() {
+            const q = (s) => JSON.stringify(s);
+            const v = this.verbosity;
+            return [
+                '"""Cliente Python do pipeline "' + (this.selectedName || 'pipeline') + '" (Maestro / AI Mesh).',
+                'Gerado pelo Playground — endpoint real via X-API-Key. Requer: pip install requests',
+                '"""',
+                'import requests', '', '',
+                'class MaestroPipeline:',
+                '    def __init__(self, api_key=' + q(this.apiKey || 'SUA_API_KEY') + ', base_url=' + q(window.location.origin) + ', pipeline_id=' + q(this.selectedId || 'SEU_PIPELINE_ID') + '):',
+                '        self.base = base_url.rstrip("/")',
+                '        self.pipeline_id = pipeline_id',
+                '        self._headers = {"X-API-Key": api_key}', '',
+                '    def invoke(self, message, *, session_id=None, verbosity=' + q(v) + ', args=None):',
+                '        """Uma chamada. Devolve o JSON da resposta (inclui output e interaction_id)."""',
+                '        body = {"message": message, "verbosity": verbosity}',
+                '        if session_id is not None:',
+                '            body["session_id"] = session_id',
+                '        if args:',
+                '            body["args"] = args',
+                '        r = requests.post(f"{self.base}/api/v1/pipelines/{self.pipeline_id}/invoke",',
+                '                          headers=self._headers, json=body)',
+                '        r.raise_for_status()',
+                '        return r.json()', '',
+                '    def conversation(self, verbosity=' + q(v) + '):',
+                '        """Abre uma conversa multi-turn (reusa o interaction_id como session_id)."""',
+                '        return Conversation(self, verbosity)', '', '',
+                'class Conversation:',
+                '    def __init__(self, client, verbosity=' + q(v) + '):',
+                '        self._client = client',
+                '        self._verbosity = verbosity',
+                '        self.session_id = None  # 1o turno: sem sessao', '',
+                '    def send(self, message):',
+                '        r = self._client.invoke(message, session_id=self.session_id, verbosity=self._verbosity)',
+                '        self.session_id = r.get("interaction_id") or self.session_id  # <- reusa como session_id',
+                '        return r.get("output", "")', '', '',
+                'if __name__ == "__main__":',
+                '    pipe = MaestroPipeline()',
+                '    conv = pipe.conversation()',
+                '    print(conv.send("o que temos aqui?"))',
+                '    print(conv.send("e sobre o segundo ponto?"))  # agora lembra do turno anterior',
+            ].join('\n');
+        },
+        // Fragmento OpenAPI 3.1 do invoke deste pipeline (contrato + multi-turn).
+        _openApiSpec() {
+            const pid = this.selectedId || '{pipeline_id}';
+            const name = this.selectedName || 'Pipeline';
+            const paths = {};
+            paths['/api/v1/pipelines/' + pid + '/invoke'] = {
+                post: {
+                    summary: 'Invoca o pipeline (uma chamada; multi-turn via session_id)',
+                    security: [{ ApiKeyAuth: [] }],
+                    requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/InvokeRequest' } } } },
+                    responses: { '200': { description: 'Resultado projetado por verbosidade', content: { 'application/json': { schema: { $ref: '#/components/schemas/InvokeResponse' } } } } },
+                },
+            };
+            return {
+                openapi: '3.1.0',
+                info: { title: 'Maestro · ' + name + ' (invoke)', version: '1.0.0', description: 'Fragmento do endpoint de invoke do pipeline "' + name + '". Multi-turn: reenvie o interaction_id da resposta como session_id no próximo turno.' },
+                servers: [{ url: window.location.origin }],
+                paths,
+                components: {
+                    securitySchemes: { ApiKeyAuth: { type: 'apiKey', in: 'header', name: 'X-API-Key' } },
+                    schemas: {
+                        InvokeRequest: {
+                            type: 'object', required: ['message'], properties: {
+                                message: { type: 'string', description: 'Texto de entrada do turno.' },
+                                session_id: { type: 'string', nullable: true, description: 'Continuidade multi-turn: o interaction_id devolvido no turno anterior. Ausente/None no 1º turno.' },
+                                verbosity: { type: 'string', enum: ['full', 'summary', 'minimal'], default: 'summary' },
+                                args: { type: 'object', additionalProperties: true, description: 'Parâmetros estruturados (## Inputs do agente-raiz).' },
+                            },
+                        },
+                        InvokeResponse: {
+                            type: 'object', properties: {
+                                output: { type: 'string' },
+                                interaction_id: { type: 'string', description: 'Handle da sessão — reenvie como session_id no próximo turno.' },
+                                status: { type: 'string' },
+                            },
+                        },
+                    },
+                },
+            };
+        },
+        exportPostman() {
+            this._download('maestro-' + this._slug() + '.postman_collection.json', JSON.stringify(this._postmanCollection(), null, 2), 'application/json');
+            showToast(this.apiKey ? 'Coleção Postman baixada — contém a chave' : 'Coleção Postman baixada', this.apiKey ? 'info' : 'success');
+        },
+        exportSdkPy() {
+            this._download('maestro_' + this._slug().replace(/-/g, '_') + '.py', this._sdkPySource(), 'text/x-python');
+            showToast(this.apiKey ? 'SDK Python baixado — contém a chave' : 'SDK Python baixado', this.apiKey ? 'info' : 'success');
+        },
+        exportOpenApi() {
+            this._download('maestro-' + this._slug() + '.openapi.json', JSON.stringify(this._openApiSpec(), null, 2), 'application/json');
+            showToast('OpenAPI baixado', 'success');
+        },
     };
 }
 </script>
