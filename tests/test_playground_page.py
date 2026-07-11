@@ -158,9 +158,11 @@ def test_conversa_ao_vivo_multiturno():
     src = PG.read_text(encoding="utf-8")
     # estado da thread + sessão
     assert "chatMode: false, chat: [], chatInput: '', chatSessionId: null, chatBusy: false" in src
-    # toggle (mutuamente exclusivo com o A/B) + painel + input + envio
+    # entrada = BOTÃO secundário "Conversar" ao lado do "Executar" (não checkbox);
+    # entrar na conversa sai do modo A/B + painel + input + envio
     assert 'data-testid="pg-chat-toggle"' in src
-    assert "if (chatMode) compareMode = false" in src
+    assert "chatMode = true; compareMode = false" in src
+    assert ">Conversar<" in src
     assert 'data-testid="pg-chat"' in src and 'data-testid="pg-chat-thread"' in src
     assert 'data-testid="pg-chat-input"' in src and 'data-testid="pg-chat-send"' in src
     # o grid do builder some no modo conversa (assume a tela); painel gated por chatMode
@@ -177,6 +179,39 @@ def test_conversa_ao_vivo_multiturno():
     assert "if (!$event.shiftKey) { $event.preventDefault(); chatSend() }" in src
     # ressalva honesta de escopo por camada (não superpromete memória)
     assert "os especialistas não lembram" in src
+
+
+def test_exportacoes_integracao():
+    """Exportar ('código pronto' pra levar embora): coleção Postman com o multi-turn
+    já cabeado (script de teste captura o interaction_id → session_id), SDK Python
+    tipado e um fragmento OpenAPI. Gerados no cliente e baixados; o gerador é
+    separado do download pra ser testável isolado. Frontend-only."""
+    src = PG.read_text(encoding="utf-8")
+    # linha Exportar + os 3 botões
+    assert 'data-testid="pg-export"' in src
+    for tid in ('pg-export-postman', 'pg-export-sdk', 'pg-export-openapi'):
+        assert f'data-testid="{tid}"' in src, f"falta o botão {tid}"
+    # geradores separados do download (testáveis) + download por Blob
+    assert "_postmanCollection()" in src and "_sdkPySource()" in src and "_openApiSpec()" in src
+    assert "exportPostman()" in src and "exportSdkPy()" in src and "exportOpenApi()" in src
+    assert "new Blob(" in src and "a.download = filename" in src
+    # Postman v2.1 + o SCRIPT de teste que encadeia o multi-turn (o diferencial)
+    assert "collection/v2.1.0/collection.json" in src
+    assert "pm.collectionVariables.set('session_id', d.interaction_id)" in src
+    # FOOTGUN do Jinja: as variáveis "{{nome}}" do Postman são montadas por
+    # concatenação (helper M) — um literal "{{...}}" no fonte seria interpolado
+    # pelo Jinja (este template é Jinja) e renderizaria VAZIO. Guarda anti-regressão:
+    assert "const M = (nm) =>" in src
+    for nm in ("'base_url'", "'pipeline_id'", "'api_key'", "'session_id'"):
+        assert f"M({nm})" in src, f"variável Postman {nm} deveria vir do helper M()"
+    assert "'{{session_id}}'" not in src and "'{{base_url}}'" not in src  # nada de literal (Jinja come)
+    # SDK: cliente tipado com invoke() + classe Conversation que encadeia a sessão
+    assert "class MaestroPipeline:" in src and "class Conversation:" in src
+    assert 'r.get("interaction_id")' in src
+    # OpenAPI 3.1 + o session_id documentado como o interaction_id do turno anterior
+    assert "openapi: '3.1.0'" in src
+    assert "#/components/schemas/InvokeRequest" in src
+    assert "o interaction_id devolvido no turno anterior" in src
 
 
 def test_console_tem_abas_tempo_e_trace():
