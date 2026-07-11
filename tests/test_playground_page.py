@@ -172,7 +172,8 @@ def test_conversa_ao_vivo_multiturno():
     # chatSend consome o /invoke/stream via _stream, com o TURNO como sink (liveSteps
     # ao vivo) e session_id no corpo — o mesmo stream que um app externo veria
     assert "async chatSend()" in src
-    assert "await this._stream(this.selectedId, this.verbosity, turn, { message: msg, sessionId: this.chatSessionId })" in src
+    # o chat roda em FULL (chatVerbosity) pra alimentar o Cockpit da Conversa
+    assert "await this._stream(this.selectedId, this.chatVerbosity, turn, { message: msg, sessionId: this.chatSessionId })" in src
     assert 'data-testid="pg-chat-steps"' in src   # passo-a-passo por agente renderizado no balão
     # REATIVIDADE (footgun Alpine): o turno é mutado via a referência REATIVA
     # (this.chat[i]), não o objeto cru — senão o balão fica preso em "respondendo…"

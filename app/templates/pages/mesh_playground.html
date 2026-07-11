@@ -577,13 +577,28 @@
          Toma a tela no lugar do builder; usa o destino/detalhe já escolhidos. Cada
          turno chama o /invoke (sync, X-API-Key) e reenvia o interaction_id como
          session_id — o servidor reconstrói o histórico (memória de conversa). -->
-    <div x-show="chatMode" class="mx-auto max-w-3xl px-4 lg:px-6 py-5 space-y-3" data-testid="pg-chat">
+    <style>
+      [x-cloak]{display:none!important}
+      .ck-help{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:9999px;background:#eceae6;color:#8a8378;font-size:9px;font-weight:800;line-height:1;flex:none;cursor:pointer;border:none}
+      .ck-help:hover{background:#d9ecff;color:#1b6fd0}
+      .ck-prov{display:inline-flex;align-items:center;font-size:8.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:1px 5px;border-radius:4px;white-space:nowrap;line-height:1.4}
+      .ck-prov-medido{color:#0f7a45;background:#e2f3ea}
+      .ck-prov-heuristico{color:#9a6600;background:#fbf0d8}
+      .ck-prov-projetado{color:#1355a8;background:#e6effc}
+      .ck-prov-amostrado{color:#c02a44;background:#fbe4e8}
+      .ck-prov-declarado{color:#6b7280;background:#eef0f2}
+      .ck-tile{background:#faf9f7;border:1px solid #eeece8;border-radius:8px;padding:7px 9px}
+    </style>
+    <div x-show="chatMode" class="px-4 lg:px-6 py-5" data-testid="pg-chat">
+      <div class="grid gap-4 items-start lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)]">
+        <!-- ESQUERDA: a conversa (chat) -->
+        <div class="space-y-3 min-w-0" data-testid="pg-chat-left">
         <div class="flex items-center gap-2">
             <button @click="chatMode = false" type="button" class="inline-flex items-center gap-1 text-[12px] text-surface-500 hover:text-brand-700">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
                 sair da conversa
             </button>
-            <span class="text-[12px] text-surface-500 truncate">Conversando com <strong class="text-brand-900" x-text="selectedName || '—'"></strong> · <span x-text="verbLabel"></span></span>
+            <span class="text-[12px] text-surface-500 truncate">Conversando com <strong class="text-brand-900" x-text="selectedName || '—'"></strong> · <span title="O chat roda em telemetria completa (full) para alimentar o cockpit de avaliação">Debug · cockpit ligado</span></span>
             <button @click="chatReset()" type="button" class="ml-auto text-[11px] text-surface-400 hover:text-rose-500" title="Esquece a sessão e começa do zero">nova conversa</button>
         </div>
 
@@ -628,6 +643,278 @@
             </button>
         </div>
         <p class="text-[10px] text-surface-400 leading-snug">Streaming real do <span class="font-mono">/invoke/stream</span> (X-API-Key, sem cookie) — você vê o <strong>passo-a-passo por agente</strong>, igual a um app externo; cada turno é 1 execução (custo de LLM). A memória vive no roteador e no maestro; <strong>os especialistas não lembram</strong>. <span x-show="!apiKey">Gere uma chave de API no topo pra começar.</span> <span x-show="chatSessionId" class="font-mono">sessão <span x-text="(chatSessionId || '').slice(0, 8)"></span>…</span></p>
+        </div><!-- /esquerda: chat -->
+
+        <!-- ═══ DIREITA: COCKPIT DA CONVERSA ═══ avaliação big-picture que EVOLUI a cada turno da sessão -->
+        <aside class="lg:sticky lg:top-4 rounded-xl border border-surface-200 bg-white overflow-hidden" data-testid="pg-cockpit">
+          <!-- cabeçalho + escopo -->
+          <div class="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-surface-100">
+            <div class="flex items-center gap-1.5 text-[12px] font-bold text-brand-900">
+              <svg class="w-3.5 h-3.5 text-brand-500" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-6M22 20H2"/></svg>
+              Avaliação
+              <button type="button" class="ck-help" @click="openRule('escopo')" title="Como ler o cockpit — recorte, índices e selos de proveniência">?</button>
+            </div>
+            <div class="inline-flex rounded-lg bg-surface-100 p-0.5 text-[11px]" data-testid="pg-cockpit-scope">
+              <button type="button" @click="cockpitScope='turno'" :class="cockpitScope==='turno' ? 'bg-white text-brand-900 font-semibold shadow-sm' : 'text-surface-500'" class="rounded-md px-2 py-1" title="Só a última troca">Este turno</button>
+              <button type="button" @click="cockpitScope='sessao'" :class="cockpitScope==='sessao' ? 'bg-white text-brand-900 font-semibold shadow-sm' : 'text-surface-500'" class="rounded-md px-2 py-1" title="Acumula todos os turnos desta conversa — evolui a cada mensagem">Sessão</button>
+            </div>
+          </div>
+
+          <!-- vazio (antes do 1º turno) -->
+          <div x-show="!cockpitActive" class="px-5 py-12 text-center" data-testid="pg-cockpit-empty">
+            <svg class="w-8 h-8 mx-auto text-surface-300 mb-2" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg>
+            <p class="text-[12px] text-surface-400 leading-relaxed">Envie a 1ª mensagem — o cockpit se preenche e <strong>evolui a cada turno</strong>: qualidade, confiabilidade e custo à luz do TCO.</p>
+          </div>
+
+          <div x-show="cockpitActive" class="divide-y divide-surface-100">
+            <!-- ── GATE Go/No-Go ── -->
+            <div class="px-3.5 py-3" data-testid="pg-cockpit-gate">
+              <div class="flex items-start gap-2.5 rounded-lg border px-3 py-2"
+                   :class="{'border-emerald-300 bg-emerald-50': ckGate.k==='ok','border-amber-300 bg-amber-50': ckGate.k==='warn','border-rose-300 bg-rose-50': ckGate.k==='crit'}">
+                <span class="text-lg leading-none flex-none" x-text="ckGate.ic"></span>
+                <div class="min-w-0">
+                  <div class="text-[12.5px] font-bold text-brand-900 flex items-center gap-1">
+                    <span x-text="ckGate.t"></span>
+                    <button type="button" class="ck-help" @click="openRule('gate')" title="Regra do veredito Go/No-Go">?</button>
+                  </div>
+                  <div class="text-[11px] text-surface-600 leading-snug" x-text="ckGate.w"></div>
+                </div>
+              </div>
+              <p class="text-[10.5px] text-surface-400 mt-1.5" x-text="cockpitScope==='turno' ? 'Recorte do último turno.' : ('Sessão · ' + ckTurns + ' turno(s) acumulado(s)' + (chatSessionId ? (' · ' + (chatSessionId||'').slice(0,8) + '…') : ''))"></p>
+            </div>
+
+            <!-- ── TRIAD Q/R/C ── -->
+            <div class="grid grid-cols-3 gap-2 px-3.5 py-3" data-testid="pg-cockpit-triad">
+              <div class="rounded-lg bg-surface-50 border border-surface-100 p-2 text-center" title="Qualidade — fatos, completude, tom e segurança (juiz)">
+                <div class="relative w-16 h-16 mx-auto rounded-full grid place-items-center" :style="gaugeStyle(idxQ)">
+                  <div class="absolute inset-[6px] rounded-full bg-surface-50"></div>
+                  <span class="relative text-[16px] font-bold font-mono text-brand-900" x-text="idxQ == null ? '—' : idxQ"></span>
+                </div>
+                <div class="text-[11px] font-semibold text-brand-900 mt-1 flex items-center justify-center gap-1">Qualidade
+                  <button type="button" class="ck-help" @click="openRule('idxQ')" title="Regra do índice de Qualidade">?</button>
+                </div>
+              </div>
+              <div class="rounded-lg bg-surface-50 border border-surface-100 p-2 text-center" title="Confiabilidade — contrato, FSM, alucinação, fundamentação">
+                <div class="relative w-16 h-16 mx-auto rounded-full grid place-items-center" :style="gaugeStyle(idxR)">
+                  <div class="absolute inset-[6px] rounded-full bg-surface-50"></div>
+                  <span class="relative text-[16px] font-bold font-mono text-brand-900" x-text="idxR == null ? '—' : idxR"></span>
+                </div>
+                <div class="text-[11px] font-semibold text-brand-900 mt-1 flex items-center justify-center gap-1">Confiab.
+                  <button type="button" class="ck-help" @click="openRule('idxR')" title="Regra do índice de Confiabilidade">?</button>
+                </div>
+              </div>
+              <div class="rounded-lg bg-surface-50 border border-surface-100 p-2 text-center" title="Eficiência — custo por resposta confiável vs sua meta">
+                <div class="relative w-16 h-16 mx-auto rounded-full grid place-items-center" :style="gaugeStyle(idxC)">
+                  <div class="absolute inset-[6px] rounded-full bg-surface-50"></div>
+                  <span class="relative text-[16px] font-bold font-mono text-brand-900" x-text="idxC == null ? '—' : idxC"></span>
+                </div>
+                <div class="text-[11px] font-semibold text-brand-900 mt-1 flex items-center justify-center gap-1">Eficiência
+                  <button type="button" class="ck-help" @click="openRule('idxC')" title="Regra do índice de Eficiência">?</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── LENTE 1: Qualidade ── -->
+            <div class="px-3.5 py-3 space-y-2.5" data-testid="pg-cockpit-quality">
+              <div class="flex items-center gap-1.5 text-[12px] font-bold text-brand-900">
+                <span class="w-4 h-4 rounded-full bg-brand-100 text-brand-700 text-[9px] font-black grid place-items-center flex-none">1</span>
+                Qualidade da resposta <span class="ck-prov ck-prov-medido">medido</span>
+              </div>
+              <div x-show="!ckHasJudge" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 leading-snug flex items-start gap-1.5">
+                <span>O juiz (Verifier v2) não avaliou este recorte — Qualidade fica <strong>não medida</strong>. As demais lentes seguem válidas.</span>
+                <button type="button" class="ck-help" @click="openRule('idxQ')" title="Por quê?">?</button>
+              </div>
+              <div x-show="ckHasJudge" class="grid grid-cols-2 gap-2">
+                <div class="ck-tile" title="Factualidade (0–5) do juiz">
+                  <div class="flex items-center justify-between"><span class="text-[10.5px] text-surface-500 font-medium">Factualidade</span><button type="button" class="ck-help" @click="openRule('factuality')">?</button></div>
+                  <div class="text-[15px] font-bold font-mono text-brand-900" x-text="fmtScore5(ckFact) + ' /5'"></div>
+                </div>
+                <div class="ck-tile" title="Completude (0–5) do juiz">
+                  <div class="flex items-center justify-between"><span class="text-[10.5px] text-surface-500 font-medium">Completude</span><button type="button" class="ck-help" @click="openRule('completeness')">?</button></div>
+                  <div class="text-[15px] font-bold font-mono text-brand-900" x-text="fmtScore5(ckCompl) + ' /5'"></div>
+                </div>
+                <div class="ck-tile" title="Aderência de tom (0–5) do juiz">
+                  <div class="flex items-center justify-between"><span class="text-[10.5px] text-surface-500 font-medium">Tom</span><button type="button" class="ck-help" @click="openRule('tone')">?</button></div>
+                  <div class="text-[15px] font-bold font-mono text-brand-900" x-text="fmtScore5(ckTone) + ' /5'"></div>
+                </div>
+                <div class="ck-tile" title="Segurança (0–5) do juiz">
+                  <div class="flex items-center justify-between"><span class="text-[10.5px] text-surface-500 font-medium">Segurança</span><button type="button" class="ck-help" @click="openRule('safety')">?</button></div>
+                  <div class="text-[15px] font-bold font-mono text-brand-900" x-text="fmtScore5(ckSafety) + ' /5'"></div>
+                </div>
+              </div>
+              <div class="ck-tile" title="RAGAS heurístico — proxy client-side">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-[10.5px] text-surface-500 font-medium">RAGAS <span class="ck-prov ck-prov-heuristico">heurístico</span></span>
+                  <button type="button" class="ck-help" @click="openRule('ragas')">?</button>
+                </div>
+                <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] font-mono text-surface-700">
+                  <div class="flex justify-between"><span class="text-surface-400">faithfulness</span><span x-text="fmtRagas(ckRagas.faithfulness)"></span></div>
+                  <div class="flex justify-between"><span class="text-surface-400">answer rel.</span><span x-text="fmtRagas(ckRagas.answer_relevancy)"></span></div>
+                  <div class="flex justify-between"><span class="text-surface-400">ctx precision</span><span x-text="fmtRagas(ckRagas.context_precision)"></span></div>
+                  <div class="flex justify-between"><span class="text-surface-400">ctx relevancy</span><span x-text="fmtRagas(ckRagas.context_relevancy)"></span></div>
+                </div>
+                <p class="text-[9.5px] text-surface-400 mt-1">Faltam groundedness · context recall · answer correctness — exigem casos-gold.</p>
+              </div>
+            </div>
+
+            <!-- ── LENTE 2: Confiabilidade ── -->
+            <div class="px-3.5 py-3 space-y-1.5" data-testid="pg-cockpit-reliability">
+              <div class="flex items-center gap-1.5 text-[12px] font-bold text-brand-900 mb-1">
+                <span class="w-4 h-4 rounded-full bg-brand-100 text-brand-700 text-[9px] font-black grid place-items-center flex-none">2</span>
+                Confiabilidade &amp; risco
+              </div>
+              <div class="flex items-center gap-2 text-[11.5px] py-1 border-b border-surface-50">
+                <span class="text-surface-600 font-medium flex items-center gap-1">Decisão (FSM)<button type="button" class="ck-help" @click="openRule('idxR')" title="Estados terminais dos turnos (Recommend/Refuse/Escalate…)">?</button></span>
+                <span class="ml-auto font-mono text-brand-900 truncate" x-text="ckFsmLabel"></span>
+              </div>
+              <div class="flex items-center gap-2 text-[11.5px] py-1 border-b border-surface-50">
+                <span class="text-surface-600 font-medium flex items-center gap-1">Contrato<button type="button" class="ck-help" @click="openRule('contract')" title="Fração de saídas conformes ao output_contract">?</button></span>
+                <span class="ml-auto font-mono" :class="ckContractRate==null ? 'text-surface-400' : (ckContractRate>=1 ? 'text-emerald-700' : 'text-amber-700')" x-text="fmtPct(ckContractRate)"></span>
+              </div>
+              <div class="flex items-center gap-2 text-[11.5px] py-1 border-b border-surface-50">
+                <span class="text-surface-600 font-medium flex items-center gap-1">Alegações sem lastro<button type="button" class="ck-help" @click="openRule('hallucination')" title="Alucinações: afirmações não sustentadas pelas evidências">?</button></span>
+                <span class="ml-auto font-mono font-bold" :class="ckHallucinations>0 ? 'text-rose-600' : 'text-emerald-700'" x-text="ckHallucinations"></span>
+              </div>
+              <div class="flex items-center gap-2 text-[11.5px] py-1 border-b border-surface-50">
+                <span class="text-surface-600 font-medium flex items-center gap-1">Fundamentação<button type="button" class="ck-help" @click="openRule('grounding')" title="Fração de turnos que usaram evidência real (RAG/anexo/tool)">?</button></span>
+                <span class="ml-auto font-mono text-brand-900" x-text="fmtPct(ckGroundedRate)"></span>
+              </div>
+              <div class="pt-1.5">
+                <div class="flex items-center justify-between text-[10.5px] text-surface-500 mb-1">
+                  <span class="flex items-center gap-1">Cobertura do juiz <span class="ck-prov ck-prov-amostrado">amostrado</span><button type="button" class="ck-help" @click="openRule('coverage')">?</button></span>
+                  <span class="font-mono" x-text="fmtPct(ckCoverage)"></span>
+                </div>
+                <div class="h-1.5 rounded-full bg-surface-100 overflow-hidden"><div class="h-full bg-brand-400 rounded-full" :style="`width:${(ckCoverage==null?0:ckCoverage*100)}%`"></div></div>
+              </div>
+            </div>
+
+            <!-- ── LENTE 3: Custo & TCO ── -->
+            <div class="px-3.5 py-3 space-y-3" data-testid="pg-cockpit-cost">
+              <div class="flex items-center gap-1.5 text-[12px] font-bold text-brand-900">
+                <span class="w-4 h-4 rounded-full bg-brand-100 text-brand-700 text-[9px] font-black grid place-items-center flex-none">3</span>
+                Custo &amp; TCO <span class="ck-prov ck-prov-medido">medido</span><span class="ck-prov ck-prov-projetado">projetado</span>
+              </div>
+              <div class="grid grid-cols-3 gap-2">
+                <div class="ck-tile" title="Custo real do recorte (BRL · US$)">
+                  <div class="flex items-center justify-between"><span class="text-[10px] text-surface-500">Custo</span><button type="button" class="ck-help" @click="openRule('cost_turn')">?</button></div>
+                  <div class="text-[13px] font-bold font-mono text-brand-900" x-text="fmtBRL(ckCostUsd * (Number(tcoFx)||0))"></div>
+                  <div class="text-[9px] font-mono text-surface-400" x-text="fmtUSD(ckCostUsd)"></div>
+                </div>
+                <div class="ck-tile" title="Tokens (entrada + saída)">
+                  <div class="flex items-center justify-between"><span class="text-[10px] text-surface-500">Tokens</span><button type="button" class="ck-help" @click="openRule('tokens')">?</button></div>
+                  <div class="text-[13px] font-bold font-mono text-brand-900" x-text="Number(ckTokens).toLocaleString('pt-BR')"></div>
+                </div>
+                <div class="ck-tile" title="Latência somada do recorte">
+                  <div class="flex items-center justify-between"><span class="text-[10px] text-surface-500">Latência</span><button type="button" class="ck-help" @click="openRule('latency')">?</button></div>
+                  <div class="text-[13px] font-bold font-mono text-brand-900" x-text="fmtMs(ckMs)"></div>
+                </div>
+              </div>
+              <div class="rounded-lg bg-brand-50 border border-brand-100 px-3 py-2.5 flex items-center gap-3" title="Custo por resposta CONFIÁVEL = custo ÷ taxa de aprovação">
+                <div class="min-w-0">
+                  <div class="text-[19px] font-bold font-mono text-brand-800" x-text="fmtBRL(qacBRL)"></div>
+                  <div class="text-[10px] text-brand-700 font-medium flex items-center gap-1">por resposta confiável<button type="button" class="ck-help" @click="openRule('qac')">?</button></div>
+                </div>
+                <div class="ml-auto text-right text-[10px] text-brand-700 leading-tight" x-show="qacOverheadPct != null && qacOverheadPct > 0.001">
+                  <span class="font-mono font-bold" x-text="'+' + fmtPct(qacOverheadPct)"></span><br>vs custo bruto
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="ck-tile block" title="Conversas por mês para projetar o TCO">
+                  <span class="text-[9.5px] text-surface-500 block mb-0.5">Volume (conv./mês)</span>
+                  <input type="number" min="0" x-model.number="tcoVolume" data-testid="pg-tco-volume" class="w-full bg-transparent text-[13px] font-mono font-bold text-brand-900 outline-none">
+                </label>
+                <label class="ck-tile block" title="Câmbio USD→BRL usado na conversão">
+                  <span class="text-[9.5px] text-surface-500 block mb-0.5">Câmbio (US$→R$)</span>
+                  <input type="number" min="0" step="0.01" x-model.number="tcoFx" data-testid="pg-tco-fx" class="w-full bg-transparent text-[13px] font-mono font-bold text-brand-900 outline-none">
+                </label>
+                <label class="ck-tile block" title="Meta de custo por resposta confiável (dá o índice de Eficiência)">
+                  <span class="text-[9.5px] text-surface-500 block mb-0.5">Meta R$/resposta</span>
+                  <input type="number" min="0" step="0.01" x-model.number="tcoAlvo" data-testid="pg-tco-alvo" class="w-full bg-transparent text-[13px] font-mono font-bold text-brand-900 outline-none">
+                </label>
+                <label class="ck-tile block" title="Ferramentas/SaaS externos — valor fixo mensal (declarado)">
+                  <span class="text-[9.5px] text-surface-500 block mb-0.5">SaaS R$/mês</span>
+                  <input type="number" min="0" step="1" x-model.number="tcoSaas" data-testid="pg-tco-saas" class="w-full bg-transparent text-[13px] font-mono font-bold text-brand-900 outline-none">
+                </label>
+              </div>
+              <div>
+                <div class="flex items-center justify-between text-[10.5px] text-surface-500 mb-1.5">
+                  <span class="flex items-center gap-1">Escada de TCO — <span class="font-mono text-surface-700" x-text="Number(tcoVolume||0).toLocaleString('pt-BR')"></span> conv./mês<button type="button" class="ck-help" @click="openRule('tco')">?</button></span>
+                  <span class="ck-prov ck-prov-projetado">projetado</span>
+                </div>
+                <div class="space-y-1.5">
+                  <div class="flex items-center gap-2 text-[10.5px]">
+                    <span class="w-24 flex-none text-surface-600 flex items-center gap-1">Inferência LLM<button type="button" class="ck-help" @click="openRule('tco_inf')">?</button></span>
+                    <span class="flex-1 h-3.5 rounded bg-surface-100 overflow-hidden"><span class="block h-full bg-brand-500 rounded" :style="`width:${tcoPct(tcoInfMonth)}%`"></span></span>
+                    <span class="w-16 flex-none text-right font-mono font-semibold text-brand-900" x-text="fmtBRLk(tcoInfMonth)"></span>
+                  </div>
+                  <div class="flex items-center gap-2 text-[10.5px]">
+                    <span class="w-24 flex-none text-surface-600 flex items-center gap-1">Juiz/verif.<button type="button" class="ck-help" @click="openRule('tco_juiz')">?</button></span>
+                    <span class="flex-1 h-3.5 rounded bg-surface-100 overflow-hidden"><span class="block h-full bg-amber-400 rounded" :style="`width:${tcoPct(tcoJudgeMonth)}%`"></span></span>
+                    <span class="w-16 flex-none text-right font-mono font-semibold text-brand-900" x-text="fmtBRLk(tcoJudgeMonth)"></span>
+                  </div>
+                  <div class="flex items-center gap-2 text-[10.5px]">
+                    <span class="w-24 flex-none text-surface-600 flex items-center gap-1">Ferram. SaaS<button type="button" class="ck-help" @click="openRule('tco_saas')">?</button></span>
+                    <span class="flex-1 h-3.5 rounded bg-surface-100 overflow-hidden"><span class="block h-full bg-emerald-400 rounded" :style="`width:${tcoPct(tcoSaasMonth)}%`"></span></span>
+                    <span class="w-16 flex-none text-right font-mono font-semibold text-brand-900" x-text="fmtBRLk(tcoSaasMonth)"></span>
+                  </div>
+                  <div class="flex items-center gap-2 text-[10.5px]">
+                    <span class="w-24 flex-none text-surface-600 flex items-center gap-1">Infra self-host.<button type="button" class="ck-help" @click="openRule('tco_infra')">?</button></span>
+                    <span class="flex-1 h-3.5 rounded bg-surface-50 border border-dashed border-surface-200"></span>
+                    <span class="w-16 flex-none text-right font-mono text-surface-400 text-[9.5px]">não medido</span>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between mt-2 pt-2 border-t border-surface-100">
+                  <span class="text-[11px] text-surface-500 flex items-center gap-1">TCO mensal — banda<button type="button" class="ck-help" @click="openRule('tco_band')">?</button></span>
+                  <span class="text-[14px] font-bold font-mono text-brand-900" x-text="fmtBRLk(tcoBandMonth.lo) + '–' + fmtBRLk(tcoBandMonth.hi)"></span>
+                </div>
+                <div class="flex items-center justify-between mt-1">
+                  <span class="text-[11px] text-surface-400">Projeção anual</span>
+                  <span class="text-[12px] font-semibold font-mono text-surface-600" x-text="fmtBRLk(tcoBandYear.lo) + '–' + fmtBRLk(tcoBandYear.hi)"></span>
+                </div>
+              </div>
+              <p class="text-[9.5px] text-surface-400 leading-snug ck-tile">
+                <strong>Premissas &amp; ressalvas:</strong> preço LLM = tabela interna 2026-05; custo do juiz <strong>estimado</strong> (não instrumentado); <strong>self-hosted conta 0</strong> (GPU/infra fora do modelo); input pode subcontar em turnos multi-chamada. Ajuste volume, câmbio, meta e SaaS acima.
+              </p>
+            </div>
+
+            <!-- ── Exportar tudo em PPTX (cockpit + a conversa) ── -->
+            <div class="px-3.5 py-3">
+              <button type="button" @click="exportCockpitPptx()" :disabled="cockpitBusy" data-testid="pg-cockpit-pptx"
+                      class="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+                <svg x-show="!cockpitBusy" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4.5 15.75v2.25a1.5 1.5 0 001.5 1.5h12a1.5 1.5 0 001.5-1.5v-2.25"/></svg>
+                <svg x-show="cockpitBusy" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+                <span x-text="cockpitBusy ? 'Gerando…' : 'Exportar tudo em PPTX'"></span>
+              </button>
+              <p class="text-[9.5px] text-surface-400 mt-1 text-center">Inclui o cockpit atual (recorte <span x-text="cockpitScope==='turno' ? 'este turno' : 'sessão'"></span>) e a conversa da sessão.</p>
+            </div>
+          </div>
+        </aside>
+      </div><!-- /grid split -->
+    </div>
+
+    <!-- Modal: a REGRA considerada e aplicada de cada indicador ("?") -->
+    <div x-show="help.open" x-cloak @keydown.escape.window="closeRule()" class="fixed inset-0 z-50 flex items-center justify-center p-4" data-testid="pg-cockpit-rule">
+      <div class="absolute inset-0 bg-black/40" @click="closeRule()"></div>
+      <div class="relative w-full max-w-md rounded-xl bg-white shadow-xl border border-surface-200 overflow-hidden" x-show="ruleView">
+        <div class="flex items-start justify-between gap-3 px-4 py-3 border-b border-surface-100">
+          <div class="text-[13px] font-bold text-brand-900" x-text="ruleView && ruleView.t"></div>
+          <button type="button" @click="closeRule()" class="text-surface-400 hover:text-rose-500 text-lg leading-none flex-none" aria-label="Fechar">×</button>
+        </div>
+        <div class="px-4 py-3 space-y-3 text-[12px] text-surface-700 leading-relaxed">
+          <div>
+            <div class="text-[9.5px] uppercase tracking-wide text-surface-400 font-semibold mb-1">Regra considerada e aplicada</div>
+            <p x-text="ruleView && ruleView.r"></p>
+          </div>
+          <div x-show="ruleView && ruleView.note">
+            <div class="text-[9.5px] uppercase tracking-wide text-amber-600 font-semibold mb-1">Ressalva</div>
+            <p class="text-amber-700" x-text="ruleView && ruleView.note"></p>
+          </div>
+          <div x-show="ruleView && ruleView.p && ruleView.p !== '—'">
+            <div class="text-[9.5px] uppercase tracking-wide text-surface-400 font-semibold mb-1">Proveniência</div>
+            <p x-text="ruleView && ruleView.p"></p>
+          </div>
+        </div>
+      </div>
     </div>
 </div>
 
@@ -665,6 +952,13 @@ function playgroundPage() {
         // começa null (1º turno abre a sessão) e passa a valer o interaction_id da
         // resposta — que é reenviado como session_id no turno seguinte.
         chatMode: false, chat: [], chatInput: '', chatSessionId: null, chatBusy: false,
+        // ── Cockpit da Conversa ──  O chat roda em verbosity FULL (chatVerbosity) pra
+        // o cockpit ter custo/tokens/evidência/FSM/juiz por turno. cockpitScope define
+        // o recorte (este turno | sessão inteira — evolui a cada mensagem). As entradas
+        // de TCO são editáveis (premissas do BP). help = modal da regra ("?").
+        chatVerbosity: 'full', cockpitScope: 'sessao', cockpitBusy: false,
+        tcoVolume: 1000, tcoFx: 5.30, tcoAlvo: 0.50, tcoSaas: 0, tcoJuizPct: 0.15,
+        help: { open: false, key: '' },
         ERRORS: [
             { code: 401, when: 'chave de API ausente ou inválida', body: '{"detail":"Autenticação necessária (cookie ou X-API-Key)."}', test: true },
             { code: 400, when: 'mensagem (entrada) E args vazios', body: '{"detail":"Informe \'message\' (ou \'input\') ou \'args\'."}', test: true },
@@ -673,6 +967,36 @@ function playgroundPage() {
             { code: 422, when: 'sem raiz resolvível OU args fora do contrato (## Inputs)', body: '{"detail":{"error":"args_validation_failed","issues":[{"field":"cd_cliente","code":"required_missing"}]}}', test: false },
             { code: 429, when: 'mais de 60 req/min', body: 'headers: Retry-After, X-RateLimit-Remaining: 0', test: false },
         ],
+        // ── Regras do cockpit ("?") ──  cada indicador tem uma regra CONSIDERADA e
+        // APLICADA (fórmula + proveniência + ressalva). O "?" abre este texto num modal.
+        // Honestidade: nenhum número aparece sem dizer COMO foi obtido.
+        RULES: {
+            escopo: { t: 'Como ler o cockpit', r: '“Este turno” mostra só a última troca; “Sessão” acumula todos os turnos desta conversa — o cockpit evolui a cada mensagem. Todos os indicadores respeitam o recorte selecionado. Cada número traz um selo de proveniência (medido / heurístico / projetado / amostrado / declarado).', p: '—' },
+            idxQ: { t: 'Índice de Qualidade (0–100)', r: 'Média ponderada das dimensões do juiz (LLM-as-Judge), normalizadas p/ 0–1: factualidade ×0,45 + completude ×0,30 + tom ×0,15 + segurança ×0,10, reescalada p/ 0–100. Só as dimensões presentes entram (pesos re-normalizados). Sem juiz no recorte, o índice fica “—”.', p: 'medido — quando o Verifier v2 rodou (perfil standard/rigorous).' },
+            idxR: { t: 'Índice de Confiabilidade (0–100)', r: 'Composição dos sinais presentes: conformidade de contrato ×0,30 + saúde da FSM (turnos que NÃO terminaram em Refuse/Escalate/erro) ×0,25 + penalidade de alucinação (1 − alegações-sem-lastro ÷ turnos) ×0,25 + fundamentação (turnos com evidência) ×0,20. Pesos re-normalizados sobre o que existe.', p: 'medido — FSM/contrato/evidência vêm do trace de cada turno.' },
+            idxC: { t: 'Índice de Eficiência (0–100)', r: 'Compara o custo por resposta confiável com a SUA meta: 100 × (meta ÷ custo_por_resposta_confiável), teto 100. Custo ≤ meta ⇒ 100; o dobro da meta ⇒ 50. Ajuste “Meta R$/resposta” na lente de Custo.', p: 'projetado — custo medido combinado à meta e ao câmbio que você define.' },
+            gate: { t: 'Veredito Go/No-Go', r: 'Reprovar se algum índice < 70 (ou Confiabilidade < 70). Apto com ressalvas se houver alegação sem lastro, cobertura do juiz < 100% ou algum índice entre 70–85. Apto para produção caso contrário.', p: 'derivado dos índices Q/R/C do recorte atual.' },
+            factuality: { t: 'Factualidade (0–5)', r: 'Nota do juiz p/ o quanto a resposta se sustenta nas evidências/contexto, sem inventar. Média dos steps julgados no recorte.', p: 'medido — LLM-as-Judge (Verifier v2).' },
+            completeness: { t: 'Completude (0–5)', r: 'Nota do juiz p/ o quanto a resposta cobre o que foi pedido. Média dos steps julgados no recorte.', p: 'medido — LLM-as-Judge.' },
+            tone: { t: 'Aderência de tom (0–5)', r: 'Nota do juiz p/ aderência ao tom/estilo esperado do agente. Média dos steps julgados.', p: 'medido — LLM-as-Judge.' },
+            safety: { t: 'Segurança (0–5)', r: 'Sinal do juiz de ausência de conteúdo inseguro/violação. Média dos steps julgados (exibida em escala 0–5).', p: 'medido — LLM-as-Judge.' },
+            ragas: { t: 'RAGAS (heurístico)', r: 'Decomposição estilo RAGAS derivada de sinais já existentes — NÃO é o framework RAGAS: faithfulness = factualidade/5; answer relevancy = completude/5; context precision/relevancy = média do evidence_score do RAG. groundedness, context recall e answer correctness NÃO são calculados (exigem gabarito / casos-gold).', p: 'heurístico — proxy client-side; espelha o compute_heuristic_ragas do servidor.' },
+            contract: { t: 'Conformidade de contrato', r: 'Fração dos steps julgados cuja saída passou no ContractValidator (schema output_contract da SKILL.md). Um retry que corrigiu conta como conforme.', p: 'medido — validação determinística.' },
+            hallucination: { t: 'Alegações sem lastro', r: 'Total de afirmações que o juiz marcou como NÃO sustentadas pelas evidências, somadas nos steps do recorte. É o sinal direto de alucinação.', p: 'medido — LLM-as-Judge.' },
+            grounding: { t: 'Fundamentação (grounding)', r: 'Fração dos turnos em que ao menos um agente usou evidência real (evidence_score > 0: RAG, anexo ou tool). Baixo = resposta “de cabeça”.', p: 'medido — do trace de evidências.' },
+            coverage: { t: 'Cobertura do juiz', r: 'Fração dos steps do recorte que o juiz efetivamente avaliou. O juiz roda por amostragem/perfil — cobertura < 100% significa que parte não foi auditada (não confundir ausência de erro com ausência de problema).', p: 'amostrado — depende do Verifier v2 e do perfil.' },
+            cost_turn: { t: 'Custo do recorte', r: 'Soma do cost_usd real de cada agente (step) nos turnos do recorte, convertida a BRL pelo câmbio. Custo = preço por token do modelo × tokens (entrada+saída).', p: 'medido — tabela de preços interna (snapshot 2026-05).', note: 'Modelos self-hosted (gpt-oss/ollama) contam 0 (infra fora do modelo). O input pode subcontar em turnos multi-chamada.' },
+            tokens: { t: 'Tokens', r: 'Soma de tokens (entrada + saída) reportados pelo provedor em cada step do recorte.', p: 'medido.' },
+            latency: { t: 'Latência', r: 'Tempo somado dos turnos do recorte (duration_ms de cada turno, ou o tempo de parede dos eventos do stream como fallback).', p: 'medido.' },
+            qac: { t: 'Custo por resposta confiável', r: 'custo_por_resposta ÷ taxa de aprovação. A taxa é a fração de turnos aprovados pelo juiz (ok); sem juiz, usa a saúde da FSM. Se 14% não passam, o custo real por resposta utilizável fica ~16% maior — o desperdício tem preço.', p: 'projetado — custo medido ÷ aprovação medida.' },
+            tco: { t: 'Escada de TCO (mensal)', r: 'Base = custo da CONVERSA inteira (todos os turnos) × câmbio. Inferência = custo_da_conversa × volume/mês. Juiz/verificador = inferência × % (estimado). Ferramentas SaaS = valor fixo que você informa. Infra self-hosted = não medido. O total vira uma BANDA (−15%/+20%) por causa das estimativas.', p: 'projetado — a partir do custo medido e das suas premissas.' },
+            tco_inf: { t: 'Inferência LLM (mês)', r: 'custo_da_conversa (BRL) × volume de conversas/mês.', p: 'projetado — a partir do custo medido.' },
+            tco_juiz: { t: 'Juiz / verificador (mês)', r: 'inferência × %. O custo do juiz NÃO é instrumentado hoje (a tabela de verificações guarda só a duração), então isto é uma ESTIMATIVA. Ajuste o %.', p: 'estimado — custo do juiz não instrumentado.' },
+            tco_saas: { t: 'Ferramentas SaaS (mês)', r: 'Valor fixo mensal de ferramentas/conectores externos que você informa (contratos de terceiros).', p: 'declarado — informado por você.' },
+            tco_infra: { t: 'Infra self-hosted', r: 'GPU/hospedagem de modelos self-hosted NÃO é modelada pela plataforma (esses modelos custam 0 no cálculo). Para um TCO fiel, some o custo de infra por fora.', p: 'não medido — fora do modelo de custo.' },
+            tco_band: { t: 'Banda de TCO', r: 'Total mensal projetado com margem −15%/+20% p/ refletir as estimativas (juiz) e omissões (infra). Anual = mensal × 12. Leve a BANDA + as premissas ao BP — não um número seco.', p: 'projetado.' },
+            prov: { t: 'Selos de proveniência', r: 'medido = instrumentado no runtime; heurístico = proxy calculado; projetado = extrapolado das suas premissas; amostrado = cobertura parcial; declarado = informado, não medido. Nenhum número aparece sem dizer COMO foi obtido.', p: '—' },
+        },
 
         async init() {
             this.curlAuth.keyNameHint = 'Playground';
@@ -898,7 +1222,9 @@ function playgroundPage() {
             const turn = this.chat[this.chat.length - 1];
             this._chatScroll();
             try {
-                await this._stream(this.selectedId, this.verbosity, turn, { message: msg, sessionId: this.chatSessionId });
+                // FULL: o cockpit precisa de custo/tokens/evidência/FSM/juiz por turno
+                // (Deploy/summary os corta no servidor). É o Playground (dono, X-API-Key).
+                await this._stream(this.selectedId, this.chatVerbosity, turn, { message: msg, sessionId: this.chatSessionId });
                 if (turn.error) {                              // stream_error no meio (stream abriu, falhou depois)
                     turn.text = 'Falha no stream: ' + String(turn.error);
                     turn.error = true;
@@ -1165,6 +1491,134 @@ function playgroundPage() {
             });
         },
         fmtMs(ms) { ms = Math.round(ms || 0); return ms >= 1000 ? (ms / 1000).toFixed(1) + ' s' : ms + ' ms'; },
+
+        // ═══════════════ COCKPIT DA CONVERSA ═══════════════
+        // Avaliação big-picture que EVOLUI a cada turno. O chat roda em verbosity FULL,
+        // então cada turn.result traz pipeline_steps[] com custo/tokens/evidência/FSM e o
+        // snapshot do juiz por step. Tudo acumula por ESCOPO (turno|sessão), 100%
+        // client-side. Degrada com honestidade: sem juiz, a Qualidade fica “—”.
+        get cockpitTurns() { return this.chat.filter(m => m.role === 'assistant' && m.result && !m.error); },
+        get cockpitLast() { const t = this.cockpitTurns; return t.length ? t[t.length - 1] : null; },
+        get cockpitActive() { return this.chatMode && this.cockpitTurns.length > 0; },
+        _scopeTurns() { if (this.cockpitScope === 'turno') { const l = this.cockpitLast; return l ? [l] : []; } return this.cockpitTurns; },
+        _sessTurns() { return this.cockpitTurns; },   // TCO usa sempre a conversa inteira
+        _steps(turns) { const o = []; (turns || []).forEach(t => (t.result.pipeline_steps || []).forEach(s => o.push(s))); return o; },
+        _verifs(turns) { return this._steps(turns).map(s => s.verification).filter(Boolean); },
+        _avg(xs) { const f = (xs || []).filter(x => x != null && !Number.isNaN(x)); return f.length ? f.reduce((a, b) => a + b, 0) / f.length : null; },
+        // dimensão do juiz normalizada p/ 0..1 (tolera escala 0-1 e 0-5)
+        _dim01(v, name) { const d = v && v.dimensions && v.dimensions[name]; let sc = d && typeof d === 'object' ? d.score : d; if (sc == null) return null; sc = Number(sc); if (Number.isNaN(sc)) return null; return sc > 1 ? sc / 5 : sc; },
+        _dimAvg(name) { return this._avg(this._verifs(this._scopeTurns()).map(v => this._dim01(v, name))); },
+
+        // custo / tokens / latência / evidência (presentes em full)
+        _costOf(turns) { return this._steps(turns).reduce((a, s) => a + (Number(s.cost_usd) || 0), 0); },
+        get ckCostUsd() { return this._costOf(this._scopeTurns()); },
+        get ckTokens() { return this._steps(this._scopeTurns()).reduce((a, s) => a + (Number(s.tokens_used) || 0), 0); },
+        get ckMs() { return this._scopeTurns().reduce((a, t) => a + (Number(t.result.duration_ms) || this._totalMs(t) || 0), 0); },
+        get ckTurns() { return this._scopeTurns().length; },
+        get ckEvidence() { return this._avg(this._steps(this._scopeTurns()).map(s => s.evidence_score != null ? Number(s.evidence_score) : null)); },
+
+        // juiz (pode não ter rodado: Verifier v2 off ou perfil fast)
+        get ckHasJudge() { return this._verifs(this._scopeTurns()).length > 0; },
+        get ckFact() { return this._dimAvg('factuality'); },
+        get ckCompl() { return this._dimAvg('completeness'); },
+        get ckTone() { return this._dimAvg('tone_adherence'); },
+        get ckSafety() { return this._dimAvg('safety'); },
+        get ckContractRate() { const vs = this._verifs(this._scopeTurns()); if (!vs.length) return null; return vs.filter(v => v.contract_compliant !== false).length / vs.length; },
+        get ckHallucinations() { return this._verifs(this._scopeTurns()).reduce((a, v) => a + ((v.unsupported_claims || []).length), 0); },
+        get ckOkRate() { const vs = this._verifs(this._scopeTurns()); if (!vs.length) return null; return vs.filter(v => v.ok).length / vs.length; },
+        get ckCoverage() { const s = this._steps(this._scopeTurns()); if (!s.length) return null; return s.filter(x => x.verification).length / s.length; },
+
+        // FSM / grounding
+        get ckFsmMix() { const m = {}; this._scopeTurns().forEach(t => { const f = (t.result.final_state || '—'); m[f] = (m[f] || 0) + 1; }); return m; },
+        get ckFsmLabel() { const m = this.ckFsmMix, ks = Object.keys(m); if (!ks.length) return '—'; if (ks.length === 1) return ks[0]; return ks.map(k => k + '×' + m[k]).join(' · '); },
+        get ckFsmHealthy() { const t = this._scopeTurns(); if (!t.length) return null; const bad = t.filter(x => ['Refuse', 'Escalate', 'error'].includes(x.result.final_state)).length; return 1 - bad / t.length; },
+        get ckGroundedRate() { const t = this._scopeTurns(); if (!t.length) return null; const g = t.filter(x => this._steps([x]).some(s => Number(s.evidence_score) > 0)).length; return g / t.length; },
+
+        // RAGAS heurístico (client-side; espelha compute_heuristic_ragas)
+        get ckRagas() { const ev = this.ckEvidence; return { faithfulness: this.ckFact, answer_relevancy: this.ckCompl, context_relevancy: ev, context_precision: ev }; },
+
+        // índices 0..100 (fórmulas no "?")
+        get idxQ() { if (!this.ckHasJudge) return null; const parts = [[this.ckFact, .45], [this.ckCompl, .30], [this.ckTone, .15], [this.ckSafety, .10]].filter(p => p[0] != null); if (!parts.length) return null; const w = parts.reduce((a, p) => a + p[1], 0); return Math.round(100 * parts.reduce((a, p) => a + p[0] * p[1], 0) / w); },
+        get idxR() { const parts = []; if (this.ckContractRate != null) parts.push([this.ckContractRate, .30]); if (this.ckFsmHealthy != null) parts.push([this.ckFsmHealthy, .25]); if (this.ckGroundedRate != null) parts.push([this.ckGroundedRate, .20]); const t = this.ckTurns || 1; parts.push([Math.max(0, 1 - this.ckHallucinations / t), .25]); if (!parts.length) return null; const w = parts.reduce((a, p) => a + p[1], 0); return Math.round(100 * parts.reduce((a, p) => a + p[0] * p[1], 0) / w); },
+        get idxC() { const qac = this.qacBRL; if (qac == null || qac <= 0) return null; return Math.max(0, Math.min(100, Math.round(100 * (Number(this.tcoAlvo) || 0.5) / qac))); },
+
+        // custo por resposta confiável (métrica de CFO)
+        get costPerTurnUsd() { const n = this.ckTurns; return n ? this.ckCostUsd / n : null; },
+        get approvalRate() { if (this.ckOkRate != null) return this.ckOkRate; return this.ckFsmHealthy; },
+        get costGrossBRL() { const c = this.costPerTurnUsd; return c == null ? null : c * (Number(this.tcoFx) || 0); },
+        get qacBRL() { const c = this.costPerTurnUsd; if (c == null) return null; const ap = this.approvalRate; const d = (ap && ap > 0) ? ap : 1; return c * (Number(this.tcoFx) || 0) / d; },
+        get qacOverheadPct() { const g = this.costGrossBRL, q = this.qacBRL; if (!g || !q || g <= 0) return null; return (q / g) - 1; },
+
+        // TCO — projeção mensal/anual; base = custo da CONVERSA inteira
+        get tcoConversaBRL() { return this._costOf(this._sessTurns()) * (Number(this.tcoFx) || 0); },
+        get tcoInfMonth() { return this.tcoConversaBRL * (Number(this.tcoVolume) || 0); },
+        get tcoJudgeMonth() { return this.tcoInfMonth * (Number(this.tcoJuizPct) || 0); },
+        get tcoSaasMonth() { return Number(this.tcoSaas) || 0; },
+        get tcoBaseMonth() { return this.tcoInfMonth + this.tcoJudgeMonth + this.tcoSaasMonth; },
+        get tcoBandMonth() { const b = this.tcoBaseMonth; return { lo: b * 0.85, hi: b * 1.20 }; },
+        get tcoBandYear() { const m = this.tcoBandMonth; return { lo: m.lo * 12, hi: m.hi * 12 }; },
+        // largura das barras da escada (% do maior componente)
+        _tcoMax() { return Math.max(this.tcoInfMonth, this.tcoJudgeMonth, this.tcoSaasMonth, 1); },
+        tcoPct(v) { return Math.max(0, Math.min(100, 100 * (Number(v) || 0) / this._tcoMax())); },
+
+        // gate Go/No-Go
+        get ckGate() {
+            const q = this.idxQ, r = this.idxR, c = this.idxC;
+            const crit = [q, r, c].some(x => x != null && x < 70) || (r != null && r < 70);
+            if (crit) return { k: 'crit', ic: '⛔', t: 'Reprovar / revisar', w: 'Indicador crítico abaixo de 70 — não escalar volume sem correção.' };
+            const ress = this.ckHallucinations > 0 || (this.ckCoverage != null && this.ckCoverage < 1) || !this.ckHasJudge || [q, r, c].some(x => x != null && x < 85);
+            if (ress) return { k: 'warn', ic: '⚠️', t: 'Apto com ressalvas', w: this._gateWhy() };
+            return { k: 'ok', ic: '✅', t: 'Apto para produção', w: 'Indicadores saudáveis e sem alegações sem lastro no recorte.' };
+        },
+        _gateWhy() { const b = []; if (this.ckHallucinations > 0) b.push(this.ckHallucinations + ' alegação(ões) sem lastro'); if (this.ckCoverage != null && this.ckCoverage < 1) b.push('cobertura do juiz ' + Math.round(this.ckCoverage * 100) + '%'); if (!this.ckHasJudge) b.push('juiz não rodou (qualidade não medida)'); return (b.length ? b.join(' · ') : 'Alguns indicadores entre 70 e 85') + ' — revisar antes de escalar.'; },
+
+        // formatação pt-BR
+        fmtBRL(v) { if (v == null || Number.isNaN(v)) return '—'; return 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
+        fmtBRLk(v) { if (v == null || Number.isNaN(v)) return '—'; const n = Number(v); if (n >= 1000) return 'R$ ' + (n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'k'; return this.fmtBRL(n); },
+        fmtUSD(v) { if (v == null || Number.isNaN(v)) return '—'; return 'US$ ' + Number(v).toFixed(4); },
+        fmtPct(x) { if (x == null || Number.isNaN(x)) return '—'; return Math.round(x * 100) + '%'; },
+        fmtScore5(x) { if (x == null || Number.isNaN(x)) return '—'; return (x * 5).toFixed(1); },
+        fmtRagas(x) { if (x == null || Number.isNaN(x)) return '—'; return Number(x).toFixed(2); },
+        gaugeColor(v) { if (v == null) return '#cbc7c0'; return v >= 85 ? '#1D9E75' : v >= 70 ? '#C07D00' : '#D8324C'; },
+        gaugeStyle(v) { const val = v == null ? 0 : v; return 'background: conic-gradient(' + this.gaugeColor(v) + ' ' + (val * 3.6) + 'deg, #ecebe7 0deg)'; },
+
+        // "?" → modal com a regra considerada e aplicada
+        openRule(k) { this.help = { open: true, key: k }; },
+        closeRule() { this.help = { open: false, key: '' }; },
+        get ruleView() { return this.RULES[this.help.key] || null; },
+
+        // ── Exportar PPTX ──  o snapshot é COMPUTADO aqui (índices/lentes/TCO já no
+        // recorte) + a conversa; o servidor só renderiza o deck. Cookie (ação de UI).
+        _cockpitSnapshot() {
+            return {
+                pipeline_name: this.selectedName, session_id: this.chatSessionId, scope: this.cockpitScope,
+                generated_at: (window.tzDateTime ? window.tzDateTime(new Date().toISOString()) : new Date().toLocaleString('pt-BR')),
+                indices: { q: this.idxQ, r: this.idxR, c: this.idxC },
+                gate: { k: this.ckGate.k, t: this.ckGate.t, w: this.ckGate.w },
+                quality: { has_judge: this.ckHasJudge, factuality: this.ckFact, completeness: this.ckCompl, tone: this.ckTone, safety: this.ckSafety, ragas: this.ckRagas },
+                reliability: { fsm: this.ckFsmLabel, contract: this.ckContractRate, hallucinations: this.ckHallucinations, grounding: this.ckGroundedRate, coverage: this.ckCoverage },
+                cost: { brl: this.ckCostUsd * (Number(this.tcoFx) || 0), usd: this.ckCostUsd, tokens: this.ckTokens, latency_ms: this.ckMs, qac_brl: this.qacBRL },
+                tco: { volume: this.tcoVolume, fx: this.tcoFx, alvo: this.tcoAlvo, saas: this.tcoSaas, inf_month: this.tcoInfMonth, judge_month: this.tcoJudgeMonth, saas_month: this.tcoSaasMonth, band_month: this.tcoBandMonth, band_year: this.tcoBandYear },
+                conversation: this.chat.map(m => ({ role: m.role, text: String(m.text || '') })),
+            };
+        },
+        async exportCockpitPptx() {
+            if (this.cockpitBusy) return;
+            this.cockpitBusy = true;
+            try {
+                const resp = await fetch(window.location.origin + '/api/v1/playground/cockpit/pptx', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this._cockpitSnapshot()),
+                });
+                if (!resp.ok) { let d = ''; try { d = (await resp.json()).detail || ''; } catch (_) {} throw new Error('HTTP ' + resp.status + (d ? (' — ' + d) : '')); }
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob), a = document.createElement('a');
+                a.href = url; a.download = 'cockpit-' + ((this.chatSessionId || 'sessao').slice(0, 8)) + '-' + this.cockpitScope + '.pptx';
+                document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+                showToast('PPTX exportado', 'success');
+            } catch (e) { showToast('Falha ao exportar PPTX: ' + e.message, 'error'); }
+            finally { this.cockpitBusy = false; }
+        },
 
         // ── codegen ──  spec único {url,key,body,stream} + 1 formatador por linguagem.
         // codeMode 'sync' aponta p/ /invoke; 'streaming' p/ /invoke/stream (consumo de
