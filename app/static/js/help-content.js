@@ -529,7 +529,21 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
             <li><strong>Deploy</strong> (summary) — resposta + narrativa por etapa, sem tripa interna. É o <em>default</em> de integração.</li>
             <li><strong>Só resposta</strong> (minimal) — só a saída final + status.</li>
           </ul>
-          <p>Cinco abas no resultado: <strong>Resposta</strong> (JSON vira cartões), <strong>Tempo</strong> (waterfall por agente), <strong>Trace</strong> (FSM, evidências, SQL — só em Debug), <strong>HTTP</strong> (status, headers, rate-limit e o mapa de erros do contrato) e <strong>Código</strong> (curl, Python, httpx, JS, axios, Go, PHP, Ruby, C#, Java — em modo <em>sync</em> ou <em>streaming</em>; o curl ainda escolhe a notação Bash/PowerShell/CMD).</p>
+          <p>Cinco abas no resultado: <strong>Resposta</strong> (JSON vira cartões), <strong>Tempo</strong> (waterfall por agente), <strong>Trace</strong> (FSM, evidências, SQL — só em Debug), <strong>HTTP</strong> (status, headers, rate-limit e o mapa de erros do contrato) e <strong>Código</strong> (curl, Python, httpx, JS, axios, Go, PHP, Ruby, C#, Java — em modo <em>sync</em> ou <em>streaming</em>; o curl ainda escolhe a notação Bash/PowerShell/CMD). A aba Código tem duas <strong>receitas</strong>: <em>Chamada única</em> (uma requisição, sem estado) e <em>Conversa (multi-turn)</em> (encadeia turnos reusando o <code>interaction_id</code> como <code>session_id</code>).</p>
+        `
+      },
+      {
+        kind: 'concept',
+        title: 'Continuar a conversa (multi-turn)',
+        body: `
+          <p>Cada chamada de <code>/invoke</code> é, por padrão, <strong>sem estado</strong> — o pipeline não lembra do que veio antes. Para continuar a conversa com contexto, use a receita <strong>Conversa (multi-turn)</strong> na aba Código.</p>
+          <p>O mecanismo é um fio só, o <code>session_id</code>:</p>
+          <ul>
+            <li>No <strong>1º turno</strong> você não manda <code>session_id</code> (vai vazio/nulo).</li>
+            <li>A resposta traz um <code>interaction_id</code>. <strong>Guarde-o e reenvie-o como <code>session_id</code></strong> na chamada seguinte.</li>
+            <li>O servidor reconstrói o histórico da sessão e o reinjeta — o pipeline passa a "lembrar" dos turnos anteriores.</li>
+          </ul>
+          <p>Dois pontos importantes: a receita usa <strong>sync</strong> (a resposta em streaming não devolve o <code>interaction_id</code> de forma limpa); e a memória vive no <strong>roteador</strong> e no <strong>maestro</strong> — os agentes <strong>especialistas não lembram</strong> (recebem só o contexto do passo anterior). O <code>interaction_id</code> é a chave da sessão: trate-o como um segredo de sessão.</p>
         `
       },
       {
@@ -537,7 +551,8 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Casos de uso',
         items: [
           { title: 'Validar a integração antes de codar', body: 'Gere uma chave, rode o pipeline pela tela e confirme o JSON, o status e os headers que o seu app vai tratar — tudo antes de escrever o cliente.' },
-          { title: 'Pegar o código pronto', body: 'Aba Código → escolha a linguagem do seu app e copie o snippet com a chave embutida. Tem a variante streaming (consumir o SSE) pra mostrar o progresso ao vivo.' },
+          { title: 'Pegar o código pronto', body: 'Aba Código → escolha a linguagem do seu app e copie o snippet com a chave embutida. Tem a variante streaming (consumir o SSE) pra mostrar o progresso ao vivo, e a receita Conversa (multi-turn) pra continuar o diálogo com contexto.' },
+          { title: 'Continuar a conversa (multi-turn)', body: 'Aba Código → Receita "Conversa (multi-turn)": o snippet vira uma sessão. A resposta traz interaction_id; reenvie-o como session_id no próximo turno e o servidor reconstrói o histórico. Assim o pipeline "lembra" dos turnos anteriores (no roteador e no maestro — os especialistas não lembram).' },
           { title: 'Auditar um teste anterior', body: 'O Histórico é por usuário e sobrevive a reload/troca de máquina. Clique numa linha e a execução volta inteira (Resposta/Tempo/Trace/HTTP) — sem re-rodar — quando o detalhe foi salvo; execuções antigas ou muito grandes restauram só a requisição.' },
           { title: 'Comparar A/B', body: 'Marque "Comparar dois lado a lado" e rode 2 pipelines (ou o mesmo em 2 níveis de detalhe) com a mesma entrada — vê as duas respostas e os deltas de tempo/custo/tamanho.' }
         ]

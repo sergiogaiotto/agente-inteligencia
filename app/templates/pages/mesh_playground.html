@@ -437,22 +437,40 @@
                         Copiar
                     </button>
                 </div>
-                <!-- sync | streaming: o snippet de streaming consome o SSE de /invoke/stream -->
-                <div class="flex items-center gap-1.5 text-[11px]" data-testid="pg-code-mode">
+                <!-- receita: chamada única (stateless) vs conversa (multi-turn via session_id).
+                     A conversa reusa o interaction_id da resposta como session_id no turno
+                     seguinte — o servidor reconstrói o histórico (memória de conversa). -->
+                <div class="flex items-center gap-1.5 text-[11px]" data-testid="pg-code-recipe">
+                    <span class="text-surface-400">Receita:</span>
+                    <button @click="recipe='single'" type="button" :class="recipe==='single' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="Uma chamada por requisição — sem estado entre chamadas.">Chamada única</button>
+                    <button @click="recipe='conversa'" type="button" :class="recipe==='conversa' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="Continua a conversa: reusa o interaction_id da resposta como session_id no próximo turno.">Conversa (multi-turn)</button>
+                </div>
+                <!-- sync | streaming: o snippet de streaming consome o SSE de /invoke/stream.
+                     Só na chamada única — a conversa precisa do interaction_id do CORPO. -->
+                <div x-show="recipe==='single'" class="flex items-center gap-1.5 text-[11px]" data-testid="pg-code-mode">
                     <span class="text-surface-400">Modo:</span>
                     <button @click="codeMode='sync'" type="button" :class="codeMode==='sync' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="Espera a resposta inteira (/invoke)">sync</button>
                     <button @click="codeMode='streaming'" type="button" :class="codeMode==='streaming' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="Consome o /invoke/stream (SSE) — progresso ao vivo, agente a agente">streaming</button>
                 </div>
-                <!-- notação do shell (só no curl): a sintaxe muda por shell (continuação de
-                     linha + aspas/escape). No PowerShell `curl` é alias → usamos curl.exe. -->
-                <div x-show="lang === 'curl'" class="flex flex-wrap items-center gap-1.5 text-[11px]" data-testid="pg-curl-shell">
+                <!-- notação do shell (só no curl, chamada única): a sintaxe muda por shell
+                     (continuação de linha + aspas/escape). No PowerShell `curl` é alias →
+                     usamos curl.exe. A conversa em curl é bash + jq (captura do id). -->
+                <div x-show="lang === 'curl' && recipe==='single'" class="flex flex-wrap items-center gap-1.5 text-[11px]" data-testid="pg-curl-shell">
                     <span class="text-surface-400">Notação:</span>
                     <button @click="curlShell='bash'" type="button" :class="curlShell==='bash' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="\\ p/ continuar a linha, corpo em aspas simples">Bash (Linux/macOS)</button>
                     <button @click="curlShell='powershell'" type="button" :class="curlShell==='powershell' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="crase p/ continuar a linha; curl.exe (no PS, curl é alias de Invoke-WebRequest)">PowerShell</button>
                     <button @click="curlShell='cmd'" type="button" :class="curlShell==='cmd' ? 'bg-brand-50 text-brand-700 font-medium' : 'text-surface-500'" class="rounded-md px-2 py-0.5" title="^ p/ continuar a linha, corpo em aspas duplas com \&quot; escapado">CMD (Windows)</button>
                 </div>
+                <!-- conversa: nota do padrão + ressalva de escopo (memória por camada) -->
+                <div x-show="recipe==='conversa'" class="rounded-lg border border-brand-100 bg-brand-50/40 px-3 py-2 text-[10px] text-surface-500 leading-snug" data-testid="pg-recipe-note">
+                    <strong class="text-brand-700">Conversa (multi-turn):</strong> a resposta traz <code class="font-mono">interaction_id</code> — reenvie-o como <code class="font-mono">session_id</code> no próximo turno e o servidor reconstrói o histórico. Usa <strong>sync</strong> (o streaming não devolve o id de forma limpa). A memória vive no roteador e no maestro; <strong>os especialistas não lembram</strong>.
+                </div>
                 <pre class="rounded-lg bg-brand-900 text-surface-50 p-3 text-[11.5px] overflow-x-auto whitespace-pre" data-testid="pg-code" x-text="snippet()"></pre>
-                <p class="text-[10px] text-surface-400">Reflete a requisição atual (<span x-text="codeMode==='streaming' ? 'streaming · SSE' : 'sync'"></span>). <span x-show="!apiKey">Gere uma chave pra embutir o segredo.</span></p>
+                <p class="text-[10px] text-surface-400">
+                    <span x-show="recipe==='single'">Reflete a requisição atual (<span x-text="codeMode==='streaming' ? 'streaming · SSE' : 'sync'"></span>).</span>
+                    <span x-show="recipe==='conversa'">Dois turnos encadeados via <span class="font-mono">session_id</span> (sync).</span>
+                    <span x-show="!apiKey">Gere uma chave pra embutir o segredo.</span>
+                </p>
             </div>
 
             <!-- COMPARAR A/B (F2): 2 execuções reais lado a lado + deltas B vs A -->
@@ -529,7 +547,7 @@ function playgroundPage() {
             { k: 'php', l: 'PHP' }, { k: 'ruby', l: 'Ruby' }, { k: 'csharp', l: 'C#' }, { k: 'java', l: 'Java' },
         ],
         pipelines: [], selectedId: '', message: 'o que temos aqui?',
-        verbosity: 'summary', tab: 'resp', lang: 'curl', codeMode: 'sync', curlShell: 'bash',
+        verbosity: 'summary', tab: 'resp', lang: 'curl', codeMode: 'sync', curlShell: 'bash', recipe: 'single',
         running: false, liveSteps: [], result: null, error: null, sizeKb: null, respBytes: 0,
         timings: [], _t0: 0, expanded: {},
         http: null, errTests: {}, history: [],
@@ -1015,6 +1033,7 @@ function playgroundPage() {
         _sq(s) { return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'"); },
         _psq(s) { return s.replace(/'/g, "''"); },  // PowerShell: aspas simples dobram '
         snippet() {
+            if (this.recipe === 'conversa') return this._mtSnippet();
             const s = this._reqSpec();
             switch (this.lang) {
                 case 'py': return this._cgPy(s);
@@ -1307,6 +1326,264 @@ function playgroundPage() {
             ]).join('\n');
         },
         _pyDict(o) { return '{' + Object.entries(o).map(([k, v]) => '"' + k + '": ' + JSON.stringify(v)).join(', ') + '}'; },
+
+        // ── codegen: RECEITA "conversa" (multi-turn) ──────────────────────────
+        // Continuidade de conversa via session_id: a resposta traz interaction_id;
+        // reenvie-o como session_id no próximo turno e o servidor reconstrói o
+        // histórico. Sync-only (precisa do interaction_id do CORPO JSON — o SSE não
+        // o entrega de forma limpa). Duas mensagens são um exemplo fixo (sem aspas
+        // → embutir é seguro em toda linguagem); verbosity segue a atual. Sem args
+        // de propósito: multi-turn é sobre o texto da conversa; o form de args
+        // (## Inputs) é uma receita à parte. O single-call segue INTOCADO.
+        _mtSpec() {
+            return {
+                url: window.location.origin + '/api/v1/pipelines/' + (this.selectedId || '{pipeline_id}') + '/invoke',
+                key: this.apiKey || 'SUA_API_KEY',
+                v: this.verbosity,
+                m1: 'o que temos aqui?',
+                m2: 'e sobre o segundo ponto?',
+            };
+        },
+        _mtSnippet() {
+            const s = this._mtSpec();
+            switch (this.lang) {
+                case 'py': return this._mtPy(s);
+                case 'py-httpx': return this._mtHttpx(s);
+                case 'js': return this._mtJs(s);
+                case 'node-axios': return this._mtAxios(s);
+                case 'go': return this._mtGo(s);
+                case 'php': return this._mtPhp(s);
+                case 'ruby': return this._mtRuby(s);
+                case 'csharp': return this._mtCsharp(s);
+                case 'java': return this._mtJava(s);
+                default: return this._mtCurl(s);
+            }
+        },
+        _mtCurl(s) {
+            return [
+                '# 1o turno: sem sessao. Captura o interaction_id da resposta (jq).',
+                `SID=$(curl -s -X POST '${s.url}' \\`,
+                `  -H 'Content-Type: application/json' \\`,
+                `  -H 'X-API-Key: ${s.key}' \\`,
+                `  -d '{"message":"${s.m1}","verbosity":"${s.v}"}' | jq -r '.interaction_id')`,
+                '',
+                '# 2o turno: reenvia o interaction_id como session_id',
+                `curl -s -X POST '${s.url}' \\`,
+                `  -H 'Content-Type: application/json' \\`,
+                `  -H 'X-API-Key: ${s.key}' \\`,
+                `  -d "{\\"message\\":\\"${s.m2}\\",\\"session_id\\":\\"$SID\\",\\"verbosity\\":\\"${s.v}\\"}"`,
+            ].join('\n');
+        },
+        _mtPy(s) {
+            return [
+                'import requests', '',
+                `URL = "${s.url}"`,
+                `KEY = "${s.key}"`,
+                'session_id = None  # 1o turno: sem sessao', '',
+                'def enviar(mensagem):',
+                '    global session_id',
+                '    r = requests.post(',
+                '        URL,',
+                '        headers={"X-API-Key": KEY},',
+                `        json={"message": mensagem, "session_id": session_id, "verbosity": "${s.v}"},`,
+                '    ).json()',
+                '    session_id = r["interaction_id"]   # <- reenvie como session_id',
+                '    return r["output"]', '',
+                `print(enviar("${s.m1}"))`,
+                `print(enviar("${s.m2}"))   # agora lembra do turno anterior`,
+            ].join('\n');
+        },
+        _mtHttpx(s) {
+            return [
+                'import httpx', '',
+                `URL = "${s.url}"`,
+                `KEY = "${s.key}"`,
+                'session_id = None  # 1o turno: sem sessao', '',
+                'def enviar(mensagem):',
+                '    global session_id',
+                '    r = httpx.post(',
+                '        URL,',
+                '        headers={"X-API-Key": KEY},',
+                `        json={"message": mensagem, "session_id": session_id, "verbosity": "${s.v}"},`,
+                '    ).json()',
+                '    session_id = r["interaction_id"]   # <- reenvie como session_id',
+                '    return r["output"]', '',
+                `print(enviar("${s.m1}"))`,
+                `print(enviar("${s.m2}"))   # agora lembra do turno anterior`,
+            ].join('\n');
+        },
+        _mtJs(s) {
+            return [
+                `const URL = "${s.url}";`,
+                `const KEY = "${s.key}";`,
+                'let sessionId = null;  // 1o turno: sem sessao', '',
+                'async function enviar(mensagem) {',
+                '  const r = await fetch(URL, {',
+                '    method: "POST",',
+                '    headers: { "Content-Type": "application/json", "X-API-Key": KEY },',
+                `    body: JSON.stringify({ message: mensagem, session_id: sessionId, verbosity: "${s.v}" }),`,
+                '  });',
+                '  const data = await r.json();',
+                '  sessionId = data.interaction_id;   // <- reenvie como session_id',
+                '  return data.output;',
+                '}', '',
+                `console.log(await enviar("${s.m1}"));`,
+                `console.log(await enviar("${s.m2}"));  // agora lembra`,
+            ].join('\n');
+        },
+        _mtAxios(s) {
+            return [
+                'const axios = require("axios");', '',
+                `const URL = "${s.url}";`,
+                `const KEY = "${s.key}";`,
+                'let sessionId = null;  // 1o turno: sem sessao', '',
+                'async function enviar(mensagem) {',
+                '  const { data } = await axios.post(URL,',
+                `    { message: mensagem, session_id: sessionId, verbosity: "${s.v}" },`,
+                '    { headers: { "X-API-Key": KEY } },',
+                '  );',
+                '  sessionId = data.interaction_id;   // <- reenvie como session_id',
+                '  return data.output;',
+                '}', '',
+                `console.log(await enviar("${s.m1}"));`,
+                `console.log(await enviar("${s.m2}"));  // agora lembra`,
+            ].join('\n');
+        },
+        _mtGo(s) {
+            return [
+                'package main', '',
+                'import (',
+                '    "bytes"', '    "encoding/json"', '    "fmt"', '    "net/http"',
+                ')', '',
+                'const (',
+                `    url = "${s.url}"`,
+                `    key = "${s.key}"`,
+                ')', '',
+                'var sessionID *string // 1o turno: nil (sem sessao)', '',
+                'func enviar(mensagem string) string {',
+                '    body, _ := json.Marshal(map[string]any{',
+                `        "message": mensagem, "session_id": sessionID, "verbosity": "${s.v}",`,
+                '    })',
+                '    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))',
+                '    req.Header.Set("Content-Type", "application/json")',
+                '    req.Header.Set("X-API-Key", key)',
+                '    resp, _ := http.DefaultClient.Do(req)',
+                '    defer resp.Body.Close()',
+                '    var out struct {',
+                '        Output        string `json:"output"`',
+                '        InteractionID string `json:"interaction_id"`',
+                '    }',
+                '    json.NewDecoder(resp.Body).Decode(&out)',
+                '    sessionID = &out.InteractionID // <- reenvie como session_id',
+                '    return out.Output',
+                '}', '',
+                'func main() {',
+                `    fmt.Println(enviar("${s.m1}"))`,
+                `    fmt.Println(enviar("${s.m2}")) // agora lembra`,
+                '}',
+            ].join('\n');
+        },
+        _mtPhp(s) {
+            return [
+                '<?php',
+                `$url = "${s.url}";`,
+                `$key = "${s.key}";`,
+                '$session_id = null; // 1o turno: sem sessao', '',
+                'function enviar($mensagem) {',
+                '    global $url, $key, $session_id;',
+                '    $ch = curl_init($url);',
+                '    curl_setopt($ch, CURLOPT_POST, true);',
+                '    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);',
+                '    curl_setopt($ch, CURLOPT_HTTPHEADER, [',
+                '        "Content-Type: application/json",',
+                '        "X-API-Key: $key",',
+                '    ]);',
+                '    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([',
+                `        "message" => $mensagem, "session_id" => $session_id, "verbosity" => "${s.v}",`,
+                '    ]));',
+                '    $data = json_decode(curl_exec($ch), true);',
+                '    curl_close($ch);',
+                '    $session_id = $data["interaction_id"]; // <- reenvie como session_id',
+                '    return $data["output"];',
+                '}', '',
+                `echo enviar("${s.m1}") . "\\n";`,
+                `echo enviar("${s.m2}") . "\\n"; // agora lembra`,
+            ].join('\n');
+        },
+        _mtRuby(s) {
+            return [
+                'require "net/http"', 'require "uri"', 'require "json"', '',
+                `URL = URI("${s.url}")`,
+                `KEY = "${s.key}"`,
+                '$session_id = nil # 1o turno: sem sessao', '',
+                'def enviar(mensagem)',
+                '  http = Net::HTTP.new(URL.host, URL.port)',
+                '  http.use_ssl = URL.scheme == "https"',
+                '  req = Net::HTTP::Post.new(URL)',
+                '  req["Content-Type"] = "application/json"',
+                '  req["X-API-Key"] = KEY',
+                `  req.body = { message: mensagem, session_id: $session_id, verbosity: "${s.v}" }.to_json`,
+                '  data = JSON.parse(http.request(req).body)',
+                '  $session_id = data["interaction_id"] # <- reenvie como session_id',
+                '  data["output"]',
+                'end', '',
+                `puts enviar("${s.m1}")`,
+                `puts enviar("${s.m2}") # agora lembra`,
+            ].join('\n');
+        },
+        _mtCsharp(s) {
+            return [
+                'using System;',
+                'using System.Net.Http;',
+                'using System.Net.Http.Json;',
+                'using System.Threading.Tasks;', '',
+                `var url = "${s.url}";`,
+                `var key = "${s.key}";`,
+                'string sessionId = null; // 1o turno: sem sessao', '',
+                'using var client = new HttpClient();',
+                'client.DefaultRequestHeaders.Add("X-API-Key", key);', '',
+                'async Task<string> Enviar(string mensagem) {',
+                '    var resp = await client.PostAsJsonAsync(url, new {',
+                `        message = mensagem, session_id = sessionId, verbosity = "${s.v}",`,
+                '    });',
+                '    var data = await resp.Content.ReadFromJsonAsync<Resposta>();',
+                '    sessionId = data.interaction_id; // <- reenvie como session_id',
+                '    return data.output;',
+                '}', '',
+                `Console.WriteLine(await Enviar("${s.m1}"));`,
+                `Console.WriteLine(await Enviar("${s.m2}")); // agora lembra`, '',
+                'record Resposta(string output, string interaction_id);',
+            ].join('\n');
+        },
+        _mtJava(s) {
+            return [
+                'import java.net.URI;',
+                'import java.net.http.HttpClient;',
+                'import java.net.http.HttpRequest;',
+                'import java.net.http.HttpResponse;',
+                'import java.util.regex.Matcher;',
+                'import java.util.regex.Pattern;', '',
+                'var client = HttpClient.newHttpClient();',
+                `var url = "${s.url}";`,
+                `var key = "${s.key}";`,
+                'String sessionId = null; // 1o turno: sem sessao',
+                '// extracao minima do interaction_id; use Jackson/Gson em producao',
+                'Pattern rx = Pattern.compile("\\"interaction_id\\"\\\\s*:\\\\s*\\"([^\\"]+)\\"");', '',
+                'for (String msg : new String[]{"' + s.m1 + '", "' + s.m2 + '"}) {',
+                '    String sid = sessionId == null ? "null" : "\\"" + sessionId + "\\"";',
+                `    String body = "{\\"message\\":\\"" + msg + "\\",\\"session_id\\":" + sid + ",\\"verbosity\\":\\"${s.v}\\"}";`,
+                '    var req = HttpRequest.newBuilder(URI.create(url))',
+                '        .header("Content-Type", "application/json")',
+                '        .header("X-API-Key", key)',
+                '        .POST(HttpRequest.BodyPublishers.ofString(body))',
+                '        .build();',
+                '    var resp = client.send(req, HttpResponse.BodyHandlers.ofString());',
+                '    Matcher m = rx.matcher(resp.body());',
+                '    if (m.find()) sessionId = m.group(1); // <- reenvie como session_id',
+                '    System.out.println(resp.body());',
+                '}',
+            ].join('\n');
+        },
         async copyCode() { if (await window.copyText(this.snippet())) showToast(this.apiKey ? 'Código copiado — contém um segredo' : 'Código copiado', this.apiKey ? 'info' : 'success'); },
     };
 }
