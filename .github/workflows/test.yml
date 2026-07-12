@@ -203,3 +203,127 @@ jobs:
           E2E_BASE_URL: http://127.0.0.1:7000
           E2E_USERNAME: e2e_admin
           E2E_PASSWORD: e2e-pass-1234
+
+  docker-smoke:
+    # Onda 3 (33.3.0): o CI rodava pip no ubuntu e NUNCA `docker build` — o
+    # footgun #533 (pip velho corrompendo wheels de Metadata 2.4 → uvicorn sem
+    # `main` → crash-loop → Caddy 502) era EXCLUSIVO do caminho Docker e passou
+    # invisível ao CI até quebrar prod. Este job builda a imagem (2 stages),
+    # confirma os imports (pega o #533 DIRETO) e sobe o app real contra Postgres+
+    # Redis batendo /api/health. Bloqueável — promover a `required` na branch
+    # protection quando confirmado verde.
+    name: docker build + smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: agente
+          POSTGRES_PASSWORD: agente
+          POSTGRES_DB: agente_inteligencia
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agente -d agente_inteligencia"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build image (multi-stage — builder + runtime)
+        run: docker build -t maestro:ci .
+
+      - name: Import smoke (pega corrupção de wheel — footgun #533)
+        # Se o wheelhouse corromper (uvicorn/app sem módulo), ISTO falha ANTES de
+        # qualquer boot — o sintoma exato do #533, invisível ao pip-no-ubuntu.
+        run: docker run --rm maestro:ci python -c "import app.main; import uvicorn; print('imports ok')"
+
+      - name: Boot smoke (uvicorn real + /api/health)
+        run: |
+          docker run -d --name maestro_app --network host \
+            -e DATABASE_URL=postgresql://agente:agente@localhost:5432/agente_inteligencia \
+            -e REDIS_URL=redis://localhost:6379/0 \
+            -e MAESTRO_SECRET_KEY=ci-smoke-key-not-for-prod \
+            -e SECRET_KEY=ci-smoke-secret-not-for-prod \
+            -e APP_ENV=development \
+            -e LOG_FILE_ENABLED=0 -e LOG_CONSOLE_ENABLED=0 \
+            maestro:ci
+          echo "Aguardando /api/health (uvicorn + init_db)..."
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -fsS http://localhost:7000/api/health >/dev/null 2>&1; then
+              echo "App de pé:"; curl -s http://localhost:7000/api/health; echo; ok=1; break
+            fi
+            sleep 3
+          done
+          if [ "$ok" != "1" ]; then
+            echo "=== App NÃO subiu a tempo — logs do container ==="
+            docker logs maestro_app || true
+            exit 1
+          fi
+
+      - name: Teardown
+        if: always()
+        run: docker rm -f maestro_app || true
+
+  lint:
+    # ruff ADVISORY (33.3.0): estabelece a linha de base de lint SEM travar merges
+    # (continue-on-error no step → job sempre verde). Promover a gate `required`
+    # depois de um PR de limpeza (hoje ~61 issues de alto sinal, ~50 auto-fixáveis).
+    # Config + ruleset em pyproject.toml.
+    name: ruff (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: ruff check (advisory — não bloqueia)
+        continue-on-error: true
+        run: ruff check app/ --output-format=github
+
+  security-audit:
+    # pip-audit ADVISORY (33.3.0): varre requirements.txt por CVEs conhecidos.
+    # Não-bloqueante — o advisory DB muda no tempo e não queremos travar merge por
+    # um CVE publicado hoje. Promover a gate quando o backlog de deps estiver limpo.
+    name: pip-audit (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: pip-audit (advisory — não bloqueia)
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
