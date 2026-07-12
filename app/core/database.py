@@ -1258,7 +1258,7 @@ _init_lock = asyncio.Lock()
 # boot/re-chamada), então refletem sempre o boot mais recente.
 _MIGRATION_STATS: dict = {
     "applied": 0, "failed": 0, "total": 0, "failures": [], "ran_at": None,
-    "strict": False,
+    "strict": False, "alembic": None,
 }
 
 
@@ -1396,6 +1396,40 @@ async def _init_pool_connection(conn):
         )
 
 
+def _alembic_upgrade_sync() -> None:
+    """Corpo SÍNCRONO do ``alembic upgrade head`` — roda numa thread (via
+    _run_alembic_upgrade). Aponta o Config p/ o alembic/ do repo (raiz = duas
+    pastas acima de app/core/) e usa a URL das settings (psycopg2, resolvido em
+    alembic/env.py). Idempotente: num DB já em head, não faz nada."""
+    from pathlib import Path
+    from alembic.config import Config
+    from alembic import command
+
+    root = Path(__file__).resolve().parent.parent.parent  # app/core → app → raiz
+    cfg = Config(str(root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(root / "alembic"))
+    command.upgrade(cfg, "head")
+
+
+async def _run_alembic_upgrade() -> None:
+    """Aplica as migrações versionadas do Alembic OFF do event loop (alembic é
+    sync) e FAIL-OPEN — registra o desfecho em ``_MIGRATION_STATS['alembic']``.
+    Uma falha aqui NÃO derruba o boot (o schema já veio do DDL idempotente)."""
+    try:
+        await asyncio.to_thread(_alembic_upgrade_sync)
+        _MIGRATION_STATS["alembic"] = "ok"
+    except Exception as e:
+        _MIGRATION_STATS["alembic"] = f"failed: {type(e).__name__}"
+        logger.warning(
+            "db.alembic.upgrade_failed",
+            extra={
+                "event": "db.alembic.upgrade_failed",
+                "error_type": type(e).__name__,
+                "error": str(e)[:200],
+            },
+        )
+
+
 async def init_db():
     """Cria pool, aplica schema e migrações idempotentes.
 
@@ -1432,6 +1466,7 @@ async def init_db():
                 applied=0, failed=0, total=len(_IDEMPOTENT_MIGRATIONS),
                 failures=[], ran_at=naive_utc_now(),
                 strict=bool(settings.database_migrations_strict),
+                alembic=None,
             )
             for migration in _IDEMPOTENT_MIGRATIONS:
                 try:
@@ -1474,6 +1509,15 @@ async def init_db():
                     f"migração(ões) falharam e DATABASE_MIGRATIONS_STRICT=on — "
                     f"boot abortado. Veja os eventos db.migration.failed no log."
                 )
+
+        # Alembic (33.6.0): migrações VERSIONADAS após o DDL idempotente. O
+        # baseline é NO-OP (o schema vem do DDL acima); num DB existente OU fresco,
+        # `alembic upgrade head` só cria a alembic_version e registra a revisão,
+        # sem tocar o schema. Revisões FUTURAS entram como novas versões. Roda em
+        # thread (alembic é sync) e é FAIL-OPEN — falha aqui NÃO derruba o boot
+        # (o schema já está OK via DDL). Fora do `async with con` (usa conexão
+        # psycopg2 própria).
+        await _run_alembic_upgrade()
 
 
 async def close_db():

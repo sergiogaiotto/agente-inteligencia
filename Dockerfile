@@ -77,6 +77,12 @@ COPY --chown=app:app app ./app
 # Scripts operacionais (ex.: seed do usuário E2E, rodado via `docker exec`).
 COPY --chown=app:app scripts ./scripts
 
+# Alembic — config + migrações versionadas (33.6.0). Aplicadas no boot pelo
+# init_db (alembic upgrade head, em thread, fail-open). WORKDIR=/app → aqui ficam
+# /app/alembic.ini e /app/alembic (env.py resolve via raiz de app.core.database).
+COPY --chown=app:app alembic.ini ./alembic.ini
+COPY --chown=app:app alembic ./alembic
+
 # Diretório de uploads / dados
 RUN mkdir -p ${APP_HOME}/data/uploads && chown -R app:app ${APP_HOME}/data
 

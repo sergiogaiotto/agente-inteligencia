@@ -256,12 +256,17 @@ async def _check_migrations() -> dict[str, Any]:
     in-process de app.core.database (mesmo processo/pool)."""
     from app.core.database import get_migration_stats
     s = get_migration_stats()
+    # ok = migrações idempotentes sem falha E alembic não-falhado (None=não rodou
+    # ainda em processos que não chamam init_db; 'ok'/'failed: X' após o boot).
+    _alembic = s.get("alembic")
+    _alembic_failed = isinstance(_alembic, str) and _alembic.startswith("failed")
     return {
-        "ok": s["failed"] == 0,
+        "ok": s["failed"] == 0 and not _alembic_failed,
         "applied": s["applied"],
         "failed": s["failed"],
         "total": s["total"],
         "strict": s["strict"],
+        "alembic": _alembic,
         "failures": s["failures"][:10],
         "ran_at": str(s["ran_at"]) if s["ran_at"] else None,
     }
