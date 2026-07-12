@@ -1,0 +1,31 @@
+# ══════════════════════════════════════════════════════════════════
+# Override de PRODUÇÃO — usa a imagem IMUTÁVEL publicada no GHCR pelo CI
+# (job `build + push image (GHCR)` em .github/workflows/test.yml), em vez de
+# buildar no host. Onda 3 (33.4.0).
+#
+# POR QUÊ: build-on-host é não-reproduzível (deps sem teto → wheel drift, o
+# footgun #533) e não tem rollback atômico (só `git checkout` + rebuild). Puxar
+# uma imagem fixada por `:versão-sha` dá deploy determinístico e rollback = puxar
+# a tag anterior.
+#
+# USO (no VPS, sobrepondo o compose base):
+#   export MAESTRO_IMAGE=ghcr.io/sergiogaiotto/agente-inteligencia:33.4.0-<sha>
+#   docker login ghcr.io -u <user> -p <PAT com read:packages>   # 1ª vez / repo privado
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull app
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build app
+#
+# ROLLBACK (atômico — sem rebuild):
+#   export MAESTRO_IMAGE=ghcr.io/sergiogaiotto/agente-inteligencia:<versão-sha ANTERIOR>
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull app
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build app
+#
+# `--no-build` garante que o host NUNCA compila (usa só a imagem puxada); o
+# `pull_policy: always` reforça o pull no `up`. Deixar `MAESTRO_IMAGE` sem setar
+# cai em `:latest` (o último merge na main) — prefira o `:versão-sha` explícito
+# em produção para rastreabilidade e rollback.
+# ══════════════════════════════════════════════════════════════════
+
+services:
+  app:
+    image: ${MAESTRO_IMAGE:-ghcr.io/sergiogaiotto/agente-inteligencia:latest}
+    pull_policy: always

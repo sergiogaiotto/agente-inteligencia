@@ -327,3 +327,57 @@ jobs:
         run: |
           pip install pip-audit
           pip-audit -r requirements.txt
+
+  release:
+    # Onda 3 (33.4.0): publica a imagem IMUTÁVEL no GHCR — 1 build por release,
+    # tag por versão + sha (+ latest). SÓ no merge pra main (push) e SÓ se
+    # testes+smoke verdes (needs) → nunca publica imagem vermelha. Também
+    # acionável via workflow_dispatch p/ verificar o pipeline sem um merge. O
+    # deploy no VPS passa a PULL a imagem fixada (docker-compose.prod.yml), não
+    # buildar no host; rollback = pull da tag :versão-sha anterior. Ver DEPLOY.md.
+    name: build + push image (GHCR)
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || github.event_name == 'workflow_dispatch'
+    needs: [test, test-integration, docker-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Metadados (versão + nome da imagem em lowercase)
+        id: meta
+        run: |
+          VERSION="$(python3 -c "import re,io; print(re.search(r'APP_VERSION\s*=\s*\"([^\"]+)\"', io.open('app/core/version.py', encoding='utf-8').read()).group(1))")"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Publicando $IMAGE:$VERSION (+ :$VERSION-${GITHUB_SHA::12}, + :latest)"
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push (multi-stage, cache gha)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}-${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
