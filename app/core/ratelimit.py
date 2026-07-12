@@ -22,8 +22,10 @@ limite independente das leves (dashboard).
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import time
+from functools import lru_cache
 from typing import Optional, Protocol
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -150,8 +152,77 @@ limiter = RateLimiter()
 
 
 # ═══════════════════════════════════════════════════════════════
-# Identidade do cliente — cookie ou IP (X-Forwarded-For-aware)
+# Identidade do cliente — cookie ou IP (X-Forwarded-For resistente a spoof)
 # ═══════════════════════════════════════════════════════════════
+
+# Default seguro quando `trusted_proxies` não é configurado: confia no XFF
+# apenas quando o peer direto é privado/loopback (o caso reverse-proxy típico
+# atrás de Caddy/Traefik numa rede Docker). Um cliente da internet pública
+# nunca é peer direto neste deploy (só o Caddy expõe 80/443), então não
+# consegue forjar XFF; e uma conexão direta com peer PÚBLICO tem o XFF ignorado.
+_DEFAULT_TRUSTED_PROXY_CIDRS = (
+    "127.0.0.0/8", "::1/128",
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+    "169.254.0.0/16", "fc00::/7", "fe80::/10",
+)
+
+
+@lru_cache(maxsize=8)
+def _parse_networks(spec: str) -> tuple:
+    """Parse CSV de IPs/CIDRs → tupla de ip_network. Entradas inválidas são ignoradas."""
+    nets = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            logger.warning("trusted_proxies: entrada inválida ignorada: %r", part)
+    return tuple(nets)
+
+
+def _trusted_networks() -> tuple:
+    spec = (get_settings().trusted_proxies or "").strip()
+    if not spec:
+        return _parse_networks(",".join(_DEFAULT_TRUSTED_PROXY_CIDRS))
+    return _parse_networks(spec)
+
+
+def _ip_in_networks(ip_str: str, networks: tuple) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    return any(ip in net for net in networks)
+
+
+def _resolve_client_ip(request: Request) -> str:
+    """IP real do cliente, resistente a spoof de X-Forwarded-For.
+
+    Só confia no XFF quando o peer DIRETO é um proxy confiável (`trusted_proxies`;
+    default = ranges privados/loopback). Numa conexão direta (peer não-confiável)
+    o XFF é IGNORADO e usa-se o peer — assim um cliente não escapa do rate-limit
+    por IP só mandando `X-Forwarded-For: <ip-aleatório>`. Quando o peer é confiável,
+    pega o IP mais à DIREITA do XFF que NÃO seja proxy confiável (o cliente real
+    visto pelo proxy mais externo); hops forjados ficam à esquerda e são descartados.
+    """
+    client = request.client
+    peer = client.host if client else ""
+    networks = _trusted_networks()
+
+    # Peer desconhecido ou NÃO-confiável → conexão direta: ignora o XFF.
+    if not peer or not _ip_in_networks(peer, networks):
+        return peer or "unknown"
+
+    xff = request.headers.get("x-forwarded-for", "")
+    if not xff:
+        return peer
+    for hop in reversed([h.strip() for h in xff.split(",") if h.strip()]):
+        if not _ip_in_networks(hop, networks):
+            return hop
+    # Todos os hops são proxies confiáveis (ou XFF vazio) → usa o peer direto.
+    return peer
 
 
 def _client_identity(request: Request) -> str:
@@ -167,6 +238,9 @@ def _client_identity(request: Request) -> str:
     key (sync, sem ida ao banco); a validação real acontece depois no auth. Uma
     key inválida ganha seu próprio balde de 401s BARATOS (sem LLM) — o caminho
     caro (invoke) exige key válida, então o floor de custo permanece protegido.
+
+    IP (anônimo): resolvido por `_resolve_client_ip` — X-Forwarded-For só é
+    honrado vindo de um proxy confiável (SEC-05), fechando o bypass por spoof.
     """
     from app.core.auth import read_session_uid, _extract_api_key_from_headers
 
@@ -178,14 +252,7 @@ def _client_identity(request: Request) -> str:
     uid = read_session_uid(request)
     if uid:
         return f"user:{uid}"
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        # primeiro IP da cadeia é o cliente real
-        ip = xff.split(",")[0].strip()
-        if ip:
-            return f"ip:{ip}"
-    client = request.client
-    return f"ip:{client.host}" if client else "ip:unknown"
+    return f"ip:{_resolve_client_ip(request)}"
 
 
 # ═══════════════════════════════════════════════════════════════

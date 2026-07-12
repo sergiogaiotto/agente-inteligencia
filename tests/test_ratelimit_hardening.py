@@ -8,8 +8,14 @@
 from __future__ import annotations
 
 import pytest
+from starlette.requests import Request
 
-from app.core.ratelimit import _MemoryLimiter, _bucket_for_path
+from app.core.ratelimit import (
+    _MemoryLimiter,
+    _bucket_for_path,
+    _client_identity,
+    _resolve_client_ip,
+)
 
 
 @pytest.mark.parametrize("path", [
@@ -58,3 +64,77 @@ async def test_memory_limiter_enforces_limit():
         ok.append(allowed)
     # 3 primeiras passam, as demais são bloqueadas
     assert ok == [True, True, True, False, False]
+
+
+# ═══════════════════════════════════════════════════════════════
+# SEC-05 — X-Forwarded-For resistente a spoof
+# ═══════════════════════════════════════════════════════════════
+
+
+def _make_request(peer_host: str, xff: str | None = None) -> Request:
+    """Request Starlette mínima com peer + XFF, sem cookie/API-key (cai no path de IP)."""
+    headers = []
+    if xff is not None:
+        headers.append((b"x-forwarded-for", xff.encode()))
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "path": "/api/v1/users/login",
+        "raw_path": b"/api/v1/users/login",
+        "query_string": b"",
+        "headers": headers,
+        "client": (peer_host, 4444),
+        "scheme": "http",
+        "server": ("app", 8000),
+    }
+    return Request(scope)
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_cache():
+    from app.core import config
+
+    config.get_settings.cache_clear()
+    yield
+    config.get_settings.cache_clear()
+
+
+class TestXffTrustedProxy:
+    def test_peer_publico_direto_ignora_xff_forjado(self):
+        # Conexão direta de IP público → XFF é spoof, deve ser ignorado.
+        req = _make_request("203.0.113.7", xff="9.9.9.9")
+        assert _resolve_client_ip(req) == "203.0.113.7"
+
+    def test_peer_privado_confiavel_honra_xff(self):
+        # Caddy (rede Docker, IP privado) → confia no XFF = cliente real.
+        req = _make_request("172.20.0.5", xff="198.51.100.23")
+        assert _resolve_client_ip(req) == "198.51.100.23"
+
+    def test_spoof_prepend_usa_mais_a_direita_nao_confiavel(self):
+        # Atacante injeta 1.2.3.4 à esquerda; Caddy anexa o real à direita.
+        req = _make_request("172.20.0.5", xff="1.2.3.4, 198.51.100.23")
+        assert _resolve_client_ip(req) == "198.51.100.23"
+
+    def test_peer_confiavel_sem_xff_usa_peer(self):
+        req = _make_request("127.0.0.1", xff=None)
+        assert _resolve_client_ip(req) == "127.0.0.1"
+
+    def test_todos_hops_confiaveis_cai_no_peer(self):
+        req = _make_request("10.0.0.9", xff="10.0.0.1, 172.16.0.2")
+        assert _resolve_client_ip(req) == "10.0.0.9"
+
+    def test_identidade_do_ratelimit_usa_ip_resolvido(self):
+        # O bypass fechado: spoof não gera balde novo — identidade = peer direto.
+        req = _make_request("203.0.113.7", xff="9.9.9.9")
+        assert _client_identity(req) == "ip:203.0.113.7"
+
+    def test_trusted_proxies_configurado_restringe_a_ips_exatos(self, monkeypatch):
+        from app.core import config
+
+        monkeypatch.setenv("TRUSTED_PROXIES", "192.0.2.10/32")
+        config.get_settings.cache_clear()
+        # peer NÃO está na allowlist exata → conexão direta, ignora XFF
+        assert _resolve_client_ip(_make_request("172.20.0.5", xff="9.9.9.9")) == "172.20.0.5"
+        # peer na allowlist exata → confia no XFF
+        assert _resolve_client_ip(_make_request("192.0.2.10", xff="198.51.100.5")) == "198.51.100.5"

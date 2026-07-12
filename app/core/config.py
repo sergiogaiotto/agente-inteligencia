@@ -174,6 +174,14 @@ class Settings(BaseSettings):
     cookie_secure: bool = False                # True em produção HTTPS
     cookie_samesite: str = "lax"               # "lax" | "strict" | "none"
     session_max_age_seconds: int = 7 * 24 * 3600
+    # ── Proxy confiável p/ X-Forwarded-For (SEC-05) ──
+    # CSV de IPs/CIDRs dos reverse proxies legítimos (ex.: Caddy/Traefik). A
+    # resolução do IP do cliente (rate-limit) só CONFIA no header X-Forwarded-For
+    # quando o peer DIRETO está nesta lista — senão usa o IP do peer. Impede que
+    # um cliente forje XFF e ganhe um balde de rate-limit novo por IP (bypass de
+    # brute-force/DoS). VAZIO = default seguro: confia em ranges privados/loopback
+    # (o caso reverse-proxy típico em rede Docker). Defina p/ restringir a IPs exatos.
+    trusted_proxies: str = ""
 
     # ── DLP / PII redaction (Onda 1) ──
     dlp_enabled: bool = True
