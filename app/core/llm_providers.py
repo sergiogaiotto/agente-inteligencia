@@ -92,6 +92,15 @@ def _openai_chat_kwargs(temperature, model, reasoning_effort) -> dict:
 logger = logging.getLogger(__name__)
 
 
+class LLMUnavailable(RuntimeError):
+    """Provider curto-circuitado pelo circuit-breaker (circuito ABERTO).
+
+    Tratado como INALCANÇÁVEL em toda a plataforma (``is_llm_unreachable`` o
+    reconhece) — do ponto de vista do caller, o provider "não responde agora",
+    então a cadeia de resiliência cai no fallback/mensagem acionável como se
+    fosse um ConnectError, sem pagar o timeout. Ver app/core/llm_breaker.py."""
+
+
 def is_llm_unreachable(exc: BaseException, _depth: int = 0) -> bool:
     """True quando a falha é de ALCANCE do provider (rede/timeout/URL ausente),
     NÃO um request malformado. Detector canônico, compartilhado pelo wizard
@@ -116,6 +125,9 @@ def is_llm_unreachable(exc: BaseException, _depth: int = 0) -> bool:
     Anda na cadeia ``__cause__`` (profundidade limitada) porque o LangChain às
     vezes re-levanta o erro do SDK encadeado.
     """
+    # 0) circuito ABERTO pelo breaker — sintetizado, tratado como inalcançável.
+    if isinstance(exc, LLMUnavailable):
+        return True
     # 1) httpx direto (path .generate dos providers OpenAI-compatible)
     if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout,
                         httpx.ReadTimeout, httpx.PoolTimeout,
@@ -208,44 +220,72 @@ async def generate_with_hosted_fallback(
     Returns (resp, used_provider, used_model). Sem fallback aplicável, a
     exceção do PRIMÁRIO propaga; se o fallback também falhar, propaga a dele.
     """
+    from app.core.llm_breaker import breaker, note_short_circuit
+
     pk = dict(prov_kwargs or {})
     gk = dict(gen_kwargs or {})
-    try:
-        llm = get_provider(provider_name, model=(model or None), **pk)
-        resp = await llm.generate(messages, **gk)
-        return resp, provider_name, (model or getattr(llm, "model", "") or "")
-    except Exception as exc:
-        primary_auth = is_llm_auth_error(exc)
-        if not (is_llm_unreachable(exc) or primary_auth):
-            raise
+    canon_primary = canonical_provider(provider_name)
+    primary_auth = False
+    primary_exc: Exception  # a exceção que propaga se não houver fallback aplicável
+
+    # Primário — pula (sem pagar o timeout) se o breaker abriu o circuito dele.
+    if await breaker.allow(canon_primary):
         try:
-            from app.llm_routing import load_routing
-            routing = await load_routing()
-            target = (routing.get("multimodal_fallback") or "").strip()
-        except Exception:
-            target = ""
-        if "/" not in target:
-            raise
-        fb_provider, fb_model = target.split("/", 1)
-        fb_provider = fb_provider.strip().lower()
-        fb_model = fb_model.strip()
-        if not fb_provider or canonical_provider(fb_provider) == canonical_provider(provider_name):
-            raise
-        logger.warning(
-            "llm.fallback.hosted",
-            extra={
-                "event": "llm.fallback.hosted",
-                "purpose": purpose,
-                "failed_provider": provider_name,
-                "failed_model": model,
-                "failed_reason": "auth" if primary_auth else "unreachable",
-                "fallback_provider": fb_provider,
-                "fallback_model": fb_model,
-            },
-        )
+            llm = get_provider(provider_name, model=(model or None), **pk)
+            resp = await llm.generate(messages, **gk)
+            await breaker.record_success(canon_primary)
+            return resp, provider_name, (model or getattr(llm, "model", "") or "")
+        except Exception as exc:
+            primary_auth = is_llm_auth_error(exc)
+            if is_llm_unreachable(exc):
+                await breaker.record_failure(canon_primary)
+            if not (is_llm_unreachable(exc) or primary_auth):
+                raise
+            primary_exc = exc
+    else:
+        note_short_circuit(canon_primary, purpose)
+        primary_exc = LLMUnavailable(f"circuit open: {provider_name}")
+
+    # Fallback hospedado (multimodal_fallback do Roteamento LLM).
+    try:
+        from app.llm_routing import load_routing
+        routing = await load_routing()
+        target = (routing.get("multimodal_fallback") or "").strip()
+    except Exception:
+        target = ""
+    if "/" not in target:
+        raise primary_exc
+    fb_provider, fb_model = target.split("/", 1)
+    fb_provider = fb_provider.strip().lower()
+    fb_model = fb_model.strip()
+    if not fb_provider or canonical_provider(fb_provider) == canon_primary:
+        raise primary_exc
+    canon_fb = canonical_provider(fb_provider)
+    logger.warning(
+        "llm.fallback.hosted",
+        extra={
+            "event": "llm.fallback.hosted",
+            "purpose": purpose,
+            "failed_provider": provider_name,
+            "failed_model": model,
+            "failed_reason": "auth" if primary_auth else "unreachable",
+            "fallback_provider": fb_provider,
+            "fallback_model": fb_model,
+        },
+    )
+    # Fallback também curto-circuitado → propaga o erro do primário (não há 3º alvo).
+    if not await breaker.allow(canon_fb):
+        note_short_circuit(canon_fb, purpose)
+        raise primary_exc
+    try:
         fb_llm = get_provider(fb_provider, model=(fb_model or None), **pk)
         resp = await fb_llm.generate(messages, **gk)
+        await breaker.record_success(canon_fb)
         return resp, fb_provider, fb_model
+    except Exception as fb_exc:
+        if is_llm_unreachable(fb_exc):
+            await breaker.record_failure(canon_fb)
+        raise
 
 
 class LLMProvider(ABC):

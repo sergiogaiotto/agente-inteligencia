@@ -285,6 +285,19 @@ class Settings(BaseSettings):
     # pipelines.fast_routing). Default OFF (mudança de comportamento gated).
     fast_routing_enabled: bool = False
 
+    # ── Circuit-breaker do egress LLM (cross-worker via Redis) — 33.1.0 ──
+    # Contém o raio de um provider caído: após N falhas de ALCANCE consecutivas
+    # (rede/timeout/URL ausente — via is_llm_unreachable), o circuito ABRE e as
+    # chamadas seguintes são curto-circuitadas (não pagam o timeout de ~120-300s
+    # que exauria o pool 5/20). Passado o cooldown, sondas half-open testam a
+    # recuperação. Estado compartilhado entre workers via redis_url (fallback
+    # in-process por-worker quando o Redis cai). Comportamento; NÃO-selado
+    # (o .env vale como fallback). Ver app/core/llm_breaker.py.
+    circuit_breaker_enabled: bool = True    # master; False = passthrough total
+    cb_failure_threshold: int = 5           # falhas de alcance p/ abrir (fleet-total no Redis)
+    cb_cooldown_seconds: int = 30           # tempo aberto antes do half-open
+    cb_half_open_max_probes: int = 1        # sondas concorrentes em half-open
+
     # Esforço de raciocínio das GERAÇÕES do Wizard (SKILL.md + agente). O gate por
     # MODELO vive em get_provider: 'high' só CHEGA ao modelo que aceita (gpt-oss
     # sempre; Azure/OpenAI só o1/o3/o4/gpt-5 — gpt-4o/gpt-4.1 descartam sem erro,
@@ -500,6 +513,11 @@ _UI_TO_ENV_MAP = {
     # Tuning de performance (25.2.0)
     "query_topology_cache_enabled": "QUERY_TOPOLOGY_CACHE_ENABLED",
     "fast_routing_enabled": "FAST_ROUTING_ENABLED",
+    # Circuit-breaker do egress LLM (33.1.0) — comportamento, não-selado.
+    "circuit_breaker_enabled": "CIRCUIT_BREAKER_ENABLED",
+    "cb_failure_threshold": "CB_FAILURE_THRESHOLD",
+    "cb_cooldown_seconds": "CB_COOLDOWN_SECONDS",
+    "cb_half_open_max_probes": "CB_HALF_OPEN_MAX_PROBES",
     # Esforço de raciocínio das gerações do Wizard (skill/agente) — gate por
     # modelo em get_provider. 'high'|'medium'|'low'|'' (desligado). Default 'high'.
     "wizard_reasoning_effort": "WIZARD_REASONING_EFFORT",
@@ -553,6 +571,12 @@ _NON_MODEL_UI_KEYS = {
     "mcp_per_tool_enabled",      # flag do modo per-tool MCP (default OFF)
     "text_to_sql_enabled",       # flag do Tier 2 text-to-SQL governado (default OFF)
     "timezone",                  # timezone da plataforma (IANA); default Brasília
+    # Circuit-breaker do egress LLM (33.1.0) — flags de comportamento, não
+    # credencial/modelo → o .env vale como fallback quando o banco não tem valor.
+    "circuit_breaker_enabled",
+    "cb_failure_threshold",
+    "cb_cooldown_seconds",
+    "cb_half_open_max_probes",
     # Módulo Parâmetros (25.1.0): thresholds/flags do Verifier e harness NÃO
     # são credencial/seleção de modelo — o .env continua valendo como
     # fallback quando o banco não tem valor (retrocompat de instalações que

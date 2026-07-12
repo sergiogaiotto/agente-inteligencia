@@ -27,11 +27,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.core.llm_providers import (
+    canonical_provider,
     get_provider,
     is_llm_auth_error,
     is_llm_param_rejection,
     is_llm_unreachable,
 )
+from app.core.llm_breaker import breaker, note_short_circuit
 from app.llm_routing import resolve_llm_for_task, load_routing
 from app.core.config import get_settings
 from app.skill_parser.parser import strip_code_fence
@@ -265,75 +267,97 @@ async def _wizard_llm_complete(
     gen_kwargs: dict = {}
     if response_format is not None:
         gen_kwargs["response_format"] = response_format
-    try:
-        llm = get_provider(provider, **prov_kwargs)
-        resp = await llm.generate(messages, **gen_kwargs)
-        return resp["content"], provider, model
-    except Exception as exc:
-        # Rejeição de PARÂMETRO (ex.: servidor OpenAI-compatible atrás da URL
-        # do gpt-oss que não conhece reasoning_effort → 400 "extra inputs"):
-        # re-entra UMA vez sem o parâmetro — mesmo espírito do strip-retry da
-        # cadeia do engine (#492). A recursão com reasoning_effort=None não
-        # repete o strip e mantém TODO o resto da resiliência (fallback
-        # hospedado, 503 acionável) para a re-tentativa.
-        if reasoning_effort is not None and is_llm_param_rejection(exc):
-            logger.info(
-                "wizard.llm.param_stripped_retry",
-                extra={
-                    "event": "wizard.llm.param_stripped_retry",
-                    "wizard_route": route,
-                    "provider": provider,
-                    "model": model,
-                    "stripped": "reasoning_effort",
-                },
-            )
-            return await _wizard_llm_complete(
-                messages, provider, model, route=route,
-                temperature=temperature, response_format=response_format,
-                reasoning_effort=None,
-            )
-        # Tenta o fallback hospedado tanto em INACESSÍVEL (rede) quanto em
-        # AUTH (401 — chave ruim): um provider com credencial inválida não deve
-        # derrubar o wizard se o multimodal_fallback (azure) tem credencial OK.
-        primary_auth = _is_llm_auth_error(exc)
-        if not (_is_llm_unreachable(exc) or primary_auth):
-            raise
-        fb_provider, fb_model = await _wizard_hosted_fallback(provider)
-        if fb_provider:
-            logger.warning(
-                "wizard.llm.fallback",
-                extra={
-                    "event": "wizard.llm.fallback",
-                    "wizard_route": route,
-                    "failed_provider": provider,
-                    "failed_model": model,
-                    "failed_reason": "auth" if primary_auth else "unreachable",
-                    "fallback_provider": fb_provider,
-                    "fallback_model": fb_model,
-                },
-            )
+    canon_primary = canonical_provider(provider)
+    primary_auth = False
+
+    # Primário — pula (sem pagar o timeout) se o breaker abriu o circuito dele.
+    if await breaker.allow(canon_primary):
+        try:
+            llm = get_provider(provider, **prov_kwargs)
+            resp = await llm.generate(messages, **gen_kwargs)
+            await breaker.record_success(canon_primary)
+            return resp["content"], provider, model
+        except Exception as exc:
+            # Rejeição de PARÂMETRO (ex.: servidor OpenAI-compatible atrás da URL
+            # do gpt-oss que não conhece reasoning_effort → 400 "extra inputs"):
+            # re-entra UMA vez sem o parâmetro — mesmo espírito do strip-retry da
+            # cadeia do engine (#492). A recursão com reasoning_effort=None não
+            # repete o strip e mantém TODO o resto da resiliência (fallback
+            # hospedado, 503 acionável) para a re-tentativa.
+            if reasoning_effort is not None and is_llm_param_rejection(exc):
+                logger.info(
+                    "wizard.llm.param_stripped_retry",
+                    extra={
+                        "event": "wizard.llm.param_stripped_retry",
+                        "wizard_route": route,
+                        "provider": provider,
+                        "model": model,
+                        "stripped": "reasoning_effort",
+                    },
+                )
+                return await _wizard_llm_complete(
+                    messages, provider, model, route=route,
+                    temperature=temperature, response_format=response_format,
+                    reasoning_effort=None,
+                )
+            primary_auth = _is_llm_auth_error(exc)
+            if _is_llm_unreachable(exc):
+                await breaker.record_failure(canon_primary)
+            if not (_is_llm_unreachable(exc) or primary_auth):
+                raise
+            # cai no fallback hospedado abaixo
+    else:
+        note_short_circuit(canon_primary, f"wizard.{route}")
+        # circuito ABERTO no primário → trata como inalcançável; cai no fallback
+
+    # Tenta o fallback hospedado tanto em INACESSÍVEL (rede) quanto em AUTH
+    # (401 — chave ruim): um provider com credencial inválida não deve derrubar
+    # o wizard se o multimodal_fallback (azure) tem credencial OK.
+    fb_provider, fb_model = await _wizard_hosted_fallback(provider)
+    if fb_provider:
+        canon_fb = canonical_provider(fb_provider)
+        logger.warning(
+            "wizard.llm.fallback",
+            extra={
+                "event": "wizard.llm.fallback",
+                "wizard_route": route,
+                "failed_provider": provider,
+                "failed_model": model,
+                "failed_reason": "auth" if primary_auth else "unreachable",
+                "fallback_provider": fb_provider,
+                "fallback_model": fb_model,
+            },
+        )
+        if await breaker.allow(canon_fb):
             try:
                 fb_kwargs = {**prov_kwargs, "model": (fb_model or None)}
                 fb_llm = get_provider(fb_provider, **fb_kwargs)
                 resp = await fb_llm.generate(messages, **gen_kwargs)
+                await breaker.record_success(canon_fb)
                 return resp["content"], fb_provider, fb_model
             except Exception as exc2:
+                if _is_llm_unreachable(exc2):
+                    await breaker.record_failure(canon_fb)
                 if not (_is_llm_unreachable(exc2) or _is_llm_auth_error(exc2)):
                     raise
                 # fallback também falhou (rede/auth) → cai na mensagem acionável abaixo
-        logger.warning(
-            "wizard.llm.unavailable",
-            extra={
-                "event": "wizard.llm.unavailable",
-                "wizard_route": route,
-                "provider": provider,
-                "model": model,
-                "reason": "auth" if primary_auth else "unreachable",
-            },
-        )
-        if primary_auth:
-            raise HTTPException(503, _wizard_auth_message(provider, model))
-        raise HTTPException(503, _wizard_unreachable_message(provider, model))
+        else:
+            note_short_circuit(canon_fb, f"wizard.{route}")
+            # fallback também curto-circuitado → mensagem acionável abaixo
+
+    logger.warning(
+        "wizard.llm.unavailable",
+        extra={
+            "event": "wizard.llm.unavailable",
+            "wizard_route": route,
+            "provider": provider,
+            "model": model,
+            "reason": "auth" if primary_auth else "unreachable",
+        },
+    )
+    if primary_auth:
+        raise HTTPException(503, _wizard_auth_message(provider, model))
+    raise HTTPException(503, _wizard_unreachable_message(provider, model))
 
 
 class WizardAgentRequest(BaseModel):
