@@ -1,0 +1,19 @@
+# Configuração de ferramentas (NÃO é build-system — o app instala via
+# requirements.txt). Só seções [tool.*]; sem [project]/[build-system] p/ não
+# mudar como o pip trata o diretório.
+#
+# Onda 3 (33.3.0): ruff entra ADVISORY no CI (job `ruff (advisory)`,
+# continue-on-error) — estabelece a linha de base sem travar merges. Promover a
+# gate `required` depois de um PR de limpeza (hoje: 184 issues no ruleset default,
+# 109 arquivos re-formatáveis). Ruleset abaixo é de ALTO SINAL: bugs reais, não
+# estilo (E701/E702 multi-statement e E402 late-import são intencionais no código).
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+# F  = pyflakes (import/variável não-usada, nome indefinido, f-string quebrada)
+# E722 = except: pelado — engole erro sem tipo
+# E741 = nome de variável ambíguo (l/O/I)
+select = ["F", "E722", "E741"]
