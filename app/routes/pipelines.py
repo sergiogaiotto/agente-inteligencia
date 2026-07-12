@@ -294,6 +294,24 @@ async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_i
     except Exception as e:
         logger.warning("event=invocation_cost_failed error=%s", str(e)[:200])
 
+    # Métricas Prometheus (OBS-1) — RED + escalonamento. inc()/observe() são
+    # in-memory (não-bloqueantes) e já rodamos DETACHED, então não tocam o
+    # caminho de resposta. final_state de escalonamento (FSM) vira contador.
+    try:
+        from app.core.metrics import record_invocation
+        r = result or {}
+        status = str(r.get("status") or "unknown")
+        final_state = str(r.get("final_state") or "")
+        record_invocation(
+            kind="invoke_stream" if stream else "invoke",
+            status=status,
+            duration_s=(float(r.get("duration_ms") or 0) / 1000.0),
+            escalated=("escal" in final_state.lower()),
+            error=(status.lower() in ("error", "failed")),
+        )
+    except Exception as e:
+        logger.warning("event=invoke_metrics_failed error=%s", str(e)[:200])
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Args estruturados do invoke (D1/D2) — campo `args` opcional no contrato.

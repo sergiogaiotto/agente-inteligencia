@@ -1,0 +1,14 @@
+# ════════════════════════════════════════════════════════════════
+# Prometheus — scrape das métricas de 1ª classe do app (Onda 2, OBS-1)
+# Bate em app:7000/metrics DIRETO na rede Docker (não passa pelo Caddy, que
+# bloqueia /metrics publicamente). Só sobe com o profile `full`.
+# ════════════════════════════════════════════════════════════════
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: agente-app
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["app:7000"]

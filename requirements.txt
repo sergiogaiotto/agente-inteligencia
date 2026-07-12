@@ -47,6 +47,9 @@ opentelemetry-instrumentation-asyncpg==0.64b0
 opentelemetry-instrumentation-httpx==0.64b0
 opentelemetry-instrumentation-redis==0.64b0
 opentelemetry-instrumentation-logging==0.64b0
+# Métricas de 1ª classe (OBS-1) — /metrics em formato Prometheus. Sempre ativo
+# (não gated por OTEL_ENABLED): é in-memory e barato, exposto p/ scrape do Prometheus.
+prometheus-client==0.21.1
 
 # === Utilities ===
 pydantic==2.13.4

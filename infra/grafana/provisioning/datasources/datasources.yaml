@@ -22,15 +22,24 @@ datasources:
         customQuery: true
         query: '{container_name="agente_app"} |= `trace_id=$${__span.traceId}`'
       tracesToMetrics:
-        datasourceUid: ''   # sem Prometheus por enquanto
+        datasourceUid: prometheus   # Onda 2 OBS-1: pula do span p/ as métricas RED
       serviceMap:
-        datasourceUid: ''
+        datasourceUid: prometheus
       nodeGraph:
         enabled: true
       search:
         hide: false
       lokiSearch:
         datasourceUid: loki
+
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    editable: false
+    jsonData:
+      httpMethod: POST
 
   - name: Loki
     type: loki
