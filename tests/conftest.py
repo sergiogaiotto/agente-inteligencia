@@ -6,8 +6,40 @@ em test DB / fixture container (asyncpg + transação rollbackable).
 """
 
 import os
+from pathlib import Path
 
 import pytest
+
+
+def _load_env_test() -> None:
+    """Carrega ``.env.test`` em ``os.environ`` ANTES de qualquer import de
+    ``app.core.*`` — torna a suíte HERMÉTICA (33.2.1).
+
+    O ``.env`` local de dev roda ``APP_ENV=production`` (espelha prod). Sem isto,
+    o crypto-fail-fast (#559) LANÇAVA em ~7 testes de federação
+    (``crypto._get_fernet`` lê ``os.environ['MAESTRO_SECRET_KEY']`` DIRETO — que o
+    dotenv do pydantic NÃO popula — e ``is_production()`` True fazia levantar em
+    vez do fallback), exigindo o workaround ``APP_ENV=development``.
+
+    Aqui forçamos ``APP_ENV=test`` + SECRET/MAESTRO determinísticos em
+    ``os.environ``: a fonte ``env`` do pydantic vence o ``dotenv`` (.env), e o
+    crypto lê ``os.environ`` direto. Roda no IMPORT do conftest raiz — antes da
+    coleta importar qualquer módulo do app — então o valor certo já está no
+    ambiente na 1ª leitura de ``get_settings()``/``_get_fernet()``. Idempotente e
+    sem dependência de plugin (não usa pytest-dotenv)."""
+    root = Path(__file__).resolve().parent.parent
+    env_test = root / ".env.test"
+    if not env_test.exists():
+        return
+    for raw in env_test.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        os.environ[key.strip()] = val.strip()
+
+
+_load_env_test()
 
 
 @pytest.fixture(autouse=True)
