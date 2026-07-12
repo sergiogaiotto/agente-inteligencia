@@ -35,7 +35,22 @@ def _get_fernet() -> Fernet:
     """Constrói Fernet a partir da master key. Cacheado por processo."""
     master = os.environ.get("MAESTRO_SECRET_KEY", "").strip()
     if not master:
-        # Fallback determinístico — INSEGURO em prod, mas evita crash em dev.
+        # SEC-02: em PRODUÇÃO, jamais cair no fallback determinístico — ele torna
+        # os segredos at-rest recuperáveis por qualquer um com o dump. Falhe-
+        # fechado (defesa em profundidade: o boot guard de main.py já barra o
+        # startup; isto barra também qualquer chamada direta que o contorne).
+        try:
+            from app.core.config import is_production
+            _prod = is_production()
+        except Exception:
+            _prod = False
+        if _prod:
+            raise RuntimeError(
+                "MAESTRO_SECRET_KEY ausente em produção — cifra de segredos "
+                "at-rest indisponível (o fallback determinístico é inseguro). "
+                "Defina MAESTRO_SECRET_KEY e reinicie."
+            )
+        # Em dev, fallback determinístico — INSEGURO, mas evita crash local.
         logger.warning(
             "MAESTRO_SECRET_KEY não setado — usando fallback determinístico "
             "INSEGURO. Configure no .env antes de produção."

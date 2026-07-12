@@ -663,3 +663,91 @@ def get_settings() -> Settings:
             "Considere reduzir se isso não for intencional."
         )
     return s
+
+
+# ═══════════════════════════════════════════════════════════════
+# Postura de segurança de PRODUÇÃO — fail-fast no boot (SEC-02, 32.0.1)
+# ═══════════════════════════════════════════════════════════════
+# Princípio: falhe-FECHADO, nunca falhe-ABERTO. Em produção, um default
+# inseguro é catastrófico e silencioso:
+#   - secret_key == "change-me": a chave que ASSINA o cookie de sessão
+#     (auth.sign_session → URLSafeTimedSerializer) é PÚBLICA (está no repo) →
+#     qualquer um produz um token válido para qualquer user_id, inclusive root
+#     = account takeover (CWE-798).
+#   - MAESTRO_SECRET_KEY ausente: crypto._get_fernet cai num fallback
+#     DETERMINÍSTICO conhecido → segredos at-rest (api-connectors) viram
+#     recuperáveis por qualquer um com o dump (CWE-321).
+#   - cookie_secure == False: o cookie de sessão trafega sem a flag Secure
+#     (interceptável em HTTP claro — CWE-614).
+#
+# Severidade define a AÇÃO (falhe-fechado onde é catastrófico e sem caso de uso
+# legítimo; avise onde bloquear quebraria um fluxo legítimo):
+#   - secret_key / MAESTRO_SECRET_KEY → HARD-FAIL (raise): comprometimento
+#     direto (takeover / segredos recuperáveis), nenhum motivo legítimo em prod.
+#   - cookie_secure=False → WARNING (não bloqueia): tem caso de uso legítimo —
+#     o MESMO app_env=production é usado no debug local por http://127.0.0.1
+#     (onde um cookie Secure simplesmente não seria enviado, quebrando o login).
+#     Bloquear o boot aqui derrubaria dev/VPS por uma questão de menor severidade;
+#     logamos um WARNING acionável em vez disso.
+# O guard SÓ age quando app_env é produção; em dev/staging é no-op. NÃO substitui
+# a ROTAÇÃO das chaves: uma chave que já vazou com o default continua comprometida
+# — rotacionar SECRET_KEY/MAESTRO_SECRET_KEY é pré-requisito operacional.
+
+_PRODUCTION_ENVS = frozenset({"production", "prod"})
+_INSECURE_SECRET_KEYS = frozenset({"", "change-me"})
+
+
+def is_production(settings: "Settings | None" = None) -> bool:
+    """True quando o app roda em produção (app_env in {production, prod})."""
+    s = settings if settings is not None else get_settings()
+    return s.app_env.strip().lower() in _PRODUCTION_ENVS
+
+
+class InsecureProductionConfigError(RuntimeError):
+    """Boot barrado: configuração insegura detectada com app_env=produção."""
+
+
+def assert_secure_production_posture(settings: "Settings | None" = None) -> None:
+    """Falha-fecha o boot nos defaults CATASTRÓFICOS de produção; avisa nos demais.
+
+    No-op fora de produção. Em produção:
+      - HARD-FAIL (raise ``InsecureProductionConfigError``): SECRET_KEY no default
+        público e MAESTRO_SECRET_KEY ausente. Coleta os dois numa exceção só
+        (conserto num restart), cada linha nomeando a env var a corrigir.
+      - WARNING (não bloqueia): COOKIE_SECURE=false — bloquear quebraria o debug
+        local por http sob o mesmo app_env=production.
+    """
+    import os
+
+    s = settings if settings is not None else get_settings()
+    if not is_production(s):
+        return
+
+    # WARNING (não bloqueia): cookie sem flag Secure. Menor severidade + caso de
+    # uso legítimo (http://127.0.0.1 local). Loga acionável e segue o boot.
+    if not s.cookie_secure:
+        logger.warning(
+            "event=security.cookie_insecure_prod detail='COOKIE_SECURE=false em "
+            "produção — o cookie de sessão vai sem a flag Secure (interceptável em "
+            "HTTP claro). Defina COOKIE_SECURE=true onde o app é servido por HTTPS.'"
+        )
+
+    # HARD-FAIL: comprometimento direto, sem caso de uso legítimo em produção.
+    fatal: list[str] = []
+    if s.secret_key.strip() in _INSECURE_SECRET_KEYS:
+        fatal.append(
+            "SECRET_KEY no default público 'change-me' — o cookie de sessão é "
+            "forjável (account takeover). Defina um SECRET_KEY aleatório e único."
+        )
+    if not os.environ.get("MAESTRO_SECRET_KEY", "").strip():
+        fatal.append(
+            "MAESTRO_SECRET_KEY ausente — a cifra de segredos at-rest cai em "
+            "fallback determinístico inseguro. Defina um MAESTRO_SECRET_KEY."
+        )
+
+    if fatal:
+        raise InsecureProductionConfigError(
+            "Boot BARRADO: app_env=produção com configuração insegura.\n  - "
+            + "\n  - ".join(fatal)
+            + "\n(Guard SEC-02 — falhe-fechado. Corrija/rotacione e reinicie.)"
+        )
