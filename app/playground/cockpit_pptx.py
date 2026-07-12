@@ -323,9 +323,11 @@ def build_cockpit_pptx(snapshot: dict[str, Any]) -> bytes:
     _txt(sl, 820000, 3120000, 5000000, 260000, "por resposta CONFIÁVEL (custo ÷ aprovação)",
          size=11, color=ACCENT)
     # escada
+    judge_lbl = ("Juiz / verificador (medido)" if tco.get("judge_measured")
+                 else "Juiz / verificador (estimado)")
     ladder = [
         ("Inferência LLM", tco.get("inf_month"), ACCENT),
-        ("Juiz / verificador (estimado)", tco.get("judge_month"), WARN),
+        (judge_lbl, tco.get("judge_month"), GOOD if tco.get("judge_measured") else WARN),
         ("Ferramentas SaaS (declarado)", tco.get("saas_month"), GOOD),
         ("Infra self-hosted (não medido)", None, MUTED),
     ]
@@ -343,7 +345,8 @@ def build_cockpit_pptx(snapshot: dict[str, Any]) -> bytes:
     prem = (f"Premissas: volume {_int(tco.get('volume'))} conv./mês · "
             f"câmbio {_brl(tco.get('fx'))} · meta {_brl(tco.get('alvo'))}/resposta.")
     _txt(sl, 640080, 4360000, 10911840, 340000, prem, size=12, color=INK)
-    _prov_note(sl, "Ressalvas: preço LLM = tabela interna 2026-05; custo do juiz ESTIMADO (não instrumentado); "
+    _judge_note = "MEDIDO quando o juiz roda" if tco.get("judge_measured") else "ESTIMADO"
+    _prov_note(sl, f"Ressalvas: preço LLM = tabela interna (editável); custo do juiz {_judge_note}; "
                    "self-hosted conta 0 (GPU/infra fora do modelo); input pode subcontar em turnos multi-chamada.")
 
     # ── Slide 6+ — a conversa ──

@@ -845,22 +845,24 @@
                 </div>
                 <div class="space-y-1.5">
                   <div class="flex items-center gap-2 text-[10.5px]">
-                    <span class="w-24 flex-none text-surface-600 flex items-center gap-1">Inferência LLM<button type="button" class="ck-help" @click="openRule('tco_inf')">?</button></span>
+                    <span class="w-28 flex-none text-surface-600 flex items-center gap-1">Inferência LLM<button type="button" class="ck-help" @click="openRule('tco_inf')">?</button></span>
                     <span class="flex-1 h-3.5 rounded bg-surface-100 overflow-hidden"><span class="block h-full bg-brand-500 rounded" :style="`width:${tcoPct(tcoInfMonth)}%`"></span></span>
                     <span class="w-16 flex-none text-right font-mono font-semibold text-brand-900" x-text="fmtBRLk(tcoInfMonth)"></span>
                   </div>
                   <div class="flex items-center gap-2 text-[10.5px]">
-                    <span class="w-24 flex-none text-surface-600 flex items-center gap-1">Juiz/verif.<button type="button" class="ck-help" @click="openRule('tco_juiz')">?</button></span>
-                    <span class="flex-1 h-3.5 rounded bg-surface-100 overflow-hidden"><span class="block h-full bg-amber-400 rounded" :style="`width:${tcoPct(tcoJudgeMonth)}%`"></span></span>
+                    <span class="w-28 flex-none text-surface-600 flex items-center gap-1">Juiz/verif.
+                      <span class="ck-prov" :class="ckJudgeMeasured ? 'ck-prov-medido' : 'ck-prov-amostrado'" x-text="ckJudgeMeasured ? 'medido' : 'est.'"></span>
+                      <button type="button" class="ck-help" @click="openRule('tco_juiz')">?</button></span>
+                    <span class="flex-1 h-3.5 rounded bg-surface-100 overflow-hidden"><span class="block h-full rounded" :class="ckJudgeMeasured ? 'bg-emerald-400' : 'bg-amber-400'" :style="`width:${tcoPct(tcoJudgeMonth)}%`"></span></span>
                     <span class="w-16 flex-none text-right font-mono font-semibold text-brand-900" x-text="fmtBRLk(tcoJudgeMonth)"></span>
                   </div>
                   <div class="flex items-center gap-2 text-[10.5px]">
-                    <span class="w-24 flex-none text-surface-600 flex items-center gap-1">Ferram. SaaS<button type="button" class="ck-help" @click="openRule('tco_saas')">?</button></span>
+                    <span class="w-28 flex-none text-surface-600 flex items-center gap-1">Ferram. SaaS<button type="button" class="ck-help" @click="openRule('tco_saas')">?</button></span>
                     <span class="flex-1 h-3.5 rounded bg-surface-100 overflow-hidden"><span class="block h-full bg-emerald-400 rounded" :style="`width:${tcoPct(tcoSaasMonth)}%`"></span></span>
                     <span class="w-16 flex-none text-right font-mono font-semibold text-brand-900" x-text="fmtBRLk(tcoSaasMonth)"></span>
                   </div>
                   <div class="flex items-center gap-2 text-[10.5px]">
-                    <span class="w-24 flex-none text-surface-600 flex items-center gap-1">Infra self-host.<button type="button" class="ck-help" @click="openRule('tco_infra')">?</button></span>
+                    <span class="w-28 flex-none text-surface-600 flex items-center gap-1">Infra self-host.<button type="button" class="ck-help" @click="openRule('tco_infra')">?</button></span>
                     <span class="flex-1 h-3.5 rounded bg-surface-50 border border-dashed border-surface-200"></span>
                     <span class="w-16 flex-none text-right font-mono text-surface-400 text-[9.5px]">não medido</span>
                   </div>
@@ -875,7 +877,7 @@
                 </div>
               </div>
               <p class="text-[9.5px] text-surface-400 leading-snug ck-tile">
-                <strong>Premissas &amp; ressalvas:</strong> preço LLM = tabela interna 2026-05; custo do juiz <strong>estimado</strong> (não instrumentado); <strong>self-hosted conta 0</strong> (GPU/infra fora do modelo); input pode subcontar em turnos multi-chamada. Ajuste volume, câmbio, meta e SaaS acima.
+                <strong>Premissas &amp; ressalvas:</strong> preço LLM = tabela interna (editável); custo do juiz <strong x-text="ckJudgeMeasured ? 'medido' : 'estimado'"></strong> (instrumentado quando o juiz roda); <strong>self-hosted conta 0</strong> (GPU/infra fora do modelo); input pode subcontar em turnos multi-chamada. Ajuste volume, câmbio, meta e SaaS acima.
               </p>
             </div>
 
@@ -994,7 +996,7 @@ function playgroundPage() {
             qac: { t: 'Custo por resposta confiável', r: 'custo_por_resposta ÷ taxa de aprovação. A taxa é a fração de turnos aprovados pelo juiz (ok); sem juiz, usa a saúde da FSM. Se 14% não passam, o custo real por resposta utilizável fica ~16% maior — o desperdício tem preço.', p: 'projetado — custo medido ÷ aprovação medida.' },
             tco: { t: 'Escada de TCO (mensal)', r: 'Base = custo da CONVERSA inteira (todos os turnos) × câmbio. Inferência = custo_da_conversa × volume/mês. Juiz/verificador = inferência × % (estimado). Ferramentas SaaS = valor fixo que você informa. Infra self-hosted = não medido. O total vira uma BANDA (−15%/+20%) por causa das estimativas.', p: 'projetado — a partir do custo medido e das suas premissas.' },
             tco_inf: { t: 'Inferência LLM (mês)', r: 'custo_da_conversa (BRL) × volume de conversas/mês.', p: 'projetado — a partir do custo medido.' },
-            tco_juiz: { t: 'Juiz / verificador (mês)', r: 'inferência × %. O custo do juiz NÃO é instrumentado hoje (a tabela de verificações guarda só a duração), então isto é uma ESTIMATIVA. Ajuste o %.', p: 'estimado — custo do juiz não instrumentado.' },
+            tco_juiz: { t: 'Juiz / verificador (mês)', r: 'MEDIDO quando o juiz rodou: soma o custo real do LLM-as-Judge por step da conversa (tokens × preço do modelo, agora instrumentado em verifications) × volume/mês. Se o juiz não rodou no recorte (perfil fast/off), cai numa ESTIMATIVA = inferência × %. Modelo self-hosted → custo 0 (honesto). O selo diz medido vs est.', p: 'medido quando o juiz rodou; senão estimado.' },
             tco_saas: { t: 'Ferramentas SaaS (mês)', r: 'Valor fixo mensal de ferramentas/conectores externos que você informa (contratos de terceiros).', p: 'declarado — informado por você.' },
             tco_infra: { t: 'Infra self-hosted', r: 'GPU/hospedagem de modelos self-hosted NÃO é modelada pela plataforma (esses modelos custam 0 no cálculo). Para um TCO fiel, some o custo de infra por fora.', p: 'não medido — fora do modelo de custo.' },
             tco_band: { t: 'Banda de TCO', r: 'Total mensal projetado com margem −15%/+20% p/ refletir as estimativas (juiz) e omissões (infra). Anual = mensal × 12. Leve a BANDA + as premissas ao BP — não um número seco.', p: 'projetado.' },
@@ -1555,7 +1557,12 @@ function playgroundPage() {
         // TCO — projeção mensal/anual; base = custo da CONVERSA inteira
         get tcoConversaBRL() { return this._costOf(this._sessTurns()) * (Number(this.tcoFx) || 0); },
         get tcoInfMonth() { return this.tcoConversaBRL * (Number(this.tcoVolume) || 0); },
-        get tcoJudgeMonth() { return this.tcoInfMonth * (Number(this.tcoJuizPct) || 0); },
+        // Custo do juiz: MEDIDO quando o juiz rodou (soma judge_cost_usd por step
+        // da conversa, agora instrumentado) — senão ESTIMADO como % da inferência.
+        _judgeCostUsdOf(turns) { let c = 0; this._steps(turns).forEach(s => { const v = s && s.verification; if (v) c += Number(v.judge_cost_usd) || 0; }); return c; },
+        get ckJudgeMeasured() { return this._steps(this._sessTurns()).some(s => s && s.verification); },
+        get ckJudgeConversaBRL() { return this._judgeCostUsdOf(this._sessTurns()) * (Number(this.tcoFx) || 0); },
+        get tcoJudgeMonth() { return this.ckJudgeMeasured ? (this.ckJudgeConversaBRL * (Number(this.tcoVolume) || 0)) : (this.tcoInfMonth * (Number(this.tcoJuizPct) || 0)); },
         get tcoSaasMonth() { return Number(this.tcoSaas) || 0; },
         get tcoBaseMonth() { return this.tcoInfMonth + this.tcoJudgeMonth + this.tcoSaasMonth; },
         get tcoBandMonth() { const b = this.tcoBaseMonth; return { lo: b * 0.85, hi: b * 1.20 }; },
@@ -1601,7 +1608,7 @@ function playgroundPage() {
                 quality: { has_judge: this.ckHasJudge, factuality: this.ckFact, completeness: this.ckCompl, tone: this.ckTone, safety: this.ckSafety, ragas: this.ckRagas },
                 reliability: { fsm: this.ckFsmLabel, contract: this.ckContractRate, hallucinations: this.ckHallucinations, grounding: this.ckGroundedRate, coverage: this.ckCoverage },
                 cost: { brl: this.ckCostUsd * (Number(this.tcoFx) || 0), usd: this.ckCostUsd, tokens: this.ckTokens, latency_ms: this.ckMs, qac_brl: this.qacBRL },
-                tco: { volume: this.tcoVolume, fx: this.tcoFx, alvo: this.tcoAlvo, saas: this.tcoSaas, inf_month: this.tcoInfMonth, judge_month: this.tcoJudgeMonth, saas_month: this.tcoSaasMonth, band_month: this.tcoBandMonth, band_year: this.tcoBandYear },
+                tco: { volume: this.tcoVolume, fx: this.tcoFx, alvo: this.tcoAlvo, saas: this.tcoSaas, inf_month: this.tcoInfMonth, judge_month: this.tcoJudgeMonth, judge_measured: this.ckJudgeMeasured, saas_month: this.tcoSaasMonth, band_month: this.tcoBandMonth, band_year: this.tcoBandYear },
                 conversation: this.chat.map(m => ({ role: m.role, text: String(m.text || '') })),
             };
         },

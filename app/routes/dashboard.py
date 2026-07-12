@@ -10,7 +10,7 @@ CORREÇÕES (2026-04):
   MCP Streamable HTTP (spec 2025-03-26) retornam HTTP 406 Not Acceptable.
 """
 import uuid, json, logging
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.models.schemas import ReleaseCreate, GoldCaseCreate, KnowledgeSourceCreate, ToolCreate, ToolUpdate, RunEvalRequest
@@ -2819,6 +2819,43 @@ async def save_settings(
         "details": json.dumps({"keys": list(settings_dict.keys()), "env_applied": applied}),
     })
     return {"message": "Configurações salvas", "keys_saved": len(settings_dict), "env_applied": applied}
+
+
+@router.get("/settings/pricing")
+async def get_llm_pricing(user: dict = Depends(require_role("root", "admin"))):
+    """Tabela EFETIVA de preços de LLM (USD/1k tokens) = default ∪ overrides.
+
+    Alimenta a tela "Preços LLM". Cada linha marca se veio de override (editado
+    na tela) ou do default do código, com o default ao lado (p/ restaurar)."""
+    from app.core.llm_pricing import effective_pricing
+    return {"pricing": effective_pricing()}
+
+
+@router.put("/settings/pricing")
+async def save_llm_pricing(
+    data: dict = Body(...), user: dict = Depends(require_role("root", "admin")),
+):
+    """Salva os overrides de preço (USD/1k tokens) e aplica em RUNTIME (sem deploy).
+
+    Body: ``{"overrides": {"azure/gpt-4o": {"input": 0.003, "output": 0.012}}}``.
+    O setter normaliza/valida (ignora inválidos); persiste a versão limpa em
+    platform_settings (chave llm_pricing_overrides) — recarregada no boot por
+    apply_settings_to_env. Torna a linha de custo do TCO auditável e atual."""
+    from app.core.llm_pricing import (
+        set_pricing_overrides, get_pricing_overrides, effective_pricing,
+    )
+    overrides = (data or {}).get("overrides")
+    if not isinstance(overrides, dict):
+        raise HTTPException(400, "Corpo inválido: esperado {\"overrides\": {...}}")
+    set_pricing_overrides(overrides)          # normaliza/valida na camada runtime
+    clean = get_pricing_overrides()
+    await settings_store.set("llm_pricing_overrides", json.dumps(clean))
+    await audit_repo.create({
+        "entity_type": "settings", "entity_id": "platform",
+        "action": "pricing_saved",
+        "details": json.dumps({"models": sorted(clean.keys())}),
+    })
+    return {"status": "ok", "count": len(clean), "pricing": effective_pricing()}
 
 
 class ProviderTestRequest(BaseModel):

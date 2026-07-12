@@ -16,6 +16,8 @@
                 :class="tab==='routing' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Roteamento LLM</button>
         <button @click="tab='params'; loadParams()" data-testid="settings-tab-params" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='params' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Parâmetros</button>
+        <button @click="tab='pricing'; loadPricing()" data-testid="settings-tab-pricing" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
+                :class="tab==='pricing' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Preços LLM</button>
         {% endif %}
         {% if user_role == 'root' %}
         <button @click="tab='prompts'; loadPrompts()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
@@ -94,6 +96,52 @@
                 </div>
             </div>
         </template>
+    </div>
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB: PREÇOS LLM (TCO auditável)       -->
+    <!-- ══════════════════════════════════════ -->
+    <div x-show="tab==='pricing'" x-cloak class="max-w-3xl" data-testid="settings-pricing-tab">
+        <div class="rounded-xl border border-brand-100 bg-brand-50/30 p-4 mb-5">
+            <h3 class="text-[13px] font-semibold text-brand-900 mb-1">Preços de LLM (USD por 1.000 tokens)</h3>
+            <p class="text-[11px] text-surface-500 leading-relaxed">
+                Editar aqui muda o <strong>cálculo de custo</strong> (e a banda de TCO do Cockpit da Conversa) em runtime, <strong>sem deploy</strong>. O que você altera vira um <em>override</em> sobre a tabela do código; <strong>restaurar</strong> remove o override e volta ao padrão. Modelo self-hosted normalmente custa 0 (infra fora do modelo de token).
+            </p>
+        </div>
+
+        <div class="flex items-center justify-between mb-3">
+            <span class="text-[11px] text-surface-400" x-text="pricing.lastSaved ? ('Salvo em ' + pricing.lastSaved) : ''"></span>
+            <button @click="savePricing()" :disabled="pricing.busy" data-testid="pricing-save"
+                    class="inline-flex items-center gap-2 rounded-lg px-5 py-2 text-[13px] font-semibold text-white bg-brand-500 hover:bg-brand-600 disabled:bg-surface-300">
+                <span x-text="pricing.busy ? 'Salvando...' : 'Salvar preços'"></span>
+            </button>
+        </div>
+
+        <div class="rounded-xl border border-surface-200 bg-white overflow-hidden">
+            <div class="grid grid-cols-[1fr_5rem_5rem_5rem_2rem] gap-2 px-3 py-2 border-b border-surface-100 text-[10px] font-semibold uppercase tracking-wide text-surface-400">
+                <span>Modelo (provider/model)</span><span class="text-right">Input</span><span class="text-right">Output</span><span class="text-center">Origem</span><span></span>
+            </div>
+            <div class="max-h-[440px] overflow-y-auto divide-y divide-surface-50">
+                <template x-for="row in pricing.rows" :key="row.key">
+                    <div class="grid grid-cols-[1fr_5rem_5rem_5rem_2rem] gap-2 px-3 py-1.5 items-center">
+                        <span class="text-[11.5px] font-mono text-brand-900 truncate" x-text="row.key" :title="row.key"></span>
+                        <input type="number" min="0" step="0.0001" x-model.number="row.input" class="w-full rounded border border-surface-200 px-1.5 py-1 text-[11px] text-right font-mono outline-none focus:border-brand-400">
+                        <input type="number" min="0" step="0.0001" x-model.number="row.output" class="w-full rounded border border-surface-200 px-1.5 py-1 text-[11px] text-right font-mono outline-none focus:border-brand-400">
+                        <span class="text-[9px] rounded-full px-1.5 py-0.5 text-center" :class="row.overridden ? 'bg-amber-50 text-amber-700 font-semibold' : 'bg-surface-100 text-surface-400'" x-text="row.overridden ? 'editado' : 'padrão'"></span>
+                        <button x-show="row.overridden || row.default_input === null" @click="resetPricingRow(row)" type="button"
+                                class="text-[12px] text-surface-400 hover:text-brand-600" :title="row.default_input === null ? 'Remover modelo' : 'Restaurar padrão'" x-text="row.default_input === null ? '×' : '↺'"></button>
+                    </div>
+                </template>
+            </div>
+            <div class="grid grid-cols-[1fr_5rem_5rem_5rem_2rem] gap-2 px-3 py-2 border-t border-surface-100 items-center bg-surface-50/50">
+                <input type="text" x-model="pricing.adding.key" placeholder="provider/model (ex.: azure/gpt-4o)" data-testid="pricing-add-key" class="w-full rounded border border-surface-200 px-1.5 py-1 text-[11px] font-mono outline-none focus:border-brand-400">
+                <input type="number" min="0" step="0.0001" x-model.number="pricing.adding.input" placeholder="input" class="w-full rounded border border-surface-200 px-1.5 py-1 text-[11px] text-right font-mono outline-none focus:border-brand-400">
+                <input type="number" min="0" step="0.0001" x-model.number="pricing.adding.output" placeholder="output" class="w-full rounded border border-surface-200 px-1.5 py-1 text-[11px] text-right font-mono outline-none focus:border-brand-400">
+                <span></span>
+                <button @click="addPricingModel()" type="button" data-testid="pricing-add" class="text-[16px] text-brand-500 hover:text-brand-700" title="Adicionar modelo à tabela">+</button>
+            </div>
+        </div>
+        <p class="text-[10px] text-surface-400 mt-2">Preços em <strong>USD por 1.000 tokens</strong>. Custo de uma resposta = (tokens_input/1000 × input) + (tokens_output/1000 × output). Vale para agentes, pipelines e o <strong>juiz</strong>.</p>
     </div>
 
     <!-- ══════════════════════════════════════ -->
@@ -1632,6 +1680,56 @@ function settingsPage() {
                 showToast('Voltou a herdar do ambiente — já vale, sem restart');
                 await this.loadParams();
             } catch(e) { showToast('Erro ao restaurar: ' + (e?.message || ''), 'error'); }
+        },
+
+        /* ── Preços LLM (TCO auditável) ──  edita a tabela de preço em runtime.
+           Um valor que difere do default do código vira override; igual ao
+           default (ou "restaurar") remove o override. Modelo custom (sem default)
+           some ao remover. */
+        pricing: { rows: [], busy: false, lastSaved: '', adding: { key: '', input: '', output: '' } },
+        async loadPricing() {
+            try {
+                const r = await api.get('/api/v1/settings/pricing');
+                this.pricing.rows = (r.pricing || []).map(p => ({ ...p }));
+            } catch(e) { showToast('Erro ao carregar preços: ' + (e?.message || ''), 'error'); }
+        },
+        _pricingOverrides() {
+            const ov = {};
+            for (const r of this.pricing.rows) {
+                const inp = Number(r.input), out = Number(r.output);
+                if (Number.isNaN(inp) || Number.isNaN(out) || inp < 0 || out < 0) continue;
+                // override quando difere do default OU quando é modelo custom (sem default)
+                if (r.default_input == null || r.default_output == null || inp !== r.default_input || out !== r.default_output) {
+                    ov[r.key] = { input: inp, output: out };
+                }
+            }
+            return ov;
+        },
+        async savePricing() {
+            this.pricing.busy = true;
+            try {
+                const r = await api.put('/api/v1/settings/pricing', { overrides: this._pricingOverrides() });
+                this.pricing.rows = (r.pricing || []).map(p => ({ ...p }));
+                this.pricing.lastSaved = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                showToast('Preços salvos — já valem no custo/TCO, sem restart');
+            } catch(e) { showToast('Erro ao salvar preços: ' + (e?.message || ''), 'error'); }
+            this.pricing.busy = false;
+        },
+        resetPricingRow(row) {
+            if (row.default_input == null) {              // modelo custom → remove da tabela
+                this.pricing.rows = this.pricing.rows.filter(r => r.key !== row.key);
+            } else {                                       // volta ao default (some do override no save)
+                row.input = row.default_input; row.output = row.default_output; row.overridden = false;
+            }
+        },
+        addPricingModel() {
+            const k = (this.pricing.adding.key || '').trim().toLowerCase();
+            if (!k || k.indexOf('/') < 0) { showToast('Use provider/model, ex.: azure/gpt-4o', 'error'); return; }
+            const inp = Number(this.pricing.adding.input), out = Number(this.pricing.adding.output);
+            if (Number.isNaN(inp) || Number.isNaN(out) || inp < 0 || out < 0) { showToast('Preços precisam ser números ≥ 0', 'error'); return; }
+            if (this.pricing.rows.some(r => r.key === k)) { showToast('Modelo já está na tabela', 'info'); return; }
+            this.pricing.rows.push({ key: k, input: inp, output: out, overridden: true, default_input: null, default_output: null });
+            this.pricing.adding = { key: '', input: '', output: '' };
         },
 
         /* ── Roteamento LLM (Onda 7) ── */
