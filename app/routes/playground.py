@@ -25,6 +25,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import io
 import json
 import logging
 import uuid
@@ -32,7 +33,8 @@ from datetime import datetime
 
 from app.core.datetime_utils import naive_utc_now
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from app.core.auth import require_user
 from app.core.database import playground_runs_repo, playground_threads_repo
@@ -182,3 +184,30 @@ async def delete_run(run_id: str, user: dict = Depends(require_user)):
         raise HTTPException(404, "Execução não encontrada")
     await playground_runs_repo.delete(run_id)  # CASCADE remove a thread
     return {"deleted": run_id}
+
+
+@router.post("/cockpit/pptx")
+async def export_cockpit_pptx(snapshot: dict = Body(...), user: dict = Depends(require_user)):
+    """Exporta o Cockpit da Conversa (tudo em tela + a conversa) como um deck PPTX.
+
+    O snapshot é COMPUTADO pela UI (índices/lentes/TCO já refletem o recorte) e a
+    conversa vai junto. O servidor apenas RENDERIZA — a lógica de avaliação vive no
+    cliente. Auth por usuário (cookie/X-API-Key). Sem gravar nada: streaming direto.
+    """
+    from app.playground.cockpit_pptx import build_cockpit_pptx
+
+    try:
+        data = build_cockpit_pptx(snapshot or {})
+    except Exception as e:  # deck defensivo, mas nunca deixa vazar 500 opaco
+        logger.warning("cockpit_pptx build failed: %s", e, exc_info=True)
+        raise HTTPException(500, "Falha ao gerar o PPTX do cockpit")
+
+    sess = str((snapshot or {}).get("session_id") or "sessao")[:8] or "sessao"
+    scope = "sessao" if (snapshot or {}).get("scope") == "sessao" else "turno"
+    safe = "".join(c for c in sess if c.isalnum() or c in "-_") or "sessao"
+    filename = f"cockpit-{safe}-{scope}.pptx"
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

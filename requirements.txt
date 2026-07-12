@@ -93,6 +93,12 @@ markitdown[all]==0.1.6
 # Arquivo .duckdb por tabela em data/tabular/<ks_id>/<table_id>.duckdb.
 duckdb==1.5.4
 
+# === Export de apresentação (Cockpit da Conversa → PPTX) ===
+# Gera o deck do cockpit (avaliação big-picture + a conversa) server-side, a
+# partir do snapshot enviado pela UI. Sem template externo; slides montados no
+# código (testável isolado em app/playground/cockpit_pptx.py).
+python-pptx==1.0.2
+
 # === Testing (dev) ===
 # Testes de lógica pura (Pydantic, parsers, state machines) +
 # integration tests com Postgres real (tests/integration/, requer docker).
