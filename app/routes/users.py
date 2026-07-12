@@ -90,7 +90,14 @@ async def check_setup():
 
 # ═══ CRUD ═══
 @router.get("")
-async def list_users(role: str = None):
+async def list_users(request: Request, role: str = None):
+    # RBAC: a lista expõe PII (email/papel/domínios) de TODOS os usuários — só
+    # root/admin. (A UI de Usuários já é gated; a observabilidade degrada p/ [].)
+    caller = await _get_caller(request)
+    if not caller:
+        raise HTTPException(401, "Faça login primeiro")
+    if not _is_privileged(caller):
+        raise HTTPException(403, "Apenas Root/Admin podem listar usuários")
     users = await users_repo.find_all(limit=500)
     if role:
         users = [u for u in users if u.get("role") == role]
@@ -98,7 +105,13 @@ async def list_users(role: str = None):
 
 
 @router.get("/{user_id}")
-async def get_user(user_id: str):
+async def get_user(user_id: str, request: Request):
+    # RBAC: ver OUTRO usuário exige root/admin; o próprio pode ver a si mesmo.
+    caller = await _get_caller(request)
+    if not caller:
+        raise HTTPException(401, "Faça login primeiro")
+    if caller["id"] != user_id and not _is_privileged(caller):
+        raise HTTPException(403, "Apenas Root/Admin podem ver outros usuários")
     u = await users_repo.find_by_id(user_id)
     if not u:
         raise HTTPException(404)
@@ -112,14 +125,16 @@ async def create_user(data: UserCreate, request: Request):
     if count == 0:
         data.role = "root"
     else:
-        # Validate caller permissions
+        # RBAC: só root/admin criam usuários. Antes, um 'comum' criava um 'admin'
+        # (nada barrava — só o papel 'root' era guardado) = escalonamento direto.
         caller = await _get_caller(request)
         if not caller:
             raise HTTPException(401, "Faça login primeiro")
-        if data.role == "root" and caller.get("role") != "root":
+        if not _is_privileged(caller):
+            raise HTTPException(403, "Apenas Root/Admin podem criar usuários")
+        # Não criar papel ACIMA do próprio: admin não cria root.
+        if (data.role or "").lower() == "root" and (caller.get("role") or "").lower() != "root":
             raise HTTPException(403, "Apenas Root pode criar usuários Root")
-        if caller.get("role") == "admin" and data.role == "root":
-            raise HTTPException(403, "Admin não pode criar Root")
 
     # Check unique username
     existing = await users_repo.find_all(limit=1000)
@@ -148,25 +163,37 @@ async def update_user(user_id: str, data: UserUpdate, request: Request):
     caller = await _get_caller(request)
     if not caller:
         raise HTTPException(401)
+    is_self = caller["id"] == user_id
+    caller_role = (caller.get("role") or "").lower()
 
-    # Root password: only self can change
-    if target["role"] == "root" and data.password and caller["id"] != user_id:
+    # RBAC: editar OUTRO usuário exige root/admin. Antes, um 'comum' redefinia a
+    # senha de QUALQUER não-root (só a senha de root era guardada) = takeover de
+    # conta. O próprio usuário segue podendo editar a si mesmo (nome/email/senha).
+    if not is_self and not _is_privileged(caller):
+        raise HTTPException(403, "Apenas Root/Admin podem editar outros usuários")
+
+    # Senha de Root: só o próprio Root altera.
+    if target["role"] == "root" and data.password and not is_self:
         raise HTTPException(403, "Apenas o próprio Root pode alterar sua senha")
-
-    # Admin cannot change Root users
-    if caller["role"] == "admin" and target["role"] == "root":
+    # Admin não altera usuários Root.
+    if caller_role == "admin" and target["role"] == "root":
         raise HTTPException(403, "Admin não pode alterar usuários Root")
 
-    # Admin cannot promote to Root
-    if caller["role"] == "admin" and data.role == "root":
-        raise HTTPException(403, "Admin não pode promover a Root")
+    # Papel: só Root altera papéis, e NINGUÉM muda o próprio papel (nem auto-promoção
+    # nem auto-rebaixamento do último root). Um pedido de role só é aplicado por root.
+    role_change = data.role is not None and (data.role or "").lower() != (target.get("role") or "").lower()
+    if role_change:
+        if caller_role != "root":
+            raise HTTPException(403, "Apenas Root altera papéis")
+        if is_self:
+            raise HTTPException(403, "Root não altera o próprio papel")
 
     upd = {}
     if data.display_name is not None:
         upd["display_name"] = data.display_name
     if data.email is not None:
         upd["email"] = data.email
-    if data.role is not None and caller["role"] == "root":
+    if role_change and caller_role == "root":
         upd["role"] = data.role
     if data.domains is not None:
         upd["domains"] = data.domains
@@ -188,7 +215,10 @@ async def delete_user(user_id: str, request: Request):
     if not caller:
         raise HTTPException(401)
 
-    if target["role"] == "root" and caller["role"] != "root":
+    # RBAC: só root/admin removem usuários (antes um 'comum' deletava não-roots).
+    if not _is_privileged(caller):
+        raise HTTPException(403, "Apenas Root/Admin podem remover usuários")
+    if target["role"] == "root" and (caller.get("role") or "").lower() != "root":
         raise HTTPException(403, "Apenas Root pode remover Root")
 
     # Cannot delete self
@@ -206,6 +236,16 @@ async def _get_caller(request: Request):
     return await users_repo.find_by_id(uid)
 
 
+_PRIVILEGED_ROLES = ("root", "admin")
+
+
+def _is_privileged(caller) -> bool:
+    """True se o caller tem papel root/admin (case-insensitive). RBAC: só estes
+    papéis administram usuários — fecha o escalonamento de privilégio e o takeover
+    de conta por usuário 'comum' (achado crítico da auditoria de segurança)."""
+    return bool(caller) and (caller.get("role") or "").lower() in _PRIVILEGED_ROLES
+
+
 # ═══ Domains ═══
 @domains_router.get("")
 async def list_domains():
@@ -213,7 +253,10 @@ async def list_domains():
 
 
 @domains_router.post("", status_code=201)
-async def create_domain(data: DomainCreate):
+async def create_domain(data: DomainCreate, request: Request):
+    # RBAC: domínios são estrutura de governança — só root/admin criam/removem.
+    if not _is_privileged(await _get_caller(request)):
+        raise HTTPException(403, "Apenas Root/Admin podem criar domínios")
     existing = await domains_repo.find_all(limit=200)
     if any(d["name"].lower() == data.name.lower() for d in existing):
         raise HTTPException(409, "Domínio já existe")
@@ -223,7 +266,9 @@ async def create_domain(data: DomainCreate):
 
 
 @domains_router.delete("/{domain_id}")
-async def delete_domain(domain_id: str):
+async def delete_domain(domain_id: str, request: Request):
+    if not _is_privileged(await _get_caller(request)):
+        raise HTTPException(403, "Apenas Root/Admin podem remover domínios")
     if not await domains_repo.delete(domain_id):
         raise HTTPException(404)
     return {"message": "Domínio removido"}
