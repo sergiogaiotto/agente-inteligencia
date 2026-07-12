@@ -1339,10 +1339,13 @@ async def init_db():
                 dsn=settings.database_url,
                 min_size=settings.database_pool_min,
                 max_size=settings.database_pool_max,
-                command_timeout=60,
+                command_timeout=settings.database_command_timeout,
                 init=_init_pool_connection,
             )
-            logger.info(f"PostgreSQL pool aberto: min={settings.database_pool_min} max={settings.database_pool_max}")
+            logger.info(
+                f"PostgreSQL pool aberto: min={settings.database_pool_min} "
+                f"max={settings.database_pool_max} command_timeout={settings.database_command_timeout}s"
+            )
         async with _pool.acquire() as con:
             for stmt in _split_sql(SCHEMA):
                 await con.execute(stmt)

@@ -24,8 +24,13 @@ class Settings(BaseSettings):
     # Formato: postgresql://user:password@host:port/database
     # Em docker-compose: postgresql://agente:agente@postgres:5432/agente_inteligencia
     database_url: str = "postgresql://agente:agente@localhost:5432/agente_inteligencia"
-    database_pool_min: int = 2
-    database_pool_max: int = 10
+    # Pool asyncpg. Defaults endurecidos p/ carga concorrente de API externa:
+    # com max=10 (antigo) invokes concorrentes + tasks async saturavam o pool e
+    # novas requests ESPERAVAM por conexão (hang). min/max e o command_timeout
+    # (teto por query — evita conexão presa indefinidamente) são env-tunáveis.
+    database_pool_min: int = 5
+    database_pool_max: int = 20
+    database_command_timeout: int = 60
 
     # ── Cache / Redis (memória de contexto) ──
     redis_url: str = "redis://localhost:6379/0"

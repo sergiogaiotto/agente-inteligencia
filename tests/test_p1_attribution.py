@@ -34,7 +34,7 @@ class TestAttribution:
             called["n"] += 1
 
         monkeypatch.setattr(pl.interactions_repo, "update", _upd)
-        await pl._attribute_interaction_to_key(_Req(), "int1")  # sem api_key_id
+        await pl._attribute_interaction_to_key(None, None, "int1")  # sem api_key_id
         assert called["n"] == 0
 
     @pytest.mark.asyncio
@@ -45,7 +45,7 @@ class TestAttribution:
             called["n"] += 1
 
         monkeypatch.setattr(pl.interactions_repo, "update", _upd)
-        await pl._attribute_interaction_to_key(_Req(api_key_id="k1"), None)
+        await pl._attribute_interaction_to_key("k1", None, None)
         assert called["n"] == 0
 
     @pytest.mark.asyncio
@@ -60,9 +60,7 @@ class TestAttribution:
 
         monkeypatch.setattr(pl.interactions_repo, "find_by_id", _find)
         monkeypatch.setattr(pl.interactions_repo, "update", _upd)
-        await pl._attribute_interaction_to_key(
-            _Req(api_key_id="k1", api_key_name="frontend-x"), "int1"
-        )
+        await pl._attribute_interaction_to_key("k1", "frontend-x", "int1")
         md = json.loads(captured["metadata"])
         assert md["via"] == "api_key"
         assert md["api_key_id"] == "k1"
@@ -80,7 +78,7 @@ class TestAttribution:
 
         monkeypatch.setattr(pl.interactions_repo, "find_by_id", _find)
         monkeypatch.setattr(pl.interactions_repo, "update", _upd)
-        await pl._attribute_interaction_to_key(_Req(api_key_id="k1"), "int1")
+        await pl._attribute_interaction_to_key("k1", None, "int1")
         md = json.loads(captured["metadata"])
         assert md["foo"] == "bar"  # não clobbera
         assert md["api_key_id"] == "k1"
@@ -92,4 +90,4 @@ class TestAttribution:
 
         monkeypatch.setattr(pl.interactions_repo, "find_by_id", _boom)
         # best-effort: NÃO pode levantar (o invoke já executou)
-        await pl._attribute_interaction_to_key(_Req(api_key_id="k1"), "int1")
+        await pl._attribute_interaction_to_key("k1", None, "int1")
