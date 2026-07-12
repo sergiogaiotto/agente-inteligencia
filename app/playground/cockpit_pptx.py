@@ -347,7 +347,7 @@ def build_cockpit_pptx(snapshot: dict[str, Any]) -> bytes:
     _txt(sl, 640080, 4360000, 10911840, 340000, prem, size=12, color=INK)
     _judge_note = "MEDIDO quando o juiz roda" if tco.get("judge_measured") else "ESTIMADO"
     _prov_note(sl, f"Ressalvas: preço LLM = tabela interna (editável); custo do juiz {_judge_note}; "
-                   "self-hosted conta 0 (GPU/infra fora do modelo); input pode subcontar em turnos multi-chamada.")
+                   "self-hosted conta 0 (GPU/infra fora do modelo); input multi-chamada já somado (billed).")
 
     # ── Slide 6+ — a conversa ──
     _conversation_slides(prs, conv)

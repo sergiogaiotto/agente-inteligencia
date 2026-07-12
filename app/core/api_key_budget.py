@@ -88,7 +88,9 @@ def cost_and_tokens_from_result(result: dict) -> tuple[float, int]:
     trace = (result or {}).get("trace") or {}
     tok = trace.get("tokens") or {}
     try:
-        ti = int(tok.get("input") or 0)
+        # input_billed_sum = input SOMADO entre as chamadas (o que o provider cobra
+        # em turnos multi-chamada); 'input' (última) subcontava. Fallback single-call.
+        ti = int(tok.get("input_billed_sum") or tok.get("input") or 0)
         to = int(tok.get("output") or 0)
     except (TypeError, ValueError):
         ti = to = 0
@@ -101,7 +103,7 @@ def cost_and_tokens_from_result(result: dict) -> tuple[float, int]:
     except Exception:
         cost = 0.0
     try:
-        tokens = int(tok.get("total") or 0) or (ti + to)
+        tokens = int(tok.get("total_billed") or tok.get("total") or 0) or (ti + to)
     except (TypeError, ValueError):
         tokens = ti + to
     return cost, tokens

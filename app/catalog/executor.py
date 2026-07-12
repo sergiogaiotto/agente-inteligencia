@@ -161,9 +161,11 @@ async def _invoke_step(
     return {
         "output": result.get("output") or "",
         "duration_ms": int(result.get("duration_ms") or 0),
-        "tokens_input": int(tokens.get("input") or 0),
+        # input_billed_sum (soma entre chamadas) p/ o custo não subcontar turnos
+        # multi-chamada; fallback a 'input' (última) p/ single-call/traces antigos.
+        "tokens_input": int(tokens.get("input_billed_sum") or tokens.get("input") or 0),
         "tokens_output": int(tokens.get("output") or 0),
-        "tokens_total": int(tokens.get("total") or 0),
+        "tokens_total": int(tokens.get("total_billed") or tokens.get("total") or 0),
         "provider": trace.get("agent_provider"),
         "model": trace.get("agent_model"),
         "interaction_id": result.get("interaction_id"),
