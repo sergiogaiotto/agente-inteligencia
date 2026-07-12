@@ -264,6 +264,15 @@ class TestApiConnectorTestEmitsEvent:
 
         monkeypatch.setattr(api_connectors.httpx, "AsyncClient", _FakeClient)
 
+        # SEC-01: a guarda SSRF (`_guard_egress`) resolve o host da base_url via
+        # getaddrinfo real. As base_urls de teste (api.example.com, "x") não
+        # resolvem → força IP público p/ o egress prosseguir e o evento ser emitido.
+        import app.core.ssrf as _ssrf
+        monkeypatch.setattr(
+            _ssrf.socket, "getaddrinfo",
+            lambda host, port, *a, **k: [(2, 1, 6, "", ("93.184.216.34", port))],
+        )
+
         app = FastAPI()
         app.include_router(api_connectors.router)
         return TestClient(app)

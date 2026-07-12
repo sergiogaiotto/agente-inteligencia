@@ -132,6 +132,14 @@ def fake_http(monkeypatch):
     FakeAsyncClient.response_map = {}
     FakeAsyncClient.raise_exc = {}
     monkeypatch.setattr("app.routes.api_connectors.httpx.AsyncClient", FakeAsyncClient)
+    # SEC-01: a guarda SSRF (`_guard_egress`) resolve o host da base_url via
+    # getaddrinfo real. Os base_urls de teste (api.example.com etc.) podem não
+    # resolver → força um IP público p/ o guard passar e o proxy ser exercitado.
+    import app.core.ssrf as _ssrf
+    monkeypatch.setattr(
+        _ssrf.socket, "getaddrinfo",
+        lambda host, port, *a, **k: [(2, 1, 6, "", ("93.184.216.34", port))],
+    )
     yield FakeAsyncClient
 
 
@@ -414,13 +422,15 @@ class TestProxyClientConfig:
         })
         assert fake_http.instances[-1].verify is False
 
-    def test_follow_redirects_true(self, fake_repos, fake_http):
+    def test_follow_redirects_disabled(self, fake_repos, fake_http):
+        # SEC-01: follow_redirects=False para que um 30x cross-host não pule a
+        # guarda SSRF e alcance um serviço interno.
         _seed_connector(fake_repos)
         c = _client()
         c.post("/api/v1/api-connectors/proxy", json={
             "connector_id": "c1", "method": "GET", "path": "/x",
         })
-        assert fake_http.instances[-1].follow_redirects is True
+        assert fake_http.instances[-1].follow_redirects is False
 
     def test_timeout_em_segundos(self, fake_repos, fake_http):
         _seed_connector(fake_repos, timeout_ms=5000)
