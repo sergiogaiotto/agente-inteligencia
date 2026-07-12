@@ -257,8 +257,9 @@ async def drain_invoke_analytics(timeout: float = 5.0) -> int:
 
 
 async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_id,
-                                   api_key_name, actor_user_id, arg_keys, stream=False) -> None:
-    """Auditoria + atribuição + débito de UMA invocação — roda DETACHED."""
+                                   api_key_name, actor_user_id, arg_keys, channel=None,
+                                   stream=False) -> None:
+    """Auditoria + atribuição + débito + ledger de custo de UMA invocação — DETACHED."""
     interaction_id = (result or {}).get("interaction_id")
     try:
         await audit_repo.create({
@@ -276,6 +277,22 @@ async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_i
         logger.warning("event=invoke_audit_failed error=%s", str(e)[:200])
     await _attribute_interaction_to_key(api_key_id, api_key_name, interaction_id)
     await _debit_api_key_cost(api_key_id, pid, result)
+    # SSOT de custo por invocação — cobre TODOS os caminhos (inclusive cookie/UI,
+    # que nenhum ledger via antes). Custo/tokens já calculados de result (sem LLM).
+    try:
+        from app.core.cost_ledger import record_invocation_cost
+        from app.core.api_key_budget import cost_and_tokens_from_result
+        cost, tokens = cost_and_tokens_from_result(result)
+        await record_invocation_cost(
+            interaction_id=interaction_id, pipeline_id=pid, agent_id=root,
+            user_id=actor_user_id, api_key_id=api_key_id, channel=channel,
+            source="invoke_stream" if stream else "invoke",
+            cost_usd=cost, tokens_used=tokens,
+            latency_ms=(result or {}).get("duration_ms") or 0,
+            final_state=(result or {}).get("final_state"),
+        )
+    except Exception as e:
+        logger.warning("event=invocation_cost_failed error=%s", str(e)[:200])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -952,6 +969,7 @@ async def invoke_pipeline(
         pid=pid, root=root, member_count=len(members), result=result,
         api_key_id=api_key_id, api_key_name=api_key_name, actor_user_id=user.get("id"),
         arg_keys=(sorted(data.args.keys()) if isinstance(data.args, dict) else []),
+        channel=data.channel,
     ))
     payload = {
         "pipeline_id": pid,
@@ -1089,7 +1107,7 @@ async def invoke_pipeline_stream(
                 pid=pid, root=root, member_count=len(members), result=(result or {}),
                 api_key_id=api_key_id, api_key_name=api_key_name, actor_user_id=user.get("id"),
                 arg_keys=(sorted(data.args.keys()) if isinstance(data.args, dict) else []),
-                stream=True,
+                channel=data.channel, stream=True,
             ))
         except Exception as e:
             await queue.put({"type": "stream_error", "error": str(e)[:300]})
