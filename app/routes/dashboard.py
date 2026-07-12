@@ -458,6 +458,16 @@ async def verifications_stats(window: str = "24h"):
     # lista (filtro "re-julgados") e no by_judge_model (onde o A/B se lê).
     _rj = "profile IS DISTINCT FROM 'rejudge'"
     where_rj = f"{where} AND {_rj}" if where else f"WHERE {_rj}"
+    # Série temporal (OBS-4): granularidade e alcance por janela. Unidade e
+    # intervalo vêm de WHITELIST fixa (nunca de input do usuário) — sem injeção.
+    if window == "24h":
+        _bucket_unit, _series_interval = "hour", "24 hours"
+    elif window == "7d":
+        _bucket_unit, _series_interval = "day", "7 days"
+    elif window == "30d":
+        _bucket_unit, _series_interval = "day", "30 days"
+    else:  # "all" — série limitada a 180d (semana) p/ não ficar ilimitada
+        _bucket_unit, _series_interval = "week", "180 days"
     async with pool.acquire() as con:
         row = await con.fetchrow(
             f"""
@@ -471,7 +481,12 @@ async def verifications_stats(window: str = "24h"):
               avg(confidence)::float                   AS avg_confidence,
               count(*) FILTER (WHERE NOT contract_compliant)::int AS contract_failures,
               count(*) FILTER (WHERE unsupported_claims != '[]' AND unsupported_claims IS NOT NULL)::int AS with_unsupported,
-              avg(duration_ms)::float                  AS avg_duration_ms
+              avg(duration_ms)::float                  AS avg_duration_ms,
+              -- Percentis (OBS-3): a cauda (p95/p99) é o que quebra SLA e some
+              -- num avg. percentile_cont ignora NULL; NULL se não há amostra.
+              percentile_cont(0.5)  WITHIN GROUP (ORDER BY duration_ms)::float AS p50_duration_ms,
+              percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::float AS p95_duration_ms,
+              percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::float AS p99_duration_ms
             FROM verifications
             {where_rj}
             """
@@ -539,6 +554,25 @@ async def verifications_stats(window: str = "24h"):
             """
         )
 
+        # Série temporal (OBS-4): volume + taxa de falha + cauda de latência por
+        # bucket. Derivável 100% de `verifications` (o escalonamento/recusa por
+        # invocação vive no transition_log/final_state → fica pro Grafana via os
+        # contadores maestro_escalations_total/maestro_refusals_total).
+        series = await con.fetch(
+            f"""
+            SELECT date_trunc('{_bucket_unit}', created_at)          AS bucket,
+                   count(*)::int                                     AS n,
+                   count(*) FILTER (WHERE ok)::int                   AS ok,
+                   count(*) FILTER (WHERE NOT ok)::int               AS errors,
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::float AS p95_duration_ms
+            FROM verifications
+            WHERE created_at > now() - interval '{_series_interval}'
+              AND {_rj}
+            GROUP BY bucket
+            ORDER BY bucket
+            """
+        )
+
     def _round_row(r: dict) -> dict:
         return {k: (round(v, 3) if isinstance(v, float) else v) for k, v in r.items()}
 
@@ -558,6 +592,17 @@ async def verifications_stats(window: str = "24h"):
         "by_profile": [dict(r) for r in profiles],
         "by_agent": [_round_row(dict(r)) for r in by_agent],
         "by_pipeline": [_round_row(dict(r)) for r in by_pipeline],
+        "timeseries": [
+            {
+                "bucket": r["bucket"].isoformat() if r["bucket"] else None,
+                "n": r["n"],
+                "ok": r["ok"],
+                "errors": r["errors"],
+                "p95_duration_ms": (round(r["p95_duration_ms"], 1)
+                                    if r["p95_duration_ms"] is not None else None),
+            }
+            for r in series
+        ],
     }
 
 
