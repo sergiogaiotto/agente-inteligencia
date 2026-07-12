@@ -20,8 +20,10 @@ from typing import Any, Optional
 
 import asyncpg
 
+from datetime import datetime
+
 from app.core.config import get_settings
-from app.core.datetime_utils import naive_utc_now
+from app.core.datetime_utils import naive_utc_now, to_naive_utc
 
 logger = logging.getLogger(__name__)
 
@@ -1438,6 +1440,7 @@ async def init_db():
     global _pool
     settings = get_settings()
     _ORDER_COL_CACHE.clear()  # 25.2.0: re-detecta a coluna de ordenação no boot
+    _COL_TYPE_CACHE.clear()   # 33.6.1: re-detecta tipos de coluna no boot
     async with _init_lock:
         if _pool is None:
             _pool = await asyncpg.create_pool(
@@ -1538,6 +1541,10 @@ async def close_db():
 # TODO find_all (~32 queries/invoke de pipeline). Correção-neutro; gated pelo
 # toggle query_topology_cache_enabled (válvula de rollback). Limpo no init_db.
 _ORDER_COL_CACHE: dict[str, str] = {}
+# Tipo de cada coluna por tabela (introspecção 1×) — usado pela coerção de write
+# do Repository (33.6.1): dict/list → json.dumps em colunas json/jsonb, e strip de
+# tzinfo em colunas TIMESTAMP. Mesmo toggle/limpeza do _ORDER_COL_CACHE.
+_COL_TYPE_CACHE: dict[str, dict[str, str]] = {}
 
 
 def _topology_cache_on() -> bool:
@@ -1574,6 +1581,39 @@ class Repository:
             _ORDER_COL_CACHE[self.table] = col
         return col
 
+    async def _col_types(self, con: asyncpg.Connection) -> dict[str, str]:
+        """{coluna: data_type} da tabela (information_schema). Cacheado como o
+        _order_col (mesmo toggle/limpeza). Base da coerção de write (33.6.1)."""
+        cache_on = _topology_cache_on()
+        if cache_on and self.table in _COL_TYPE_CACHE:
+            return _COL_TYPE_CACHE[self.table]
+        rows = await con.fetch(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = $1",
+            self.table,
+        )
+        types = {r["column_name"]: r["data_type"] for r in rows}
+        if cache_on and types:
+            _COL_TYPE_CACHE[self.table] = types
+        return types
+
+    @staticmethod
+    def _coerce_value(value: Any, data_type: str) -> Any:
+        """Blinda os footguns asyncpg no bind de write (33.6.1), a partir do TIPO
+        da coluna: dict/list → json.dumps em json/jsonb (senão asyncpg lança
+        "expected str, got list"); datetime tz-aware → naive UTC em colunas
+        TIMESTAMP (asyncpg rejeita aware). Valor já-string ou já-naive passa
+        intacto (callers corretos não mudam de comportamento). `default=str`
+        serializa datetimes aninhados em vez de quebrar."""
+        if value is None:
+            return value
+        if data_type in ("json", "jsonb") and isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False, default=str)
+        if (data_type == "timestamp without time zone"
+                and isinstance(value, datetime) and value.tzinfo is not None):
+            return to_naive_utc(value)
+        return value
+
     async def find_all(self, limit: int = 100, offset: int = 0, **filters) -> list[dict]:
         pool = _get_pool()
         async with pool.acquire() as con:
@@ -1601,11 +1641,12 @@ class Repository:
     async def create(self, data: dict) -> dict:
         pool = _get_pool()
         async with pool.acquire() as con:
+            types = await self._col_types(con)
             keys = list(data.keys())
             cols = ", ".join(keys)
             phs = ", ".join(f"${i+1}" for i in range(len(keys)))
             sql = f"INSERT INTO {self.table} ({cols}) VALUES ({phs})"
-            await con.execute(sql, *[data[k] for k in keys])
+            await con.execute(sql, *[self._coerce_value(data[k], types.get(k, "")) for k in keys])
             return data
 
     async def update(self, id: str, data: dict) -> Optional[dict]:
@@ -1613,10 +1654,12 @@ class Repository:
             return await self.find_by_id(id)
         pool = _get_pool()
         async with pool.acquire() as con:
+            types = await self._col_types(con)
             keys = list(data.keys())
             sets = ", ".join(f"{k}=${i+1}" for i, k in enumerate(keys))
             sql = f"UPDATE {self.table} SET {sets} WHERE id=${len(keys)+1}"
-            await con.execute(sql, *[data[k] for k in keys], id)
+            await con.execute(
+                sql, *[self._coerce_value(data[k], types.get(k, "")) for k in keys], id)
             r = await con.fetchrow(f"SELECT * FROM {self.table} WHERE id=$1", id)
             return dict(r) if r else None
 
