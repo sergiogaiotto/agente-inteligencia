@@ -34,6 +34,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         # Não derruba app se logging falhar (defensivo)
         print(f"WARN: setup_logging falhou: {e}", flush=True)
+    # SEC-02: falha-fecha o boot se app_env=produção com default inseguro
+    # (SECRET_KEY 'change-me', MAESTRO_SECRET_KEY ausente, COOKIE_SECURE=false).
+    # ANTES de init_db — um prod mal configurado não deve nem conectar ao banco.
+    # No-op em dev/staging.
+    from app.core.config import assert_secure_production_posture
+    assert_secure_production_posture()
     await init_db()
     # Após pool aberto, popula os.environ com overrides do settings_store
     # (UI gravou via PUT /settings em sessões anteriores). Sem isso, providers
