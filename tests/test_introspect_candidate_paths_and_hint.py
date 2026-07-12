@@ -114,6 +114,14 @@ class TestHintWhenNoSpecFound:
             async def get(self, url, **kw): return _Fake404Resp()
 
         monkeypatch.setattr(api_connectors.httpx, "AsyncClient", _FakeClient)
+        # SEC-01: o introspect valida o host (getaddrinfo real) antes do fetch —
+        # mocka p/ IP público, senão o teste depende de DNS (brasilapi.com.br) e
+        # flaka em run cheio (o guard devolveria 400 em vez do hint).
+        import app.core.ssrf as _ssrf
+        monkeypatch.setattr(
+            _ssrf.socket, "getaddrinfo",
+            lambda host, port, *a, **k: [(2, 1, 6, "", ("93.184.216.34", port))],
+        )
 
         app = FastAPI()
         app.include_router(api_connectors.router)

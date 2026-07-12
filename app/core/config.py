@@ -165,6 +165,14 @@ class Settings(BaseSettings):
     # Tamanho máximo de upload (MB) — anti-DoS de memória/disco (CWE-400).
     # O handler lê em chunks e aborta com 413 ao exceder.
     max_upload_mb: int = 25
+    # Teto GLOBAL do corpo de requisição (MB) — anti-DoS de memória (API-6).
+    # Rejeita com 413 por Content-Length ANTES de ler/parsear o corpo (sem esse
+    # teto, um POST de corpo ilimitado no /invoke era buferizado inteiro → OOM).
+    # Precisa acomodar o MAIOR corpo legítimo: anexos inline no /invoke =
+    # 5 × 10MB raw ≈ 67MB base64 (ver _MAX_ATTACHMENT_BYTES em routes/agents.py)
+    # e uploads multipart (max_upload_mb). Default 100MB dá margem; baixe se a
+    # instalação não usa anexos grandes.
+    max_request_body_mb: int = 100
 
     # ── Auth hardening (Onda 1) ──
     # bcrypt sempre ativo; SHA256 legado validado e migrado no próximo login.
