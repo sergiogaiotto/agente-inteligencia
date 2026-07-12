@@ -226,34 +226,14 @@ async def _debit_api_key_cost(api_key_id, pid: str, result: dict) -> None:
 # DÉBITO é accounting (soft-cap, consistência eventual — um pequeno overspend em
 # rajada concorrente é aceitável, o pré-gate é a proteção dura). Auditoria de
 # invoke é best-effort de alto volume: aceita perda rara em crash pela latência.
-_ANALYTICS_TASKS: set = set()
-
-
-def _schedule_analytics(coro) -> None:
-    """Agenda uma escrita de analytics fora do caminho de resposta (fire-and-forget)."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:                       # sem loop (não ocorre em rota async)
-        return
-    task = loop.create_task(_safe_analytics(coro))
-    _ANALYTICS_TASKS.add(task)
-    task.add_done_callback(_ANALYTICS_TASKS.discard)
-
-
-async def _safe_analytics(coro) -> None:
-    try:
-        await coro
-    except Exception as e:
-        logger.warning("event=invoke_analytics_failed error=%s", str(e)[:200], exc_info=True)
-
-
-async def drain_invoke_analytics(timeout: float = 5.0) -> int:
-    """Drena as escritas de analytics pendentes no shutdown (best-effort)."""
-    pend = list(_ANALYTICS_TASKS)
-    if not pend:
-        return 0
-    done, _ = await asyncio.wait(pend, timeout=timeout)
-    return len(done)
+# Fila off-path extraída p/ app/core/analytics_tasks.py (33.7.0) — agora
+# COMPARTILHADA por agents/workspace (SSOT de custo org-wide). Os aliases
+# preservam os nomes locais usados abaixo e o import de main.py
+# (`from app.routes.pipelines import drain_invoke_analytics`).
+from app.core.analytics_tasks import (  # noqa: E402
+    schedule_analytics as _schedule_analytics,
+    drain_analytics as drain_invoke_analytics,
+)
 
 
 async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_id,

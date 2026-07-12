@@ -163,6 +163,35 @@ async def _debit_and_attribute_apikey(request: Request, result: dict) -> None:
         logger.warning("event=apikey_attribution_failed interaction_id=%s error=%s", interaction_id, e)
 
 
+def _schedule_agent_invoke_cost(request: Request, agent_id: str, result: dict) -> None:
+    """SSOT de custo (33.7.0) do invoke DIRETO de agente (source='agent_invoke'),
+    OFF-PATH e org-wide: grava 1 linha em `invocation_costs` cobrindo cookie/UI E
+    X-API-Key (o débito por-key só via a parte da key). Best-effort; o invoke não
+    espera por isto (invariante de desempenho)."""
+    from app.core.analytics_tasks import schedule_analytics
+
+    async def _rec():
+        from app.core.cost_ledger import record_invocation_cost
+        from app.core.api_key_budget import cost_and_tokens_from_result
+        from app.core.auth import read_session_uid
+        r = result or {}
+        cost, tokens = cost_and_tokens_from_result(r)
+        api_key_id = getattr(request.state, "api_key_id", None)
+        await record_invocation_cost(
+            interaction_id=r.get("interaction_id"),
+            agent_id=agent_id,
+            user_id=(None if api_key_id else read_session_uid(request)),
+            api_key_id=api_key_id,
+            channel=("api_key" if api_key_id else "session"),
+            source="agent_invoke",
+            cost_usd=cost, tokens_used=tokens,
+            latency_ms=(r.get("duration_ms") or 0),
+            final_state=r.get("final_state"),
+        )
+
+    schedule_analytics(_rec())
+
+
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 @router.get("")
@@ -671,6 +700,8 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
             outputs_dict["dry_run"] = True
         else:
             # F12: atribui a interação declarativa à key (débito ~$0 — sem LLM).
+            # SSOT (33.7.0): registra o invoke direto de agente org-wide, off-path.
+            _schedule_agent_invoke_cost(request, agent_id, result)
             await _debit_and_attribute_apikey(request, result)
         return AgentInvokeResponse(
             session_id=result.get("interaction_id"),
@@ -750,6 +781,8 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
             }, ensure_ascii=False),
         })
 
+        # SSOT (33.7.0): registra o invoke direto de agente org-wide, off-path.
+        _schedule_agent_invoke_cost(request, agent_id, pipe_result)
         # F6/F12: debita o custo real (soma dos steps) no ledger da key + atribui
         # a interação à key. Best-effort; gated pelo toggle. Só via X-API-Key.
         await _debit_and_attribute_apikey(request, pipe_result)
@@ -815,6 +848,8 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
         }, ensure_ascii=False),
     })
 
+    # SSOT (33.7.0): registra o invoke direto de agente org-wide, off-path.
+    _schedule_agent_invoke_cost(request, agent_id, result)
     # F6/F12: débito do custo real (do trace, agente single) + atribuição à key.
     await _debit_and_attribute_apikey(request, result)
 
