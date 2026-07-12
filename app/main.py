@@ -66,6 +66,15 @@ async def lifespan(app: FastAPI):
             await drain(timeout=5.0)
         except Exception as e:
             logger.warning(f"verifier drain falhou no shutdown: {e}")
+        # Drena as escritas de analytics do invoke (auditoria/atribuição/débito
+        # fire-and-forget) antes de fechar o pool — mesma razão do verifier.
+        try:
+            from app.routes.pipelines import drain_invoke_analytics
+            n = await drain_invoke_analytics(timeout=5.0)
+            if n:
+                logger.info(f"invoke analytics drenados no shutdown: {n}")
+        except Exception as e:
+            logger.warning(f"invoke analytics drain falhou no shutdown: {e}")
         await close_db()
 
 settings = get_settings()

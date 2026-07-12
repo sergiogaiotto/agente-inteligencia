@@ -13,6 +13,7 @@ e EXIGE autenticação (`Depends(require_user)`): cookie de sessão (UI) OU head
 `X-API-Key: ag_live_...` (integração). Sem isso, qualquer um na rede dispararia
 execuções que gastam tokens de LLM. Mesmo padrão do `POST /api/v1/workspace/chat`.
 """
+import asyncio
 import uuid
 import json
 import hashlib
@@ -155,14 +156,16 @@ def _guard_api_key_published_only(request, p: dict) -> None:
     )
 
 
-async def _attribute_interaction_to_key(request, interaction_id: Optional[str]) -> None:
+async def _attribute_interaction_to_key(api_key_id, api_key_name, interaction_id: Optional[str]) -> None:
     """F12: propaga a atribuição por-key à metadata da interação.
 
     A auditoria (audit_log) já registra o api_key_id, mas a OBSERVABILIDADE/UI lê
     a tabela `interactions` — cujo metadata vinha VAZIO p/ chamadas via key (não
     dava pra saber QUAL frontend disparou o quê). Faz MERGE (não clobbera) e é
-    best-effort: falha aqui NÃO derruba a resposta (o invoke já executou)."""
-    api_key_id = getattr(request.state, "api_key_id", None)
+    best-effort: falha aqui NÃO derruba a resposta (o invoke já executou).
+
+    Recebe api_key_id/api_key_name JÁ EXTRAÍDOS do request (não o request), pois
+    roda DETACHED, fora do caminho de resposta (invariante de desempenho)."""
     if not (api_key_id and interaction_id):
         return  # só chamadas via key; sessão de UI não precisa
     try:
@@ -175,7 +178,7 @@ async def _attribute_interaction_to_key(request, interaction_id: Optional[str]) 
         md.update({
             "via": "api_key",
             "api_key_id": api_key_id,
-            "api_key_name": getattr(request.state, "api_key_name", None),
+            "api_key_name": api_key_name,
         })
         await interactions_repo.update(
             interaction_id, {"metadata": json.dumps(md, ensure_ascii=False)}
@@ -197,10 +200,10 @@ async def _guard_api_key_cost_budget(request) -> None:
     await enforce_budget(api_key_id)
 
 
-async def _debit_api_key_cost(request, pid: str, result: dict) -> None:
+async def _debit_api_key_cost(api_key_id, pid: str, result: dict) -> None:
     """F6: debita o custo REAL da invocação (soma dos steps) no ledger da key.
-    Best-effort e gated pelo toggle — nunca derruba a resposta (já executou)."""
-    api_key_id = getattr(request.state, "api_key_id", None)
+    Best-effort e gated pelo toggle — nunca derruba a resposta (já executou).
+    Recebe api_key_id já extraído (roda DETACHED, fora do caminho de resposta)."""
     if not api_key_id:
         return
     from app.core.api_key_budget import cost_and_tokens_from_result, record_cost
@@ -210,6 +213,69 @@ async def _debit_api_key_cost(request, pid: str, result: dict) -> None:
         pipeline_id=pid,
         interaction_id=(result or {}).get("interaction_id"),
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INVARIANTE DE DESEMPENHO: o invoke NUNCA espera por escrita de analytics.
+# ═══════════════════════════════════════════════════════════════════════════════
+# Auditoria + atribuição por-key + débito de custo saem do CAMINHO DE RESPOSTA e
+# rodam DETACHED (fire-and-forget), drenados no shutdown. A latência da API — o
+# que um app externo mede — paga só execução + projeção, nunca 3 round-trips ao
+# Postgres nem a contenção do pool durante a espera do cliente. O GATE de
+# orçamento (_guard_api_key_cost_budget) segue SÍNCRONO e ANTES da execução; o
+# DÉBITO é accounting (soft-cap, consistência eventual — um pequeno overspend em
+# rajada concorrente é aceitável, o pré-gate é a proteção dura). Auditoria de
+# invoke é best-effort de alto volume: aceita perda rara em crash pela latência.
+_ANALYTICS_TASKS: set = set()
+
+
+def _schedule_analytics(coro) -> None:
+    """Agenda uma escrita de analytics fora do caminho de resposta (fire-and-forget)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:                       # sem loop (não ocorre em rota async)
+        return
+    task = loop.create_task(_safe_analytics(coro))
+    _ANALYTICS_TASKS.add(task)
+    task.add_done_callback(_ANALYTICS_TASKS.discard)
+
+
+async def _safe_analytics(coro) -> None:
+    try:
+        await coro
+    except Exception as e:
+        logger.warning("event=invoke_analytics_failed error=%s", str(e)[:200], exc_info=True)
+
+
+async def drain_invoke_analytics(timeout: float = 5.0) -> int:
+    """Drena as escritas de analytics pendentes no shutdown (best-effort)."""
+    pend = list(_ANALYTICS_TASKS)
+    if not pend:
+        return 0
+    done, _ = await asyncio.wait(pend, timeout=timeout)
+    return len(done)
+
+
+async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_id,
+                                   api_key_name, actor_user_id, arg_keys, stream=False) -> None:
+    """Auditoria + atribuição + débito de UMA invocação — roda DETACHED."""
+    interaction_id = (result or {}).get("interaction_id")
+    try:
+        await audit_repo.create({
+            "entity_type": "pipeline", "entity_id": pid, "action": "invoked",
+            "details": json.dumps({
+                "root_agent_id": root, "member_count": member_count,
+                "completed_agents": (result or {}).get("completed_agents", 0),
+                "interaction_id": interaction_id, "actor_user_id": actor_user_id,
+                "via": "api_key" if api_key_id else "session", "api_key_id": api_key_id,
+                **({"stream": True} if stream else {}),
+                "arg_keys": arg_keys,
+            }, ensure_ascii=False),
+        })
+    except Exception as e:
+        logger.warning("event=invoke_audit_failed error=%s", str(e)[:200])
+    await _attribute_interaction_to_key(api_key_id, api_key_name, interaction_id)
+    await _debit_api_key_cost(api_key_id, pid, result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -877,26 +943,16 @@ async def invoke_pipeline(
         })
 
     api_key_id = getattr(request.state, "api_key_id", None)
-    await audit_repo.create({
-        "entity_type": "pipeline",
-        "entity_id": pid,
-        "action": "invoked",
-        "details": json.dumps({
-            "root_agent_id": root,
-            "member_count": len(members),
-            "completed_agents": result.get("completed_agents", 0),
-            "interaction_id": result.get("interaction_id"),
-            "actor_user_id": user.get("id"),
-            "via": "api_key" if api_key_id else "session",
-            "api_key_id": api_key_id,
-            # Governança: registra QUAIS args foram passados (só as chaves, não os
-            # valores — evita vazar PII no log de auditoria).
-            "arg_keys": sorted(data.args.keys()) if isinstance(data.args, dict) else [],
-        }, ensure_ascii=False),
-    })
-    await _attribute_interaction_to_key(request, result.get("interaction_id"))
-    # F6: debita o custo real desta invocação no ledger da key (best-effort).
-    await _debit_api_key_cost(request, pid, result)
+    api_key_name = getattr(request.state, "api_key_name", None)
+    # INVARIANTE DE DESEMPENHO: auditoria + atribuição + débito saem do caminho de
+    # resposta (fire-and-forget). O invoke devolve assim que executa+projeta; as 3
+    # escritas ao Postgres rodam detached (drenadas no shutdown). Governança: só as
+    # CHAVES dos args entram na auditoria (não os valores — evita vazar PII no log).
+    _schedule_analytics(_record_invoke_analytics(
+        pid=pid, root=root, member_count=len(members), result=result,
+        api_key_id=api_key_id, api_key_name=api_key_name, actor_user_id=user.get("id"),
+        arg_keys=(sorted(data.args.keys()) if isinstance(data.args, dict) else []),
+    ))
     payload = {
         "pipeline_id": pid,
         "status": result.get("status", "completed"),
@@ -985,6 +1041,7 @@ async def invoke_pipeline_stream(
     # X-API-Key→summary), pra que a console "ver como integração" não minta. Os eventos
     # intermediários (agent_*) são sempre crus (são o passo-a-passo, não o contrato).
     api_key_id = getattr(request.state, "api_key_id", None)
+    api_key_name = getattr(request.state, "api_key_name", None)
     explicit = verbosity or data.verbosity
     api_default = "summary"
     if api_key_id:
@@ -1025,32 +1082,15 @@ async def invoke_pipeline_stream(
                 progress_callback=_cb,
                 pipeline_id=pid,  # auditoria: dono do julgamento nas verifications
             )
-            # Auditoria (paridade com o /invoke sync — este é o caminho da UI/Playground):
-            # registra a invocação + arg_keys. Envolta em try/except: auditoria NUNCA
-            # pode derrubar o stream do usuário.
-            try:
-                await audit_repo.create({
-                    "entity_type": "pipeline",
-                    "entity_id": pid,
-                    "action": "invoked",
-                    "details": json.dumps({
-                        "root_agent_id": root,
-                        "member_count": len(members),
-                        "completed_agents": (result or {}).get("completed_agents", 0),
-                        "interaction_id": (result or {}).get("interaction_id"),
-                        "actor_user_id": user.get("id"),
-                        "via": "api_key" if api_key_id else "session",
-                        "api_key_id": api_key_id,
-                        "stream": True,
-                        "arg_keys": sorted(data.args.keys()) if isinstance(data.args, dict) else [],
-                    }, ensure_ascii=False),
-                })
-            except Exception:
-                pass
-            # F12: atribuição por-key na metadata da interação (paridade c/ /invoke).
-            await _attribute_interaction_to_key(request, (result or {}).get("interaction_id"))
-            # F6: débito do custo real no ledger da key (paridade c/ /invoke sync).
-            await _debit_api_key_cost(request, pid, result or {})
+            # INVARIANTE DE DESEMPENHO (paridade c/ o /invoke sync): auditoria +
+            # atribuição + débito saem do caminho e rodam detached — NÃO atrasam o
+            # fechamento do stream (o cliente já recebeu o pipeline_done).
+            _schedule_analytics(_record_invoke_analytics(
+                pid=pid, root=root, member_count=len(members), result=(result or {}),
+                api_key_id=api_key_id, api_key_name=api_key_name, actor_user_id=user.get("id"),
+                arg_keys=(sorted(data.args.keys()) if isinstance(data.args, dict) else []),
+                stream=True,
+            ))
         except Exception as e:
             await queue.put({"type": "stream_error", "error": str(e)[:300]})
         finally:

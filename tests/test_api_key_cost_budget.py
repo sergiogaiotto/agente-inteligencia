@@ -271,7 +271,7 @@ class TestInvokeHelpers:
         async def _fake_record(*a, **k):
             called["n"] += 1
         monkeypatch.setattr("app.core.api_key_budget.record_cost", _fake_record)
-        await pipelines._debit_api_key_cost(_Req(None), "p1", {"pipeline_steps": []})
+        await pipelines._debit_api_key_cost(None, "p1", {"pipeline_steps": []})
         assert called["n"] == 0
 
     @pytest.mark.asyncio
@@ -289,7 +289,7 @@ class TestInvokeHelpers:
                 {"cost_usd": 0.01, "tokens_used": 80},
             ],
         }
-        await pipelines._debit_api_key_cost(_Req("k9"), "p1", result)
+        await pipelines._debit_api_key_cost("k9", "p1", result)
         assert seen["api_key_id"] == "k9"
         assert round(seen["cost"], 6) == 0.03
         assert seen["tokens"] == 200
