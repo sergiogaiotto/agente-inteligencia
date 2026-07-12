@@ -256,3 +256,40 @@ async def health():
         "mcp_features": features,
         "code_fingerprint": fingerprint,
     }
+
+
+# ── Probes de orquestrador + métricas (OBS-2 + OBS-1) ──────────
+# Anônimos e leves (fora de /api/v1 → não passam pelo default-deny; isentos de
+# rate-limit). /livez e /readyz distinguem "processo vivo" de "pronto p/ tráfego"
+# — um LB/k8s pode drenar uma réplica com o banco caído em vez de martelá-la.
+@app.get("/livez", include_in_schema=False)
+async def livez():
+    """Liveness: 200 se o processo está de pé. ZERO I/O (nunca toca o banco)."""
+    return {"status": "alive"}
+
+
+@app.get("/readyz", include_in_schema=False)
+async def readyz():
+    """Readiness: 200 só quando o pool asyncpg está pronto e acquirable; 503 senão."""
+    from starlette.responses import JSONResponse
+    import app.core.database as _db
+
+    pool = _db._pool
+    if pool is None:
+        return JSONResponse({"status": "not_ready", "reason": "db_pool_uninitialized"}, status_code=503)
+    try:
+        async with pool.acquire() as con:
+            await con.fetchval("SELECT 1")
+    except Exception:
+        return JSONResponse({"status": "not_ready", "reason": "db_unavailable"}, status_code=503)
+    return {"status": "ready"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """Exposição Prometheus das métricas RED + escalonamento (app/core/metrics.py)."""
+    from starlette.responses import Response
+    from app.core.metrics import render_latest
+
+    payload, content_type = render_latest()
+    return Response(content=payload, media_type=content_type)

@@ -22,6 +22,14 @@
 }
 
 {$TLS_SITE::80} {
+	# /metrics é EXCLUSIVO do scrape interno do Prometheus (que bate em app:7000
+	# direto, na rede Docker — não passa por aqui). Nunca deve ser público: expõe
+	# contadores/latências operacionais. /livez e /readyz seguem públicos (probes
+	# inofensivos que o LB/orquestrador precisa alcançar sem auth).
+	handle /metrics {
+		respond 403
+	}
+
 	# ─── Observabilidade (profile full) ─────────────────────────────
 	# Reverse proxy para Grafana sob /grafana/* (mesma origin → sem CORS
 	# nem SSH tunnel). Grafana precisa de GF_SERVER_ROOT_URL e

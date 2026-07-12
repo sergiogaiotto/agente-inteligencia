@@ -299,8 +299,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         bucket, limit = _bucket_for_path(path)
         if limit <= 0:
             return await call_next(request)
-        # /api/health não conta — usado por Docker healthcheck
-        if path == "/api/health":
+        # Health/probes/métricas não contam — batidos por Docker/orquestrador/Prometheus.
+        if path in ("/api/health", "/livez", "/readyz", "/metrics"):
             return await call_next(request)
 
         identity = _client_identity(request)
