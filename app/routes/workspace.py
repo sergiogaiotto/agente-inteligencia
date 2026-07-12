@@ -698,6 +698,33 @@ async def _filter_attachments_by_agent(
     return accepted, rejected
 
 
+def _schedule_chat_cost(request: Request, user: dict, data, result: dict, source: str) -> None:
+    """SSOT de custo (33.7.0) do chat interativo — 1 linha OFF-PATH em
+    `invocation_costs` (source='chat'/'chat_stream'), org-wide. O chat/stream NÃO
+    espera por isto (invariante de desempenho); best-effort."""
+    from app.core.analytics_tasks import schedule_analytics
+
+    async def _rec():
+        from app.core.cost_ledger import record_invocation_cost
+        from app.core.api_key_budget import cost_and_tokens_from_result
+        r = result or {}
+        cost, tokens = cost_and_tokens_from_result(r)
+        api_key_id = getattr(request.state, "api_key_id", None)
+        await record_invocation_cost(
+            interaction_id=r.get("interaction_id"),
+            agent_id=getattr(data, "agent_id", None),
+            user_id=(user or {}).get("id"),
+            api_key_id=api_key_id,
+            channel=(r.get("channel") or getattr(data, "channel", None)),
+            source=source,
+            cost_usd=cost, tokens_used=tokens,
+            latency_ms=(r.get("duration_ms") or 0),
+            final_state=r.get("final_state"),
+        )
+
+    schedule_analytics(_rec())
+
+
 @router.post("/chat/stream")
 async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(require_user)):
     """Versão streaming (SSE) do /chat — emite eventos por step do pipeline.
@@ -796,11 +823,18 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
             yield f"event: pipeline_done\ndata: {_done}\n\n"
             yield "event: end\ndata: {}\n\n"
             return
+        _final_result = None
         while True:
             item = await queue.get()
             if item is _DONE:
+                # SSOT (33.7.0): custo do chat stream, org-wide, off-path — só se o
+                # pipeline chegou a produzir um result (o pipeline_done da fila).
+                if _final_result:
+                    _schedule_chat_cost(request, user, data, _final_result, source="chat_stream")
                 yield "event: end\ndata: {}\n\n"
                 break
+            if isinstance(item, dict) and item.get("type") == "pipeline_done":
+                _final_result = item.get("result")
             payload = json.dumps(item, ensure_ascii=False, default=str)
             event_name = item.get("type", "message") if isinstance(item, dict) else "message"
             yield f"event: {event_name}\ndata: {payload}\n\n"
@@ -1130,6 +1164,8 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
         # Sinaliza attachments rejeitados para que o frontend possa mostrar
         if rejected_attachments:
             result["rejected_attachments"] = rejected_attachments
+        # SSOT (33.7.0): custo do chat interativo, org-wide, off-path.
+        _schedule_chat_cost(request, user, data, result, source="chat")
         return result
     except ValueError as e:
         raise HTTPException(404, str(e))
