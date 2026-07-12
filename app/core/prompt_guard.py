@@ -61,6 +61,35 @@ _EXFIL_RE = [
     (re.compile(r"\b(?:list|enumerate)\s+(?:all\s+)?(?:your\s+)?(?:tools|functions|capabilities)\s+(?:in\s+)?(?:detail|verbatim)\b", re.I), 0.35),
 ]
 
+# ── pt-BR + es (SEC-06) ─────────────────────────────────────────
+# O idioma PRIMÁRIO da plataforma é pt-BR: payloads de injeção em português
+# passavam ilesos pelas regex só-inglês. Pesos idênticos aos equivalentes em
+# inglês (mesma postura: 1 sinal = warn; 2+ combinados = block). es mínimo (LATAM).
+_JAILBREAK_PT_RE = [
+    (re.compile(r"\b(?:ignore|ignora|ignorem|desconsidere|desconsidera|desconsiderem)\s+(?:todas?\s+)?(?:as\s+|os\s+)?(?:instru[çc][õo]es|regras|ordens|diretrizes|prompts?)\s+(?:anteriores|acima|pr[ée]vias|passadas|do sistema)\b", re.I), 0.55),
+    (re.compile(r"\besque[çc]a(?:-se)?\s+(?:de\s+)?(?:tudo|todas?\s+as\s+(?:instru[çc][õo]es|regras)|as\s+(?:instru[çc][õo]es|regras)\s+(?:anteriores|acima))\b", re.I), 0.45),
+    (re.compile(r"\bmodo\s+(?:desenvolvedor|dev|deus|root|administrador|irrestrito)\s+(?:ativad[oa]|ligad[oa]|habilitad[oa]|on)\b", re.I), 0.55),
+    (re.compile(r"\b(?:ative|ativar|habilite|habilitar)\s+o\s+modo\s+(?:desenvolvedor|deus|root|administrador|irrestrito)\b", re.I), 0.55),
+    (re.compile(r"\b(?:aja|atue|comporte-se|finja)\s+como\s+(?:se\s+)?(?:voc[êe]\s+)?(?:n[ãa]o\s+)?(?:tivesse|fosse|estivesse|tem)\b.{0,40}?\b(?:restri[çc][õo]es|limites?|regras|livre|irrestrit[oa])\b", re.I), 0.45),
+    (re.compile(r"\bfa[çc]a\s+qualquer\s+coisa\s+agora\b", re.I), 0.55),
+]
+_EXFIL_PT_RE = [
+    (re.compile(r"\b(?:mostre|mostra|revele|revela|repita|repete|exiba|exibe|imprima|imprime|diga|conte|compartilhe|cole)\s+(?:(?:me|-me)\s+)?(?:(?:o|a|as|os|seu|sua|suas|seus)\s+){0,3}(?:system\s+)?(?:prompt|instru[çc][õo]es|regras?|diretrizes?)\b", re.I), 0.55),
+    (re.compile(r"\bqual\s+(?:é|s[ãa]o|era[m]?)\s+(?:o\s+|a\s+|as\s+|os\s+)?(?:seu|sua|suas|seus)\s+(?:prompt|instru[çc][õo]es|regras?|diretrizes?)\b", re.I), 0.55),
+    (re.compile(r"\brepita\s+(?:tudo|de novo|novamente)?\s*(?:acima|antes|o que (?:veio|foi dito) antes|desde o come[çc]o)\b", re.I), 0.45),
+]
+_JAILBREAK_ES_RE = [
+    (re.compile(r"\b(?:ignora|ignore|olvida|descarta|desestima)\s+(?:todas?\s+)?(?:las\s+|los\s+)?(?:instrucciones|reglas|[óo]rdenes)\s+(?:anteriores|previas|del sistema)\b", re.I), 0.55),
+    (re.compile(r"\bmodo\s+(?:desarrollador|dios|root|administrador)\s+(?:activad[oa]|habilitad[oa])\b", re.I), 0.55),
+]
+_EXFIL_ES_RE = [
+    (re.compile(r"\b(?:muestra|mu[ée]strame|revela|repite|imprime|dime|ense[ñn]a)\s+(?:me\s+)?(?:tu|el|la|las|los)\s+(?:prompt|instrucciones|reglas?)\b", re.I), 0.55),
+]
+
+# Listas combinadas (inglês + pt-BR + es) usadas pelo detector.
+_JAILBREAK_ALL_RE = _JAILBREAK_RE + _JAILBREAK_PT_RE + _JAILBREAK_ES_RE
+_EXFIL_ALL_RE = _EXFIL_RE + _EXFIL_PT_RE + _EXFIL_ES_RE
+
 # ── Heurísticas de payload codificado ───────────────────────────
 # Bloco base64 suspeito: >= 80 chars de [A-Za-z0-9+/=] sem espaço
 _B64_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{80,}(?![A-Za-z0-9+/=])")
@@ -107,7 +136,7 @@ def detect(
     score = 0.0
     matched: list[str] = []
 
-    for rx, weight in _JAILBREAK_RE:
+    for rx, weight in _JAILBREAK_ALL_RE:
         if rx.search(text):
             score += weight
             matched.append(f"jailbreak:{rx.pattern[:40]}")
@@ -117,7 +146,7 @@ def detect(
             score += weight
             matched.append(f"role_marker:{rx.pattern[:40]}")
 
-    for rx, weight in _EXFIL_RE:
+    for rx, weight in _EXFIL_ALL_RE:
         if rx.search(text):
             score += weight
             matched.append(f"exfil:{rx.pattern[:40]}")
@@ -128,7 +157,7 @@ def detect(
         decoded = _decode_base64_safely(candidate)
         if decoded:
             # Recursão simples: aplica as regex de jailbreak ao decoded
-            for rx, weight in _JAILBREAK_RE + _EXFIL_RE:
+            for rx, weight in _JAILBREAK_ALL_RE + _EXFIL_ALL_RE:
                 if rx.search(decoded):
                     score += weight + 0.1   # pequeno bônus por ofuscação
                     matched.append(f"b64_payload:{rx.pattern[:30]}")
