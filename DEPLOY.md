@@ -132,11 +132,42 @@ curl -fsS https://seu-dominio.com.br/api/health    # via Caddy/TLS público
 
 ### Update da aplicação
 
+**Opção A — build no host (simples, não-reproduzível):**
+
 ```bash
 cd ~/agente-inteligencia
 git pull
 docker compose up -d --build app
 ```
+
+**Opção B — imagem IMUTÁVEL do GHCR (recomendado em prod — 33.4.0):**
+
+O CI publica `ghcr.io/sergiogaiotto/agente-inteligencia:<versão>-<sha>` (+ `:latest`)
+a cada merge na `main` (job `build + push image (GHCR)`, só com testes+smoke verdes).
+O host **puxa** a imagem em vez de compilar → deploy determinístico, sem o risco de
+drift de wheel (footgun #533) e com **rollback atômico**.
+
+```bash
+cd ~/agente-inteligencia
+git pull                                   # traz o docker-compose.prod.yml + .env novos
+# Repo privado / 1ª vez: autentica no GHCR com um PAT de read:packages
+echo "$GHCR_PAT" | docker login ghcr.io -u sergiogaiotto --password-stdin
+
+# Fixe a tag imutável do release desejado (veja as tags publicadas em
+# github.com/sergiogaiotto/agente-inteligencia/pkgs/container/agente-inteligencia):
+export MAESTRO_IMAGE=ghcr.io/sergiogaiotto/agente-inteligencia:33.4.0-<sha>
+docker compose -f docker-compose.yml -f docker-compose.prod.yml pull app
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build app
+```
+
+**Rollback (atômico, sem rebuild):** aponte `MAESTRO_IMAGE` para o `:<versão>-<sha>`
+**anterior** e repita `pull` + `up -d --no-build app`. O banco não é tocado (só o
+container do app troca); se o release novo migrou o schema de forma incompatível,
+restaure o backup do pg_dump correspondente (ver abaixo) antes de voltar a imagem.
+
+> `--no-build` garante que o host nunca compila (usa só a imagem puxada). Sem
+> `MAESTRO_IMAGE` setado, cai em `:latest` (último merge) — em produção prefira a
+> tag `:<versão>-<sha>` explícita para rastreabilidade.
 
 ### Backup (cron diário)
 
