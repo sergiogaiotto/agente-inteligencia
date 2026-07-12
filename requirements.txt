@@ -18,6 +18,11 @@ aiofiles==25.1.0
 
 # === Database (PostgreSQL) ===
 asyncpg==0.31.0
+# Alembic — migrações versionadas (up/down) adotadas na Onda 4 (33.6.0). O app
+# runtime segue usando asyncpg cru; alembic usa seu próprio engine sync (psycopg2)
+# só p/ aplicar migrações no boot (init_db, em thread). Traz SQLAlchemy como dep.
+alembic==1.13.3
+psycopg2-binary==2.9.10
 
 # === Cache / Memória de Contexto ===
 redis[hiredis]==8.0.1
