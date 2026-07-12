@@ -938,6 +938,7 @@ async def invoke_pipeline(
             user_input=user_input,
             channel=data.channel or "api",
             session_id=data.session_id,
+            context_mode=data.context_mode or "auto",  # 'none' = stateless/idempotente
             attachments=pipeline_attachments or None,
             allowed_agent_ids=members,  # SELA a execução ao subgrafo do pipeline
             sealed_inputs=sealed_inputs or None,  # envelope param (out-of-band)
@@ -1094,6 +1095,7 @@ async def invoke_pipeline_stream(
                 user_input=user_input,
                 channel=data.channel or "api",
                 session_id=data.session_id,
+                context_mode=data.context_mode or "auto",  # 'none' = stateless/idempotente
                 attachments=pipeline_attachments or None,
                 allowed_agent_ids=members,  # SELA ao subgrafo do pipeline
                 sealed_inputs=sealed_inputs or None,  # envelope param (out-of-band)

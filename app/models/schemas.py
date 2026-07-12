@@ -224,6 +224,11 @@ class PipelineInvokeRequest(BaseModel):
     dry: Optional[bool] = False
     session_id: Optional[str] = None
     channel: Optional[str] = "api"
+    # Memória de conversa multi-turno (paridade com AgentInvokeRequest.context_mode):
+    # 'auto' (default) reconstrói a janela da sessão e reinjeta no LLM + gate;
+    # 'none' = stateless (função pura, p/ integrações idempotentes via API). Só age
+    # quando session_id está presente. Ver app/agents/conversation_memory.py.
+    context_mode: Optional[str] = "auto"
     # Detalhe da resposta: full | summary | minimal. Ausente → default por auth
     # (sessão→full; X-API-Key→platform_settings.api_invoke_default_verbosity).
     verbosity: Optional[str] = None
