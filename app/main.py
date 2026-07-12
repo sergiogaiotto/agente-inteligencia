@@ -167,6 +167,12 @@ install_api_auth_middleware(app)
 from app.core.ratelimit import RateLimitMiddleware
 app.add_middleware(RateLimitMiddleware)
 
+# Teto global de corpo (API-6): rejeita 413 por Content-Length antes de ler o
+# corpo — anti-OOM de um único request grande. Registrado antes do CORS (fica
+# INTERNO a ele) para que o 413 saia com os headers CORS.
+from app.core.request_limits import install_request_body_limit_middleware
+install_request_body_limit_middleware(app)
+
 # CORS (P0 — frontends externos no browser). Registrado por ÚLTIMO = middleware
 # MAIS EXTERNO: trata o preflight OPTIONS ANTES do ApiAuth (que devolvia 401 no
 # preflight). Origens lidas dinamicamente de platform_settings (cors_allowed_origins);
