@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     database_pool_min: int = 5
     database_pool_max: int = 20
     database_command_timeout: int = 60
+    # Migrações idempotentes fail-fast (33.5.0): True → o boot ABORTA se QUALQUER
+    # migração falhar (crash-loop até corrigir) em vez do fail-open atual (WARNING
+    # + segue). Default False = comportamento atual (retrocompat). Env: DATABASE_MIGRATIONS_STRICT.
+    database_migrations_strict: bool = False
 
     # ── Cache / Redis (memória de contexto) ──
     redis_url: str = "redis://localhost:6379/0"

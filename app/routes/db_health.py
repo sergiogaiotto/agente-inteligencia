@@ -247,6 +247,26 @@ async def _check_settings_store() -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:120]}"}
 
 
+async def _check_migrations() -> dict[str, Any]:
+    """Migrações idempotentes da última init_db (33.5.0).
+
+    ok = nenhuma falhou. Mesmo em modo fail-open (default), uma migração que
+    falhou vira ok=false AQUI (visibilidade — antes só existia um WARNING no
+    log). Em modo strict o boot nem chega aqui (aborta). Lê o snapshot
+    in-process de app.core.database (mesmo processo/pool)."""
+    from app.core.database import get_migration_stats
+    s = get_migration_stats()
+    return {
+        "ok": s["failed"] == 0,
+        "applied": s["applied"],
+        "failed": s["failed"],
+        "total": s["total"],
+        "strict": s["strict"],
+        "failures": s["failures"][:10],
+        "ran_at": str(s["ran_at"]) if s["ran_at"] else None,
+    }
+
+
 @router.get("/database")
 async def database_health(user: dict = Depends(require_user)) -> dict[str, Any]:
     """Health check abrangente do Postgres.
@@ -281,13 +301,14 @@ async def database_health(user: dict = Depends(require_user)) -> dict[str, Any]:
             "checks": {"pool": pool_check},
         }
 
-    extensions, tables, indexes, pgvec, tsv, settings = await asyncio.gather(
+    extensions, tables, indexes, pgvec, tsv, settings, migrations = await asyncio.gather(
         _check_extensions(),
         _check_tables(),
         _check_indexes(),
         _check_pgvector_dim(),
         _check_tsvector(),
         _check_settings_store(),
+        _check_migrations(),
     )
 
     checks = {
@@ -298,6 +319,7 @@ async def database_health(user: dict = Depends(require_user)) -> dict[str, Any]:
         "pgvector": pgvec,
         "tsvector": tsv,
         "settings_store": settings,
+        "migrations": migrations,
     }
     overall_ok = all(c.get("ok") for c in checks.values())
 

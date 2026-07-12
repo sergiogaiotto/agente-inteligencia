@@ -21,6 +21,7 @@ from typing import Any, Optional
 import asyncpg
 
 from app.core.config import get_settings
+from app.core.datetime_utils import naive_utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -1209,6 +1210,39 @@ _IDEMPOTENT_MIGRATIONS = [
       END IF;
     END $$;
     """,
+    # ── FK ON DELETE CASCADE no núcleo transacional (33.5.0) ──────────────
+    # turns/tool_calls/binding_executions.interaction_id → interactions.id.
+    # ANTES: sem FK → órfãos. tool_calls/binding_executions VAZAM a cada
+    # consolidação de pipeline (nunca eram limpos) e o delete_session da UI
+    # orfanava tudo; o cascade-em-Python dos turns (engine.execute_pipeline)
+    # fica redundante. verifications FICA DE FORA de propósito: é RE-APONTADA
+    # ao master ANTES do delete da filha (preserva a auditoria do juiz —
+    # judge_cost_usd/scores no /quality); cascatear apagaria essa auditoria.
+    #
+    # ⚠️ Órfãos pré-existentes fazem o ADD CONSTRAINT FALHAR — e, por causa do
+    # try/except fail-open do loop de migração, a FK NÃO seria criada (silencioso).
+    # Por isso: DELETE dos órfãos ANTES de cada ADD, em entrada ANTERIOR da lista.
+    # Coluna NULLABLE (tool_calls) filtra IS NOT NULL (NULL é válido na FK, não é órfão).
+    "DELETE FROM turns WHERE interaction_id IS NOT NULL AND interaction_id NOT IN (SELECT id FROM interactions)",
+    "ALTER TABLE turns DROP CONSTRAINT IF EXISTS turns_interaction_id_fkey",
+    """ALTER TABLE turns ADD CONSTRAINT turns_interaction_id_fkey
+       FOREIGN KEY (interaction_id) REFERENCES interactions(id) ON DELETE CASCADE""",
+
+    "DELETE FROM tool_calls WHERE interaction_id IS NOT NULL AND interaction_id NOT IN (SELECT id FROM interactions)",
+    "ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_interaction_id_fkey",
+    """ALTER TABLE tool_calls ADD CONSTRAINT tool_calls_interaction_id_fkey
+       FOREIGN KEY (interaction_id) REFERENCES interactions(id) ON DELETE CASCADE""",
+
+    "DELETE FROM binding_executions WHERE interaction_id IS NOT NULL AND interaction_id NOT IN (SELECT id FROM interactions)",
+    "ALTER TABLE binding_executions DROP CONSTRAINT IF EXISTS binding_executions_interaction_id_fkey",
+    """ALTER TABLE binding_executions ADD CONSTRAINT binding_executions_interaction_id_fkey
+       FOREIGN KEY (interaction_id) REFERENCES interactions(id) ON DELETE CASCADE""",
+
+    # ── Índices de leitura em interactions (33.5.0) ──────────────────────
+    # Dashboards/observabilidade ordenam por created_at DESC e filtram por state
+    # (default 'Intake'). Sem índice, viram seq scan conforme a tabela cresce.
+    "CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_interactions_state ON interactions(state)",
 ]
 
 
@@ -1218,6 +1252,19 @@ _IDEMPOTENT_MIGRATIONS = [
 
 _pool: Optional[asyncpg.Pool] = None
 _init_lock = asyncio.Lock()
+
+# Estatísticas da ÚLTIMA execução das migrações idempotentes (33.5.0) — lidas
+# pelo GET /api/v1/health/database. Resetadas a cada init_db (que roda a cada
+# boot/re-chamada), então refletem sempre o boot mais recente.
+_MIGRATION_STATS: dict = {
+    "applied": 0, "failed": 0, "total": 0, "failures": [], "ran_at": None,
+    "strict": False,
+}
+
+
+def get_migration_stats() -> dict:
+    """Snapshot das migrações idempotentes da última ``init_db`` (p/ o health)."""
+    return dict(_MIGRATION_STATS)
 
 
 def _get_pool() -> asyncpg.Pool:
@@ -1379,10 +1426,24 @@ async def init_db():
             # antigos, causando 500 no POST /api/v1/skills (bug bug.skills.create
             # 2026-05). Não derruba startup — pool já está aberto e schema base
             # já rodou; queremos apenas visibilidade.
+            # Contadores da rodada (33.5.0) — resetados aqui pois init_db roda a
+            # cada boot/re-chamada. Expostos no /health/database.
+            _MIGRATION_STATS.update(
+                applied=0, failed=0, total=len(_IDEMPOTENT_MIGRATIONS),
+                failures=[], ran_at=naive_utc_now(),
+                strict=bool(settings.database_migrations_strict),
+            )
             for migration in _IDEMPOTENT_MIGRATIONS:
                 try:
                     await con.execute(migration)
+                    _MIGRATION_STATS["applied"] += 1
                 except Exception as e:
+                    _MIGRATION_STATS["failed"] += 1
+                    _MIGRATION_STATS["failures"].append({
+                        "migration_preview": migration[:120],
+                        "error_type": type(e).__name__,
+                        "error": str(e)[:200],
+                    })
                     logger.warning(
                         "db.migration.failed",
                         extra={
@@ -1392,6 +1453,27 @@ async def init_db():
                             "error": str(e)[:200],
                         },
                     )
+            logger.info(
+                "db.migrations.summary",
+                extra={
+                    "event": "db.migrations.summary",
+                    "applied": _MIGRATION_STATS["applied"],
+                    "failed": _MIGRATION_STATS["failed"],
+                    "total": _MIGRATION_STATS["total"],
+                    "strict": _MIGRATION_STATS["strict"],
+                },
+            )
+            # Fail-fast opcional (DATABASE_MIGRATIONS_STRICT): aborta o boot se
+            # QUALQUER migração falhou — em vez do fail-open (WARNING + segue).
+            # Collect-then-raise: rodamos TODAS antes de levantar, pro log listar
+            # todas as falhas. main.py chama init_db() nu na lifespan → o raise
+            # crash-loopa até corrigir (intencional). Default OFF (retrocompat).
+            if _MIGRATION_STATS["strict"] and _MIGRATION_STATS["failed"] > 0:
+                raise RuntimeError(
+                    f"{_MIGRATION_STATS['failed']}/{_MIGRATION_STATS['total']} "
+                    f"migração(ões) falharam e DATABASE_MIGRATIONS_STRICT=on — "
+                    f"boot abortado. Veja os eventos db.migration.failed no log."
+                )
 
 
 async def close_db():
