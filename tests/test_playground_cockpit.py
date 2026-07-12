@@ -27,6 +27,11 @@ def test_cockpit_layout_split_chat_esquerda_cockpit_direita():
     assert 'data-testid="pg-chat-left"' in src
     assert 'data-testid="pg-cockpit"' in src
     assert "<aside" in src and "lg:sticky" in src
+    # o cockpit tem SCROLLBAR próprio (independente do chat à esquerda): altura
+    # limitada + corpo rolável, com o cabeçalho/escopo fixo (flex-none)
+    assert 'data-testid="pg-cockpit-scroll"' in src
+    assert "lg:max-h-[calc(100vh-5.5rem)]" in src
+    assert "flex-1 min-h-0 overflow-y-auto" in src
 
 
 def test_cockpit_roda_o_chat_em_full_para_ter_telemetria():
@@ -50,6 +55,25 @@ def test_cockpit_evolui_por_escopo_turno_e_sessao():
     # vazio antes do 1º turno + estado ativo
     assert 'data-testid="pg-cockpit-empty"' in src
     assert "get cockpitActive()" in src
+
+
+def test_cockpit_terceiro_recorte_pipeline_30d():
+    """Recorte 'Pipeline · 30d': agrega qualidade/confiabilidade da população deste
+    pipeline (verifications/stats), contextualizando a conversa. Custo/TCO não se
+    aplicam ao agregado — a lente de Custo mostra um aviso honesto."""
+    src = _src()
+    assert "cockpitScope='pipeline'" in src and "_loadPipeline30d()" in src
+    # consome o endpoint de stats agregado (cookie), filtra pelo pipeline atual
+    assert "'/api/v1/dashboard/verifications/stats?window=30d'" in src
+    assert "r.by_pipeline" in src and "p.pipeline_id === this.selectedId" in src
+    # getters branquam no recorte pipeline (lêem o agregado, não os turnos)
+    assert "get _isPl()" in src and "this._pl.avg_factuality" in src
+    assert "this._pl.with_unsupported" in src and "this._pl.ok_count" in src
+    # custo/TCO não se aplicam ao agregado → aviso + custo por turno nulo no recorte
+    assert "custo por conversa não vem do agregado" in src
+    assert "if (this._isPl) return null;" in src        # costPerTurnUsd/idxC
+    # guarda de amostra pequena (sem falsa confiança)
+    assert "amostra pequena" in src
 
 
 def test_cockpit_tres_indices_e_gate():

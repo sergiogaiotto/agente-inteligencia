@@ -618,6 +618,18 @@ async def apply_settings_to_env() -> int:
     except Exception:
         pass
 
+    # Overrides de pricing editáveis (TCO auditável): carrega a tabela de preços
+    # de LLM do banco na camada de overrides do llm_pricing — runtime, sem deploy.
+    try:
+        import json as _json
+        from app.core import llm_pricing as _lp
+        _raw = data.get("llm_pricing_overrides")
+        n = _lp.set_pricing_overrides(_json.loads(_raw) if _raw else {})
+        if n:
+            logger.info("event=pricing.overrides_loaded count=%d", n)
+    except Exception:
+        logger.warning("event=pricing.overrides_load_failed", exc_info=True)
+
     # Invalida cache pra próxima chamada de get_settings() rebuild com novas envs
     get_settings.cache_clear()
 

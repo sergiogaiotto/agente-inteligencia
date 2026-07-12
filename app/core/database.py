@@ -519,6 +519,11 @@ CREATE TABLE IF NOT EXISTS verifications (
     judge_model TEXT,
     profile TEXT,
     duration_ms INTEGER,
+    -- Custo REAL do juiz (instrumentação de TCO): tokens + USD da chamada do
+    -- LLM-as-Judge. Antes invisível (só duration_ms). DBs antigos migram via
+    -- _IDEMPOTENT_MIGRATIONS.
+    judge_tokens INTEGER DEFAULT 0,
+    judge_cost_usd REAL DEFAULT 0,
     created_at TIMESTAMP DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_verifications_turn ON verifications (turn_id);
@@ -1030,6 +1035,8 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS draft_redacted TEXT",
     "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS contract_retried BOOLEAN DEFAULT FALSE",
     "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS contract_original_errors TEXT DEFAULT '[]'",
+    "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS judge_tokens INTEGER DEFAULT 0",
+    "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS judge_cost_usd REAL DEFAULT 0",
     "CREATE INDEX IF NOT EXISTS idx_verifications_agent ON verifications (agent_id)",
     "CREATE INDEX IF NOT EXISTS idx_verifications_pipeline ON verifications (pipeline_id)",
     # Tabela `traces` foi criada no schema mas nunca escrita por ninguém — traces

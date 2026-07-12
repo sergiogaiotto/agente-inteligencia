@@ -167,10 +167,24 @@ class MultiDimJudge:
             if not isinstance(unsupported_claims, list):
                 unsupported_claims = []
 
+            # Custo REAL do juiz: tokens reportados pelo provider × preço do
+            # modelo EFETIVAMENTE usado (pós-fallback hospedado). self-hosted
+            # (gpt-oss) → 0, honestamente. Antes o custo do juiz era invisível
+            # (verifications só guardava duration_ms) e o TCO o estimava.
+            usage = resp.get("usage") or {}
+            in_tok = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+            out_tok = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+            from app.core.llm_pricing import compute_cost
+            judge_cost = compute_cost(used_provider, used_model, in_tok, out_tok)
+            span.set_attribute("judge.tokens", in_tok + out_tok)
+            span.set_attribute("judge.cost_usd", judge_cost)
+
             return {
                 "dimensions": dimensions,
                 "unsupported_claims": unsupported_claims[:20],
                 "model": resp.get("model", judge_model_id),
+                "judge_tokens": in_tok + out_tok,
+                "judge_cost_usd": judge_cost,
             }
 
     @staticmethod

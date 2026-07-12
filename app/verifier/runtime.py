@@ -46,6 +46,11 @@ class VerificationResult:
     contract_errors: list[str] = field(default_factory=list)
     judge_model: str = ""
     duration_ms: int = 0
+    # Custo REAL do juiz (instrumentação de TCO): tokens + USD da chamada do
+    # LLM-as-Judge. 0 quando o juiz não rodou (profile fast) ou o modelo é
+    # self-hosted (preço 0). Torna a linha "Juiz/verificador" do TCO MEDIDA.
+    judge_tokens: int = 0
+    judge_cost_usd: float = 0.0
     # Wave Contract Retry (PR atual)
     contract_retried: bool = False
     """True quando o Verifier detectou compliant=false e re-chamou o LLM
@@ -218,6 +223,8 @@ class Verifier:
             dimensions: dict[str, dict] = {}
             unsupported_claims: list[str] = []
             judge_model = ""
+            judge_tokens = 0
+            judge_cost_usd = 0.0
 
             if run_judge:
                 from app.verifier.multi_dim_judge import MultiDimJudge
@@ -233,6 +240,8 @@ class Verifier:
                     dimensions = j.get("dimensions", {})
                     unsupported_claims = j.get("unsupported_claims", []) or []
                     judge_model = j.get("model", "")
+                    judge_tokens = int(j.get("judge_tokens") or 0)
+                    judge_cost_usd = float(j.get("judge_cost_usd") or 0.0)
                     span.set_attribute("verifier.judge_ok", True)
                 except Exception as e:
                     logger.warning(f"MultiDimJudge falhou: {type(e).__name__}: {e}")
@@ -280,6 +289,8 @@ class Verifier:
                 contract_errors=contract_errors,
                 judge_model=judge_model,
                 duration_ms=duration_ms,
+                judge_tokens=judge_tokens,
+                judge_cost_usd=judge_cost_usd,
                 # Wave Contract Retry
                 contract_retried=contract_retried,
                 contract_original_errors=contract_original_errors,
@@ -476,9 +487,10 @@ class Verifier:
                    contract_compliant, contract_errors,
                    contract_retried, contract_original_errors,
                    ok, confidence, unsupported_claims,
-                   judge_model, profile, duration_ms)
+                   judge_model, profile, duration_ms,
+                   judge_tokens, judge_cost_usd)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-                        $16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+                        $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
                 """,
                 rid, turn_id, interaction_id,
                 agent_id, pipeline_id, q_red, draft_red,
@@ -491,6 +503,7 @@ class Verifier:
                 json.dumps(result.contract_original_errors)[:8000],
                 result.ok, result.confidence, json.dumps(result.unsupported_claims)[:8000],
                 result.judge_model, profile, result.duration_ms,
+                int(result.judge_tokens or 0), float(result.judge_cost_usd or 0.0),
             )
 
 

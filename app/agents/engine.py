@@ -2811,6 +2811,10 @@ def _serialize_verification(v) -> dict | None:
         "contract_errors": list(getattr(v, "contract_errors", []) or []),
         "judge_model": str(getattr(v, "judge_model", "") or ""),
         "duration_ms": int(getattr(v, "duration_ms", 0) or 0),
+        # Custo REAL do juiz (instrumentação de TCO): o cockpit soma isto por
+        # step p/ a linha "Juiz/verificador" virar MEDIDA (não estimada).
+        "judge_tokens": int(getattr(v, "judge_tokens", 0) or 0),
+        "judge_cost_usd": float(getattr(v, "judge_cost_usd", 0.0) or 0.0),
         "risk_high": bool(getattr(v, "risk_high", False)),
         # Wave Contract Retry: expõe na resposta HTTP pra UI mostrar
         # "✓ Verifier corrigiu a saída via retry" e operador auditar.

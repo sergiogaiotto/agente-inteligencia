@@ -100,9 +100,67 @@ def _normalize(provider: Optional[str], model: Optional[str]) -> str:
     return f"{p}/{m}"
 
 
+# ─── Overrides EDITÁVEIS em runtime (platform_settings) ──────────
+# Preços de LLM mudam (e o snapshot hardcoded envelhece). Para o TCO ser
+# AUDITÁVEL, o operador pode editar os preços na tela (Configurações → Preços
+# LLM) sem deploy. get_pricing consulta os overrides ANTES da tabela default.
+# Carregados no boot por apply_settings_to_env (chave 'llm_pricing_overrides',
+# JSON {"provider/model": {"input": x, "output": y}}) e a cada save.
+_OVERRIDES: dict[str, dict[str, float]] = {}
+
+
+def set_pricing_overrides(overrides: Optional[dict]) -> int:
+    """Substitui a camada de overrides. Normaliza chaves (lower) e valores
+    (float >= 0); entradas inválidas são ignoradas. Retorna quantas entraram."""
+    global _OVERRIDES
+    clean: dict[str, dict[str, float]] = {}
+    for k, v in (overrides or {}).items():
+        key = str(k or "").strip().lower()
+        if not key or "/" not in key or not isinstance(v, dict):
+            continue
+        try:
+            inp = float(v.get("input"))
+            out = float(v.get("output"))
+        except (TypeError, ValueError):
+            continue
+        if inp < 0 or out < 0:
+            continue
+        clean[key] = {"input": inp, "output": out}
+    _OVERRIDES = clean
+    return len(clean)
+
+
+def get_pricing_overrides() -> dict[str, dict[str, float]]:
+    """Cópia dos overrides ativos (o que a UI edita / persiste)."""
+    return {k: dict(v) for k, v in _OVERRIDES.items()}
+
+
+def effective_pricing() -> list[dict]:
+    """Tabela EFETIVA p/ a UI: default ∪ overrides, marcando a origem de cada
+    modelo. Ordenada por chave. Cada item: key, input, output, overridden,
+    default_input, default_output (para o botão "restaurar padrão")."""
+    out = []
+    for k in sorted(set(PRICING) | set(_OVERRIDES)):
+        ov = k in _OVERRIDES
+        price = _OVERRIDES[k] if ov else PRICING[k]
+        dflt = PRICING.get(k)
+        out.append({
+            "key": k,
+            "input": price["input"],
+            "output": price["output"],
+            "overridden": ov,
+            "default_input": dflt["input"] if dflt else None,
+            "default_output": dflt["output"] if dflt else None,
+        })
+    return out
+
+
 def get_pricing(provider: Optional[str], model: Optional[str]) -> Optional[dict[str, float]]:
-    """Lookup direto na tabela. None se desconhecido (caller decide o fallback)."""
-    return PRICING.get(_normalize(provider, model))
+    """Lookup: override editável ANTES da tabela default. None se desconhecido."""
+    key = _normalize(provider, model)
+    if key in _OVERRIDES:
+        return _OVERRIDES[key]
+    return PRICING.get(key)
 
 
 def compute_cost(
