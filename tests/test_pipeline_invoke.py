@@ -89,6 +89,40 @@ class TestInvokePipeline:
         assert captured["allowed_agent_ids"] == {"r", "a"}
         assert captured["session_id"] == "s1"
 
+    def _seed_happy(self, monkeypatch, captured):
+        async def fake_exec(**k):
+            captured.update(k)
+            return {"status": "completed", "output": "ok", "interaction_id": "i1",
+                    "pipeline_steps": [{"agent_id": "r"}], "total_agents": 1,
+                    "completed_agents": 1, "duration_ms": 1}
+        monkeypatch.setattr(db.pipelines_repo, "find_by_id", _async(_pipe()))
+        monkeypatch.setattr(pdefs, "_build_subgraph", _async({
+            "root_agent_id": "r", "nodes": [{"id": "r"}], "edges": [],
+        }))
+        monkeypatch.setattr(engine, "execute_pipeline", fake_exec)
+        monkeypatch.setattr(db.audit_repo, "create", _async({}))
+
+    def test_context_mode_default_auto(self, monkeypatch):
+        # API-1: ausente → 'auto' (comportamento atual: reinjeta memória da sessão).
+        captured = {}
+        self._seed_happy(monkeypatch, captured)
+        r = _client().post("/api/v1/pipelines/p1/invoke", json={"message": "oi"})
+        assert r.status_code == 200, r.text
+        assert captured["context_mode"] == "auto"
+
+    def test_context_mode_none_threaded(self, monkeypatch):
+        # API-1: 'none' chega ao execute_pipeline → invoke stateless/idempotente
+        # (não reconstrói a janela da sessão mesmo com session_id).
+        captured = {}
+        self._seed_happy(monkeypatch, captured)
+        r = _client().post(
+            "/api/v1/pipelines/p1/invoke",
+            json={"message": "oi", "session_id": "s1", "context_mode": "none"},
+        )
+        assert r.status_code == 200, r.text
+        assert captured["context_mode"] == "none"
+        assert captured["session_id"] == "s1"
+
     def test_aposentado_engine_valueerror_maps_409(self, monkeypatch):
         # Defesa em profundidade: se o gate do motor levantar ValueError, vira 409.
         monkeypatch.setattr(db.pipelines_repo, "find_by_id", _async(_pipe("publicado")))

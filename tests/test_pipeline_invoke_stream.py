@@ -64,6 +64,25 @@ def test_stream_emite_eventos_sse_ao_vivo(monkeypatch):
     assert captured["progress_callback"] is not None
 
 
+def test_stream_threads_context_mode(monkeypatch):
+    # API-1: o path de stream também repassa context_mode ao execute_pipeline.
+    captured = {}
+    async def fake_exec(**k):
+        captured.update(k)
+        cb = k.get("progress_callback")
+        if cb:
+            await cb({"type": "pipeline_done", "result": {"output": "ok", "pipeline_steps": []}})
+        return {}
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(engine, "execute_pipeline", fake_exec)
+    r = _client().post(
+        "/api/v1/pipelines/p1/invoke/stream",
+        json={"message": "oi", "session_id": "s1", "context_mode": "none"},
+    )
+    assert r.status_code == 200, r.text
+    assert captured["context_mode"] == "none"
+
+
 def test_stream_projeta_pipeline_done_por_verbosidade(monkeypatch):
     # o pipeline_done final HONRA verbosidade (igual ao /invoke) — senão a console
     # "ver como integração" mentiria. Aqui verbosity=minimal → result enxuto.
