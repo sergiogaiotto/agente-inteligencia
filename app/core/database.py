@@ -652,6 +652,30 @@ CREATE INDEX IF NOT EXISTS idx_catalog_costs_entry ON catalog_costs(entry_id);
 CREATE INDEX IF NOT EXISTS idx_catalog_costs_consumer ON catalog_costs(consumer_user_id);
 CREATE INDEX IF NOT EXISTS idx_catalog_costs_invoked_at ON catalog_costs(invoked_at DESC);
 
+-- SSOT de custo por INVOCAÇÃO — cobre TODOS os caminhos de invoke (pipeline
+-- sync/stream, inclusive cookie/UI e X-API-Key). Antes catalog_costs (só catálogo)
+-- e api_key_cost_ledger (só toggle+key) cobriam subconjuntos disjuntos → runs por
+-- UI/diretos ficavam CEGOS ("quanto gastamos" era irrespondível). Escrito OFF-PATH
+-- (o invoke não espera); insert-only; agregação em app/core/cost_ledger.py.
+CREATE TABLE IF NOT EXISTS invocation_costs (
+    id TEXT PRIMARY KEY,
+    interaction_id TEXT,
+    pipeline_id TEXT,
+    agent_id TEXT,
+    user_id TEXT,
+    api_key_id TEXT,
+    channel TEXT,
+    source TEXT,                 -- invoke | invoke_stream | agent | chat
+    cost_usd REAL DEFAULT 0,
+    tokens_used INTEGER DEFAULT 0,
+    latency_ms REAL DEFAULT 0,
+    final_state TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_invocation_costs_created_at ON invocation_costs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_invocation_costs_pipeline ON invocation_costs(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_invocation_costs_user ON invocation_costs(user_id);
+
 -- ═══════════════════════════════════════════════════════════════
 -- External Platforms metadata (Onda 2) — 1:1 com catalog_entries
 -- quando kind='external_platform'. Cataloga IAs terceirizadas

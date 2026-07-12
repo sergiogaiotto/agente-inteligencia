@@ -2858,6 +2858,32 @@ async def save_llm_pricing(
     return {"status": "ok", "count": len(clean), "pricing": effective_pricing()}
 
 
+@router.get("/dashboard/costs")
+async def dashboard_costs(
+    group_by: str = "pipeline",
+    since: str = None,
+    until: str = None,
+    pipeline_id: str = None,
+    user_id: str = None,
+    source: str = None,
+    user: dict = Depends(require_role("root", "admin")),
+):
+    """Custo org-wide por invocação (SSOT `invocation_costs`) — o "quanto gastamos".
+
+    Agrega TODOS os caminhos de invoke (não só o catálogo, como o /catalog/cost) por
+    pipeline|agent|user|source|day, com filtros de data (since/until, ISO). É a visão
+    de FinOps que faltava — role-gated (root/admin), dado de custo."""
+    from app.core.cost_ledger import aggregate_invocation_costs
+    try:
+        rows, totals = await aggregate_invocation_costs(
+            group_by=group_by, since=since, until=until,
+            pipeline_id=pipeline_id, user_id=user_id, source=source,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"group_by": group_by, "rows": rows, "totals": totals}
+
+
 class ProviderTestRequest(BaseModel):
     provider: str  # azure | openai | maritaca | ollama | qwen3 | gpt-oss-*
     model: str
