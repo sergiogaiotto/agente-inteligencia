@@ -27,6 +27,11 @@ def test_cockpit_layout_split_chat_esquerda_cockpit_direita():
     assert 'data-testid="pg-chat-left"' in src
     assert 'data-testid="pg-cockpit"' in src
     assert "<aside" in src and "lg:sticky" in src
+    # o cockpit tem SCROLLBAR próprio (independente do chat à esquerda): altura
+    # limitada + corpo rolável, com o cabeçalho/escopo fixo (flex-none)
+    assert 'data-testid="pg-cockpit-scroll"' in src
+    assert "lg:max-h-[calc(100vh-5.5rem)]" in src
+    assert "flex-1 min-h-0 overflow-y-auto" in src
 
 
 def test_cockpit_roda_o_chat_em_full_para_ter_telemetria():
