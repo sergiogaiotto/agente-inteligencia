@@ -22,7 +22,13 @@ from dataclasses import asdict
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
-from app.core.llm_providers import get_provider, is_llm_unreachable, is_llm_param_rejection
+from app.core.llm_providers import (
+    canonical_provider,
+    get_provider,
+    is_llm_unreachable,
+    is_llm_param_rejection,
+)
+from app.core.llm_breaker import breaker
 from app.core.observability import get_langfuse_handler, tracker
 from app.agents.conversation_memory import (
     build_history_messages as _build_history_messages,
@@ -696,9 +702,18 @@ async def _run_llm_chain(
     # vez): se o primário está morto há segundos, a resposta vem do fallback
     # imediatamente em vez de re-pagar o timeout. `_chosen` do caller usa a
     # lista ORIGINAL, então a nota de contingência continua correta.
-    down = [c for c in candidates if _llm_marked_down(c[0])]
+    # Deferral = marcador local (por-processo, defer-após-1, fix Aurora) OU
+    # circuito ABERTO no breaker cross-worker (33.1.0): um provider que a frota
+    # já viu cair é preterido AQUI mesmo que ESTE worker nunca tenha falhado nele.
+    _deferred = []
+    for _cand_p, _cand_m in candidates:
+        _is_down = _llm_marked_down(_cand_p) or await breaker.is_open(
+            canonical_provider(_cand_p)
+        )
+        _deferred.append(_is_down)
+    down = [c for c, d in zip(candidates, _deferred) if d]
     if down and len(down) < len(candidates):
-        alive = [c for c in candidates if not _llm_marked_down(c[0])]
+        alive = [c for c, d in zip(candidates, _deferred) if not d]
         logger.info(
             "agent.llm.chain.reordered",
             extra={
@@ -740,6 +755,7 @@ async def _run_llm_chain(
                 try:
                     result = await run_attempt(cand_p, cand_m)
                     _mark_llm_up(cand_p)
+                    await breaker.record_success(canonical_provider(cand_p))
                     break
                 except Exception as retry_exc:
                     attempt_exc = retry_exc
@@ -748,6 +764,10 @@ async def _run_llm_chain(
                 # externo, que mapeia pra mensagem acionável específica.
                 raise
             _mark_llm_down(cand_p)
+            # Alimenta o breaker cross-worker: só chegamos aqui em falha de
+            # ALCANCE (o `raise` acima barrou 4xx/param). A frota inteira passa a
+            # preterir/pular este provider após cb_failure_threshold falhas.
+            await breaker.record_failure(canonical_provider(cand_p))
             has_next = ci + 1 < len(candidates)
             # SEMPRE registra em observabilidade + LOG (independente do checkbox
             # show_in_trace, que só controla a NOTA visível na UI).
@@ -783,6 +803,7 @@ async def _run_llm_chain(
             break
         # sucesso nesta tentativa — encerra a cadeia
         _mark_llm_up(cand_p)
+        await breaker.record_success(canonical_provider(cand_p))
         break
     return result, attempted
 

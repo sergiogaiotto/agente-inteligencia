@@ -40,6 +40,21 @@ ESCALATIONS = Counter(
     ["kind"],
 )
 
+# ── Circuit-breaker do egress LLM (33.1.0) ──
+# opens = quantas vezes um provider ABRIU o circuito (falha de alcance repetida);
+# short_circuits = chamadas PULADAS por circuito aberto = timeouts de provider
+# morto que deixaram de ser pagos (o ganho direto do breaker).
+CIRCUIT_BREAKER_OPENS = Counter(
+    "maestro_circuit_breaker_opens_total",
+    "Aberturas de circuito por provider (falha de alcance)",
+    ["provider"],
+)
+CIRCUIT_BREAKER_SHORT_CIRCUITS = Counter(
+    "maestro_circuit_breaker_short_circuits_total",
+    "Chamadas LLM curto-circuitadas (timeout evitado) por provider",
+    ["provider"],
+)
+
 
 def record_invocation(
     *,
@@ -57,6 +72,16 @@ def record_invocation(
         INVOCATION_ERRORS.labels(kind=kind).inc()
     if escalated:
         ESCALATIONS.labels(kind=kind).inc()
+
+
+def record_breaker_open(provider: str) -> None:
+    """Registra a ABERTURA de um circuito (transição, não a cada falha)."""
+    CIRCUIT_BREAKER_OPENS.labels(provider=provider).inc()
+
+
+def record_breaker_short_circuit(provider: str) -> None:
+    """Registra uma chamada PULADA por circuito aberto (timeout evitado)."""
+    CIRCUIT_BREAKER_SHORT_CIRCUITS.labels(provider=provider).inc()
 
 
 def render_latest() -> tuple[bytes, str]:
