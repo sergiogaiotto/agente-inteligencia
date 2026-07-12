@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.crypto import encrypt_secret, decrypt_secret
+from app.core.ssrf import validate_public_url, SSRFError
 from app.core.http_auth import (
     build_auth_headers as _http_build_auth_headers,
     prepare_request_body,
@@ -342,6 +343,11 @@ async def test_connector(connector_id: str):
     base = c.get("base_url", "").rstrip("/")
     path = c.get("health_path", "/api/health")
     url = f"{base}{path}"
+    try:
+        _guard_egress(url)
+    except SSRFError as e:
+        logger.warning("api_connector.test.blocked_ssrf", extra={"connector_id": connector_id, "url": url})
+        return {"ok": False, "status": 0, "error": f"URL bloqueada (SSRF): {e}", "url": url}
     headers = _build_auth_headers(c)
     start = time.time()
     result: dict
@@ -395,9 +401,12 @@ async def health_all():
         path = c.get("health_path", "/api/health")
         headers = _build_auth_headers(c)
         try:
+            _guard_egress(f"{base}{path}")  # SSRF: bloqueia base_url interna
             async with httpx.AsyncClient(headers=headers, **_client_kwargs(c)) as client:
                 r = await client.get(f"{base}{path}")
             results[c["id"]] = {"ok": 200 <= r.status_code < 400, "status": r.status_code, "name": c["name"]}
+        except SSRFError:
+            results[c["id"]] = {"ok": False, "status": 0, "name": c["name"], "error": "URL bloqueada (SSRF)"}
         except Exception:
             results[c["id"]] = {"ok": False, "status": 0, "name": c["name"]}
     return results
@@ -424,6 +433,11 @@ async def proxy_call(data: ProxyRequest):
 
     base = c.get("base_url", "").rstrip("/")
     url = f"{base}{data.path}"
+    try:
+        _guard_egress(url)
+    except SSRFError as e:
+        logger.warning("api_connector.proxy.blocked_ssrf", extra={"connector_id": data.connector_id, "url": url})
+        return {"error": f"URL bloqueada (SSRF): {e}", "status": 0}
     headers = _build_auth_headers(c)
     if data.headers:
         headers.update(data.headers)
@@ -562,6 +576,11 @@ async def test_inline(data: InlineTestRequest):
     if not path.startswith("/"):
         path = "/" + path
     url = f"{base}{path}"
+    try:
+        _guard_egress(url)
+    except SSRFError as e:
+        return {"ok": False, "status": 0, "error": f"URL bloqueada (SSRF): {e}", "url": url,
+                "hint": "O host aponta para um IP interno/privado (bloqueado). Use um host público."}
     timeout = (data.timeout_ms or 15000) / 1000
     headers = _build_auth_headers({
         "auth_type": data.auth_type or "none",
@@ -570,7 +589,7 @@ async def test_inline(data: InlineTestRequest):
     })
     start = time.time()
     try:
-        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=False) as client:
             r = await client.get(url)
         latency = round((time.time() - start) * 1000, 2)
         return {
@@ -620,11 +639,16 @@ async def extract_cookie(data: ExtractCookieRequest):
     """
     if not data.login_url.strip():
         raise HTTPException(400, "login_url obrigatório")
+    login_url = data.login_url.strip()
+    try:
+        _guard_egress(login_url)
+    except SSRFError as e:
+        return {"ok": False, "status": 0, "error": f"URL bloqueada (SSRF): {e}"}
     timeout = (data.timeout_ms or 15000) / 1000
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             r = await client.post(
-                data.login_url.strip(),
+                login_url,
                 json=data.login_body or {},
                 headers={"Content-Type": "application/json"},
             )
@@ -788,6 +812,13 @@ async def introspect(data: IntrospectRequest):
 
     parsed = httpx.URL(raw)
     origin = f"{parsed.scheme}://{parsed.host}" + (f":{parsed.port}" if parsed.port and parsed.port not in (80, 443) else "")
+    # SSRF: o host do introspect vem do usuário. Todos os candidatos usam o mesmo
+    # origin, então validar aqui cobre a lista inteira; o `hinted` (extraído de
+    # HTML) pode ter outro host → validado à parte antes do fetch.
+    try:
+        _guard_egress(origin)
+    except SSRFError as e:
+        raise HTTPException(400, f"URL bloqueada (SSRF): {e}")
 
     # Strip anchor/query; se path termina em .json usamos direto
     url_path = (parsed.path or "/").rstrip("/")
@@ -833,7 +864,7 @@ async def introspect(data: IntrospectRequest):
     tried: list = []
     final_url = ""
     auth_hint: Optional[str] = None
-    async with httpx.AsyncClient(timeout=15, headers=headers, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=15, headers=headers, follow_redirects=False) as client:
         for cand in candidate_urls:
             try:
                 r = await client.get(cand)
@@ -865,6 +896,7 @@ async def introspect(data: IntrospectRequest):
                 hinted = _extract_openapi_url_from_html(r.text, origin)
                 if hinted and hinted not in [t["url"] for t in tried]:
                     try:
+                        _guard_egress(hinted)  # SSRF: hint de HTML pode ter outro host
                         r2 = await client.get(hinted)
                         ct2 = (r2.headers.get("content-type") or "").lower()
                         tried.append({"url": hinted, "status": r2.status_code, "content_type": ct2[:60], "via": "html-hint"})
@@ -1303,13 +1335,32 @@ def _build_auth_headers(connector: dict) -> dict:
     return headers
 
 
+def _guard_egress(url: str) -> None:
+    """Guarda SSRF do egress de connectors (SEC-01).
+
+    O proxy/health/test/introspect são alcançáveis por cookie OU X-API-Key e a
+    URL vem de dado configurável (base_url do connector / campos do request).
+    Sem esta guarda, um principal autenticado apontava um connector para
+    ``http://169.254.169.254/...`` (metadata da cloud) ou serviços internos e o
+    servidor os buscava por ele = SSRF autenticado + exfil de credencial.
+
+    ``validate_public_url`` resolve o host e bloqueia se QUALQUER IP for privado/
+    loopback/link-local/reservado. ``allow_http=True``: muitas APIs legítimas de
+    connector são http — mas o IP resolvido ainda precisa ser público. Levanta
+    ``SSRFError`` quando bloqueado. Combine SEMPRE com ``follow_redirects=False``
+    (abaixo) para que um redirect não pule a validação até um host interno.
+    """
+    validate_public_url(url, allow_http=True)
+
+
 def _client_kwargs(connector: dict, default_timeout: Optional[float] = None) -> dict:
     """Kwargs comuns para httpx.AsyncClient baseados no connector.
 
     Centraliza: verify_ssl, timeout (em segundos), follow_redirects.
-    Default follow_redirects=True — exceto onde explicitamente precisamos
-    interceptar redirect (ex: extract_cookie precisa do Set-Cookie do primeiro
-    response, antes de seguir).
+    ``follow_redirects=False`` (SEC-01): seguir um redirect cross-host pularia a
+    guarda SSRF (`_guard_egress` valida só a URL inicial) e alcançaria um host
+    interno via 30x. A maioria das APIs REST responde direto no path — quem
+    depender de redirect deve apontar o connector para a URL final.
     """
     timeout_s = default_timeout
     if timeout_s is None:
@@ -1318,7 +1369,7 @@ def _client_kwargs(connector: dict, default_timeout: Optional[float] = None) -> 
     return {
         "timeout": timeout_s,
         "verify": verify,
-        "follow_redirects": True,
+        "follow_redirects": False,
     }
 
 
