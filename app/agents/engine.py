@@ -4486,13 +4486,12 @@ async def execute_pipeline(
         for cid in child_interaction_ids:
             if cid:
                 try:
-                    child_turns = await turns_repo.find_all(interaction_id=cid, limit=100)
-                    for ct in child_turns:
-                        await turns_repo.delete(ct["id"])
                     # Auditoria (24.10.0): re-aponta as verifications da filha
                     # pro master ANTES do delete — senão o julgamento do step
                     # (rigorous) vira linha órfã, invisível no deep-link do
-                    # /quality?interaction_id=master.
+                    # /quality?interaction_id=master. verifications NÃO cascateia
+                    # de propósito (é auditoria do juiz preservada); por isso o
+                    # re-point continua explícito aqui.
                     try:
                         from app.core.database import _get_pool
                         async with _get_pool().acquire() as _con:
@@ -4503,6 +4502,10 @@ async def execute_pipeline(
                             )
                     except Exception:
                         pass
+                    # FK ON DELETE CASCADE (33.5.0): deletar a interaction filha
+                    # já apaga seus turns/tool_calls/binding_executions no banco —
+                    # o loop manual de turns (find_all+delete, limit=100 que
+                    # truncava >100) virou redundante e foi removido.
                     await interactions_repo.delete(cid)
                 except Exception:
                     pass
