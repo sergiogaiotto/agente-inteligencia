@@ -57,6 +57,25 @@ def test_cockpit_evolui_por_escopo_turno_e_sessao():
     assert "get cockpitActive()" in src
 
 
+def test_cockpit_terceiro_recorte_pipeline_30d():
+    """Recorte 'Pipeline · 30d': agrega qualidade/confiabilidade da população deste
+    pipeline (verifications/stats), contextualizando a conversa. Custo/TCO não se
+    aplicam ao agregado — a lente de Custo mostra um aviso honesto."""
+    src = _src()
+    assert "cockpitScope='pipeline'" in src and "_loadPipeline30d()" in src
+    # consome o endpoint de stats agregado (cookie), filtra pelo pipeline atual
+    assert "'/api/v1/dashboard/verifications/stats?window=30d'" in src
+    assert "r.by_pipeline" in src and "p.pipeline_id === this.selectedId" in src
+    # getters branquam no recorte pipeline (lêem o agregado, não os turnos)
+    assert "get _isPl()" in src and "this._pl.avg_factuality" in src
+    assert "this._pl.with_unsupported" in src and "this._pl.ok_count" in src
+    # custo/TCO não se aplicam ao agregado → aviso + custo por turno nulo no recorte
+    assert "custo por conversa não vem do agregado" in src
+    assert "if (this._isPl) return null;" in src        # costPerTurnUsd/idxC
+    # guarda de amostra pequena (sem falsa confiança)
+    assert "amostra pequena" in src
+
+
 def test_cockpit_tres_indices_e_gate():
     src = _src()
     # índices Q/R/C (0..100) com fórmulas nos getters

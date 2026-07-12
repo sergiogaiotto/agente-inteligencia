@@ -657,6 +657,7 @@
             <div class="inline-flex rounded-lg bg-surface-100 p-0.5 text-[11px]" data-testid="pg-cockpit-scope">
               <button type="button" @click="cockpitScope='turno'" :class="cockpitScope==='turno' ? 'bg-white text-brand-900 font-semibold shadow-sm' : 'text-surface-500'" class="rounded-md px-2 py-1" title="Só a última troca">Este turno</button>
               <button type="button" @click="cockpitScope='sessao'" :class="cockpitScope==='sessao' ? 'bg-white text-brand-900 font-semibold shadow-sm' : 'text-surface-500'" class="rounded-md px-2 py-1" title="Acumula todos os turnos desta conversa — evolui a cada mensagem">Sessão</button>
+              <button type="button" @click="cockpitScope='pipeline'; _loadPipeline30d()" :class="cockpitScope==='pipeline' ? 'bg-white text-brand-900 font-semibold shadow-sm' : 'text-surface-500'" class="rounded-md px-2 py-1" title="Agregado dos últimos 30 dias deste pipeline — contextualiza a conversa contra a população">Pipeline · 30d</button>
             </div>
           </div>
 
@@ -682,7 +683,7 @@
                   <div class="text-[11px] text-surface-600 leading-snug" x-text="ckGate.w"></div>
                 </div>
               </div>
-              <p class="text-[10.5px] text-surface-400 mt-1.5" x-text="cockpitScope==='turno' ? 'Recorte do último turno.' : ('Sessão · ' + ckTurns + ' turno(s) acumulado(s)' + (chatSessionId ? (' · ' + (chatSessionId||'').slice(0,8) + '…') : ''))"></p>
+              <p class="text-[10.5px] text-surface-400 mt-1.5" x-text="cockpitScopeNote"></p>
             </div>
 
             <!-- ── TRIAD Q/R/C ── -->
@@ -796,6 +797,10 @@
                 <span class="w-4 h-4 rounded-full bg-brand-100 text-brand-700 text-[9px] font-black grid place-items-center flex-none">3</span>
                 Custo &amp; TCO <span class="ck-prov ck-prov-medido">medido</span><span class="ck-prov ck-prov-projetado">projetado</span>
               </div>
+              <div x-show="cockpitScope==='pipeline'" class="text-[11px] text-surface-500 leading-relaxed rounded-lg bg-surface-50 border border-surface-100 px-3 py-2">
+                O recorte <strong>Pipeline · 30d</strong> agrega <strong>qualidade e confiabilidade</strong> da população — o custo por conversa não vem do agregado. Volte para <strong>Sessão</strong> ou <strong>Este turno</strong> para o custo real e a escada de TCO desta conversa.
+              </div>
+              <div x-show="cockpitScope!=='pipeline'" class="space-y-3">
               <div class="grid grid-cols-3 gap-2">
                 <div class="ck-tile" title="Custo real do recorte (BRL · US$)">
                   <div class="flex items-center justify-between"><span class="text-[10px] text-surface-500">Custo</span><button type="button" class="ck-help" @click="openRule('cost_turn')">?</button></div>
@@ -879,6 +884,7 @@
               <p class="text-[9.5px] text-surface-400 leading-snug ck-tile">
                 <strong>Premissas &amp; ressalvas:</strong> preço LLM = tabela interna (editável); custo do juiz <strong x-text="ckJudgeMeasured ? 'medido' : 'estimado'"></strong> (instrumentado quando o juiz roda); <strong>self-hosted conta 0</strong> (GPU/infra fora do modelo); input pode subcontar em turnos multi-chamada. Ajuste volume, câmbio, meta e SaaS acima.
               </p>
+              </div><!-- /custo (não-pipeline) -->
             </div>
 
             <!-- ── Exportar tudo em PPTX (cockpit + a conversa) ── -->
@@ -963,6 +969,8 @@ function playgroundPage() {
         // de TCO são editáveis (premissas do BP). help = modal da regra ("?").
         chatVerbosity: 'full', cockpitScope: 'sessao', cockpitBusy: false,
         tcoVolume: 1000, tcoFx: 5.30, tcoAlvo: 0.50, tcoSaas: 0, tcoJuizPct: 0.15,
+        // Pipeline · 30d: agregado histórico da população (verifications/stats).
+        pipeline30d: null, pipeline30dLoading: false,
         help: { open: false, key: '' },
         ERRORS: [
             { code: 401, when: 'chave de API ausente ou inválida', body: '{"detail":"Autenticação necessária (cookie ou X-API-Key)."}', test: true },
@@ -976,7 +984,7 @@ function playgroundPage() {
         // APLICADA (fórmula + proveniência + ressalva). O "?" abre este texto num modal.
         // Honestidade: nenhum número aparece sem dizer COMO foi obtido.
         RULES: {
-            escopo: { t: 'Como ler o cockpit', r: '“Este turno” mostra só a última troca; “Sessão” acumula todos os turnos desta conversa — o cockpit evolui a cada mensagem. Todos os indicadores respeitam o recorte selecionado. Cada número traz um selo de proveniência (medido / heurístico / projetado / amostrado / declarado).', p: '—' },
+            escopo: { t: 'Como ler o cockpit', r: '“Este turno” mostra só a última troca; “Sessão” acumula todos os turnos desta conversa (evolui a cada mensagem); “Pipeline · 30d” mostra o AGREGADO dos últimos 30 dias deste pipeline (qualidade e confiabilidade da população — contextualiza a conversa contra o típico; custo/TCO por conversa não se aplicam a esse recorte). Todos os indicadores respeitam o recorte. Cada número traz um selo de proveniência (medido / heurístico / projetado / amostrado / declarado).', p: '—' },
             idxQ: { t: 'Índice de Qualidade (0–100)', r: 'Média ponderada das dimensões do juiz (LLM-as-Judge), normalizadas p/ 0–1: factualidade ×0,45 + completude ×0,30 + tom ×0,15 + segurança ×0,10, reescalada p/ 0–100. Só as dimensões presentes entram (pesos re-normalizados). Sem juiz no recorte, o índice fica “—”.', p: 'medido — quando o Verifier v2 rodou (perfil standard/rigorous).' },
             idxR: { t: 'Índice de Confiabilidade (0–100)', r: 'Composição dos sinais presentes: conformidade de contrato ×0,30 + saúde da FSM (turnos que NÃO terminaram em Refuse/Escalate/erro) ×0,25 + penalidade de alucinação (1 − alegações-sem-lastro ÷ turnos) ×0,25 + fundamentação (turnos com evidência) ×0,20. Pesos re-normalizados sobre o que existe.', p: 'medido — FSM/contrato/evidência vêm do trace de cada turno.' },
             idxC: { t: 'Índice de Eficiência (0–100)', r: 'Compara o custo por resposta confiável com a SUA meta: 100 × (meta ÷ custo_por_resposta_confiável), teto 100. Custo ≤ meta ⇒ 100; o dobro da meta ⇒ 50. Ajuste “Meta R$/resposta” na lente de Custo.', p: 'projetado — custo medido combinado à meta e ao câmbio que você define.' },
@@ -1505,7 +1513,32 @@ function playgroundPage() {
         get cockpitTurns() { return this.chat.filter(m => m.role === 'assistant' && m.result && !m.error); },
         get cockpitLast() { const t = this.cockpitTurns; return t.length ? t[t.length - 1] : null; },
         get cockpitActive() { return this.chatMode && this.cockpitTurns.length > 0; },
-        _scopeTurns() { if (this.cockpitScope === 'turno') { const l = this.cockpitLast; return l ? [l] : []; } return this.cockpitTurns; },
+        get cockpitScopeNote() {
+            if (this.cockpitScope === 'turno') return 'Recorte do último turno.';
+            if (this.cockpitScope === 'pipeline') {
+                if (this.pipeline30dLoading) return 'Carregando o agregado de 30 dias…';
+                const n = this._plN;
+                if (!n) return 'Pipeline · 30 dias — sem julgamentos do juiz neste período (nada a agregar).';
+                return 'Pipeline · últimos 30 dias · ' + n + ' conversa(s) julgada(s)' + (n < 5 ? ' · amostra pequena, provisório' : '') + ' · custo/TCO usam o recorte da sessão.';
+            }
+            return 'Sessão · ' + this.ckTurns + ' turno(s) acumulado(s)' + (this.chatSessionId ? (' · ' + (this.chatSessionId || '').slice(0, 8) + '…') : '');
+        },
+        _scopeTurns() { if (this.cockpitScope === 'turno') { const l = this.cockpitLast; return l ? [l] : []; } if (this.cockpitScope === 'pipeline') return []; return this.cockpitTurns; },
+        // Recorte "Pipeline · 30d": agregado histórico (verifications/stats) da
+        // POPULAÇÃO deste pipeline — contextualiza a conversa contra o típico.
+        // Custo/FSM por conversa não se aplicam (não vêm do agregado); qualidade
+        // e confiabilidade (aprovação/alucinação) sim.
+        get _isPl() { return this.cockpitScope === 'pipeline'; },
+        get _pl() { return this.pipeline30d || {}; },
+        get _plN() { return Number(this._pl.n) || 0; },
+        async _loadPipeline30d() {
+            this.pipeline30dLoading = true;
+            try {
+                const r = await api.get('/api/v1/dashboard/verifications/stats?window=30d');
+                this.pipeline30d = (r.by_pipeline || []).find(p => p.pipeline_id === this.selectedId) || { n: 0 };
+            } catch (e) { this.pipeline30d = { n: 0, error: true }; }
+            this.pipeline30dLoading = false;
+        },
         _sessTurns() { return this.cockpitTurns; },   // TCO usa sempre a conversa inteira
         _steps(turns) { const o = []; (turns || []).forEach(t => (t.result.pipeline_steps || []).forEach(s => o.push(s))); return o; },
         _verifs(turns) { return this._steps(turns).map(s => s.verification).filter(Boolean); },
@@ -1519,24 +1552,24 @@ function playgroundPage() {
         get ckCostUsd() { return this._costOf(this._scopeTurns()); },
         get ckTokens() { return this._steps(this._scopeTurns()).reduce((a, s) => a + (Number(s.tokens_used) || 0), 0); },
         get ckMs() { return this._scopeTurns().reduce((a, t) => a + (Number(t.result.duration_ms) || this._totalMs(t) || 0), 0); },
-        get ckTurns() { return this._scopeTurns().length; },
+        get ckTurns() { if (this._isPl) return this._plN; return this._scopeTurns().length; },
         get ckEvidence() { return this._avg(this._steps(this._scopeTurns()).map(s => s.evidence_score != null ? Number(s.evidence_score) : null)); },
 
         // juiz (pode não ter rodado: Verifier v2 off ou perfil fast)
-        get ckHasJudge() { return this._verifs(this._scopeTurns()).length > 0; },
-        get ckFact() { return this._dimAvg('factuality'); },
-        get ckCompl() { return this._dimAvg('completeness'); },
-        get ckTone() { return this._dimAvg('tone_adherence'); },
-        get ckSafety() { return this._dimAvg('safety'); },
+        get ckHasJudge() { if (this._isPl) return this._plN > 0 && this._pl.avg_factuality != null; return this._verifs(this._scopeTurns()).length > 0; },
+        get ckFact() { if (this._isPl) return this._pl.avg_factuality != null ? this._pl.avg_factuality / 5 : null; return this._dimAvg('factuality'); },
+        get ckCompl() { if (this._isPl) return this._pl.avg_completeness != null ? this._pl.avg_completeness / 5 : null; return this._dimAvg('completeness'); },
+        get ckTone() { if (this._isPl) return this._pl.avg_tone != null ? this._pl.avg_tone / 5 : null; return this._dimAvg('tone_adherence'); },
+        get ckSafety() { if (this._isPl) return null; return this._dimAvg('safety'); },
         get ckContractRate() { const vs = this._verifs(this._scopeTurns()); if (!vs.length) return null; return vs.filter(v => v.contract_compliant !== false).length / vs.length; },
-        get ckHallucinations() { return this._verifs(this._scopeTurns()).reduce((a, v) => a + ((v.unsupported_claims || []).length), 0); },
-        get ckOkRate() { const vs = this._verifs(this._scopeTurns()); if (!vs.length) return null; return vs.filter(v => v.ok).length / vs.length; },
+        get ckHallucinations() { if (this._isPl) return Number(this._pl.with_unsupported) || 0; return this._verifs(this._scopeTurns()).reduce((a, v) => a + ((v.unsupported_claims || []).length), 0); },
+        get ckOkRate() { if (this._isPl) return this._plN > 0 ? (Number(this._pl.ok_count) || 0) / this._plN : null; const vs = this._verifs(this._scopeTurns()); if (!vs.length) return null; return vs.filter(v => v.ok).length / vs.length; },
         get ckCoverage() { const s = this._steps(this._scopeTurns()); if (!s.length) return null; return s.filter(x => x.verification).length / s.length; },
 
         // FSM / grounding
         get ckFsmMix() { const m = {}; this._scopeTurns().forEach(t => { const f = (t.result.final_state || '—'); m[f] = (m[f] || 0) + 1; }); return m; },
         get ckFsmLabel() { const m = this.ckFsmMix, ks = Object.keys(m); if (!ks.length) return '—'; if (ks.length === 1) return ks[0]; return ks.map(k => k + '×' + m[k]).join(' · '); },
-        get ckFsmHealthy() { const t = this._scopeTurns(); if (!t.length) return null; const bad = t.filter(x => ['Refuse', 'Escalate', 'error'].includes(x.result.final_state)).length; return 1 - bad / t.length; },
+        get ckFsmHealthy() { if (this._isPl) return this.ckOkRate; const t = this._scopeTurns(); if (!t.length) return null; const bad = t.filter(x => ['Refuse', 'Escalate', 'error'].includes(x.result.final_state)).length; return 1 - bad / t.length; },
         get ckGroundedRate() { const t = this._scopeTurns(); if (!t.length) return null; const g = t.filter(x => this._steps([x]).some(s => Number(s.evidence_score) > 0)).length; return g / t.length; },
 
         // RAGAS heurístico (client-side; espelha compute_heuristic_ragas)
@@ -1545,10 +1578,10 @@ function playgroundPage() {
         // índices 0..100 (fórmulas no "?")
         get idxQ() { if (!this.ckHasJudge) return null; const parts = [[this.ckFact, .45], [this.ckCompl, .30], [this.ckTone, .15], [this.ckSafety, .10]].filter(p => p[0] != null); if (!parts.length) return null; const w = parts.reduce((a, p) => a + p[1], 0); return Math.round(100 * parts.reduce((a, p) => a + p[0] * p[1], 0) / w); },
         get idxR() { const parts = []; if (this.ckContractRate != null) parts.push([this.ckContractRate, .30]); if (this.ckFsmHealthy != null) parts.push([this.ckFsmHealthy, .25]); if (this.ckGroundedRate != null) parts.push([this.ckGroundedRate, .20]); const t = this.ckTurns || 1; parts.push([Math.max(0, 1 - this.ckHallucinations / t), .25]); if (!parts.length) return null; const w = parts.reduce((a, p) => a + p[1], 0); return Math.round(100 * parts.reduce((a, p) => a + p[0] * p[1], 0) / w); },
-        get idxC() { const qac = this.qacBRL; if (qac == null || qac <= 0) return null; return Math.max(0, Math.min(100, Math.round(100 * (Number(this.tcoAlvo) || 0.5) / qac))); },
+        get idxC() { if (this._isPl) return null; const qac = this.qacBRL; if (qac == null || qac <= 0) return null; return Math.max(0, Math.min(100, Math.round(100 * (Number(this.tcoAlvo) || 0.5) / qac))); },
 
         // custo por resposta confiável (métrica de CFO)
-        get costPerTurnUsd() { const n = this.ckTurns; return n ? this.ckCostUsd / n : null; },
+        get costPerTurnUsd() { if (this._isPl) return null; const n = this.ckTurns; return n ? this.ckCostUsd / n : null; },
         get approvalRate() { if (this.ckOkRate != null) return this.ckOkRate; return this.ckFsmHealthy; },
         get costGrossBRL() { const c = this.costPerTurnUsd; return c == null ? null : c * (Number(this.tcoFx) || 0); },
         get qacBRL() { const c = this.costPerTurnUsd; if (c == null) return null; const ap = this.approvalRate; const d = (ap && ap > 0) ? ap : 1; return c * (Number(this.tcoFx) || 0) / d; },
