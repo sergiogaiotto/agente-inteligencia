@@ -3414,7 +3414,12 @@ def _step_cost_and_tokens(result: dict, agent: dict) -> tuple:
     """
     trace = result.get("trace") or {}
     tok = trace.get("tokens") or {}
-    ti = int(tok.get("input") or 0)
+    # Custo/billing usam o input SOMADO entre as chamadas LLM (input_billed_sum):
+    # em turnos multi-chamada (reflexão/tool-loop) o provider cobra o prompt a CADA
+    # chamada — usar só o input da última SUBCONTAVA. tok['input'] (última chamada)
+    # segue p/ display. Fallback a 'input' cobre traces antigos/single-call (billed
+    # == last). Idem tokens_used: total_billed (soma real) quando existir.
+    ti = int(tok.get("input_billed_sum") or tok.get("input") or 0)
     to = int(tok.get("output") or 0)
     try:
         from app.core.llm_pricing import compute_cost
@@ -3425,7 +3430,7 @@ def _step_cost_and_tokens(result: dict, agent: dict) -> tuple:
         )
     except Exception:
         cost = 0.0
-    return float(cost or 0.0), (int(tok.get("total") or 0) or (ti + to))
+    return float(cost or 0.0), (int(tok.get("total_billed") or tok.get("total") or 0) or (ti + to))
 
 
 def _step_effective_model(result: dict, agent: dict) -> str:

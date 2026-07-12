@@ -882,7 +882,7 @@
                 </div>
               </div>
               <p class="text-[9.5px] text-surface-400 leading-snug ck-tile">
-                <strong>Premissas &amp; ressalvas:</strong> preço LLM = tabela interna (editável); custo do juiz <strong x-text="ckJudgeMeasured ? 'medido' : 'estimado'"></strong> (instrumentado quando o juiz roda); <strong>self-hosted conta 0</strong> (GPU/infra fora do modelo); input pode subcontar em turnos multi-chamada. Ajuste volume, câmbio, meta e SaaS acima.
+                <strong>Premissas &amp; ressalvas:</strong> preço LLM = tabela interna (editável); custo do juiz <strong x-text="ckJudgeMeasured ? 'medido' : 'estimado'"></strong> (instrumentado quando o juiz roda); <strong>self-hosted conta 0</strong> (GPU/infra fora do modelo); input multi-chamada já somado (billed). Ajuste volume, câmbio, meta e SaaS acima.
               </p>
               </div><!-- /custo (não-pipeline) -->
             </div>
@@ -998,7 +998,7 @@ function playgroundPage() {
             hallucination: { t: 'Alegações sem lastro', r: 'Total de afirmações que o juiz marcou como NÃO sustentadas pelas evidências, somadas nos steps do recorte. É o sinal direto de alucinação.', p: 'medido — LLM-as-Judge.' },
             grounding: { t: 'Fundamentação (grounding)', r: 'Fração dos turnos em que ao menos um agente usou evidência real (evidence_score > 0: RAG, anexo ou tool). Baixo = resposta “de cabeça”.', p: 'medido — do trace de evidências.' },
             coverage: { t: 'Cobertura do juiz', r: 'Fração dos steps do recorte que o juiz efetivamente avaliou. O juiz roda por amostragem/perfil — cobertura < 100% significa que parte não foi auditada (não confundir ausência de erro com ausência de problema).', p: 'amostrado — depende do Verifier v2 e do perfil.' },
-            cost_turn: { t: 'Custo do recorte', r: 'Soma do cost_usd real de cada agente (step) nos turnos do recorte, convertida a BRL pelo câmbio. Custo = preço por token do modelo × tokens (entrada+saída).', p: 'medido — tabela de preços interna (snapshot 2026-05).', note: 'Modelos self-hosted (gpt-oss/ollama) contam 0 (infra fora do modelo). O input pode subcontar em turnos multi-chamada.' },
+            cost_turn: { t: 'Custo do recorte', r: 'Soma do cost_usd real de cada agente (step) nos turnos do recorte, convertida a BRL pelo câmbio. Custo = preço por token do modelo × tokens. O input usa a SOMA entre as chamadas LLM do turno (input_billed_sum) — turnos multi-chamada (reflexão/tool-loop) não subcontam mais.', p: 'medido — tabela de preços editável (Configurações → Preços LLM).', note: 'Modelos self-hosted (gpt-oss/ollama) contam 0 (infra fora do modelo).' },
             tokens: { t: 'Tokens', r: 'Soma de tokens (entrada + saída) reportados pelo provedor em cada step do recorte.', p: 'medido.' },
             latency: { t: 'Latência', r: 'Tempo somado dos turnos do recorte (duration_ms de cada turno, ou o tempo de parede dos eventos do stream como fallback).', p: 'medido.' },
             qac: { t: 'Custo por resposta confiável', r: 'custo_por_resposta ÷ taxa de aprovação. A taxa é a fração de turnos aprovados pelo juiz (ok); sem juiz, usa a saúde da FSM. Se 14% não passam, o custo real por resposta utilizável fica ~16% maior — o desperdício tem preço.', p: 'projetado — custo medido ÷ aprovação medida.' },
