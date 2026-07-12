@@ -5,7 +5,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from app.core.config import get_settings
+from app.core.config import get_settings, is_production
+from app.core.version import APP_VERSION
 from app.core.database import init_db, close_db
 from app.core.otel import init_otel
 from app.routes import agents, skills, workspace, mesh, dashboard, frontend, wizard, users, pipelines, federation
@@ -84,7 +85,56 @@ async def lifespan(app: FastAPI):
         await close_db()
 
 settings = get_settings()
-app = FastAPI(title=settings.app_name, description="Plataforma Multi-Agente §SKILL.md sobre AI Mesh", version="2.0.0", lifespan=lifespan)
+
+
+# ── OpenAPI/docs (API-4 + API-5) ───────────────────────────────
+# API-4: o schema OpenAPI expõe a versão REAL do produto (APP_VERSION), não mais
+# um "2.0.0" estático que induzia a erro sobre o que está no ar.
+# API-5: em produção, /docs + /redoc + /openapi.json ficam ATRÁS de admin — sem
+# isso, a superfície inteira da API (todas as rotas + schemas) era enumerável
+# anonimamente (recon). Em dev ficam abertos. Como o local roda app_env=production,
+# GATEAMOS por admin (não desligamos) — o operador logado ainda abre o /docs.
+def _install_protected_docs(application: FastAPI, app_name: str) -> None:
+    """API-5: serve /docs /redoc /openapi.json só para root/admin autenticado."""
+    from fastapi import Depends
+    from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+    from app.core.auth import require_role
+
+    guard = require_role("root", "admin")
+
+    @application.get("/openapi.json", include_in_schema=False)
+    async def _protected_openapi(_user: dict = Depends(guard)):
+        return application.openapi()
+
+    @application.get("/docs", include_in_schema=False)
+    async def _protected_docs(_user: dict = Depends(guard)):
+        return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app_name} — API")
+
+    @application.get("/redoc", include_in_schema=False)
+    async def _protected_redoc(_user: dict = Depends(guard)):
+        return get_redoc_html(openapi_url="/openapi.json", title=f"{app_name} — API")
+
+
+def build_app(app_settings, *, lifespan_fn=lifespan) -> FastAPI:
+    """Constrói o FastAPI com a versão real (API-4) e, em produção, o /docs
+    trancado por admin (API-5). Fatorado para ser testável sem depender do env
+    no momento do import (o app do módulo é construído uma vez, abaixo)."""
+    locked = is_production(app_settings)
+    kwargs = dict(
+        title=app_settings.app_name,
+        description="Plataforma Multi-Agente §SKILL.md sobre AI Mesh",
+        version=APP_VERSION,
+        lifespan=lifespan_fn,
+    )
+    if locked:
+        kwargs.update(docs_url=None, redoc_url=None, openapi_url=None)
+    application = FastAPI(**kwargs)
+    if locked:
+        _install_protected_docs(application, app_settings.app_name)
+    return application
+
+
+app = build_app(settings)
 
 # ── Observabilidade (Onda 2) ───────────────────────────────────
 # Inicializa OpenTelemetry ANTES dos middlewares para que requests sejam
@@ -127,8 +177,8 @@ install_cors_middleware(app)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.state.templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # Versão do produto (PR-driven) disponível em todos os templates como
-# {{ app_version }} (rodapé da UI). Fonte única: app/core/version.py.
-from app.core.version import APP_VERSION
+# {{ app_version }} (rodapé da UI). Fonte única: app/core/version.py (importado
+# no topo).
 app.state.templates.env.globals["app_version"] = APP_VERSION
 # Tier 2 (text-to-SQL governado): flag exposta como CALLABLE aos templates —
 # `{% if text_to_sql_enabled() %}` reflete o toggle em runtime (lê o env a cada
@@ -195,7 +245,7 @@ async def health():
     return {
         "status": "ok",
         "app": settings.app_name,
-        "version": "2.0.0",
+        "version": APP_VERSION,
         "spec": "§1-§24 implemented",
         "mcp_features": features,
         "code_fingerprint": fingerprint,
