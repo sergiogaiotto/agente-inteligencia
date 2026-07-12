@@ -58,6 +58,48 @@
         </div>
     </div>
 
+    <!-- ─── Latência da verificação + tendência (OBS-3+4) ─── -->
+    <div class="rounded-xl border border-surface-200 bg-white p-3 mb-4">
+        <h3 class="text-[12px] font-semibold text-brand-900 mb-2">Latência da verificação
+            <span class="text-[10px] font-normal text-surface-400">— a cauda (p95/p99) é o que estoura SLA/timeout e some num avg</span>
+        </h3>
+        <div class="grid grid-cols-4 gap-2 mb-3">
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="Latência média da verificação">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Média</div>
+                <div class="text-[16px] font-bold text-brand-900" x-text="fmtMs(stats.avg_duration_ms)"></div>
+            </div>
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="Mediana (p50) — metade das verificações é mais rápida que isto">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">p50</div>
+                <div class="text-[16px] font-bold text-brand-700" x-text="fmtMs(stats.p50_duration_ms)"></div>
+            </div>
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="95º percentil — 1 em 20 verificações demora isto ou mais">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">p95</div>
+                <div class="text-[16px] font-bold text-amber-600" x-text="fmtMs(stats.p95_duration_ms)"></div>
+            </div>
+            <div class="rounded-lg border border-surface-200 px-3 py-2" title="99º percentil — a cauda que estoura timeout/pool">
+                <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">p99</div>
+                <div class="text-[16px] font-bold text-rose-600" x-text="fmtMs(stats.p99_duration_ms)"></div>
+            </div>
+        </div>
+        <div class="flex items-center justify-between mb-1">
+            <div class="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Tendência — volume por período, cor = taxa de falha</div>
+            <div class="flex items-center gap-2 text-[9px] text-surface-400">
+                <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-emerald-400"></span>&lt;5%</span>
+                <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-amber-400"></span>&lt;20%</span>
+                <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-rose-400"></span>≥20%</span>
+            </div>
+        </div>
+        <div x-show="timeseries.length" class="flex items-end gap-[2px] h-16">
+            <template x-for="(b, i) in timeseries" :key="b.bucket || i">
+                <div class="flex-1 rounded-t min-h-[2px]"
+                     :class="barColor(b)"
+                     :style="'height:' + barH(b) + '%'"
+                     :title="bucketLabel(b) + ' · ' + (b.n||0) + ' verif · ' + (b.errors||0) + ' falhas · p95 ' + fmtMs(b.p95_duration_ms)"></div>
+            </template>
+        </div>
+        <div x-show="!timeseries.length" x-cloak class="text-[11px] text-surface-400 py-4 text-center">Sem verificações na janela.</div>
+    </div>
+
     <!-- ─── Production Sample (async dispatcher) ─── -->
     <div x-show="asyncStats.config?.enabled" x-cloak class="rounded-xl border border-surface-200 bg-white p-3 mb-4">
         <div class="flex items-center justify-between mb-2">
@@ -406,6 +448,23 @@ function qualityPage(){return{
     },
     fmt1(v) { return (v == null) ? '—' : Number(v).toFixed(1); },
     fmtDim(v) { return (v == null) ? '·' : Number(v).toFixed(1); },
+    // Latência (OBS-3) + tendência (OBS-4)
+    timeseries: [],
+    fmtMs(v) {
+        if (v == null) return '—';
+        v = Number(v);
+        return v >= 1000 ? (v / 1000).toFixed(1) + 's' : Math.round(v) + 'ms';
+    },
+    get maxSeriesN() { return Math.max(1, ...this.timeseries.map(b => b.n || 0)); },
+    barH(b) { return Math.round(((b.n || 0) / this.maxSeriesN) * 100); },
+    barColor(b) {
+        const e = (b.n > 0) ? (b.errors || 0) / b.n : 0;
+        return e >= 0.2 ? 'bg-rose-400' : e >= 0.05 ? 'bg-amber-400' : 'bg-emerald-400';
+    },
+    bucketLabel(b) {
+        try { return (typeof tzDateTime === 'function') ? tzDateTime(b.bucket) : b.bucket; }
+        catch { return b.bucket; }
+    },
     dimColor(v) {
         if (v == null) return 'text-surface-400';
         if (v >= 4) return 'text-emerald-600 font-bold';
@@ -517,7 +576,8 @@ function qualityPage(){return{
             this.byProfile = r.by_profile || [];
             this.byAgent = r.by_agent || [];
             this.byPipeline = r.by_pipeline || [];
-        } catch { this.stats = {}; this.byModel = []; this.byProfile = []; this.byAgent = []; this.byPipeline = []; }
+            this.timeseries = r.timeseries || [];
+        } catch { this.stats = {}; this.byModel = []; this.byProfile = []; this.byAgent = []; this.byPipeline = []; this.timeseries = []; }
         try {
             const c = await api.get('/api/v1/dashboard/verifications/claims?window=' + this.window);
             this.claims = c.claims || [];

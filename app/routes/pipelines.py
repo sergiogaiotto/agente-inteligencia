@@ -308,6 +308,7 @@ async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_i
             duration_s=(float(r.get("duration_ms") or 0) / 1000.0),
             escalated=("escal" in final_state.lower()),
             error=(status.lower() in ("error", "failed")),
+            refused=("refus" in final_state.lower()),
         )
     except Exception as e:
         logger.warning("event=invoke_metrics_failed error=%s", str(e)[:200])

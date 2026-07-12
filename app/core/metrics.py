@@ -39,6 +39,11 @@ ESCALATIONS = Counter(
     "Invocações cujo estado terminal foi de escalonamento",
     ["kind"],
 )
+REFUSALS = Counter(
+    "maestro_refusals_total",
+    "Invocações cujo estado terminal foi de recusa (grounding/segurança)",
+    ["kind"],
+)
 
 # ── Circuit-breaker do egress LLM (33.1.0) ──
 # opens = quantas vezes um provider ABRIU o circuito (falha de alcance repetida);
@@ -63,6 +68,7 @@ def record_invocation(
     duration_s: float,
     escalated: bool = False,
     error: bool = False,
+    refused: bool = False,
 ) -> None:
     """Registra uma invocação nas métricas RED. Não-bloqueante (in-memory)."""
     INVOCATIONS.labels(kind=kind, status=status).inc()
@@ -72,6 +78,8 @@ def record_invocation(
         INVOCATION_ERRORS.labels(kind=kind).inc()
     if escalated:
         ESCALATIONS.labels(kind=kind).inc()
+    if refused:
+        REFUSALS.labels(kind=kind).inc()
 
 
 def record_breaker_open(provider: str) -> None:

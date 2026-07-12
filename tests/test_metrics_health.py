@@ -77,13 +77,25 @@ class TestMetrics:
         record_invocation(kind="invoke", status="completed", duration_s=1.5,
                           escalated=True, error=False)
         record_invocation(kind="invoke", status="failed", duration_s=0.2, error=True)
+        # Recusa (OBS-4) — contador dedicado p/ o rate() do Grafana.
+        record_invocation(kind="invoke", status="refused", duration_s=0.3, refused=True)
         payload, content_type = render_latest()
         text = payload.decode("utf-8")
         assert "maestro_invocations_total" in text
         assert "maestro_invocation_duration_seconds" in text
         assert "maestro_invocation_errors_total" in text
         assert "maestro_escalations_total" in text
+        assert "maestro_refusals_total" in text
         assert "text/plain" in content_type  # formato de exposição Prometheus
+
+    def test_refusal_incrementa_so_quando_refused(self):
+        from app.core import metrics
+
+        before = metrics.REFUSALS.labels(kind="invoke")._value.get()
+        metrics.record_invocation(kind="invoke", status="completed", duration_s=0.1)
+        assert metrics.REFUSALS.labels(kind="invoke")._value.get() == before  # sem refused
+        metrics.record_invocation(kind="invoke", status="refused", duration_s=0.1, refused=True)
+        assert metrics.REFUSALS.labels(kind="invoke")._value.get() == before + 1
 
     def test_endpoint_metrics_retorna_200_prometheus(self):
         from app.main import metrics
