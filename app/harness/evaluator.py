@@ -25,7 +25,7 @@ import time
 import logging
 from collections import Counter
 
-from app.core.database import gold_cases_repo, eval_runs_repo, releases_repo, agents_repo
+from app.core.database import gold_cases_repo, eval_runs_repo, releases_repo, agents_repo, drift_repo
 from app.core.config import get_settings
 from app.agents.engine import execute_interaction
 
@@ -228,6 +228,96 @@ def _compute_gold_hash(cases: list[dict]) -> str:
     return h.hexdigest()[:16]
 
 
+# Métricas de drift do harness + direção (higher_is_better). A direção define se
+# um delta release-over-release é REGRESSÃO (adverso) ou MELHORA.
+_DRIFT_METRICS: list[tuple[str, bool]] = [
+    ("accuracy", True),
+    ("avg_factuality", True),
+    ("avg_completeness", True),
+    ("avg_tone", True),
+    ("contract_compliance_rate", True),
+    ("correct_refusal_rate", True),
+    ("safety_violation_rate", False),
+    ("hallucination_rate", False),
+    ("false_positive_rate", False),
+]
+# Abaixo deste %, o movimento é ruído (nondeterminismo do LLM) — não registra.
+_DRIFT_NOISE_FLOOR_PCT = 1.0
+
+
+async def _write_drift_events(
+    release_id: str,
+    gold_hash: str | None,
+    current_metrics: dict,
+    regression_pct_threshold: float,
+) -> int:
+    """PRODUTOR de ``drift_events`` (33.11.0) — a tabela era MORTA (zero writers,
+    mas o /quality anuncia "detecção de drift" e só a LIA).
+
+    Compara as métricas deste run com o baseline COMPARÁVEL (mesmo ``gold_hash``,
+    run concluído mais recente — a comparabilidade robusta do 33.9.0) e insere um
+    evento por métrica que se moveu além do ruído, com magnitude (delta cru) e
+    severidade orientada pela DIREÇÃO da métrica:
+      - regressão >= regression_pct_threshold → ``critical`` (reprovaria o gate);
+      - regressão menor                       → ``warning``;
+      - melhora além do ruído                 → ``info``.
+
+    Deve ser chamado ANTES de persistir o run atual (que ainda está 'running' →
+    o filtro status='completed' o exclui, evitando comparar consigo mesmo).
+    Best-effort: nunca invalida o run (drift é leitura posterior). Retorna o nº
+    de eventos inseridos (log/teste)."""
+    if not gold_hash:
+        return 0
+    try:
+        baselines = await eval_runs_repo.find_all(
+            gold_hash=gold_hash, status="completed", limit=1,
+        )
+    except Exception as e:
+        logger.warning("drift: falha ao buscar baseline: %s", str(e)[:150])
+        return 0
+    if not baselines:
+        return 0  # 1º run comparável — sem baseline, sem drift
+    b0 = baselines[0]
+
+    written = 0
+    for metric, higher_better in _DRIFT_METRICS:
+        base = _coerce_score(b0.get(metric))
+        cur = _coerce_score(current_metrics.get(metric))
+        if base is None or cur is None:
+            continue  # métrica não avaliada num dos lados — incomparável
+        delta = cur - base
+        adverse = (base - cur) if higher_better else (cur - base)  # >0 = piorou
+        pct = (adverse / max(abs(base), 0.01)) * 100
+        if abs(pct) < _DRIFT_NOISE_FLOOR_PCT:
+            continue  # dentro do ruído do LLM — não registra
+        if pct >= regression_pct_threshold:
+            severity = "critical"
+        elif pct > 0:
+            severity = "warning"
+        else:
+            severity = "info"  # melhorou além do ruído
+        try:
+            await drift_repo.create({
+                "id": str(uuid.uuid4()),
+                "release_id": release_id,
+                "metric_name": metric,
+                "baseline_value": round(base, 4),
+                "current_value": round(cur, 4),
+                "magnitude": round(delta, 4),
+                "detection_method": "harness_baseline_delta",
+                "severity": severity,
+            })
+            written += 1
+        except Exception as e:
+            logger.warning("drift: falha ao inserir evento %s: %s", metric, str(e)[:150])
+    if written:
+        logger.info(
+            "drift.events_written",
+            extra={"event": "drift.events_written", "count": written, "release_id": release_id},
+        )
+    return written
+
+
 async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "latest", run_type: str = "baseline") -> dict:
     """Executa harness contra Golden Dataset e produz relatório multi-dim."""
     settings = get_settings()
@@ -246,8 +336,9 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
         return {"eval_id": eval_id, "status": "no_cases", "message": "Nenhum caso no Golden Dataset"}
 
     # Q6 (33.9.0): carimba o hash imutável do CONTEÚDO do gold usado neste run
-    # (comparabilidade robusta — ver compare_eval_runs).
-    await eval_runs_repo.update(eval_id, {"gold_hash": _compute_gold_hash(cases)})
+    # (comparabilidade robusta — ver compare_eval_runs). Reusado no writer de drift.
+    gold_hash = _compute_gold_hash(cases)
+    await eval_runs_repo.update(eval_id, {"gold_hash": gold_hash})
 
     # Resolve o agente UMA vez, ANTES do loop. Se ele não existe mais (deletado),
     # cada caso cairia no except "Agente não encontrado" (engine.py) e seria
@@ -530,6 +621,25 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
 
     gate = "rejected" if gate_reasons else "approved"
     gate_reason_text = "; ".join(gate_reasons) if gate_reasons else None
+
+    # ─── Drift release-over-release (33.11.0): PRODUTOR que faltava para
+    # drift_events. Compara com o baseline comparável (mesmo gold_hash) ANTES de
+    # persistir este run (ainda 'running' → não vira baseline de si mesmo). ───
+    await _write_drift_events(
+        release_id=release_id, gold_hash=gold_hash,
+        current_metrics={
+            "accuracy": accuracy,
+            "avg_factuality": avg_factuality,
+            "avg_completeness": avg_completeness,
+            "avg_tone": avg_tone,
+            "contract_compliance_rate": contract_compliance_rate,
+            "correct_refusal_rate": correct_refusal_rate,
+            "safety_violation_rate": safety_violation_rate,
+            "hallucination_rate": hallucination_rate,
+            "false_positive_rate": false_positive_rate,
+        },
+        regression_pct_threshold=settings.harness_max_dim_regression_pct,
+    )
 
     # ─── Persistência ───
     await eval_runs_repo.update(eval_id, {
