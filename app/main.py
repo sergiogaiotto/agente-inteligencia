@@ -62,6 +62,18 @@ async def lifespan(app: FastAPI):
             logger.info(f"Pipelines: migração mesh_groups→pipelines {res}")
     except Exception as e:
         logger.warning(f"migrate_mesh_groups_to_pipelines falhou no startup: {e}")
+    # Fila de juiz DURÁVEL (Onda 6): re-despacha os verifier_jobs 'pending' e os
+    # 'running' órfãos (juiz async que ficou do processo anterior — crash/restart;
+    # a fila em memória não sobrevivia). DEPOIS do init_db (pool aberto) e ANTES
+    # de servir → single-flight, sem double-processing. Nunca derruba o boot.
+    try:
+        from app.verifier.async_dispatcher import resume_jobs
+        from app.core.config import get_settings as _gs
+        resumed = await resume_jobs(batch=_gs().verifier_max_concurrent_jobs)
+        if resumed:
+            logger.info(f"verifier_jobs: {resumed} job(s) do juiz re-despachado(s) no boot")
+    except Exception as e:
+        logger.warning(f"verifier resume_jobs falhou no startup: {e}")
     try:
         yield
     finally:
