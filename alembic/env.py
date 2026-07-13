@@ -7,6 +7,7 @@ o caminho estoque/robusto. ``target_metadata=None``: as migrações são SQL esc
 """
 from __future__ import annotations
 
+import logging
 import os
 from logging.config import fileConfig
 
@@ -26,10 +27,18 @@ elif _url.startswith("postgresql://"):
     _url = _url.replace("postgresql://", "postgresql+psycopg2://", 1)
 config.set_main_option("sqlalchemy.url", _url)
 
-# Logging do alembic — best-effort (não deixa a config do alembic derrubar a do app).
-if config.config_file_name is not None:
+# Logging do alembic — SÓ no CLI standalone (root ainda sem handlers).
+# In-process (migrations no boot do app, database._alembic_upgrade_sync), o
+# fileConfig do alembic.ini DERRUBAVA o logging do app: substituía os handlers
+# do root (app.log/api.log/console JSON sumiam) e, com o default
+# disable_existing_loggers=True, DESABILITAVA todos os loggers já criados
+# (app.*, uvicorn.* — nem access log sobrava). Nenhum log de runtime chegava a
+# sink algum desde a 33.17.0 (#585, primeira release com alembic no boot).
+# O try/except antigo só protegia contra EXCEÇÃO, não contra esse efeito
+# colateral. Diagnóstico: revisão E2E Pulsar, 2026-07-13.
+if config.config_file_name is not None and not logging.getLogger().handlers:
     try:
-        fileConfig(config.config_file_name)
+        fileConfig(config.config_file_name, disable_existing_loggers=False)
     except Exception:
         pass
 
