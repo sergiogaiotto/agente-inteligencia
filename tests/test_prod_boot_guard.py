@@ -82,6 +82,41 @@ class TestBootGuard:
         with pytest.raises(InsecureProductionConfigError):
             assert_secure_production_posture(_settings(secret_key="   "))
 
+    def test_prod_placeholder_do_env_example_barra(self, monkeypatch):
+        """Copiar o .env.example e esquecer de trocar o SECRET_KEY NÃO pode bootar
+        em prod — o placeholder distribuído é uma chave pública (takeover)."""
+        from app.core.config import _ENV_EXAMPLE_SECRET_PLACEHOLDER
+
+        monkeypatch.setenv("MAESTRO_SECRET_KEY", "master-key-real")
+        with pytest.raises(InsecureProductionConfigError) as ei:
+            assert_secure_production_posture(
+                _settings(secret_key=_ENV_EXAMPLE_SECRET_PLACEHOLDER)
+            )
+        assert "SECRET_KEY" in str(ei.value)
+
+    def test_env_example_placeholder_e_barrado(self):
+        """Meta-teste: o SECRET_KEY que o .env.example DISTRIBUI tem de estar na
+        lista de inseguros. Amarra o template ao guard — trocar um sem o outro
+        (deixando um placeholder público 'aceito' em prod) quebra aqui."""
+        import re
+        from pathlib import Path
+
+        from app.core.config import _INSECURE_SECRET_KEYS
+
+        env_example = Path(__file__).resolve().parents[1] / ".env.example"
+        if not env_example.exists():
+            pytest.skip(".env.example ausente neste ambiente")
+        m = re.search(
+            r"^SECRET_KEY=(.*)$", env_example.read_text(encoding="utf-8"), re.MULTILINE
+        )
+        assert m, "SECRET_KEY não encontrado no .env.example"
+        shipped = m.group(1).strip()
+        assert shipped in _INSECURE_SECRET_KEYS, (
+            f"O SECRET_KEY do .env.example ({shipped!r}) não está em "
+            "_INSECURE_SECRET_KEYS — uma prod que copie o template e não troque "
+            "bootaria com chave pública. Adicione-o ao frozenset em config.py."
+        )
+
     def test_prod_sem_maestro_key_barra(self, monkeypatch):
         monkeypatch.delenv("MAESTRO_SECRET_KEY", raising=False)
         with pytest.raises(InsecureProductionConfigError) as ei:
