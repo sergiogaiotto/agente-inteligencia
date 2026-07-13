@@ -25,16 +25,19 @@ import time
 import logging
 from collections import Counter
 
-from app.core.database import gold_cases_repo, eval_runs_repo, releases_repo, agents_repo, drift_repo
+from app.core.database import (
+    gold_cases_repo, eval_runs_repo, releases_repo, agents_repo, drift_repo,
+    pipelines_repo,
+)
 from app.core.config import get_settings
-from app.agents.engine import execute_interaction
+from app.agents.engine import execute_interaction, execute_pipeline
 
 logger = logging.getLogger(__name__)
 
-# Thresholds legacy ainda usados para FP/regressão geral. Os novos vão por Settings.
+# Threshold legacy ainda usado para FP. (max_regression_pct virou setting
+# runtime-editável — harness_max_regression_pct, Pacote C3.)
 GATE_THRESHOLDS = {
     "max_false_positive_rate": 0.15,
-    "max_regression_pct": 5.0,
 }
 
 
@@ -250,6 +253,8 @@ async def _write_drift_events(
     gold_hash: str | None,
     current_metrics: dict,
     regression_pct_threshold: float,
+    agent_id: str | None = None,
+    pipeline_id: str | None = None,
 ) -> int:
     """PRODUTOR de ``drift_events`` (33.11.0) — a tabela era MORTA (zero writers,
     mas o /quality anuncia "detecção de drift" e só a LIA).
@@ -269,8 +274,16 @@ async def _write_drift_events(
     if not gold_hash:
         return 0
     try:
+        # Baseline por gold_hash E MESMO ALVO (Pacote C): sem o filtro de alvo,
+        # um run de pipeline compararia com o de um agente (mesmo gold set) e
+        # geraria drift espúrio. Runs antigos têm agent_id NULL → não casam →
+        # o 1º run pós-upgrade vira baseline novo (também absorve a mudança de
+        # régua do similarity do Pacote A sem falso drift).
+        target_filter = (
+            {"pipeline_id": pipeline_id} if pipeline_id else {"agent_id": agent_id}
+        )
         baselines = await eval_runs_repo.find_all(
-            gold_hash=gold_hash, status="completed", limit=1,
+            gold_hash=gold_hash, status="completed", limit=1, **target_filter,
         )
     except Exception as e:
         logger.warning("drift: falha ao buscar baseline: %s", str(e)[:150])
@@ -318,8 +331,25 @@ async def _write_drift_events(
     return written
 
 
-async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "latest", run_type: str = "baseline") -> dict:
-    """Executa harness contra Golden Dataset e produz relatório multi-dim."""
+async def run_evaluation(
+    release_id: str,
+    agent_id: str | None = None,
+    gold_version: str = "latest",
+    run_type: str = "baseline",
+    pipeline_id: str | None = None,
+) -> dict:
+    """Executa harness contra Golden Dataset e produz relatório multi-dim.
+
+    Alvo (Pacote C, 33.20.0): exatamente UM de `agent_id` | `pipeline_id`.
+    - agent_id: modo clássico — execute_interaction por caso (agente isolado).
+    - pipeline_id: modo PIPELINE — invoca o pipeline SELADO (root + membros via
+      _build_subgraph, mesmo caminho do POST /pipelines/{id}/invoke) por caso.
+      Isso torna o ROTEAMENTO avaliável: o output final vem do especialista a
+      que o caso foi roteado (1-de-N), então expected_pattern/output validam o
+      caminho de verdade — inclusive escalonamentos (ex.: Escalate técnico que
+      um subagente isolado estruturalmente nunca produziria). Cada entry de
+      `details` ganha `path` (agente:status por step) para auditar a rota.
+    """
     settings = get_settings()
     use_verifier = settings.harness_use_verifier and settings.verifier_v2_enabled
     # RAGAS com gabarito (33.12.0): context_recall + answer_correctness são
@@ -330,10 +360,19 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
     gold_answer_correctness: list[float] = []
     gold_ragas_cost_usd = 0.0
 
+    # Exatamente um alvo (defesa em profundidade — a rota também valida).
+    if bool(agent_id) == bool(pipeline_id):
+        return {
+            "status": "invalid_target",
+            "message": "Informe exatamente UM alvo: agent_id OU pipeline_id.",
+        }
+
     eval_id = str(uuid.uuid4())
     await eval_runs_repo.create({
         "id": eval_id, "release_id": release_id, "gold_version": gold_version,
         "run_type": run_type, "status": "running",
+        # Alvo do run (Pacote C): antes o run não sabia contra quem rodou.
+        "agent_id": agent_id, "pipeline_id": pipeline_id,
     })
 
     filters = {"dataset_version": gold_version} if gold_version != "latest" else {}
@@ -347,14 +386,41 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
     gold_hash = _compute_gold_hash(cases)
     await eval_runs_repo.update(eval_id, {"gold_hash": gold_hash})
 
-    # Resolve o agente UMA vez, ANTES do loop. Se ele não existe mais (deletado),
-    # cada caso cairia no except "Agente não encontrado" (engine.py) e seria
-    # contado como FAILED → accuracy 0.0 espúria (não é a plataforma ruim, é o
-    # alvo que sumiu). Em vez disso, encerra o run como 'invalid_agent'/skipped
-    # (espelha o caminho no_cases acima) SEM avaliar nenhum caso. Também fecha a
-    # janela de corrida do guard da rota /execute (agente deletado entre a
-    # validação e este ponto — resoluções independentes).
-    if not await agents_repo.find_by_id(agent_id):
+    # Resolve o ALVO UMA vez, ANTES do loop. Se ele não existe mais (deletado),
+    # cada caso cairia no except e seria contado como FAILED → accuracy 0.0
+    # espúria (não é a plataforma ruim, é o alvo que sumiu). Em vez disso,
+    # encerra o run como invalid/skipped (espelha o caminho no_cases) SEM
+    # avaliar nenhum caso. Também fecha a janela de corrida do guard da rota
+    # /execute (alvo deletado entre a validação e este ponto).
+    pipeline_root: str | None = None
+    pipeline_members: set | None = None
+    if pipeline_id:
+        pipe = await pipelines_repo.find_by_id(pipeline_id)
+        invalid_reason = None
+        if not pipe:
+            invalid_reason = f"Pipeline {pipeline_id} não existe"
+        elif (pipe.get("status") or "") == "aposentado":
+            invalid_reason = f"Pipeline '{pipe.get('name') or pipeline_id}' está aposentado"
+        else:
+            # Mesmo caminho do invoke selado: root + membros do subgrafo.
+            from app.catalog.pipeline_defs import _build_subgraph
+            sub = await _build_subgraph(pipeline_id)
+            pipeline_root = (sub or {}).get("root_agent_id")
+            pipeline_members = {n["id"] for n in (sub or {}).get("nodes", [])}
+            if not pipeline_root:
+                invalid_reason = (
+                    f"Pipeline {pipeline_id} sem agente-raiz resolvível "
+                    "(conecte os agentes para definir o Início)"
+                )
+        if invalid_reason:
+            await eval_runs_repo.update(eval_id, {"status": "invalid_pipeline", "gate_result": "skipped"})
+            return {
+                "eval_id": eval_id,
+                "status": "invalid_pipeline",
+                "message": f"{invalid_reason} — execução não realizada "
+                           f"(nenhum caso avaliado; accuracy não computada).",
+            }
+    elif not await agents_repo.find_by_id(agent_id):
         await eval_runs_repo.update(eval_id, {"status": "invalid_agent", "gate_result": "skipped"})
         return {
             "eval_id": eval_id,
@@ -393,24 +459,64 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
 
         start = time.time()
         try:
-            result = await execute_interaction(
-                agent_id=agent_id,
-                user_input=case["input_text"],
-                channel=case.get("channel", "api"),
-                journey=case.get("journey", ""),
-                # Golden dataset = avaliação idempotente: cada caso é uma função
-                # pura. 'none' blinda a métrica contra vazamento de histórico
-                # entre casos (reprodutibilidade), independente do default 'auto'.
-                context_mode="none",
-                # Grounded-by-default (2026-06-06): golden datasets foram
-                # calibrados ANTES da guarda anti-conhecimento-paramétrico e
-                # muitos casos não anexam evidência. strict=True recusaria esses
-                # casos e quebraria a métrica. Fixamos False p/ reprodutibilidade
-                # — a guarda é runtime de produção, não critério de avaliação.
-                grounding_strict=False,
-            )
+            if pipeline_id:
+                # Modo PIPELINE: invoca a cadeia SELADA (root + membros), o
+                # mesmo caminho do POST /pipelines/{id}/invoke — direto no
+                # engine, sem a camada HTTP (auth/budget/analytics ficam fora,
+                # como no modo agente). context_mode/grounding_strict com a
+                # mesma justificativa de reprodutibilidade do modo agente.
+                result = await execute_pipeline(
+                    entry_agent_id=pipeline_root,
+                    user_input=case["input_text"],
+                    channel=case.get("channel", "api"),
+                    context_mode="none",
+                    allowed_agent_ids=pipeline_members,
+                    pipeline_id=pipeline_id,
+                    grounding_strict=False,
+                )
+            else:
+                result = await execute_interaction(
+                    agent_id=agent_id,
+                    user_input=case["input_text"],
+                    channel=case.get("channel", "api"),
+                    journey=case.get("journey", ""),
+                    # Golden dataset = avaliação idempotente: cada caso é uma função
+                    # pura. 'none' blinda a métrica contra vazamento de histórico
+                    # entre casos (reprodutibilidade), independente do default 'auto'.
+                    context_mode="none",
+                    # Grounded-by-default (2026-06-06): golden datasets foram
+                    # calibrados ANTES da guarda anti-conhecimento-paramétrico e
+                    # muitos casos não anexam evidência. strict=True recusaria esses
+                    # casos e quebraria a métrica. Fixamos False p/ reprodutibilidade
+                    # — a guarda é runtime de produção, não critério de avaliação.
+                    grounding_strict=False,
+                )
             latency = (time.time() - start) * 1000
             total_latency += latency
+
+            if pipeline_id:
+                # Reancora decisão E julgamento no ÚLTIMO step COMPLETADO — o
+                # dono do output avaliado. O envelope do engine expõe
+                # final_state/transitions de steps[-1] (último nó da CADEIA),
+                # que em fan-out 1-de-N pode ser um step PULADO: sem isso,
+                # casos roteados a qualquer ramo que não seja o último nó BFS
+                # reprovariam por state_mismatch='SkippedConditional' apesar
+                # de roteamento e output corretos (blocker do review). Idem
+                # verification: usar a de OUTRO step (ex.: Maestro rigorous)
+                # julgaria o texto errado — se o dono do output não tem
+                # snapshot, deixa None e o _judge_draft julga o output certo.
+                _last_done = next(
+                    (s for s in reversed(result.get("pipeline_steps") or [])
+                     if s.get("status") == "completed"),
+                    None,
+                )
+                if _last_done:
+                    result = {
+                        **result,
+                        "final_state": _last_done.get("final_state") or result.get("final_state"),
+                        "transitions": _last_done.get("transitions") or [],
+                        "verification": _last_done.get("verification"),
+                    }
 
             # Estado de DECISÃO (Recommend/Refuse/Escalate) — não o terminal cru
             # LogAndClose. Ver _decision_state: sem isso o casamento nunca bate.
@@ -437,6 +543,8 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
             shape_passed = state_match and output_match and not has_red
 
             # ─── Multi-dim: usa verification do engine, ou re-judge se ausente ───
+            # (No modo pipeline, result["verification"] já foi reancorada acima
+            # no último step completado — o dono do output avaliado.)
             verification = result.get("verification")
             engine_verified = bool(verification)  # engine rodou o verifier → linha persistida
             if not verification and use_verifier:
@@ -509,6 +617,19 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
             }
             if failure_reasons:
                 entry["failure_reasons"] = failure_reasons
+            if pipeline_id:
+                # Rota percorrida — auditável no drawer do run (quem completou,
+                # quem foi pulado). Status abreviado p/ caber no cap de 32KB
+                # dos details.
+                _abbrev = {
+                    "completed": "ok", "skipped_conditional": "skip",
+                    "skipped_upstream": "skip↑", "passthrough": "pass",
+                    "error": "err", "fast_routed": "fast",
+                }
+                entry["path"] = [
+                    f"{s.get('agent_name', '?')}:{_abbrev.get(s.get('status'), s.get('status'))}"
+                    for s in (result.get("pipeline_steps") or [])
+                ]
             details.append(entry)
 
             # RAGAS com gabarito (33.12.0): context_recall + answer_correctness
@@ -621,6 +742,7 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
 
     # ─── Gate multi-dim ───
     gate_reasons: list[str] = []
+    regression_note: str | None = None
     if accuracy < settings.harness_min_accuracy:
         gate_reasons.append(f"accuracy={accuracy:.2f} < {settings.harness_min_accuracy}")
     if false_positive_rate > GATE_THRESHOLDS["max_false_positive_rate"]:
@@ -645,14 +767,30 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
         # accuracy=0) ou de outro dataset viraria referência e mascararia a
         # regressão (falso 'approved'). find_all ordena created_at DESC → o
         # baseline COMPLETO mais recente do mesmo dataset.
+        # Pacote C: baseline também filtrado pelo MESMO ALVO (agent/pipeline) —
+        # sem isso, a regressão de um pipeline seria medida contra o baseline
+        # de um agente avulso que usou o mesmo release/dataset.
+        _target_f = {"pipeline_id": pipeline_id} if pipeline_id else {"agent_id": agent_id}
         baseline_runs = await eval_runs_repo.find_all(
             release_id=release_id, run_type="baseline",
-            status="completed", gold_version=gold_version, limit=1,
+            status="completed", gold_version=gold_version, limit=1, **_target_f,
         )
+        if not baseline_runs:
+            # Sem baseline do MESMO alvo (alvo novo, ou baseline pré-33.20 com
+            # coluna NULL): a regressão fica sem referência e é PULADA — mas
+            # avisando (review: silêncio aqui mascara queda real; o operador
+            # precisa saber que deve rodar um baseline novo do alvo).
+            regression_note = (
+                "regressão não avaliada: nenhum baseline concluído do MESMO "
+                "alvo neste release/dataset — rode um baseline primeiro"
+            )
         if baseline_runs:
             b0 = baseline_runs[0]
             dim_pairs = [
-                ("accuracy", accuracy, GATE_THRESHOLDS["max_regression_pct"]),
+                # Pacote C3: era GATE_THRESHOLDS["max_regression_pct"] hardcoded
+                # 5.0 — única dimensão não-configurável (as demais já liam
+                # settings). Agora runtime-editável em Configurações→Parâmetros.
+                ("accuracy", accuracy, settings.harness_max_regression_pct),
                 ("avg_factuality", avg_factuality, settings.harness_max_dim_regression_pct),
                 ("avg_completeness", avg_completeness, settings.harness_max_dim_regression_pct),
                 ("avg_tone", avg_tone, settings.harness_max_dim_regression_pct),
@@ -664,6 +802,12 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
 
     gate = "rejected" if gate_reasons else "approved"
     gate_reason_text = "; ".join(gate_reasons) if gate_reasons else None
+    # Nota informativa (não reprova): regressão pulada por falta de baseline
+    # do alvo — visível no card do run via gate_reason.
+    if regression_note:
+        gate_reason_text = (
+            f"{gate_reason_text}; {regression_note}" if gate_reason_text else regression_note
+        )
 
     # ─── Drift release-over-release (33.11.0): PRODUTOR que faltava para
     # drift_events. Compara com o baseline comparável (mesmo gold_hash) ANTES de
@@ -682,6 +826,7 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
             "false_positive_rate": false_positive_rate,
         },
         regression_pct_threshold=settings.harness_max_dim_regression_pct,
+        agent_id=agent_id, pipeline_id=pipeline_id,
     )
 
     # ─── Persistência ───

@@ -279,6 +279,9 @@ class Settings(BaseSettings):
     harness_min_contract_compliance: float = 0.95
     harness_max_hallucination_rate: float = 0.10
     harness_max_dim_regression_pct: float = 5.0
+    # Pacote C3 (33.20.0): regressão de ACURÁCIA vs baseline — era o último
+    # gate hardcoded (GATE_THRESHOLDS) enquanto os irmãos já eram settings.
+    harness_max_regression_pct: float = 5.0
 
     # ── RAGAS com gabarito (ground truth) — 33.12.0 ──
     # context_recall + answer_correctness exigem a resposta-padrão do gold E uma
@@ -527,6 +530,7 @@ _UI_TO_ENV_MAP = {
     "harness_min_contract_compliance": "HARNESS_MIN_CONTRACT_COMPLIANCE",
     "harness_max_hallucination_rate": "HARNESS_MAX_HALLUCINATION_RATE",
     "harness_max_dim_regression_pct": "HARNESS_MAX_DIM_REGRESSION_PCT",
+    "harness_max_regression_pct": "HARNESS_MAX_REGRESSION_PCT",
     "ragas_ground_truth_enabled": "RAGAS_GROUND_TRUTH_ENABLED",
     # Tuning de performance (25.2.0)
     "query_topology_cache_enabled": "QUERY_TOPOLOGY_CACHE_ENABLED",
@@ -563,6 +567,7 @@ PARAMETER_UI_KEYS = (
     "harness_min_contract_compliance",
     "harness_max_hallucination_rate",
     "harness_max_dim_regression_pct",
+    "harness_max_regression_pct",
     "ragas_ground_truth_enabled",
     "query_topology_cache_enabled",
     "fast_routing_enabled",

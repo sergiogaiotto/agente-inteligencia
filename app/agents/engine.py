@@ -3495,6 +3495,11 @@ async def execute_pipeline(
     # Auditoria (24.10.0): id do pipeline (tabela pipelines) — propagado a
     # cada step p/ as verifications. None em execuções fora do invoke selado.
     pipeline_id: str | None = None,
+    # Harness modo pipeline (Pacote C): paridade com execute_interaction —
+    # None (default) lê settings.grounding_strict em cada step; o harness pina
+    # False p/ reprodutibilidade (mesma razão do modo agente: golden datasets
+    # calibrados antes da guarda anti-conhecimento-paramétrico).
+    grounding_strict: bool | None = None,
 ) -> dict:
     """Executa pipeline completo pelo AI Mesh.
 
@@ -4400,6 +4405,8 @@ async def execute_pipeline(
                 # async gravar direto no master (evita órfã na consolidação).
                 audit_posture=_audit_posture,
                 master_interaction_id=master_interaction_id,
+                # Paridade harness (Pacote C): None = comportamento atual.
+                grounding_strict=grounding_strict,
             )
             iid = result.get("interaction_id")
             # Primeiro agente executado (não pass-through) vira o master

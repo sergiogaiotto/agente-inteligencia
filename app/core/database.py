@@ -1298,6 +1298,12 @@ _IDEMPOTENT_MIGRATIONS = [
     # HASH (não o rótulo texto-livre gold_version), pegando "mesmo rótulo, conteúdo
     # do gold mudou".
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS gold_hash TEXT",
+    # ── Harness modo pipeline (Pacote C, 33.20.0) ──
+    # O run passa a registrar o ALVO avaliado (antes não sabia contra quem
+    # rodou). Também blinda baseline de regressão/drift: runs de alvos
+    # diferentes (ou de antes desta coluna) não se comparam entre si.
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS agent_id TEXT",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS pipeline_id TEXT",
 ]
 
 
