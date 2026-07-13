@@ -21,12 +21,12 @@ def test_alembic_config_chain_linear_e_head():
     script = ScriptDirectory.from_config(cfg)
 
     # História LINEAR (um único head): 0001_baseline → 0002_verifications_gold_case_id
-    # → 0003_interactions_owner_user_id (head atual; IDOR 33.13.0).
-    assert script.get_heads() == ["0003_interactions_owner_user_id"]
-    head = script.get_revision("0003_interactions_owner_user_id")
-    assert head.down_revision == "0002_verifications_gold_case_id"
-    mid = script.get_revision("0002_verifications_gold_case_id")
-    assert mid.down_revision == "0001_baseline"
+    # → 0003_interactions_owner_user_id → 0004_api_keys_scope (head; key-scope 33.17.0).
+    assert script.get_heads() == ["0004_api_keys_scope"]
+    head = script.get_revision("0004_api_keys_scope")
+    assert head.down_revision == "0003_interactions_owner_user_id"
+    r3 = script.get_revision("0003_interactions_owner_user_id")
+    assert r3.down_revision == "0002_verifications_gold_case_id"
     base = script.get_revision("0001_baseline")
     assert base.down_revision is None
 

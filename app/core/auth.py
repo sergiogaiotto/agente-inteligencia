@@ -210,6 +210,12 @@ async def require_user(request: Request) -> dict:
             if user and user.get("status", "active") == "active":
                 request.state.api_key_id = key_record["id"]
                 request.state.api_key_name = key_record["name"]
+                # Escopo por-key (Onda 6): lido no invoke por assert_api_key_can_
+                # invoke. .get: resiliente a DB sem as colunas (pré-migração).
+                request.state.api_key_scope = {
+                    "allowed_pipeline_ids": key_record.get("allowed_pipeline_ids"),
+                    "read_only": bool(key_record.get("read_only")),
+                }
                 return {k: v for k, v in dict(user).items() if k != "password_hash"}
 
     raise HTTPException(
