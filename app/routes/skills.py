@@ -3,7 +3,7 @@ import logging
 import uuid, json, hashlib
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import SkillCreateRaw, SkillCreateManual
-from app.core.database import skills_repo
+from app.core.database import skills_repo, knowledge_repo
 from app.skill_parser.parser import (
     parse_skill_md, skill_to_db_dict, REQUIRED_SECTIONS, OPTIONAL_SECTIONS,
 )
@@ -28,6 +28,53 @@ def _reject_bad_skill_name(name: str) -> None:
                    "'# Verificador de Número Primo') na primeira linha. O valor "
                    "extraído parece um cabeçalho de seção.",
         )
+
+
+async def _warn_unknown_evidence_sources(parsed) -> list[str]:
+    """Warnings para IDs do ## Evidence Policy que não existem em
+    knowledge_sources (E2E Pulsar 2026-07-13: UUID digitado errado virava
+    filtro SQL que casa 0 chunks — recusa silenciosa em runtime, sem pista).
+    Non-blocking (coerente com o save de seções faltantes) e best-effort:
+    falha de banco aqui nunca impede o save."""
+    sources = (getattr(parsed, "evidence_policy_parsed", None) or {}).get("sources")
+    if not sources:
+        return []
+    warnings: list[str] = []
+    try:
+        for sid in dict.fromkeys(sources):  # dedup preservando ordem
+            row = await knowledge_repo.find_by_id(sid)
+            if not row:
+                warnings.append(
+                    f"Evidence Policy: a source '{sid}' não existe em Bases de "
+                    "Conhecimento — o retrieval retornará 0 evidências para ela. "
+                    "Use o dropdown 'Fontes RAG' do editor para inserir o ID correto."
+                )
+            elif not row.get("authorized"):
+                # Existe mas está desautorizada: BM25 e pgvector filtram
+                # authorized=1, então o efeito em runtime é o mesmo do UUID
+                # inexistente — 0 evidências, recusa silenciosa.
+                warnings.append(
+                    f"Evidence Policy: a source '{row.get('name') or sid}' existe "
+                    "mas está DESAUTORIZADA (authorized=0) — o retrieval retornará "
+                    "0 evidências para ela até que a base seja reautorizada."
+                )
+        if warnings:
+            logger.warning(
+                "SKILL.md salvo com source(s) desconhecida(s) no Evidence Policy",
+                extra={
+                    "event": "skill.evidence_policy.unknown_source",
+                    "skill_name": parsed.name,
+                    "declared_sources": list(sources),
+                    "unknown_count": len(warnings),
+                },
+            )
+    except Exception:
+        logger.debug(
+            "validação de sources do Evidence Policy falhou (best-effort)",
+            extra={"event": "skill.evidence_policy.validation_failed"},
+            exc_info=True,
+        )
+    return warnings
 
 
 def _raise_for_db_error(e: Exception, urn: str) -> None:
@@ -215,14 +262,16 @@ async def create_skill(data: SkillCreateRaw):
         raise
     except Exception as e:
         _raise_for_db_error(e, db_data["urn"])
+    warnings = (parsed.validation_errors if not parsed.is_valid else [])
+    warnings += await _warn_unknown_evidence_sources(parsed)
     return {
         "id": sid,
         "urn": parsed.frontmatter.id,
         "name": parsed.name,
         "kind": parsed.frontmatter.kind,
         "execution_mode": parsed.execution_mode,
-        "warnings": parsed.validation_errors if not parsed.is_valid else [],
-        "message": "Skill criada" + (" (com avisos de validação)" if not parsed.is_valid else ""),
+        "warnings": warnings,
+        "message": "Skill criada" + (" (com avisos de validação)" if warnings else ""),
     }
 
 @router.post("/manual", status_code=201)
@@ -249,11 +298,18 @@ async def update_skill(skill_id: str, data: SkillCreateRaw):
     db_data["version"] = _bump_version(existing.get("version", "0.1.0"))
     db_data["tags"] = data.tags or existing.get("tags", "[]")
     try:
-        return await skills_repo.update(skill_id, db_data)
+        updated = await skills_repo.update(skill_id, db_data)
     except HTTPException:
         raise
     except Exception as e:
         _raise_for_db_error(e, db_data["urn"])
+    # Warnings aditivos no PUT (o create já devolvia; o update não devolvia nada
+    # além do row — quem edita o UUID à mão faz isso no PUT, não no POST).
+    warnings = (parsed.validation_errors if not parsed.is_valid else [])
+    warnings += await _warn_unknown_evidence_sources(parsed)
+    if isinstance(updated, dict) and warnings:
+        updated = {**updated, "warnings": warnings}
+    return updated
 
 @router.delete("/{skill_id}")
 async def delete_skill(skill_id: str):

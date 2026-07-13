@@ -147,8 +147,60 @@ class Retriever:
             top = fused[:top_n]
             span.set_attribute("retriever.fused_count", len(top))
 
+            # Diagnóstico de resultado vazio com filtro de sources (E2E Pulsar
+            # 2026-07-13): um UUID inexistente/desautorizado no ## Evidence
+            # Policy vira filtro SQL que casa 0 linhas em AMBOS os braços —
+            # sem este log a falha é 100% silenciosa e o agente só "recusa".
+            # Roda apenas no caminho raro (0 hits + filtro): custo zero no feliz.
+            if not top and allowed_source_ids:
+                await self._diagnose_empty_filtered_result(allowed_source_ids, span)
+
             # Hidrata: pega texto + metadados das sources
             return await self._hydrate(top)
+
+    async def _diagnose_empty_filtered_result(
+        self, allowed_source_ids: list[str], span
+    ) -> None:
+        """Loga por que um retrieval filtrado voltou vazio: source inexistente,
+        desautorizada ou apenas sem match. Best-effort — nunca propaga erro."""
+        try:
+            pool = _get_pool()
+            async with pool.acquire() as con:
+                rows = await con.fetch(
+                    "SELECT id, authorized FROM knowledge_sources WHERE id = ANY($1::text[])",
+                    allowed_source_ids,
+                )
+            found = {r["id"]: r["authorized"] for r in rows}
+            unknown = [s for s in allowed_source_ids if s not in found]
+            unauthorized = [s for s, auth in found.items() if not auth]
+            if unknown:
+                span.set_attribute("retriever.unknown_sources", ",".join(unknown))
+                logger.warning(
+                    "Evidence Policy aponta para source(s) INEXISTENTE(S) — "
+                    "retrieval retornou 0 evidências. Corrija o UUID no "
+                    "## Evidence Policy da skill (use o dropdown Fontes RAG).",
+                    extra={
+                        "event": "retrieval.unknown_source",
+                        "unknown_source_ids": unknown,
+                        "allowed_source_ids": allowed_source_ids,
+                    },
+                )
+            if unauthorized:
+                span.set_attribute("retriever.unauthorized_sources", ",".join(unauthorized))
+                logger.warning(
+                    "Evidence Policy aponta para source(s) NÃO AUTORIZADA(S) "
+                    "(authorized=0) — retrieval retornou 0 evidências.",
+                    extra={
+                        "event": "retrieval.unauthorized_source",
+                        "unauthorized_source_ids": unauthorized,
+                    },
+                )
+        except Exception:
+            logger.debug(
+                "diagnóstico de retrieval vazio falhou (best-effort)",
+                extra={"event": "retrieval.empty_diagnosis_failed"},
+                exc_info=True,
+            )
 
     async def _has_any_chunks(self) -> bool:
         """Cheap check: existe ao menos 1 chunk em qualquer source autorizada?"""

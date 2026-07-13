@@ -325,6 +325,10 @@ async def search(query_vector: list[float], top_n: int = 20,
     Filtro `source_ids` usa B-tree index idx_evidence_chunks_source (já existia
     para BM25). Pré-filtro SQL → KNN só nos candidatos qualificados.
 
+    Autorização: só chunks de knowledge_sources com `authorized = 1` — mesma
+    regra que o braço BM25 (runtime._bm25_search) já aplicava via JOIN. Sem
+    isso, uma base desautorizada continuava recuperável pelo braço vetorial.
+
     Lista vazia se coluna não existe / drift de dim / Postgres offline.
     Caller cai em BM25-only.
     """
@@ -344,6 +348,8 @@ async def search(query_vector: list[float], top_n: int = 20,
                     FROM evidence_chunks
                     WHERE {EMBEDDING_COLUMN} IS NOT NULL
                       AND knowledge_source_id = ANY($3::text[])
+                      AND knowledge_source_id IN (
+                          SELECT id FROM knowledge_sources WHERE authorized = 1)
                     ORDER BY {EMBEDDING_COLUMN} <=> $1
                     LIMIT $2
                     """,
@@ -357,6 +363,8 @@ async def search(query_vector: list[float], top_n: int = 20,
                            1 - ({EMBEDDING_COLUMN} <=> $1) AS score
                     FROM evidence_chunks
                     WHERE {EMBEDDING_COLUMN} IS NOT NULL
+                      AND knowledge_source_id IN (
+                          SELECT id FROM knowledge_sources WHERE authorized = 1)
                     ORDER BY {EMBEDDING_COLUMN} <=> $1
                     LIMIT $2
                     """,

@@ -2780,7 +2780,19 @@ async def execute_interaction(
         if skill_data.get("evidence_policy") and exec_profile == "rigorous":
             await fsm.run_verify_evidence({"ok": False, "confidence": 0.0})
         else:
-            await fsm.run_verify_evidence({"ok": True, "confidence": 0.8})
+            # Zero evidências RAG. O 0.8 histórico incondicional fazia o trace
+            # exibir "evid 0.8" mesmo com retrieval VAZIO — mascarou o
+            # diagnóstico do E2E Pulsar (Evidence Policy com UUID inexistente
+            # parecia "80% fundamentado"). Agora o score diz a verdade:
+            # - anexo/tool output presente → 0.8 (grounding legítimo não-RAG;
+            #   o Cockpit define fundamentado como "evidence_score > 0: RAG,
+            #   anexo ou tool" — zerar aqui penalizaria esses turnos);
+            # - nada → 0.0 (fingerprint honesto de resposta sem fonte).
+            # ok=True preserva o fluxo (Recommend) nos dois casos.
+            _nonrag_grounding = _has_attach_grounding or _has_tool_grounding_flag
+            await fsm.run_verify_evidence(
+                {"ok": True, "confidence": 0.8 if _nonrag_grounding else 0.0}
+            )
 
     if ctx.current_state == State.RECOMMEND:
         await fsm.run_recommend(draft)
