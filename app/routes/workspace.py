@@ -306,11 +306,30 @@ async def _nl_table_answer(parsed_skill, msg: str, user: dict,
 
 
 @router.get("/sessions")
-async def list_sessions(agent_id: str = None, limit: int = 30, offset: int = 0):
-    f = {}
-    if agent_id: f["agent_id"] = agent_id
-    sessions = await interactions_repo.find_all(limit=limit, offset=offset, **f)
-    return {"sessions": sessions, "total": await interactions_repo.count(**f)}
+async def list_sessions(agent_id: str = None, limit: int = 30, offset: int = 0,
+                        user: dict = Depends(require_user)):
+    # IDOR (33.15.0): só as sessões do DONO (+ legadas sem dono — não dá pra
+    # atribuir retroativamente); root vê todas. Antes listava TODAS as sessões de
+    # TODOS os usuários (vazava títulos/PII cross-tenant) e era anônimo.
+    from app.core.database import _get_pool
+    is_root = (user.get("role") or "").strip().lower() == "root"
+    conds: list[str] = []
+    params: list = []
+    if not is_root:
+        params.append(user.get("id"))
+        conds.append(f"(owner_user_id = ${len(params)} OR owner_user_id IS NULL)")
+    if agent_id:
+        params.append(agent_id)
+        conds.append(f"agent_id = ${len(params)}")
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            f"SELECT * FROM interactions{where} ORDER BY created_at DESC "
+            f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}",
+            *params, limit, offset,
+        )
+        total = await con.fetchval(f"SELECT count(*) FROM interactions{where}", *params)
+    return {"sessions": [dict(r) for r in rows], "total": total}
 
 
 @router.get("/sessions/{session_id}")
@@ -746,6 +765,11 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
     if data.mode != "pipeline":
         raise HTTPException(400, "Stream só suporta mode=pipeline. Use POST /chat pra modo agent.")
 
+    # IDOR (33.15.0): reusar um session_id exige ser DONO — ANTES de iniciar o
+    # stream (um 404 aqui vira erro HTTP normal, não um evento SSE mudo).
+    from app.core.interaction_access import assert_can_access_interaction, stamp_interaction_owner
+    await assert_can_access_interaction(data.session_id, user)
+
     attachments = []
     if data.attachments:
         for att in data.attachments:
@@ -779,7 +803,7 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
     async def _run_pipeline():
         from app.agents.engine import execute_pipeline
         try:
-            await execute_pipeline(
+            _res = await execute_pipeline(
                 entry_agent_id=data.agent_id,
                 user_input=data.message,
                 channel=data.channel,
@@ -793,6 +817,8 @@ async def chat_stream(data: ChatMessage, request: Request, user: dict = Depends(
                 # da sessão no roteador/orquestrador. 'none' = stateless.
                 context_mode=data.context_mode or "auto",
             )
+            # IDOR (33.15.0): carimba o dono da interaction do stream (best-effort).
+            await stamp_interaction_owner((_res or {}).get("interaction_id"), user.get("id"))
         except Exception as e:
             await queue.put({"type": "stream_error", "error": str(e)[:300]})
         finally:
@@ -862,6 +888,10 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
     externa). Quando X-API-Key é usado, request.state.api_key_id fica disponível
     pra audit log distinguir UI de chamadas externas.
     """
+    # IDOR (33.15.0): reusar um session_id exige ser DONO da interaction (o chat
+    # multi-turno reinjeta o histórico da sessão no LLM). ON-PATH, antes de executar.
+    from app.core.interaction_access import assert_can_access_interaction, stamp_interaction_owner
+    await assert_can_access_interaction(data.session_id, user)
     try:
         attachments = []
         if data.attachments:
@@ -1133,6 +1163,8 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
         # missing que viram "undefinedms" no frontend de sessão antiga.
         iid = result.get("interaction_id")
         if iid:
+            # IDOR (33.15.0): carimba o dono no 1º acesso (best-effort).
+            await stamp_interaction_owner(iid, user.get("id"))
             # "verification" incluída (24.10.0): o painel Verifier do Workspace
             # agora RESTAURA a auditoria ao recarregar a sessão (antes ela só
             # existia no response vivo do /chat e sumia no reload).
