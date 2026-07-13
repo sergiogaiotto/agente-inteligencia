@@ -276,6 +276,15 @@ class Settings(BaseSettings):
     harness_max_hallucination_rate: float = 0.10
     harness_max_dim_regression_pct: float = 5.0
 
+    # ── RAGAS com gabarito (ground truth) — 33.12.0 ──
+    # context_recall + answer_correctness exigem a resposta-padrão do gold E uma
+    # chamada LLM-judge extra POR MÉTRICA (custo). Gated default-OFF: quando
+    # False, o RAGAS fica só nas 4 heurísticas sem gabarito (zero LLM extra).
+    # Comportamento; NÃO-selado (o .env vale como fallback). Env:
+    # RAGAS_GROUND_TRUTH_ENABLED. Lido em run_evaluation (harness) — único lugar
+    # com gold garantido (produção não tem gabarito).
+    ragas_ground_truth_enabled: bool = False
+
     # ── Tuning de performance do invoke (25.2.0) ──
     # Cache de topologia/schema por processo/requisição: elimina a amplificação
     # de queries do execute_pipeline (~250 round-trips → dezenas). Correção-
@@ -514,6 +523,7 @@ _UI_TO_ENV_MAP = {
     "harness_min_contract_compliance": "HARNESS_MIN_CONTRACT_COMPLIANCE",
     "harness_max_hallucination_rate": "HARNESS_MAX_HALLUCINATION_RATE",
     "harness_max_dim_regression_pct": "HARNESS_MAX_DIM_REGRESSION_PCT",
+    "ragas_ground_truth_enabled": "RAGAS_GROUND_TRUTH_ENABLED",
     # Tuning de performance (25.2.0)
     "query_topology_cache_enabled": "QUERY_TOPOLOGY_CACHE_ENABLED",
     "fast_routing_enabled": "FAST_ROUTING_ENABLED",
@@ -549,6 +559,7 @@ PARAMETER_UI_KEYS = (
     "harness_min_contract_compliance",
     "harness_max_hallucination_rate",
     "harness_max_dim_regression_pct",
+    "ragas_ground_truth_enabled",
     "query_topology_cache_enabled",
     "fast_routing_enabled",
     "wizard_reasoning_effort",

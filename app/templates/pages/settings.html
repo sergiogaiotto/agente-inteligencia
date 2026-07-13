@@ -1600,6 +1600,7 @@ function settingsPage() {
                 {key:'harness_min_contract_compliance', type:'number', min:0, max:1, step:0.01, label:'Mín. conformidade de contrato (0–1)', desc:''},
                 {key:'harness_max_hallucination_rate', type:'number', min:0, max:1, step:0.01, label:'Máx. taxa de alucinação (0–1)', desc:'Fração de casos com afirmações sem respaldo.'},
                 {key:'harness_max_dim_regression_pct', type:'number', min:0, max:100, step:0.5, label:'Máx. regressão por dimensão (%)', desc:'Queda tolerada vs baseline em execuções de regressão.'},
+                {key:'ragas_ground_truth_enabled', type:'bool', label:'RAGAS com gabarito (LLM-cost)', desc:'Liga context_recall + answer_correctness no harness — comparam a resposta gerada e os contextos recuperados com o expected_output do gold via LLM-judge (1 chamada por métrica, por caso). Default OFF por custo. Só afeta execuções do harness (produção não tem gabarito). Aparece por execução no card de Avaliações.'},
               ]},
             { title: '⚡ Performance do invoke',
               hint: 'Otimizações do caminho de execução de pipeline. Efeito em runtime, sem restart.',

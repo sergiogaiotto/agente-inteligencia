@@ -322,6 +322,13 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
     """Executa harness contra Golden Dataset e produz relatório multi-dim."""
     settings = get_settings()
     use_verifier = settings.harness_use_verifier and settings.verifier_v2_enabled
+    # RAGAS com gabarito (33.12.0): context_recall + answer_correctness são
+    # LLM-cost (1 chamada de juiz cada) → gated default-OFF. Só o harness tem o
+    # gold (expected_output). Acumuladores run-level + custo total dessas chamadas.
+    use_ragas_gt = settings.ragas_ground_truth_enabled
+    gold_context_recall: list[float] = []
+    gold_answer_correctness: list[float] = []
+    gold_ragas_cost_usd = 0.0
 
     eval_id = str(uuid.uuid4())
     await eval_runs_repo.create({
@@ -504,6 +511,37 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
                 entry["failure_reasons"] = failure_reasons
             details.append(entry)
 
+            # RAGAS com gabarito (33.12.0): context_recall + answer_correctness
+            # vs o expected_output do gold. LLM-cost → gated + best-effort (nunca
+            # invalida o caso). Contextos vêm do trace (chave 'text_preview').
+            if use_ragas_gt:
+                _gt = (case.get("expected_output") or "").strip()
+                if _gt:
+                    try:
+                        from app.verifier.ragas_metrics import compute_gold_ragas
+                        _contexts = [
+                            (e.get("text_preview") or "")
+                            for e in (result.get("trace", {}).get("evidence_detail") or [])
+                            if isinstance(e, dict) and (e.get("text_preview") or "").strip()
+                        ]
+                        _gr = await compute_gold_ragas(
+                            answer=output, ground_truth=_gt, contexts=_contexts,
+                        )
+                        _cr = (_gr.get("context_recall") or {}).get("score")
+                        _ac = (_gr.get("answer_correctness") or {}).get("score")
+                        details[-1]["context_recall"] = _cr
+                        details[-1]["answer_correctness"] = _ac
+                        gold_ragas_cost_usd += float((_gr.get("_meta") or {}).get("cost_usd") or 0.0)
+                        if _cr is not None:
+                            gold_context_recall.append(_cr)
+                        if _ac is not None:
+                            gold_answer_correctness.append(_ac)
+                    except Exception as e:
+                        logger.warning(
+                            "ragas_gold: falha no caso %s: %s",
+                            case.get("id", "?"), str(e)[:150],
+                        )
+
         except Exception as e:
             failed += 1
             details.append({
@@ -574,6 +612,11 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
         "by_category": category_breakdown,
         "top_unsupported_claims": top_unsupported,
         "skipped_cases": sum(1 for d in details if d.get("dim_skipped")),
+        # RAGAS com gabarito (33.12.0): médias run-level das 2 métricas gold
+        # (None quando o toggle OFF ou nenhum caso teve gabarito+contexto).
+        "avg_context_recall": _safe_round(_safe_mean(gold_context_recall)),
+        "avg_answer_correctness": _safe_round(_safe_mean(gold_answer_correctness)),
+        "ragas_gold_cost_usd": round(gold_ragas_cost_usd, 6) if gold_ragas_cost_usd else None,
     }
 
     # ─── Gate multi-dim ───

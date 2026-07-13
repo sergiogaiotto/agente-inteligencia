@@ -186,6 +186,14 @@
                                 · fp_rate=<span x-text="((r.false_positive_rate||0)*100).toFixed(0)+'%'"></span>
                                 · created=<span x-text="tzDateTime(r.created_at) || '—'"></span>
                             </div>
+                            <template x-if="r.dimension_breakdown?.avg_answer_correctness != null || r.dimension_breakdown?.avg_context_recall != null">
+                                <div class="mt-1 text-[9px] text-indigo-700 font-mono" title="RAGAS com gabarito (LLM-judge; só quando o toggle Parâmetros→RAGAS-com-gabarito está ON)">
+                                    RAGAS-gold ·
+                                    answer_correctness=<span x-text="r.dimension_breakdown?.avg_answer_correctness != null ? (r.dimension_breakdown.avg_answer_correctness*100).toFixed(0)+'%' : '—'"></span>
+                                    · context_recall=<span x-text="r.dimension_breakdown?.avg_context_recall != null ? (r.dimension_breakdown.avg_context_recall*100).toFixed(0)+'%' : '—'"></span>
+                                    <template x-if="r.dimension_breakdown?.ragas_gold_cost_usd"><span x-text="' · $'+Number(r.dimension_breakdown.ragas_gold_cost_usd).toFixed(4)"></span></template>
+                                </div>
+                            </template>
                         </div>
                     </div>
                 </template>

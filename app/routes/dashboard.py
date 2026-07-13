@@ -2765,6 +2765,7 @@ class SettingsSave(BaseModel):
     # Tuning de performance do invoke (25.2.0)
     query_topology_cache_enabled: Optional[bool] = None
     fast_routing_enabled: Optional[bool] = None
+    ragas_ground_truth_enabled: Optional[bool] = None
     # Esforço de raciocínio das gerações do Wizard (27.0.0): 'high'|'medium'|
     # 'low'|'' (desligado). Gate por modelo em get_provider. Default 'high'.
     wizard_reasoning_effort: Optional[str] = None
