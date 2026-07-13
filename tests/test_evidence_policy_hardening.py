@@ -31,7 +31,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.core.database import skills_repo, knowledge_repo
+from app.core.database import skills_repo
 from app.evidence import pgvector_store
 from app.evidence.runtime import Retriever
 from app.routes import skills as skills_routes
@@ -87,12 +87,24 @@ sources:
 """
 
 
+def _mock_ks_query(monkeypatch, rows=None, error: Exception | None = None):
+    """Mocka a query única `id = ANY($1)` do _warn_unknown_evidence_sources
+    (Pacote A: o loop de find_by_id virou 1 round-trip)."""
+    con = MagicMock()
+    if error is not None:
+        con.fetch = AsyncMock(side_effect=error)
+    else:
+        con.fetch = AsyncMock(return_value=rows or [])
+    monkeypatch.setattr("app.routes.skills._get_pool", lambda: _pool_with_con(con))
+    return con
+
+
 class TestCreateSkillUnknownSourceWarning:
     def test_unknown_source_returns_201_with_warning(self, monkeypatch):
         """Source inexistente NÃO bloqueia o save (design non-blocking do
         editor), mas o 201 precisa avisar — antes era silêncio total."""
         monkeypatch.setattr(skills_repo, "create", AsyncMock(return_value=None))
-        monkeypatch.setattr(knowledge_repo, "find_by_id", AsyncMock(return_value=None))
+        _mock_ks_query(monkeypatch, rows=[])
 
         r = _client().post("/api/v1/skills", json={"raw_content": _skill_md(BAD_UUID)})
         assert r.status_code == 201
@@ -102,10 +114,7 @@ class TestCreateSkillUnknownSourceWarning:
 
     def test_known_source_no_unknown_warning(self, monkeypatch):
         monkeypatch.setattr(skills_repo, "create", AsyncMock(return_value=None))
-        monkeypatch.setattr(
-            knowledge_repo, "find_by_id",
-            AsyncMock(return_value={"id": GOOD_UUID, "name": "Pulsar", "authorized": 1}),
-        )
+        _mock_ks_query(monkeypatch, rows=[{"id": GOOD_UUID, "name": "Pulsar", "authorized": 1}])
 
         r = _client().post("/api/v1/skills", json={"raw_content": _skill_md(GOOD_UUID)})
         assert r.status_code == 201
@@ -116,10 +125,7 @@ class TestCreateSkillUnknownSourceWarning:
         authorized=1, então em runtime o efeito = UUID inexistente. O save
         precisa avisar (achado do review adversarial deste PR)."""
         monkeypatch.setattr(skills_repo, "create", AsyncMock(return_value=None))
-        monkeypatch.setattr(
-            knowledge_repo, "find_by_id",
-            AsyncMock(return_value={"id": GOOD_UUID, "name": "Base Pulsar", "authorized": 0}),
-        )
+        _mock_ks_query(monkeypatch, rows=[{"id": GOOD_UUID, "name": "Base Pulsar", "authorized": 0}])
 
         r = _client().post("/api/v1/skills", json={"raw_content": _skill_md(GOOD_UUID)})
         assert r.status_code == 201
@@ -128,7 +134,7 @@ class TestCreateSkillUnknownSourceWarning:
     def test_duplicated_source_warns_once(self, monkeypatch):
         """sources: [X, X] com X inexistente → 1 warning, não 2 (dedup)."""
         monkeypatch.setattr(skills_repo, "create", AsyncMock(return_value=None))
-        monkeypatch.setattr(knowledge_repo, "find_by_id", AsyncMock(return_value=None))
+        con = _mock_ks_query(monkeypatch, rows=[])
         md = _skill_md(BAD_UUID).replace(
             f"sources:\n  - {BAD_UUID}",
             f"sources:\n  - {BAD_UUID}\n  - {BAD_UUID}",
@@ -136,14 +142,23 @@ class TestCreateSkillUnknownSourceWarning:
         r = _client().post("/api/v1/skills", json={"raw_content": md})
         assert r.status_code == 201
         assert sum(1 for w in r.json()["warnings"] if BAD_UUID in w) == 1
+        # e a validação foi UMA query (ANY), não N find_by_id
+        assert con.fetch.await_count == 1
+
+    def test_empty_sources_list_warns_blocking(self, monkeypatch):
+        """Foot-gun `sources: []`: bloqueia TODO retrieval (≠ remover a seção,
+        que libera todas as bases). O save agora avisa."""
+        monkeypatch.setattr(skills_repo, "create", AsyncMock(return_value=None))
+        _mock_ks_query(monkeypatch, rows=[])
+        md = _skill_md(BAD_UUID).replace(f"sources:\n  - {BAD_UUID}", "sources: []")
+        r = _client().post("/api/v1/skills", json={"raw_content": md})
+        assert r.status_code == 201
+        assert any("BLOQUEIA todo o retrieval" in w for w in r.json()["warnings"])
 
     def test_db_failure_in_validation_never_blocks_save(self, monkeypatch):
         """Best-effort: banco fora do ar na validação não pode derrubar o save."""
         monkeypatch.setattr(skills_repo, "create", AsyncMock(return_value=None))
-        monkeypatch.setattr(
-            knowledge_repo, "find_by_id",
-            AsyncMock(side_effect=Exception("postgres offline")),
-        )
+        _mock_ks_query(monkeypatch, error=Exception("postgres offline"))
 
         r = _client().post("/api/v1/skills", json={"raw_content": _skill_md(BAD_UUID)})
         assert r.status_code == 201
@@ -160,12 +175,35 @@ class TestUpdateSkillUnknownSourceWarning:
         monkeypatch.setattr(
             skills_repo, "update", AsyncMock(return_value={"id": "s1", "version": "0.1.1"}),
         )
-        monkeypatch.setattr(knowledge_repo, "find_by_id", AsyncMock(return_value=None))
+        _mock_ks_query(monkeypatch, rows=[])
 
         r = _client().put("/api/v1/skills/s1", json={"raw_content": _skill_md(BAD_UUID)})
         assert r.status_code == 200
         body = r.json()
         assert any(BAD_UUID in w for w in body.get("warnings", [])), body
+
+    def test_put_syncs_frontmatter_version_with_bump(self, monkeypatch):
+        """Pacote A5: o bump da coluna (0.1.0→0.1.1) agora reescreve também o
+        `version:` do frontmatter no raw_content persistido — antes divergiam
+        para sempre (coluna v0.1.2, YAML 0.1.0)."""
+        monkeypatch.setattr(
+            skills_repo, "find_by_id",
+            AsyncMock(return_value={"id": "s1", "version": "0.1.3", "tags": "[]"}),
+        )
+        captured = {}
+
+        async def _capture_update(_id, data):
+            captured.update(data)
+            return {"id": _id, **data}
+
+        monkeypatch.setattr(skills_repo, "update", _capture_update)
+        _mock_ks_query(monkeypatch, rows=[{"id": BAD_UUID, "name": "X", "authorized": 1}])
+
+        r = _client().put("/api/v1/skills/s1", json={"raw_content": _skill_md(BAD_UUID)})
+        assert r.status_code == 200
+        assert captured["version"] == "0.1.4"
+        assert "version: 0.1.4" in captured["raw_content"]
+        assert "version: 0.1.0" not in captured["raw_content"]
 
 
 def _pool_with_con(con):

@@ -730,13 +730,43 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
     }
 
 
+# Stopwords pt-BR (+ algumas en) para o similarity check. Lista curta e
+# estável de propósito: o objetivo é só impedir que artigos/preposições
+# inflem o overlap — não é NLP. Antes desta lista, um texto de RECUSA
+# ("não há evidências...") podia PASSAR num gabarito rico porque "de/o/a/
+# para/com" batiam como substring (achado da revisão E2E Pulsar 2026-07-13).
+_SIMILARITY_STOPWORDS = frozenset(
+    "a o e é de da do das dos em no na nos nas um uma uns umas para pra por "
+    "com sem sob que se ao aos à às ou não nao mais menos como seu sua seus "
+    "suas ele ela eles elas isso isto esse essa este esta são ser está estão "
+    "foi tem têm ter há ate até já sobre entre quando onde qual quais the of "
+    "to in on and or is are be a an".split()
+)
+
+
+def _similarity_tokens(text: str) -> list[str]:
+    """Tokens de palavra inteira (unicode), minúsculos, sem stopwords."""
+    return [
+        t for t in re.findall(r"\w+", (text or "").lower(), flags=re.UNICODE)
+        if t not in _SIMILARITY_STOPWORDS
+    ]
+
+
 def _similarity_check(actual: str, expected: str) -> bool:
-    """Verificação simplificada de similaridade entre output e expected."""
+    """Similaridade output vs expected: overlap de TOKENS DE CONTEÚDO.
+
+    Antes: split ingênuo + match por SUBSTRING contando stopwords — 30% era
+    atingível por artigos/preposições ("planos" também casava "planosXYZ").
+    Agora: tokens de palavra inteira, stopwords fora; limiar 30% mantido,
+    mas medido só sobre palavras que carregam significado.
+    Expected vazio (ou só-stopwords) → True: gabarito sem conteúdo mensurável
+    não reprova ninguém (comportamento herdado do expected vazio).
+    """
     if not expected:
         return True
-    actual_lower = actual.lower()
-    expected_words = expected.lower().split()
-    if not expected_words:
+    expected_tokens = _similarity_tokens(expected)
+    if not expected_tokens:
         return True
-    matches = sum(1 for w in expected_words if w in actual_lower)
-    return (matches / len(expected_words)) >= 0.3
+    actual_tokens = set(_similarity_tokens(actual))
+    matches = sum(1 for t in expected_tokens if t in actual_tokens)
+    return (matches / len(expected_tokens)) >= 0.3
