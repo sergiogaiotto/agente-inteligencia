@@ -283,6 +283,35 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ─── Alertmanager (roteia/agrupa os alertas do Prometheus — Onda 6) ──
+  alertmanager:
+    build:
+      context: ./infra/alertmanager
+    image: agente-alertmanager:local
+    container_name: agente_alertmanager
+    profiles: ["full"]
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - alertmanager_data:/alertmanager
+    networks:
+      - aimesh
+    # Porta interna 9093 (não exposta na host — Prometheus manda alertas via rede Docker).
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:9093/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
   tempo:
     build:
       context: ./infra/tempo
@@ -447,6 +476,8 @@ volumes:
   # Onda 2 — observabilidade (criados sob demanda quando profile=full)
   prometheus_data:
     name: agente_prometheus_data
+  alertmanager_data:
+    name: agente_alertmanager_data
   tempo_data:
     name: agente_tempo_data
   loki_data:

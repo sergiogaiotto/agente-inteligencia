@@ -1,0 +1,33 @@
+# Alertmanager do Maestro (Onda 6) — agrupa/desduplica/roteia os alertas que o
+# Prometheus dispara a partir de infra/prometheus/alerts.yml.
+#
+# Por padrão NÃO há canal externo configurado: os alertas ficam VISÍVEIS no
+# Alertmanager (:9093, rede Docker interna) e no Prometheus (/alerts), mas não
+# NOTIFICAM ninguém. Para plantão de verdade, o operador liga um receiver
+# (webhook/email/slack) abaixo — o `null_configs` vazio é substituído.
+route:
+  receiver: default
+  # Agrupa por nome do alerta (um card por tipo, não um por série).
+  group_by: ["alertname"]
+  group_wait: 30s        # espera juntar alertas do mesmo grupo antes da 1ª notificação
+  group_interval: 5m     # intervalo entre notificações de NOVOS alertas do grupo
+  repeat_interval: 4h    # re-notifica alertas ainda ativos a cada 4h
+
+receivers:
+  - name: default
+    # Receiver "null" — válido e proposital: os alertas são visíveis na UI, sem
+    # notificação externa. Para NOTIFICAR, descomente e configure UM canal:
+    #
+    # webhook_configs:
+    #   - url: "http://SEU-WEBHOOK:PORTA/alerts"
+    #
+    # email_configs:
+    #   - to: "plantao@empresa.com"
+    #     from: "alertmanager@empresa.com"
+    #     smarthost: "smtp.empresa.com:587"
+    #     auth_username: "..."
+    #     auth_password: "..."
+    #
+    # slack_configs:
+    #   - api_url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+    #     channel: "#maestro-alertas"
