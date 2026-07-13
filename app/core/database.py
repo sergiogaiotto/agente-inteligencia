@@ -148,6 +148,13 @@ CREATE TABLE IF NOT EXISTS interactions (
     release_id TEXT,
     metadata TEXT DEFAULT '{}',
     trace_data TEXT DEFAULT '{}',
+    -- Dono da interaction (Onda 6 IDOR, 33.13.0): quem a criou — user['id']
+    -- (cookie OU dono da API-key). NULLABLE: interactions LEGADAS não têm dono
+    -- (sem atribuição retroativa); o 1º acesso do dono a carimba. DB fresco/CI
+    -- pega aqui; DBs EXISTENTES migram via Alembic 0003. O índice
+    -- idx_interactions_owner vive SÓ no Alembic (em DB existente a coluna ainda
+    -- não existe quando o SCHEMA roda → CREATE INDEX = boot crash).
+    owner_user_id TEXT,
     created_at TIMESTAMP DEFAULT now()
 );
 

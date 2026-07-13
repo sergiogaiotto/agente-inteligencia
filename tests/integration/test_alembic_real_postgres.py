@@ -26,7 +26,7 @@ async def test_alembic_upgrade_carimba_baseline(db_pool, monkeypatch):
     await asyncio.to_thread(_alembic_upgrade_sync)
     async with db_pool.acquire() as con:
         version = await con.fetchval("SELECT version_num FROM alembic_version")
-    assert version == "0002_verifications_gold_case_id"
+    assert version == "0003_interactions_owner_user_id"
 
     # Idempotente — 2ª execução não muda nada (DB já em head).
     await asyncio.to_thread(_alembic_upgrade_sync)

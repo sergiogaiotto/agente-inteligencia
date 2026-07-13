@@ -45,8 +45,12 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def workspace_client():
     from app.routes.workspace import router
+    from app.core.auth import require_user
     app = FastAPI()
     app.include_router(router)
+    # get_session agora exige auth (IDOR 33.13.0). Override com um root de teste;
+    # o gate de posse fail-opens sem DB (owner None → passa) e root bypassa.
+    app.dependency_overrides[require_user] = lambda: {"id": "test-owner", "role": "root"}
     return TestClient(app)
 
 

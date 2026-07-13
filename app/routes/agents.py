@@ -587,6 +587,13 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
     # find_by_id novamente com o name.
     agent_id = agent["id"]
 
+    # IDOR (33.13.0): reusar um session_id exige ser DONO da interaction (senão
+    # reinjetaria a conversa alheia no LLM). request.state.auth_user é populado
+    # pelo ApiAuthMiddleware (cookie OU dono da API-key). ON-PATH, antes de executar.
+    from app.core.interaction_access import assert_can_access_interaction, stamp_interaction_owner
+    _caller = getattr(request.state, "auth_user", None) or {}
+    await assert_can_access_interaction(data.session_id, _caller)
+
     # Regra de exposição: bloqueia invocação direta de subagents que fazem parte
     # de pipeline e de orquestradores sem pipeline configurada. Bypass via env
     # ALLOW_DIRECT_SUBAGENT_INVOKE=true (rollback emergencial, não recomendado).
@@ -760,6 +767,9 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
         except Exception as e:
             raise HTTPException(500, f"Erro na execução do pipeline: {e}")
 
+        # IDOR (33.13.0): carimba o dono na interaction (1º acesso, best-effort).
+        await stamp_interaction_owner(pipe_result.get("interaction_id"), _caller.get("id"))
+
         pipe_status = pipe_result.get("status") or "completed"
         any_completed = pipe_result.get("completed_agents", 0) > 0
         invoke_status = "ok" if any_completed and pipe_status == "completed" else (
@@ -822,6 +832,9 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
         raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(500, f"Erro na execução: {str(e)}")
+
+    # IDOR (33.13.0): carimba o dono na interaction (1º acesso, best-effort).
+    await stamp_interaction_owner(result.get("interaction_id"), _caller.get("id"))
 
     final_state = result.get("final_state") or ""
     if final_state == "Recommend":
