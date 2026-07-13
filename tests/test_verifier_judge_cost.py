@@ -75,7 +75,7 @@ def test_verification_result_e_persist_carregam_custo():
     # campos no dataclass + capturados do juiz + persistidos
     assert "judge_tokens: int = 0" in src and "judge_cost_usd: float = 0.0" in src
     assert 'judge_tokens = int(j.get("judge_tokens") or 0)' in src
-    assert "judge_tokens, judge_cost_usd)" in src          # colunas no INSERT
+    assert "judge_tokens, judge_cost_usd" in src           # colunas no INSERT (+generator_model/self_judged em 33.9.0)
 
 
 def test_schema_e_migracao_das_colunas():

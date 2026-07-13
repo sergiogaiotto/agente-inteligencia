@@ -1245,6 +1245,16 @@ _IDEMPOTENT_MIGRATIONS = [
     # (default 'Intake'). Sem índice, viram seq scan conforme a tabela cresce.
     "CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_interactions_state ON interactions(state)",
+    # ── Q5 anti-auto-preferência do juiz (33.9.0) ──
+    # generator_model = modelo que GEROU o draft; self_judged = mesmo modelo
+    # gerou E julgou (o juiz pode se favorecer). Torna o viés AUDITÁVEL.
+    "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS generator_model TEXT",
+    "ALTER TABLE verifications ADD COLUMN IF NOT EXISTS self_judged BOOLEAN DEFAULT FALSE",
+    # ── Q6 gold-hash p/ comparabilidade robusta (33.9.0) ──
+    # Hash imutável do case-set no momento do run: comparar dois eval_runs checa o
+    # HASH (não o rótulo texto-livre gold_version), pegando "mesmo rótulo, conteúdo
+    # do gold mudou".
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS gold_hash TEXT",
 ]
 
 
