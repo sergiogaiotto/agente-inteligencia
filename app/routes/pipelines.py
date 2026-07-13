@@ -880,6 +880,10 @@ async def invoke_pipeline(
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
     _guard_api_key_published_only(request, p)
+    # Escopo por-key (Onda 6): read_only → 403; allowed_pipeline_ids não-vazio e
+    # este pid fora da lista → 403. No-op p/ cookie/UI (sem escopo de key).
+    from app.core.apikey_scope import assert_api_key_can_invoke
+    assert_api_key_can_invoke(request, pipeline_id=pid)
     user_input = (data.message or data.input or "").strip()
     # `dry` dispensa entrada (resolve o que houver, até defaults). `args` presente
     # — MESMO `{}` — engaja o contrato (defaults podem preencher); por isso o guard

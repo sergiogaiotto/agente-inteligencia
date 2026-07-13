@@ -59,6 +59,16 @@ class APIKeyCreate(BaseModel):
     # Só é APLICADO quando api_key_cost_budget_enabled está ON (toggle global).
     cost_budget_usd: Optional[float] = None
     cost_budget_window: Optional[str] = "month"  # 'day' | 'month' | 'total'
+    # Escopo por-key (Onda 6): allowed_pipeline_ids = lista de pipeline ids que a
+    # key pode invocar (None/[] = todos); read_only = key só lê/descobre (invoke→403).
+    allowed_pipeline_ids: Optional[list[str]] = None
+    read_only: Optional[bool] = False
+
+
+class APIKeyScopeUpdate(BaseModel):
+    # Substitui o escopo: allowed_pipeline_ids (None/[] = liberar todos) + read_only.
+    allowed_pipeline_ids: Optional[list[str]] = None
+    read_only: Optional[bool] = False
 
 
 class APIKeyBudgetUpdate(BaseModel):
@@ -107,6 +117,10 @@ async def create_api_key(data: APIKeyCreate, request: Request, user: dict = Depe
         "expires_at": expires_at,
         "cost_budget_usd": data.cost_budget_usd,
         "cost_budget_window": window,
+        # Escopo por-key (Onda 6): allowed_pipeline_ids é TEXT (JSON) — serializo
+        # à mão (a Repository só coage dict/list em colunas JSON/JSONB, não TEXT).
+        "allowed_pipeline_ids": json.dumps(data.allowed_pipeline_ids) if data.allowed_pipeline_ids else None,
+        "read_only": bool(data.read_only),
     })
 
     await audit_repo.create({
@@ -130,6 +144,30 @@ async def create_api_key(data: APIKeyCreate, request: Request, user: dict = Depe
         "cost_budget_window": window,
         "warning": "Copie a key agora — não será mostrada de novo.",
     }
+
+
+@router.patch("/{key_id}/scope")
+async def update_api_key_scope(key_id: str, data: APIKeyScopeUpdate, user: dict = Depends(require_user)):
+    """Define/substitui o escopo de uma key (Onda 6): allowed_pipeline_ids +
+    read_only. Só o DONO da key (ou root). Vazio/None em allowed = liberar todos."""
+    row = await api_keys_repo.find_by_id(key_id)
+    is_root = (user.get("role") or "").strip().lower() == "root"
+    if not row or (row.get("user_id") != user.get("id") and not is_root):
+        raise HTTPException(404, "API key não encontrada")
+    allowed = json.dumps(data.allowed_pipeline_ids) if data.allowed_pipeline_ids else None
+    await api_keys_repo.update(key_id, {
+        "allowed_pipeline_ids": allowed,
+        "read_only": bool(data.read_only),
+    })
+    await audit_repo.create({
+        "entity_type": "api_key", "entity_id": key_id, "action": "scope_updated",
+        "actor": user["id"],
+        "details": json.dumps({
+            "allowed_pipeline_ids": data.allowed_pipeline_ids, "read_only": bool(data.read_only),
+        }),
+    })
+    return {"id": key_id, "allowed_pipeline_ids": data.allowed_pipeline_ids or [],
+            "read_only": bool(data.read_only)}
 
 
 @router.get("")

@@ -396,7 +396,13 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at TIMESTAMP DEFAULT now(),
     last_used_at TIMESTAMP,
     revoked_at TIMESTAMP,
-    expires_at TIMESTAMP
+    expires_at TIMESTAMP,
+    -- Escopo por-key (Onda 6): allowed_pipeline_ids = JSON array de pipeline ids
+    -- que a key pode invocar (NULL/[] = todos, comportamento atual); read_only =
+    -- a key só lê/descobre, não invoca (403). DB fresco/CI pega aqui; DBs
+    -- EXISTENTES migram via Alembic 0004.
+    allowed_pipeline_ids TEXT,
+    read_only BOOLEAN DEFAULT FALSE
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash) WHERE revoked_at IS NULL;

@@ -69,13 +69,11 @@ async def verify_api_key(plaintext: str) -> Optional[dict]:
     except Exception:
         return None
     async with pool.acquire() as con:
+        # SELECT * (não colunas explícitas): resiliente se o escopo por-key
+        # (allowed_pipeline_ids/read_only) ainda não migrou num DB — o auth por
+        # key NÃO pode quebrar por uma coluna nova ausente (Alembic é fail-open).
         row = await con.fetchrow(
-            """
-            SELECT id, user_id, name, key_prefix, created_at,
-                   last_used_at, revoked_at, expires_at
-            FROM api_keys
-            WHERE key_hash = $1
-            """,
+            "SELECT * FROM api_keys WHERE key_hash = $1",
             key_hash,
         )
         if not row:

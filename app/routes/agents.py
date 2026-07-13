@@ -593,6 +593,10 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
     from app.core.interaction_access import assert_can_access_interaction, stamp_interaction_owner
     _caller = getattr(request.state, "auth_user", None) or {}
     await assert_can_access_interaction(data.session_id, _caller)
+    # Escopo por-key (Onda 6): read_only → 403 (allowed_pipeline_ids se aplica no
+    # invoke por-pipeline; aqui, invoke de agente, só o gate read_only).
+    from app.core.apikey_scope import assert_api_key_can_invoke
+    assert_api_key_can_invoke(request)
 
     # Regra de exposição: bloqueia invocação direta de subagents que fazem parte
     # de pipeline e de orquestradores sem pipeline configurada. Bypass via env
