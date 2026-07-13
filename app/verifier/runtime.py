@@ -132,6 +132,8 @@ class Verifier:
             contract_retried = False
             contract_original_errors: list[str] = []
             contract_retry_draft = ""
+            retry_tokens = 0        # FIN-2 (33.8.0): custo da 2ª geração (contract retry)
+            retry_cost_usd = 0.0
             if output_contract:
                 from app.verifier.contract_validator import validate_contract
                 cr = validate_contract(draft, output_contract)
@@ -162,7 +164,7 @@ class Verifier:
                     )
                     span.add_event("verifier.contract.retry_initiated")
                     try:
-                        new_draft = await self._retry_contract_with_llm(
+                        new_draft, _retry_usage = await self._retry_contract_with_llm(
                             original_draft=draft,
                             errors=contract_errors,
                             output_contract=output_contract,
@@ -171,6 +173,13 @@ class Verifier:
                             llm_model=llm_model,
                             max_tokens=settings.verifier_contract_retry_max_tokens,
                         )
+                        # FIN-2 (33.8.0): custo da 2ª geração do draft (antes o
+                        # usage era descartado) — somado ao custo do verifier abaixo.
+                        _rin = int(_retry_usage.get("prompt_tokens") or _retry_usage.get("input_tokens") or 0)
+                        _rout = int(_retry_usage.get("completion_tokens") or _retry_usage.get("output_tokens") or 0)
+                        retry_tokens = _rin + _rout
+                        from app.core.llm_pricing import compute_cost
+                        retry_cost_usd = compute_cost(llm_provider_name, llm_model, _rin, _rout)
                     except Exception as e:
                         # Retry falhou (rede/LLM erro) — segue com result original.
                         logger.warning(
@@ -248,6 +257,13 @@ class Verifier:
                     span.set_attribute("verifier.judge_ok", False)
                     span.set_attribute("verifier.judge_error", str(e)[:200])
 
+            # FIN-1+FIN-2 (33.8.0): custo do verifier = juiz + retry de contrato.
+            # Soma o retry (2ª geração do draft, antes descartada) ao judge_cost/
+            # tokens p/ o TCO auditável (verifications + SSOT) incluir os dois.
+            # Fora do `if run_judge` → conta o retry mesmo no profile fast.
+            judge_tokens += retry_tokens
+            judge_cost_usd += retry_cost_usd
+
             # ─── 3. Agregação ────────────────────────────────────
             scores = self._extract_scores(dimensions)
             confidence = self._compute_confidence(scores)
@@ -320,7 +336,7 @@ class Verifier:
         llm_provider_name: str,
         llm_model: Optional[str] = None,
         max_tokens: int = 2000,
-    ) -> str:
+    ) -> tuple[str, dict]:
         """Re-chama o LLM com instrução de correção do contrato.
 
         Prompt é minimalista e cirúrgico:
@@ -330,8 +346,9 @@ class Verifier:
         - Pede regeneração mantendo conteúdo factual
 
         Returns:
-            Novo draft string (pode ser vazio se LLM devolveu nada).
-            Não valida — caller revalida com ContractValidator.
+            (novo_draft, usage) — draft pode ser vazio se LLM devolveu nada; usage
+            é o dict de tokens do provider (FIN-2 33.8.0: antes descartado). Não
+            valida — caller revalida com ContractValidator.
         """
         from app.core.llm_providers import get_provider
 
@@ -393,7 +410,7 @@ class Verifier:
             ],
             **kwargs,
         )
-        return (resp.get("content") or "").strip()
+        return (resp.get("content") or "").strip(), (resp.get("usage") or {})
 
     @staticmethod
     def _extract_scores(dimensions: dict) -> dict[str, Optional[float]]:
@@ -505,6 +522,26 @@ class Verifier:
                 result.judge_model, profile, result.duration_ms,
                 int(result.judge_tokens or 0), float(result.judge_cost_usd or 0.0),
             )
+
+        # FIN-1 (33.8.0): custo do verifier (juiz + retry de contrato) no SSOT de
+        # custo org-wide — linha SEPARADA (source='judge', mesma interaction_id)
+        # que o /dashboard/costs SOMA. Linha separada (INSERT, não UPDATE) evita
+        # corrida com a linha 'invoke'. Off-path (schedule_analytics) — cobre o
+        # verify SÍNCRONO (no caminho, mas não bloqueia) e o async_dispatcher.
+        try:
+            _toks = int(result.judge_tokens or 0)
+            _cost = float(result.judge_cost_usd or 0.0)
+            if interaction_id and (_toks > 0 or _cost > 0):
+                from app.core.analytics_tasks import schedule_analytics
+                from app.core.cost_ledger import record_invocation_cost
+                schedule_analytics(record_invocation_cost(
+                    interaction_id=interaction_id,
+                    agent_id=agent_id, pipeline_id=pipeline_id,
+                    source="judge", cost_usd=_cost, tokens_used=_toks,
+                    latency_ms=(result.duration_ms or 0),
+                ))
+        except Exception as e:  # nunca derruba a persistência do verifier
+            logger.warning("event=judge_cost_ledger_failed error=%s", str(e)[:200])
 
 
 # ───────────────────────────────────────────────────────────────
