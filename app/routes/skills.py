@@ -1,9 +1,10 @@
 """Rotas de skills — parse canônico SKILL.md §5."""
 import logging
+import re
 import uuid, json, hashlib
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import SkillCreateRaw, SkillCreateManual
-from app.core.database import skills_repo, knowledge_repo
+from app.core.database import skills_repo, _get_pool
 from app.skill_parser.parser import (
     parse_skill_md, skill_to_db_dict, REQUIRED_SECTIONS, OPTIONAL_SECTIONS,
 )
@@ -36,25 +37,44 @@ async def _warn_unknown_evidence_sources(parsed) -> list[str]:
     filtro SQL que casa 0 chunks — recusa silenciosa em runtime, sem pista).
     Non-blocking (coerente com o save de seções faltantes) e best-effort:
     falha de banco aqui nunca impede o save."""
-    sources = (getattr(parsed, "evidence_policy_parsed", None) or {}).get("sources")
+    policy = getattr(parsed, "evidence_policy_parsed", None) or {}
+    sources = policy.get("sources")
+    if sources == []:
+        # Foot-gun documentado no parser (§Evidence Policy): `sources: []`
+        # BLOQUEIA todo o retrieval, enquanto REMOVER a seção libera todas as
+        # bases autorizadas — dois estados parecidos com efeito oposto.
+        return [
+            "Evidence Policy: `sources: []` (lista vazia) BLOQUEIA todo o "
+            "retrieval — o agente nunca receberá evidências. Selecione fontes "
+            "no dropdown 'Fontes RAG' ou remova a seção para liberar todas as "
+            "bases autorizadas."
+        ]
     if not sources:
         return []
     warnings: list[str] = []
     try:
-        for sid in dict.fromkeys(sources):  # dedup preservando ordem
-            row = await knowledge_repo.find_by_id(sid)
+        ids = list(dict.fromkeys(sources))  # dedup preservando ordem
+        pool = _get_pool()
+        async with pool.acquire() as con:
+            rows = await con.fetch(
+                "SELECT id, name, authorized FROM knowledge_sources WHERE id = ANY($1::text[])",
+                ids,
+            )
+        found = {r["id"]: r for r in rows}
+        for sid in ids:
+            row = found.get(sid)
             if not row:
                 warnings.append(
                     f"Evidence Policy: a source '{sid}' não existe em Bases de "
                     "Conhecimento — o retrieval retornará 0 evidências para ela. "
                     "Use o dropdown 'Fontes RAG' do editor para inserir o ID correto."
                 )
-            elif not row.get("authorized"):
+            elif not row["authorized"]:
                 # Existe mas está desautorizada: BM25 e pgvector filtram
                 # authorized=1, então o efeito em runtime é o mesmo do UUID
                 # inexistente — 0 evidências, recusa silenciosa.
                 warnings.append(
-                    f"Evidence Policy: a source '{row.get('name') or sid}' existe "
+                    f"Evidence Policy: a source '{row['name'] or sid}' existe "
                     "mas está DESAUTORIZADA (authorized=0) — o retrieval retornará "
                     "0 evidências para ela até que a base seja reautorizada."
                 )
@@ -189,6 +209,20 @@ async def get_skill(skill_id: str):
                         ("Examples", "examples"),
                     ] if (getattr(parsed, attr, "") or "").strip()
                 ],
+                # Cobertura das seções OBRIGATÓRIAS do parser (§5). O antigo
+                # "X de 9 seções" da UI contava a lista de EXIBIÇÃO acima
+                # (6 obrigatórias + 3 opcionais, sem Activation Criteria) —
+                # "5/9" não significava "faltam 4 obrigatórias". Agora a UI
+                # mostra X/7 real + quais faltam (revisão E2E Pulsar).
+                "required_sections_total": len(REQUIRED_SECTIONS),
+                "required_sections_found": [
+                    name for name in REQUIRED_SECTIONS
+                    if (getattr(parsed, name.lower().replace(" ", "_"), "") or "").strip()
+                ],
+                "required_sections_missing": [
+                    name for name in REQUIRED_SECTIONS
+                    if not (getattr(parsed, name.lower().replace(" ", "_"), "") or "").strip()
+                ],
             }
     except Exception as e:
         # Não derruba o GET — UI lida com summary ausente
@@ -288,14 +322,37 @@ async def create_skill_manual(data: SkillCreateManual):
         _raise_for_db_error(e, d.get("urn") or d.get("name", ""))
     return {"id": sid, "message": "Skill criada manualmente"}
 
+def _sync_frontmatter_version(raw: str, new_version: str) -> str:
+    """Reescreve o ``version:`` do frontmatter para casar com o bump da coluna.
+
+    Antes o PUT incrementava só a coluna ``version`` e o YAML do raw_content
+    ficava para trás (coluna v0.1.2, frontmatter 0.1.0 — divergiam a cada
+    save, achado da revisão E2E Pulsar). Sem frontmatter ou sem a linha
+    ``version:``, devolve o texto intacto (não inventa estrutura)."""
+    # Tolerante a BOM/linhas em branco iniciais (o parser aceita; editor web
+    # cola assim) e a CRLF ([^\r\n] preserva o \r — sem line endings mistos).
+    m = re.match(r"^(﻿?\s*---[ \t]*\r?\n)(.*?)(\r?\n---[ \t]*(\r?\n|$))", raw, flags=re.DOTALL)
+    if not m:
+        return raw
+    head = m.group(2)
+    if not re.search(r"(?m)^version\s*:", head):
+        return raw
+    head2 = re.sub(r"(?m)^version\s*:[^\r\n]*", f"version: {new_version}", head, count=1)
+    return raw[: m.start(2)] + head2 + raw[m.end(2):]
+
+
 @router.put("/{skill_id}")
 async def update_skill(skill_id: str, data: SkillCreateRaw):
     existing = await skills_repo.find_by_id(skill_id)
     if not existing: raise HTTPException(404)
-    parsed = parse_skill_md(data.raw_content)
+    new_version = _bump_version(existing.get("version", "0.1.0"))
+    # Sincroniza o frontmatter ANTES do parse — assim raw_content persistido,
+    # content_hash e a coluna version contam a mesma história.
+    raw_synced = _sync_frontmatter_version(data.raw_content, new_version)
+    parsed = parse_skill_md(raw_synced)
     _reject_bad_skill_name(parsed.name)
     db_data = skill_to_db_dict(parsed)
-    db_data["version"] = _bump_version(existing.get("version", "0.1.0"))
+    db_data["version"] = new_version
     db_data["tags"] = data.tags or existing.get("tags", "[]")
     try:
         updated = await skills_repo.update(skill_id, db_data)

@@ -720,10 +720,18 @@
                             <span class="text-[11px] font-medium text-amber-700" x-text="skillSummary.data_tables_count + ' tabela(s)'"></span>
                         </div>
 
-                        <!-- Seções preenchidas (resumo de cobertura do SKILL.md) -->
-                        <div class="flex justify-between gap-2 pt-1" x-show="(skillSummary.sections_with_content || []).length > 0">
+                        <!-- Seções preenchidas (cobertura das OBRIGATÓRIAS §5 do parser;
+                             o antigo "X de 9" contava a lista de exibição e enganava) -->
+                        <!-- x-show por required_sections_total (não pelo length dos arrays:
+                             [] é truthy em JS e "0 de 7" — o pior caso — sumiria da tela) -->
+                        <div class="flex justify-between gap-2 pt-1" x-show="skillSummary.required_sections_total || (skillSummary.sections_with_content || []).length > 0">
                             <span class="text-[11px] text-surface-400">Seções §5</span>
-                            <span class="text-[11px] font-medium text-brand-700" x-text="(skillSummary.sections_with_content || []).length + ' de 9 seções'"></span>
+                            <span class="text-[11px] font-medium"
+                                  :class="(skillSummary.required_sections_missing || []).length ? 'text-amber-700' : 'text-brand-700'"
+                                  :title="(skillSummary.required_sections_missing || []).length ? 'Faltam: ' + skillSummary.required_sections_missing.join(', ') : 'Todas as seções obrigatórias presentes'"
+                                  x-text="skillSummary.required_sections_total
+                                      ? ((skillSummary.required_sections_found || []).length + ' de ' + skillSummary.required_sections_total + ' obrigatórias')
+                                      : ((skillSummary.sections_with_content || []).length + ' seções')"></span>
                         </div>
                     </div>
                 </template>
