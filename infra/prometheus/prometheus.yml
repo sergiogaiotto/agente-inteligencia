@@ -12,3 +12,13 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["app:7000"]
+
+# ── Regras de alerta (Onda 6) — avaliadas a cada evaluation_interval (15s) ──
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# ── Envia os alertas disparados ao Alertmanager (rede Docker, profile full) ──
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]

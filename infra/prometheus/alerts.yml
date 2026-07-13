@@ -1,0 +1,66 @@
+# Regras de alerta do Maestro (Onda 6) — dão o ALERTA que faltava sobre as
+# métricas RED de 1ª classe do #565 (app/core/metrics.py). O Prometheus avalia
+# estas regras a cada `evaluation_interval` (15s) e manda os alertas ao
+# Alertmanager (:9093), que agrupa/roteia. Sem canal externo configurado, os
+# alertas ficam VISÍVEIS no Prometheus (/alerts) e no Alertmanager (:9093) —
+# o operador liga webhook/email/slack em infra/alertmanager/alertmanager.yml.
+#
+# `clamp_min(..., 0.001)` no denominador evita divisão por zero quando não há
+# tráfego (sem invocações → sem alerta espúrio de "taxa infinita").
+groups:
+  - name: maestro-red
+    rules:
+      # ── Disponibilidade: o Prometheus não consegue raspar o app ──
+      - alert: MaestroAppDown
+        expr: up{job="agente-app"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Maestro inacessível (scrape de /metrics falhando)"
+          description: "O Prometheus não raspa app:7000/metrics há 2m — app caído, travado ou /metrics quebrado. MTTD antes: 'até alguém reclamar'."
+
+      # ── Taxa de ERRO de invoke > 10% (janela 5m) ──
+      - alert: MaestroHighErrorRate
+        expr: >-
+          sum(rate(maestro_invocation_errors_total[5m]))
+          / clamp_min(sum(rate(maestro_invocations_total[5m])), 0.001) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Taxa de erro de invocação > 10% (5m)"
+          description: "Mais de 10% das invocações estão falhando na janela de 5m. Ver errors.log + traces no Tempo."
+
+      # ── Cauda de latência: p99 de invoke > 30s (5m) ──
+      - alert: MaestroHighLatencyP99
+        expr: >-
+          histogram_quantile(0.99, sum(rate(maestro_invocation_duration_seconds_bucket[5m])) by (le)) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p99 de latência de invocação > 30s (5m)"
+          description: "A cauda de latência estourou o SLA. Provável LLM lento/timeout ou saturação do pool asyncpg."
+
+      # ── Resiliência: circuit-breaker de LLM ABRIU ──
+      - alert: MaestroLLMBreakerOpen
+        expr: increase(maestro_circuit_breaker_opens_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit-breaker de LLM abriu (provider {{ $labels.provider }})"
+          description: "Um provider de LLM ficou inacessível N vezes e o circuito abriu — chamadas seguintes são curto-circuitadas (fallback). Ver app/core/llm_breaker.py."
+
+      # ── Qualidade: pico de RECUSAS > 50% das invocações (10m) ──
+      - alert: MaestroRefusalSpike
+        expr: >-
+          sum(rate(maestro_refusals_total[10m]))
+          / clamp_min(sum(rate(maestro_invocations_total[10m])), 0.001) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Recusas > 50% das invocações (10m)"
+          description: "Metade das invocações está recusando — guarda anti-alucinação agressiva demais, evidência ausente, ou abuso. Investigar o grounding/skills."
