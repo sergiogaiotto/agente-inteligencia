@@ -1395,17 +1395,34 @@ async def put_llm_routing(data: LLMRoutingUpdate, user: dict = Depends(require_u
 
 @router.post("/eval-runs/execute")
 async def run_harness(data: RunEvalRequest):
-    """Executa harness de avaliação contra dataset gold §9.5."""
-    # Valida que release E agente existem ANTES de rodar. Sem isso, ids
+    """Executa harness de avaliação contra dataset gold §9.5.
+
+    Alvo (Pacote C): exatamente UM de agent_id | pipeline_id. Modo pipeline
+    invoca a cadeia SELADA por caso — o roteamento vira parte da avaliação.
+    """
+    # Valida que release E alvo existem ANTES de rodar. Sem isso, ids
     # inexistentes ainda geram um eval_run "lixo" (completed, accuracy 0.0)
     # que não pode ser deletado (não há DELETE de eval_runs).
+    # ''→None: a UI envia o runForm inteiro (campo não usado vem como string
+    # vazia) — normalizar evita gravar '' na coluna do alvo em eval_runs.
+    agent_id = data.agent_id or None
+    pipeline_id = data.pipeline_id or None
+    if bool(agent_id) == bool(pipeline_id):
+        raise HTTPException(422, "Informe exatamente UM alvo: agent_id OU pipeline_id.")
     if not await releases_repo.find_by_id(data.release_id):
         raise HTTPException(404, f"Release '{data.release_id}' não encontrada.")
-    if not await agents_repo.find_by_id(data.agent_id):
-        raise HTTPException(404, f"Agente '{data.agent_id}' não encontrado.")
+    if agent_id and not await agents_repo.find_by_id(agent_id):
+        raise HTTPException(404, f"Agente '{agent_id}' não encontrado.")
+    if pipeline_id:
+        from app.core.database import pipelines_repo
+        if not await pipelines_repo.find_by_id(pipeline_id):
+            raise HTTPException(404, f"Pipeline '{pipeline_id}' não encontrado.")
     from app.harness.evaluator import run_evaluation
     try:
-        result = await run_evaluation(data.release_id, data.agent_id, data.gold_version, data.run_type)
+        result = await run_evaluation(
+            data.release_id, agent_id, data.gold_version, data.run_type,
+            pipeline_id=pipeline_id,
+        )
         return result
     except Exception as e:
         raise HTTPException(500, f"Erro no harness: {str(e)}")
@@ -2762,6 +2779,7 @@ class SettingsSave(BaseModel):
     harness_min_contract_compliance: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     harness_max_hallucination_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     harness_max_dim_regression_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    harness_max_regression_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     # Tuning de performance do invoke (25.2.0)
     query_topology_cache_enabled: Optional[bool] = None
     fast_routing_enabled: Optional[bool] = None

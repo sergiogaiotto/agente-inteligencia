@@ -343,7 +343,12 @@ class CAREntryCreate(BaseModel):
     required_entities: str = "[]"
 
 class RunEvalRequest(BaseModel):
-    release_id: str; agent_id: str
+    """Alvo do harness (Pacote C): exatamente UM de agent_id | pipeline_id.
+    agent_id era obrigatório; virou opcional para o modo pipeline — a rota
+    valida o XOR (mantém 422/404 amigáveis em vez de erro de schema)."""
+    release_id: str
+    agent_id: Optional[str] = None
+    pipeline_id: Optional[str] = None
     gold_version: str = "latest"; run_type: str = "baseline"
 
 _MIN_PASSWORD_LEN = 8  # política mínima de senha (SKILL.md §1 / CWE-521)

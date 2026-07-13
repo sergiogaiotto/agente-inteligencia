@@ -196,14 +196,16 @@ window.MODULE_GUIDE = [
   <li>Vá para <a href="/harness" class="text-brand-500 underline">/harness</a> → painel "Golden Dataset".</li>
   <li>Adicione casos: <code>input_text</code> + <code>expected_output</code> (ou <code>expected_pattern</code>) + <code>expected_state</code> + <code>case_type</code> + <code>red_flags</code>.</li>
   <li>Crie uma release em <a href="/releases" class="text-brand-500 underline">/releases</a>.</li>
-  <li>Execute o harness selecionando agente + release + tipo (<code>baseline</code> / <code>regression</code>).</li>
+  <li>Execute o harness selecionando o alvo — um <b>agente</b> (isolado) OU um <b>pipeline</b> (roteamento ponta-a-ponta) — + release + tipo (<code>baseline</code> / <code>regression</code>).</li>
 </ol>
-<p class="mt-2">As métricas multi-dimensionais (factuality/completeness/tone/safety) só são produzidas quando <code>harness_use_verifier=true</code> E <code>verifier_v2_enabled=true</code> nas Configurações.</p>`,
-    usar: `<p>Via API direto:</p>
+<p class="mt-2">As métricas multi-dimensionais (factuality/completeness/tone/safety) só são produzidas quando <code>harness_use_verifier=true</code> E <code>verifier_v2_enabled=true</code> nas Configurações.</p>
+<p class="mt-2"><b>Modo pipeline (33.20.0):</b> cada caso invoca a cadeia SELADA (Maestro → triagens → especialistas) — a resposta avaliada é a do especialista a que o caso foi roteado, então <code>expected_pattern</code>/<code>expected_output</code> validam o roteamento de verdade; cada caso registra o caminho percorrido (<code>path</code>) nos detalhes do run.</p>`,
+    usar: `<p>Via API direto — o alvo é exatamente UM de <code>agent_id</code> | <code>pipeline_id</code>:</p>
 <pre class="bg-surface-50 p-2 rounded mt-2 text-[10px]">POST /api/v1/eval-runs/execute
 {
   "release_id":"...",
-  "agent_id":"...",
+  "agent_id":"...",        // agente isolado…
+  "pipeline_id":"...",     // …OU pipeline (roteamento ponta-a-ponta)
   "gold_version":"latest",
   "run_type":"baseline"
 }</pre>

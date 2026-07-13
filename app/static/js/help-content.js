@@ -1016,7 +1016,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Pegadinhas',
         items: [
           { title: 'Direto para production = roleta russa', severity: 'danger', body: 'Pular canary economiza 10 minutos e pode custar horas de incidente. Sempre passe por canary.' },
-          { title: 'Regressão precisa de baseline', severity: 'warning', body: 'O harness em regression só compara se existe um baseline COMPLETO do mesmo release e mesmo gold_version. Rode o baseline antes de promover.' }
+          { title: 'Regressão precisa de baseline', severity: 'warning', body: 'O harness em regression só compara se existe um baseline COMPLETO do mesmo release, mesmo gold_version e MESMO ALVO (agente ou pipeline — 33.20.0). Rode o baseline antes de promover; sem baseline do alvo, o run avisa no gate_reason.' }
         ]
       }
     ],
