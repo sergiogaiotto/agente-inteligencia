@@ -9,6 +9,19 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.fixture
+def _force_verifier_v2(monkeypatch):
+    """verify() cai no _LegacyVerifier quando VERIFIER_V2_ENABLED=False (default no
+    ambiente hermético). O path v2 (que seta generator_model/self_judged) só roda
+    com o toggle ON — força aqui p/ o teste ser DETERMINÍSTICO (não depender do
+    .env). Sem isto: passa local (que tem o toggle) e falha no CI."""
+    from app.core import config as _config
+    monkeypatch.setenv("VERIFIER_V2_ENABLED", "true")
+    _config.get_settings.cache_clear()
+    yield
+    _config.get_settings.cache_clear()
+
+
 class _FakeJudge:
     async def evaluate(self, **kw):
         return {
@@ -19,7 +32,7 @@ class _FakeJudge:
 
 class TestSelfJudged:
     @pytest.mark.asyncio
-    async def test_mesmo_modelo_gera_e_julga_marca_self_judged(self, monkeypatch):
+    async def test_mesmo_modelo_gera_e_julga_marca_self_judged(self, monkeypatch, _force_verifier_v2):
         from app.verifier import multi_dim_judge
         from app.verifier.runtime import Verifier
 
@@ -33,7 +46,7 @@ class TestSelfJudged:
         assert r.self_judged is True
 
     @pytest.mark.asyncio
-    async def test_modelo_diferente_nao_e_self_judged(self, monkeypatch):
+    async def test_modelo_diferente_nao_e_self_judged(self, monkeypatch, _force_verifier_v2):
         from app.verifier import multi_dim_judge
         from app.verifier.runtime import Verifier
 
@@ -46,7 +59,7 @@ class TestSelfJudged:
         assert r.self_judged is False
 
     @pytest.mark.asyncio
-    async def test_sem_generator_model_nao_e_self_judged(self, monkeypatch):
+    async def test_sem_generator_model_nao_e_self_judged(self, monkeypatch, _force_verifier_v2):
         from app.verifier import multi_dim_judge
         from app.verifier.runtime import Verifier
 
