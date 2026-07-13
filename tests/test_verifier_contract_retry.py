@@ -255,7 +255,7 @@ class TestRetryHelper:
         fake.generate = _capture
         monkeypatch.setattr("app.core.llm_providers.get_provider", lambda *a, **kw: fake)
 
-        out = await Verifier._retry_contract_with_llm(
+        out, usage = await Verifier._retry_contract_with_llm(
             original_draft='{"wrong": true}',
             errors=["missing required field: answer"],
             output_contract=_SIMPLE_CONTRACT,
@@ -265,7 +265,9 @@ class TestRetryHelper:
             max_tokens=2000,
         )
 
+        # FIN-2 (33.8.0): retorna (content, usage) — antes só content.
         assert out == '{"answer":"ok"}'
+        assert usage == {}
         # Sanity sobre o prompt construído
         all_text = " ".join(m["content"] for m in captured["messages"])
         assert "missing required field: answer" in all_text
