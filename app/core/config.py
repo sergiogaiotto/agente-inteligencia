@@ -261,6 +261,10 @@ class Settings(BaseSettings):
     verifier_production_async: bool = False
     verifier_production_sample_rate: float = 0.10  # 10% das interações
     verifier_max_concurrent_jobs: int = 20  # backpressure: drop acima disso
+    # Fila de juiz DURÁVEL (Onda 6): nº máx. de tentativas de um verifier_job
+    # antes de virar 'dead' (dead-letter). O boot-resume re-despacha os pending
+    # até este teto. Env: VERIFIER_JOB_MAX_ATTEMPTS.
+    verifier_job_max_attempts: int = 3
 
     # ── Harness multi-dim gate (§9.5 + §14.2) ──
     # Quando True, run_evaluation re-julga cada caso via Verifier (profile=rigorous)

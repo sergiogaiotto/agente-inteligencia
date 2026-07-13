@@ -552,6 +552,28 @@ CREATE INDEX IF NOT EXISTS idx_verifications_created_at ON verifications (create
 -- pipeline_id ainda não existem nesse momento (CREATE INDEX aqui = boot
 -- crash; incidente 2026-07-04 pego no smoke).
 
+-- Fila de juiz DURÁVEL (Onda 6): cada sample do juiz async (verifier_production_
+-- async) vira uma linha aqui. Sobrevive a restart — a fila em MEMÓRIA do
+-- async_dispatcher não sobrevivia. No boot, resume_jobs re-despacha os 'pending'
+-- e os 'running' órfãos (processo anterior morreu no meio). 'dead' = esgotou
+-- verifier_job_max_attempts (dead-letter auditável). TABELA NOVA → CREATE +
+-- índice no SCHEMA cobre DB fresco E existente (CREATE TABLE IF NOT EXISTS cria
+-- quando ausente) — não precisa de Alembic (a lição Alembic era p/ COLUNA nova
+-- em tabela EXISTENTE, não p/ tabela nova).
+CREATE TABLE IF NOT EXISTS verifier_jobs (
+    id TEXT PRIMARY KEY,
+    interaction_id TEXT,
+    agent_id TEXT,
+    pipeline_id TEXT,
+    payload TEXT NOT NULL DEFAULT '{}',      -- JSON dos args de verify()
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | running | done | dead
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_verifier_jobs_status ON verifier_jobs (status);
+
 -- ═══════════════════════════════════════════════════════════════
 -- Catálogo / Marketplace corporativo (Onda 1)
 -- Agentes, skills e (futuro) recipes/external_platforms publicáveis
