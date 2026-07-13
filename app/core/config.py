@@ -738,7 +738,16 @@ def get_settings() -> Settings:
 # — rotacionar SECRET_KEY/MAESTRO_SECRET_KEY é pré-requisito operacional.
 
 _PRODUCTION_ENVS = frozenset({"production", "prod"})
-_INSECURE_SECRET_KEYS = frozenset({"", "change-me"})
+
+# Placeholder que o ``.env.example`` DISTRIBUI para o SECRET_KEY. Quem copia o
+# template e esquece de trocar bootaria com uma chave que está PÚBLICA no repo
+# (cookie de sessão forjável — o mesmo takeover do 'change-me'). Fica amarrado
+# ao ``.env.example`` pelo meta-teste ``test_env_example_placeholder_e_barrado``:
+# trocar o placeholder no template sem atualizar aqui quebra o teste.
+_ENV_EXAMPLE_SECRET_PLACEHOLDER = "troque-isto-por-uma-chave-aleatoria-de-64-caracteres"
+
+# SECRET_KEYs conhecidos-públicos → inseguros por definição em produção.
+_INSECURE_SECRET_KEYS = frozenset({"", "change-me", _ENV_EXAMPLE_SECRET_PLACEHOLDER})
 
 
 def is_production(settings: "Settings | None" = None) -> bool:
@@ -780,8 +789,9 @@ def assert_secure_production_posture(settings: "Settings | None" = None) -> None
     fatal: list[str] = []
     if s.secret_key.strip() in _INSECURE_SECRET_KEYS:
         fatal.append(
-            "SECRET_KEY no default público 'change-me' — o cookie de sessão é "
-            "forjável (account takeover). Defina um SECRET_KEY aleatório e único."
+            "SECRET_KEY num default público conhecido ('change-me' ou o "
+            "placeholder do .env.example) — o cookie de sessão é forjável "
+            "(account takeover). Defina um SECRET_KEY aleatório e único."
         )
     if not os.environ.get("MAESTRO_SECRET_KEY", "").strip():
         fatal.append(
