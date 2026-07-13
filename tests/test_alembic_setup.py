@@ -20,11 +20,13 @@ def test_alembic_config_chain_linear_e_head():
     cfg.set_main_option("script_location", str(_ROOT / "alembic"))
     script = ScriptDirectory.from_config(cfg)
 
-    # História LINEAR (um único head): 0001_baseline → 0002_verifications_gold_case_id.
-    # 0002 é a 1ª revisão REAL após o baseline no-op (keystone 33.10.0).
-    assert script.get_heads() == ["0002_verifications_gold_case_id"]
-    head = script.get_revision("0002_verifications_gold_case_id")
-    assert head.down_revision == "0001_baseline"
+    # História LINEAR (um único head): 0001_baseline → 0002_verifications_gold_case_id
+    # → 0003_interactions_owner_user_id (head atual; IDOR 33.13.0).
+    assert script.get_heads() == ["0003_interactions_owner_user_id"]
+    head = script.get_revision("0003_interactions_owner_user_id")
+    assert head.down_revision == "0002_verifications_gold_case_id"
+    mid = script.get_revision("0002_verifications_gold_case_id")
+    assert mid.down_revision == "0001_baseline"
     base = script.get_revision("0001_baseline")
     assert base.down_revision is None
 

@@ -314,9 +314,13 @@ async def list_sessions(agent_id: str = None, limit: int = 30, offset: int = 0):
 
 
 @router.get("/sessions/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, user: dict = Depends(require_user)):
     s = await interactions_repo.find_by_id(session_id)
     if not s: raise HTTPException(404, "Sessão não encontrada")
+    # IDOR (33.13.0): só o DONO (ou root) lê a conversa. Antes o endpoint era
+    # ANÔNIMO — qualquer um com o id lia os turnos alheios. Legada-sem-dono passa.
+    from app.core.interaction_access import assert_can_access_interaction
+    await assert_can_access_interaction(session_id, user)
     msgs = await turns_repo.find_all(interaction_id=session_id, limit=200)
 
     # Restaurar trace_data persistido. Estabilizar campos críticos para

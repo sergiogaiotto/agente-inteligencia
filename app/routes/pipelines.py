@@ -930,6 +930,12 @@ async def invoke_pipeline(
         for att in (data.attachments or [])
     ]
 
+    # IDOR (33.13.0): reusar um session_id exige ser DONO da interaction — senão
+    # o context_mode='auto' reinjetaria a conversa alheia no LLM. ON-PATH, ANTES
+    # de executar. Sessão nova / legada-sem-dono passa; dono divergente → 404.
+    from app.core.interaction_access import assert_can_access_interaction, stamp_interaction_owner
+    await assert_can_access_interaction(data.session_id, user)
+
     from app.agents.engine import execute_pipeline
     try:
         result = await execute_pipeline(
@@ -958,6 +964,11 @@ async def invoke_pipeline(
             "request_id": rid,
             "hint": "Falha ao executar o pipeline. Cite o request_id ao suporte.",
         })
+
+    # IDOR (33.13.0): carimba o dono na interaction (1º acesso; WHERE owner IS
+    # NULL não sobrescreve). Awaited mas best-effort — 1 UPDATE rápido, e a posse
+    # é primitivo de segurança (não pode ser fire-and-forget e perder no crash).
+    await stamp_interaction_owner(result.get("interaction_id"), user.get("id"))
 
     api_key_id = getattr(request.state, "api_key_id", None)
     api_key_name = getattr(request.state, "api_key_name", None)
