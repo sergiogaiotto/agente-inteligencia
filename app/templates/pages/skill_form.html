@@ -2437,18 +2437,32 @@ ${outMap}`;
             if (!this.form.raw_content.trim()) { showToast('Conteúdo obrigatório', 'error'); return; }
             this.saving = true;
             try {
+                let warnings = [];
                 if (this.isEdit) {
                     const result = await api.put(`/api/v1/skills/${editId}`, this.form);
+                    warnings = result.warnings || [];
                     showToast('Skill atualizada (v' + (result.version || '') + ')');
                 } else {
                     const result = await api.post('/api/v1/skills', this.form);
-                    if (result.warnings && result.warnings.length > 0) {
-                        showToast('Skill criada com ' + result.warnings.length + ' aviso(s)', 'info');
+                    warnings = result.warnings || [];
+                    if (warnings.length > 0) {
+                        showToast('Skill criada com ' + warnings.length + ' aviso(s)', 'info');
                     } else {
                         showToast('Skill criada');
                     }
                 }
-                setTimeout(() => window.location.href = '/skills', 1200);
+                // Warnings acionáveis (ex.: source do ## Evidence Policy
+                // inexistente/desautorizada) precisam ser LIDOS: antes o PUT
+                // descartava result.warnings e o usuário via só o toast verde
+                // — exatamente o silêncio que escondeu o incidente do E2E
+                // Pulsar. Tipo 'error' = fica na tela 6-15s e é dispensável
+                // no clique; o redirect espera o usuário terminar de ler.
+                if (warnings.length > 0) {
+                    warnings.slice(0, 3).forEach(w => showToast(w, 'error'));
+                    setTimeout(() => window.location.href = '/skills', 6000);
+                } else {
+                    setTimeout(() => window.location.href = '/skills', 1200);
+                }
             } catch(e) {
                 showToast(e.message, 'error');
             }
