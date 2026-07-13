@@ -186,6 +186,22 @@ def _decision_state(result: dict) -> str:
     return final
 
 
+def _compute_gold_hash(cases: list[dict]) -> str:
+    """Hash imutável do CONTEÚDO do case-set (Q6, 33.9.0) — id + input + expected
+    de cada caso, ordenado por id. Muda quando o gold é editado (mesmo rótulo).
+    Comparar dois eval_runs checa este hash → pega 'mesmo gold_version, conteúdo
+    diferente' (que o rótulo texto-livre não pegava)."""
+    import hashlib
+    h = hashlib.sha256()
+    for c in sorted(cases, key=lambda x: str(x.get("id") or "")):
+        h.update((
+            str(c.get("id") or "") + "\x1f"
+            + str(c.get("input_text") or "") + "\x1f"
+            + str(c.get("expected_output") or "") + "\x1e"
+        ).encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
 async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "latest", run_type: str = "baseline") -> dict:
     """Executa harness contra Golden Dataset e produz relatório multi-dim."""
     settings = get_settings()
@@ -202,6 +218,10 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
     if not cases:
         await eval_runs_repo.update(eval_id, {"status": "no_cases", "gate_result": "skipped"})
         return {"eval_id": eval_id, "status": "no_cases", "message": "Nenhum caso no Golden Dataset"}
+
+    # Q6 (33.9.0): carimba o hash imutável do CONTEÚDO do gold usado neste run
+    # (comparabilidade robusta — ver compare_eval_runs).
+    await eval_runs_repo.update(eval_id, {"gold_hash": _compute_gold_hash(cases)})
 
     # Resolve o agente UMA vez, ANTES do loop. Se ele não existe mais (deletado),
     # cada caso cairia no except "Agente não encontrado" (engine.py) e seria

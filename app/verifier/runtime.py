@@ -51,6 +51,10 @@ class VerificationResult:
     # self-hosted (preço 0). Torna a linha "Juiz/verificador" do TCO MEDIDA.
     judge_tokens: int = 0
     judge_cost_usd: float = 0.0
+    # Q5 anti-auto-preferência (33.9.0): modelo que gerou o draft + flag de que o
+    # MESMO modelo gerou e julgou (o juiz pode se favorecer). Torna o viés visível.
+    generator_model: str = ""
+    self_judged: bool = False
     # Wave Contract Retry (PR atual)
     contract_retried: bool = False
     """True quando o Verifier detectou compliant=false e re-chamou o LLM
@@ -264,6 +268,20 @@ class Verifier:
             judge_tokens += retry_tokens
             judge_cost_usd += retry_cost_usd
 
+            # Q5 (33.9.0): anti-auto-preferência — flag quando o MESMO modelo gerou
+            # o draft (llm_model do agente) E o julgou (judge_model). O juiz pode se
+            # favorecer; a flag torna o viés AUDITÁVEL (não muda o gate).
+            generator_model = (llm_model or "").strip()
+            self_judged = bool(
+                judge_model and generator_model
+                and judge_model.strip().lower() == generator_model.lower()
+            )
+            if self_judged:
+                logger.warning(
+                    "verifier.self_judged",
+                    extra={"event": "verifier.self_judged", "model": judge_model},
+                )
+
             # ─── 3. Agregação ────────────────────────────────────
             scores = self._extract_scores(dimensions)
             confidence = self._compute_confidence(scores)
@@ -307,6 +325,8 @@ class Verifier:
                 duration_ms=duration_ms,
                 judge_tokens=judge_tokens,
                 judge_cost_usd=judge_cost_usd,
+                generator_model=generator_model,
+                self_judged=self_judged,
                 # Wave Contract Retry
                 contract_retried=contract_retried,
                 contract_original_errors=contract_original_errors,
@@ -505,9 +525,9 @@ class Verifier:
                    contract_retried, contract_original_errors,
                    ok, confidence, unsupported_claims,
                    judge_model, profile, duration_ms,
-                   judge_tokens, judge_cost_usd)
+                   judge_tokens, judge_cost_usd, generator_model, self_judged)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-                        $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
+                        $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
                 """,
                 rid, turn_id, interaction_id,
                 agent_id, pipeline_id, q_red, draft_red,
@@ -521,6 +541,7 @@ class Verifier:
                 result.ok, result.confidence, json.dumps(result.unsupported_claims)[:8000],
                 result.judge_model, profile, result.duration_ms,
                 int(result.judge_tokens or 0), float(result.judge_cost_usd or 0.0),
+                str(result.generator_model or ""), bool(result.self_judged),
             )
 
         # FIN-1 (33.8.0): custo do verifier (juiz + retry de contrato) no SSOT de

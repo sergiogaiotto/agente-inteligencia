@@ -1233,6 +1233,20 @@ async def compare_eval_runs(a: str, b: str):
             f"b={run_b.get('gold_version')!r}. Comparar runs em datasets "
             "diferentes não tem significado estatístico."
         )
+    elif (
+        run_a.get("gold_hash") and run_b.get("gold_hash")
+        and run_a.get("gold_hash") != run_b.get("gold_hash")
+    ):
+        # Q6 (33.9.0): mesmo rótulo gold_version, mas o CONTEÚDO do gold mudou
+        # entre os runs (casos editados) → comparação sem significado. O hash pega
+        # o que o rótulo texto-livre não pegava. (Runs antigos sem hash: pula.)
+        comparable = False
+        reason = (
+            f"o CONTEÚDO do Golden Dataset MUDOU entre os runs (mesmo rótulo "
+            f"{run_a.get('gold_version')!r}, hashes diferentes: "
+            f"a={run_a.get('gold_hash')}, b={run_b.get('gold_hash')}). Re-rode o "
+            "baseline no gold atual antes de comparar."
+        )
 
     response = {
         "run_a": _summary_of_run(run_a),
