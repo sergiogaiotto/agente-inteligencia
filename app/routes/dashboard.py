@@ -823,6 +823,9 @@ async def rejudge_verification(vid: str, user: dict = Depends(require_user)):
         interaction_id=row["interaction_id"],
         agent_id=row["agent_id"],
         pipeline_id=row["pipeline_id"],
+        # Keystone 33.10.0: preserva o elo com o gold case no re-julgamento
+        # (dict(row).get: defensivo p/ DB anterior ao Alembic 0002).
+        gold_case_id=dict(row).get("gold_case_id"),
         persist=True,
     )
     logger.info(

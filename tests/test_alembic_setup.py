@@ -12,7 +12,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_alembic_config_e_baseline_e_head():
+def test_alembic_config_chain_linear_e_head():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -20,7 +20,11 @@ def test_alembic_config_e_baseline_e_head():
     cfg.set_main_option("script_location", str(_ROOT / "alembic"))
     script = ScriptDirectory.from_config(cfg)
 
-    assert script.get_heads() == ["0001_baseline"]
+    # História LINEAR (um único head): 0001_baseline → 0002_verifications_gold_case_id.
+    # 0002 é a 1ª revisão REAL após o baseline no-op (keystone 33.10.0).
+    assert script.get_heads() == ["0002_verifications_gold_case_id"]
+    head = script.get_revision("0002_verifications_gold_case_id")
+    assert head.down_revision == "0001_baseline"
     base = script.get_revision("0001_baseline")
     assert base.down_revision is None
 

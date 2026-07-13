@@ -527,6 +527,14 @@ CREATE TABLE IF NOT EXISTS verifications (
     -- _IDEMPOTENT_MIGRATIONS.
     judge_tokens INTEGER DEFAULT 0,
     judge_cost_usd REAL DEFAULT 0,
+    -- Elo harness↔produção (keystone 33.10.0): o gold_cases.id que ORIGINOU esta
+    -- verificação num run do harness (NULL em produção normal). Destrava drift
+    -- (Q1) e RAGAS-com-gabarito (Q3) — join do veredito de prod ao baseline do
+    -- gold. Coluna aqui p/ DB FRESCO/CI; DBs EXISTENTES migram via Alembic 0002.
+    -- O índice idx_verifications_gold_case vive SÓ no Alembic (nunca no SCHEMA:
+    -- em DB existente a coluna ainda não existe aqui → CREATE INDEX = boot crash;
+    -- mesma armadilha do agent_id/pipeline_id, incidente 2026-07-04).
+    gold_case_id TEXT,
     created_at TIMESTAMP DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_verifications_turn ON verifications (turn_id);
