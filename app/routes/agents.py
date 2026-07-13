@@ -1161,7 +1161,7 @@ async def list_agent_invocations(
 
 
 @router.get("/{agent_id}/invocations/{interaction_id}")
-async def get_invocation_detail(agent_id: str, interaction_id: str):
+async def get_invocation_detail(agent_id: str, interaction_id: str, request: Request):
     """Detalhe completo de uma invocação: turns + tool_calls + api_call_logs (matchados
     por janela temporal, já que api_call_logs não tem interaction_id) + audit + tempo_link."""
     agent = await agents_repo.find_by_id(agent_id)
@@ -1170,6 +1170,10 @@ async def get_invocation_detail(agent_id: str, interaction_id: str):
     itx = await interactions_repo.find_by_id(interaction_id)
     if not itx or itx.get("agent_id") != agent_id:
         raise HTTPException(404, "Invocação não encontrada para este agente")
+    # IDOR (33.15.0): só o DONO (ou root) vê os turns/tool_calls da invocação.
+    # request.state.auth_user vem do ApiAuthMiddleware (cookie OU dono da API-key).
+    from app.core.interaction_access import assert_can_access_interaction
+    await assert_can_access_interaction(interaction_id, getattr(request.state, "auth_user", None) or {})
 
     turns = await turns_repo.find_all(interaction_id=interaction_id, limit=200)
     turns.sort(key=lambda t: t.get("turn_number") or 0)
