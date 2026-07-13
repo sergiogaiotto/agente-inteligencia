@@ -116,6 +116,32 @@ async def _judge_draft(case: dict, result: dict) -> dict | None:
         return None
 
 
+async def _link_verification_to_gold_case(interaction_id: str | None, gold_case_id: str | None) -> None:
+    """Carimba `verifications.gold_case_id` na(s) linha(s) da interação avaliada
+    pelo harness — o ELO harness↔produção (keystone 33.10.0).
+
+    Só a verification do ENGINE é persistida (o re-judge de fallback roda
+    persist=False, sem linha p/ ligar), então ligamos por interaction_id.
+    Best-effort: a falha NÃO invalida o run — a métrica do harness não depende
+    deste elo (ele destrava drift/RAGAS, que são leituras posteriores).
+    `gold_case_id IS NULL` no WHERE evita sobrescrever um elo já gravado."""
+    if not interaction_id or not gold_case_id:
+        return
+    try:
+        from app.core.database import _get_pool
+        async with _get_pool().acquire() as con:
+            await con.execute(
+                "UPDATE verifications SET gold_case_id = $1 "
+                "WHERE interaction_id = $2 AND gold_case_id IS NULL",
+                gold_case_id, interaction_id,
+            )
+    except Exception as e:
+        logger.warning(
+            "harness: falha ao ligar verification->gold_case %s: %s",
+            gold_case_id, str(e)[:200],
+        )
+
+
 def _extract_dim_scores(verification: dict | None) -> dict:
     """Extrai (factuality, completeness, tone, safety) + contract + unsupported
     de um verification dict. Tudo None quando indisponível.
@@ -314,8 +340,15 @@ async def run_evaluation(release_id: str, agent_id: str, gold_version: str = "la
 
             # ─── Multi-dim: usa verification do engine, ou re-judge se ausente ───
             verification = result.get("verification")
+            engine_verified = bool(verification)  # engine rodou o verifier → linha persistida
             if not verification and use_verifier:
                 verification = await _judge_draft(case, result)
+
+            # Keystone 33.10.0: liga a verification PERSISTIDA (a do engine) ao
+            # gold case → elo harness↔produção. O re-judge de fallback roda
+            # persist=False (não há linha p/ ligar). Best-effort, off da métrica.
+            if engine_verified:
+                await _link_verification_to_gold_case(result.get("interaction_id"), case["id"])
 
             dims = _extract_dim_scores(verification)
             dim_skipped = [k for k in ("factuality", "completeness", "tone", "safety")

@@ -107,6 +107,10 @@ class Verifier:
         # (agregação por agente/pipeline sem JOIN frágil).
         agent_id: Optional[str] = None,
         pipeline_id: Optional[str] = None,
+        # Elo harness↔produção (keystone 33.10.0): o gold_cases.id que originou
+        # este julgamento. Setado pelo re-julgamento do harness/quality; NULL na
+        # produção normal. Persistido em verifications p/ join com o baseline.
+        gold_case_id: Optional[str] = None,
     ) -> VerificationResult:
         """Verifica um draft.
 
@@ -340,6 +344,7 @@ class Verifier:
                         result, turn_id, interaction_id, profile,
                         agent_id=agent_id, pipeline_id=pipeline_id,
                         user_question=user_question, draft=draft,
+                        gold_case_id=gold_case_id,
                     )
                 except Exception as e:
                     logger.warning(f"verifier persist falhou: {e}")
@@ -492,6 +497,7 @@ class Verifier:
         self, result: VerificationResult, turn_id, interaction_id, profile: str,
         agent_id: Optional[str] = None, pipeline_id: Optional[str] = None,
         user_question: str = "", draft: str = "",
+        gold_case_id: Optional[str] = None,
     ):
         """Insere em `verifications`. Best-effort — falha não derruba o pipeline.
 
@@ -525,9 +531,10 @@ class Verifier:
                    contract_retried, contract_original_errors,
                    ok, confidence, unsupported_claims,
                    judge_model, profile, duration_ms,
-                   judge_tokens, judge_cost_usd, generator_model, self_judged)
+                   judge_tokens, judge_cost_usd, generator_model, self_judged,
+                   gold_case_id)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-                        $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+                        $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
                 """,
                 rid, turn_id, interaction_id,
                 agent_id, pipeline_id, q_red, draft_red,
@@ -542,6 +549,7 @@ class Verifier:
                 result.judge_model, profile, result.duration_ms,
                 int(result.judge_tokens or 0), float(result.judge_cost_usd or 0.0),
                 str(result.generator_model or ""), bool(result.self_judged),
+                gold_case_id,
             )
 
         # FIN-1 (33.8.0): custo do verifier (juiz + retry de contrato) no SSOT de
