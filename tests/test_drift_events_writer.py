@@ -57,6 +57,32 @@ class TestDriftWriter:
         assert e["release_id"] == "rel-1"
 
     @pytest.mark.asyncio
+    async def test_evento_registra_o_alvo(self, monkeypatch):
+        """35.1.0: o baseline já era filtrado por alvo — agora o EVENTO também
+        declara de quem é o drift (agent_id XOR pipeline_id)."""
+        ev, dr = _patch(monkeypatch, {"accuracy": 0.90})
+        await evaluator._write_drift_events(
+            "rel-1", "h1", {"accuracy": 0.70}, regression_pct_threshold=10.0,
+            pipeline_id="p1",
+        )
+        assert dr.created[0]["pipeline_id"] == "p1"
+        assert dr.created[0]["agent_id"] is None
+        # e o baseline foi buscado pelo MESMO alvo
+        assert ev.calls[0].get("pipeline_id") == "p1"
+
+    def test_colunas_no_schema_e_migracao(self):
+        from app.core.database import SCHEMA, _IDEMPOTENT_MIGRATIONS
+        assert "agent_id TEXT" in SCHEMA.split("drift_events")[1].split(";")[0]
+        migs = "\n".join(_IDEMPOTENT_MIGRATIONS)
+        assert "ALTER TABLE drift_events ADD COLUMN IF NOT EXISTS agent_id TEXT" in migs
+        assert "ALTER TABLE drift_events ADD COLUMN IF NOT EXISTS pipeline_id TEXT" in migs
+
+    def test_endpoint_filtra_por_alvo(self):
+        src = Path("app/routes/dashboard.py").read_text(encoding="utf-8")
+        assert 'if agent_id: f["agent_id"] = agent_id' in src
+        assert 'if pipeline_id: f["pipeline_id"] = pipeline_id' in src
+
+    @pytest.mark.asyncio
     async def test_regressao_pequena_vira_warning(self, monkeypatch):
         _, dr = _patch(monkeypatch, {"accuracy": 0.80})
         await evaluator._write_drift_events(

@@ -2204,9 +2204,15 @@ async def get_history(entity_type: str = None, search: str = None, limit: int = 
 
 # ═══ Drift Events §18.2 ═══
 @router.get("/drift-events")
-async def list_drift_events(release_id: str = None, limit: int = 20):
+async def list_drift_events(release_id: str = None, agent_id: str = None,
+                            pipeline_id: str = None, limit: int = 20):
+    """Eventos de drift. Filtros opcionais por release e por ALVO (35.1.0):
+    com múltiplos alvos por release (agente isolado × pipeline no harness),
+    `agent_id`/`pipeline_id` isolam de quem é o drift."""
     f = {}
     if release_id: f["release_id"] = release_id
+    if agent_id: f["agent_id"] = agent_id
+    if pipeline_id: f["pipeline_id"] = pipeline_id
     return {"events": await drift_repo.find_all(limit=limit, **f)}
 
 
