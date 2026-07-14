@@ -61,9 +61,8 @@ async def purge_interactions_once() -> dict:
     """UMA passada de purga (1 lote). No-op quando desligado. Retorna contadores.
     Best-effort: exceção é logada, nunca propagada ao caller do loop."""
     days = _retention_days()
-    out = {"deleted": 0, "scrubbed_verifications": 0}
     if days <= 0:
-        return out  # DESLIGADO
+        return {"deleted": 0, "scrubbed_verifications": 0}  # DESLIGADO
     async with _pool().acquire() as con:
         rows = await con.fetch(
             "SELECT id FROM interactions "
@@ -71,42 +70,82 @@ async def purge_interactions_once() -> dict:
             "ORDER BY created_at LIMIT $2",
             float(days), _PURGE_BATCH,
         )
-        ids = [r["id"] for r in rows]
-        if not ids:
-            return out
-        # 2) SCRUB das verifications (preserva a linha analítica).
-        res = await con.execute(
-            "UPDATE verifications SET "
-            "question_redacted = $2, draft_redacted = $2, "
-            "factuality_reason = NULL, completeness_reason = NULL, "
-            "tone_reason = NULL, safety_reason = NULL, "
-            "unsupported_claims = '[]' "
-            "WHERE interaction_id = ANY($1)",
-            ids, _SCRUB,
-        )
-        try:
-            out["scrubbed_verifications"] = int(str(res).split()[-1])
-        except Exception:
-            pass
-        # 3) Varre tabelas com conteúdo cru que NÃO cascateiam de interactions.
-        # invoke_jobs NÃO entra aqui: o interaction_id vive só dentro do
-        # result_payload (JSON) e o reaper do próprio job já apaga terminais em
-        # `invoke_jobs_retention_hours` (72h default) — muito antes de qualquer
-        # janela de retenção em DIAS. Cobrimos as que persistem indefinidamente:
-        await con.execute(
-            "DELETE FROM api_call_logs WHERE interaction_id = ANY($1)", ids)
-        await con.execute(
-            "DELETE FROM verifier_jobs WHERE interaction_id = ANY($1)", ids)
-        # 4) DELETE das interactions — CASCADE leva turns/tool_calls/binding.
-        res = await con.execute(
-            "DELETE FROM interactions WHERE id = ANY($1)", ids)
-        try:
-            out["deleted"] = int(str(res).split()[-1])
-        except Exception:
-            out["deleted"] = len(ids)
-    logger.info("event=retention_purged deleted=%s scrubbed_verifications=%s days=%s",
-                out["deleted"], out["scrubbed_verifications"], days)
+        out = await _purge_ids(con, [r["id"] for r in rows])
+    if out["deleted"] or out["scrubbed_verifications"]:
+        logger.info("event=retention_purged deleted=%s scrubbed_verifications=%s days=%s",
+                    out["deleted"], out["scrubbed_verifications"], days)
     return out
+
+
+async def _purge_ids(con, ids: list) -> dict:
+    """Miolo compartilhado por retenção (idade) e esquecimento (titular): dado
+    um lote de interaction_ids, SCRUB das verifications (preserva a linha) →
+    varre órfãs não-cascade → DELETE das interactions (cascade). Recebe a
+    conexão (o caller controla pool/transação)."""
+    out = {"deleted": 0, "scrubbed_verifications": 0}
+    if not ids:
+        return out
+    res = await con.execute(
+        "UPDATE verifications SET "
+        "question_redacted = $2, draft_redacted = $2, "
+        "factuality_reason = NULL, completeness_reason = NULL, "
+        "tone_reason = NULL, safety_reason = NULL, "
+        "unsupported_claims = '[]' "
+        "WHERE interaction_id = ANY($1)",
+        ids, _SCRUB,
+    )
+    try:
+        out["scrubbed_verifications"] = int(str(res).split()[-1])
+    except Exception:
+        pass
+    await con.execute("DELETE FROM api_call_logs WHERE interaction_id = ANY($1)", ids)
+    await con.execute("DELETE FROM verifier_jobs WHERE interaction_id = ANY($1)", ids)
+    res = await con.execute("DELETE FROM interactions WHERE id = ANY($1)", ids)
+    try:
+        out["deleted"] = int(str(res).split()[-1])
+    except Exception:
+        out["deleted"] = len(ids)
+    return out
+
+
+def hash_customer_ref(customer_ref: Optional[str]) -> Optional[str]:
+    """Pseudonimização (LGPD-2): guardamos SÓ o SHA-256 do identificador do
+    cliente-final (CPF/id/email), nunca o valor cru. Determinístico →
+    'esquecer o cliente X' = hash(X). Normaliza (trim+lower) p/ casar o mesmo
+    cliente escrito de formas levemente diferentes."""
+    import hashlib
+    ref = (customer_ref or "").strip().lower()
+    if not ref:
+        return None
+    return hashlib.sha256(ref.encode("utf-8")).hexdigest()
+
+
+async def forget_customer(customer_hash: str) -> dict:
+    """Direito ao esquecimento (LGPD Art.18): apaga TODAS as conversas do
+    titular (pelo customer_hash pseudônimo). Mesmo delete+scrub da retenção,
+    por TITULAR em vez de idade e COMPLETO (varre em lotes até esgotar).
+    O caller (rota root/admin) resolve o hash do customer_ref e audita."""
+    total = {"deleted": 0, "scrubbed_verifications": 0, "batches": 0}
+    if not customer_hash:
+        return total
+    async with _pool().acquire() as con:
+        while True:
+            rows = await con.fetch(
+                "SELECT id FROM interactions WHERE customer_hash = $1 LIMIT $2",
+                customer_hash, _PURGE_BATCH,
+            )
+            ids = [r["id"] for r in rows]
+            if not ids:
+                break
+            out = await _purge_ids(con, ids)
+            total["deleted"] += out["deleted"]
+            total["scrubbed_verifications"] += out["scrubbed_verifications"]
+            total["batches"] += 1
+            if len(ids) < _PURGE_BATCH:
+                break
+    logger.info("event=customer_forgotten deleted=%s scrubbed=%s batches=%s",
+                total["deleted"], total["scrubbed_verifications"], total["batches"])
+    return total
 
 
 async def maybe_purge() -> Optional[dict]:

@@ -212,8 +212,10 @@ class InteractionStateMachine:
             # Dono na CRIAÇÃO (35.4.0): nasce carimbado quando o caller setou o
             # contexto — um aborto (timeout do invoke-job, crash) não deixa mais
             # interaction órfã sem dono (IDOR). Ver interaction_access.
-            from app.core.interaction_access import interaction_owner_for_creation
+            from app.core.interaction_access import (
+                interaction_owner_for_creation, interaction_customer_hash_for_creation)
             _owner = interaction_owner_for_creation()
+            _chash = interaction_customer_hash_for_creation()  # LGPD-2: pivô do esquecimento
             await interactions_repo.create({
                 "id": self.ctx.interaction_id,
                 "title": _maybe_redact(user_input)[:80].strip(),
@@ -222,6 +224,7 @@ class InteractionStateMachine:
                 "journey_id": journey,
                 "state": State.INTAKE.value,
                 **({"owner_user_id": _owner} if _owner else {}),
+                **({"customer_hash": _chash} if _chash else {}),
             })
         await turns_repo.create({
             "id": str(uuid.uuid4()),

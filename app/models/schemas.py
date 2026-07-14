@@ -242,6 +242,10 @@ class PipelineInvokeRequest(BaseModel):
     # + assinatura HMAC-SHA256 em X-Maestro-Signature (segredo = sha256 da key).
     # Validada com guarda SSRF no aceite E no envio. Ignorado no sync/stream.
     callback_url: Optional[str] = None
+    # Cliente-final (35.9.0, LGPD-2): identificador do titular dos dados
+    # (CPF/id/email). Guardado só como HASH (customer_hash) na interaction —
+    # pivô do direito ao esquecimento (POST /privacy/forget). None = sem pivô.
+    customer_ref: Optional[str] = None
 
 class PlaygroundRunCreate(BaseModel):
     """Uma execução do Playground a persistir no histórico do usuário.
