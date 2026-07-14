@@ -333,6 +333,12 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE TABLE IF NOT EXISTS drift_events (
     id TEXT PRIMARY KEY,
     release_id TEXT,
+    -- Alvo do run que gerou o evento (35.1.0, fast-follow do #589): com
+    -- múltiplos alvos por release (agente isolado × pipeline), sem isto os
+    -- eventos se misturavam. Colunas TAMBÉM em _IDEMPOTENT_MIGRATIONS (tabela
+    -- EXISTENTE em DBs reais — aqui só cobre DB fresco/CI).
+    agent_id TEXT,
+    pipeline_id TEXT,
     metric_name TEXT,
     baseline_value REAL,
     current_value REAL,
@@ -1336,6 +1342,11 @@ _IDEMPOTENT_MIGRATIONS = [
     # diferentes (ou de antes desta coluna) não se comparam entre si.
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS agent_id TEXT",
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS pipeline_id TEXT",
+    # ── drift_events com ALVO (35.1.0, fast-follow do #589) ──
+    # O writer já filtrava o BASELINE por alvo, mas o evento não registrava de
+    # quem era o drift — múltiplos alvos por release se misturavam na leitura.
+    "ALTER TABLE drift_events ADD COLUMN IF NOT EXISTS agent_id TEXT",
+    "ALTER TABLE drift_events ADD COLUMN IF NOT EXISTS pipeline_id TEXT",
 ]
 
 

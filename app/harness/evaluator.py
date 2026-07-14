@@ -313,6 +313,10 @@ async def _write_drift_events(
             await drift_repo.create({
                 "id": str(uuid.uuid4()),
                 "release_id": release_id,
+                # Alvo do run (35.1.0): o baseline já era filtrado por alvo —
+                # agora o EVENTO também declara de quem é o drift.
+                "agent_id": agent_id,
+                "pipeline_id": pipeline_id,
                 "metric_name": metric,
                 "baseline_value": round(base, 4),
                 "current_value": round(cur, 4),
