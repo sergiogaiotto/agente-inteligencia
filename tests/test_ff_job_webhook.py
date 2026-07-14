@@ -9,7 +9,6 @@ na fila off-path (drenada no shutdown).
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac as hmac_mod
 import json

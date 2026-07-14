@@ -38,16 +38,15 @@ from app.agents.conversation_memory import (
 )
 from app.core.database import (
     agents_repo, skills_repo, interactions_repo, turns_repo,
-    envelopes_repo, audit_repo, car_repo,
+    audit_repo, car_repo,
 )
 from app.a2a.protocol import (
-    Envelope, IntentDescriptor, Budget, ContextDelta,
-    create_delegation_envelope, persist_envelope, apply_context_delta,
+    IntentDescriptor,
 )
 from app.agents.state_machine import (
     InteractionStateMachine, InteractionContext, State,
 )
-from app.evidence.runtime import retriever, reranker, evidence_checker, EvidenceResult
+from app.evidence.runtime import retriever, reranker, evidence_checker
 from app.skill_parser.parser import parse_skill_md
 from app.core.otel import get_tracer
 
@@ -1991,7 +1990,6 @@ async def execute_interaction(
             f"Modelo Primário aplicado: agent={agent_id[:8]} → {_primary_p}/{_primary_m}"
         )
 
-    from app.core.database import mesh_repo
     mesh_chain = await _resolve_mesh_chain(agent_id, agent)
 
     skill_data = {}
@@ -3307,7 +3305,7 @@ def _build_execution_log(
             ops = t.get("ops", [])
             if isinstance(ops, str):
                 try: ops = json.loads(ops)
-                except: ops = [ops]
+                except Exception: ops = [ops]
             ops_str = ", ".join(ops) if ops else "—"
             _add("tools", "⚙️", t.get("name", "?"), f"Server: {t.get('server','')} · Ops: {ops_str}")
     elif _unmatched:
@@ -3384,7 +3382,7 @@ def _build_execution_log(
 
 async def _resolve_mesh_chain(agent_id: str, agent: dict) -> list:
     """Resolve a cadeia completa de agentes via AI Mesh usando BFS."""
-    from app.core.database import mesh_repo, agents_repo
+    from app.core.database import mesh_repo
 
     entry = {"id": agent_id, "name": agent.get("name",""), "kind": agent.get("kind","subagent"), "model": agent.get("model",""), "role": "entry_point", "depth": 0}
     visited = {agent_id}
@@ -4595,7 +4593,6 @@ async def execute_pipeline(
     # Tipo de conexão REAL por nó (display honesto: não cravar "sequential"
     # quando a aresta parent→nó é `conditional`). Lookup leve por step, contra
     # o parent real. Fail-open → "sequential" se a busca falhar.
-    from app.core.database import mesh_repo as _mesh_repo_disp
     conn_type_by_id: dict = {}
     for s in steps:
         _aid = s.get("agent_id", "")
@@ -5644,7 +5641,6 @@ async def _resolve_context_scope(
     inherit (output original). É melhor over-share contexto que perder dado
     por bug de regra.
     """
-    from app.core.database import mesh_repo
 
     prev_len = len(last_output or "")
     inherit_result = {
@@ -5822,7 +5818,6 @@ async def _resolve_ordered_chain_with_parents(
     MESMO `parent_of` (o source comum) — e o gate de cada um avalia contra
     o output do source, não do irmão anterior na lista (que era o bug).
     """
-    from app.core.database import mesh_repo
     allowed = set(allowed_agent_ids) if allowed_agent_ids is not None else None
     chain = [entry_agent_id]
     visited = {entry_agent_id}

@@ -4,7 +4,6 @@
 /topology no lugar de recomputar). O /topology também passa a expor `roots` e
 `pipeline_id` por nó (membership), de forma ADITIVA e fail-safe.
 """
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

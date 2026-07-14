@@ -17,3 +17,8 @@ line-length = 100
 # E722 = except: pelado — engole erro sem tipo
 # E741 = nome de variável ambíguo (l/O/I)
 select = ["F", "E722", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixture compartilhada via import (padrão pytest): os parâmetros de teste
+# "sombreiam" o import — falso positivo de redefinição.
+"tests/test_workspace_invoke_direct_persist.py" = ["F811"]

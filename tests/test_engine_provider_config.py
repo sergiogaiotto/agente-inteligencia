@@ -16,7 +16,6 @@ aceita 'not-needed' como key, usa URL como source of truth.
 """
 from __future__ import annotations
 
-import pytest
 
 from app.agents.engine import _resolve_provider_config
 

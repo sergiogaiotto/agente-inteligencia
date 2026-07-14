@@ -17,8 +17,6 @@ propagar de execute_interaction e execute_pipeline.
 """
 from __future__ import annotations
 
-import uuid
-from unittest.mock import AsyncMock
 
 import pytest
 

@@ -23,7 +23,6 @@ Este arquivo tranca os contratos das 3 correções.
 """
 from __future__ import annotations
 
-import pytest
 
 from app.skill_parser.parser import _parse_api_bindings, parse_skill_md
 from app.skill_parser.linter import lint_skill

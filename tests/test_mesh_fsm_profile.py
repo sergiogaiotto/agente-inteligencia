@@ -53,7 +53,7 @@ def test_llm_modes_have_canonical_seven_path(mode):
     prof = _build_fsm_profile(mode, 1)
     assert _ids(prof) == ["Intake", "PolicyCheck", "RetrieveEvidence", "DraftAnswer", "VerifyEvidence", "LogAndClose"]
     # 3 folhas terminais mutuamente exclusivas
-    assert [l["label"] for l in prof["leaves"]] == ["Recommend", "Refuse", "Escalate"]
+    assert [ln["label"] for ln in prof["leaves"]] == ["Recommend", "Refuse", "Escalate"]
     # invariantes de sempre-executadas + terminal
     assert _by_id(prof, "Intake")["state"] == "always"
     assert _by_id(prof, "PolicyCheck")["state"] == "always"

@@ -15,7 +15,6 @@ Uso:
 
 import json
 import logging
-import re
 import time
 from typing import Any
 
@@ -50,7 +49,6 @@ async def probe(req: ProbeRequest):
     )
     from app.agents.engine import DeepAgentHarness
     from app.core.llm_providers import get_provider
-    from app.core.config import get_settings
 
     t0 = time.time()
 

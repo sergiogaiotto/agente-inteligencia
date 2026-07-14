@@ -476,7 +476,7 @@ async def run_stdio_session(command: str, action: str = "test", tool_name: str =
 
         return {"success": True, "details": "Conectado"}
 
-    except FileNotFoundError as e:
+    except FileNotFoundError:
         cmd_base = command.split()[0] if command else "?"
         return {
             "success": False,
@@ -698,7 +698,7 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
             pt['auth_config'] = matched.get('auth_config', '{}') or '{}'
             if not pt.get('operations') and matched.get('operations'):
                 try: pt['operations'] = json.loads(matched['operations'])
-                except: pt['operations'] = []
+                except Exception: pt['operations'] = []
         enriched.append(pt)
     return enriched
 
@@ -1474,7 +1474,7 @@ async def execute_tool_call(tool_name: str, arguments: dict, mcp_tools: list[dic
         import os
         for tf in temp_files:
             try: os.unlink(tf)
-            except: pass
+            except Exception: pass
 
 
 # Cache de tokens OAuth2 para runtime

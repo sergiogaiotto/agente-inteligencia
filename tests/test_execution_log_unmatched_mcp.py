@@ -16,7 +16,6 @@ Fix expõe `mcp_tools_unmatched` no execution_log com warning explícito.
 """
 from __future__ import annotations
 
-import pytest
 
 from app.agents.engine import _build_execution_log
 

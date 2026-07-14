@@ -13,11 +13,8 @@ Cobre:
 """
 from __future__ import annotations
 
-import io
 import json
 import logging
-import os
-from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -32,7 +29,6 @@ from app.core.logging_setup import (
     user_id_var,
 )
 from app.core.request_context import (
-    RequestContextMiddleware,
     _validate_or_generate,
     install_request_context_middleware,
 )
@@ -155,7 +151,7 @@ class TestSetupLogging:
         monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
         monkeypatch.setenv("LOG_FILE_ENABLED", "1")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-        info1 = setup_logging(force=True)
+        _info1 = setup_logging(force=True)
         info2 = setup_logging(force=False)
         assert info2.get("already_setup") is True
 

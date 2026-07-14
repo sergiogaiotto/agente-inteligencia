@@ -9,7 +9,6 @@ de parsear; o teste abaixo falha se alguém remover esse embrulho.
 """
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 from fastapi import FastAPI

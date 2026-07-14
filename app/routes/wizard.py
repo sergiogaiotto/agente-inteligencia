@@ -540,7 +540,7 @@ async def _resolve_bindings_for_prompt(data: WizardSkillRequest) -> dict:
 
     # Imports lazy — evita acoplar wizard.py a módulos que podem nem estar
     # carregados em testes unitários do próprio wizard.
-    from app.core.database import knowledge_repo, _get_pool
+    from app.core.database import _get_pool
 
     # 1. MCP tools — vive em app.tools.* via repository simples
     if data.mcp_tool_ids:

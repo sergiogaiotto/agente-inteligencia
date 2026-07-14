@@ -15,7 +15,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 
 from app.skill_parser.parser import ParsedSkill, SkillFrontmatter, skill_to_db_dict
 

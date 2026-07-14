@@ -14,7 +14,6 @@ Resolução em cascata: agent.response_language > settings.default > "pt-BR".
 """
 from __future__ import annotations
 
-import pytest
 
 from app.agents.engine import (
     _build_response_language_closing,

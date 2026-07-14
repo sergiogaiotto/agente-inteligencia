@@ -9,10 +9,6 @@ Cobre:
 """
 from __future__ import annotations
 
-import json
-import logging
-from logging.handlers import TimedRotatingFileHandler
-from pathlib import Path
 
 import pytest
 from fastapi import FastAPI

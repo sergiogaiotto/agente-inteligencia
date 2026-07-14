@@ -17,11 +17,8 @@ Cobertura:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 
 # Reusa fixtures do arquivo gêmeo (skill + agent + tool).

@@ -7,7 +7,6 @@ Auth hardening (Onda 1):
 - CSRF token gerado em /me e /login; validação opt-in via setting.
 """
 import uuid
-import json
 import logging
 from fastapi import APIRouter, HTTPException, Request, Response
 from app.models.schemas import UserCreate, UserUpdate, UserLogin, DomainCreate

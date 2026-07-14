@@ -243,7 +243,7 @@ class TestRegressionUserScreenshot:
         com `---`."""
         lines = self.SAMPLE_USER_INPUT.split("\n")
         # Acha linha header (primeira com |...|)
-        header_idx = next(i for i, l in enumerate(lines) if l.strip().startswith("|"))
+        header_idx = next(i for i, ln in enumerate(lines) if ln.strip().startswith("|"))
         sep_line = lines[header_idx + 1].strip()
         # Separator GFM: começa/termina com `|`, células só `-`/`:`/space
         assert sep_line.startswith("|") and sep_line.endswith("|")
@@ -255,12 +255,12 @@ class TestRegressionUserScreenshot:
 
     def test_sample_input_has_ordered_list(self):
         lines = self.SAMPLE_USER_INPUT.split("\n")
-        ordered = [l for l in lines if re.match(r"^\s*\d+[.)]\s+", l)]
+        ordered = [ln for ln in lines if re.match(r"^\s*\d+[.)]\s+", ln)]
         assert len(ordered) >= 2, "input não tem lista ordenada esperada"
 
     def test_sample_input_has_header(self):
         lines = self.SAMPLE_USER_INPUT.split("\n")
-        headers = [l for l in lines if re.match(r"^#{1,6}\s", l)]
+        headers = [ln for ln in lines if re.match(r"^#{1,6}\s", ln)]
         assert len(headers) >= 1
 
 

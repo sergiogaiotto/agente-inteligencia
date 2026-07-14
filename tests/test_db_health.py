@@ -23,7 +23,6 @@ Integração real com Postgres fica em tests/integration/.
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -379,7 +378,6 @@ class TestEndpointE2E:
     def test_pool_failure_short_circuits(self, app_client, monkeypatch):
         """Se pool falha, demais checks dependeriam dele — fail fast retorna
         só pool no checks."""
-        from app.routes import db_health
 
         def raise_no_pool():
             raise RuntimeError("Pool não inicializado")
@@ -463,7 +461,7 @@ class TestFkIndexesMigration:
     def test_all_migrations_use_if_not_exists(self):
         """Idempotência: todas as nossas novas migrations usam IF NOT EXISTS."""
         from app.core.database import _IDEMPOTENT_MIGRATIONS
-        new_indexes = [m for m in _IDEMPOTENT_MIGRATIONS if "Onda P" in m or "idx_agent_bindings" in m or "idx_envelopes" in m or "idx_turns_interaction" in m]
+        _new_indexes = [m for m in _IDEMPOTENT_MIGRATIONS if "Onda P" in m or "idx_agent_bindings" in m or "idx_envelopes" in m or "idx_turns_interaction" in m]
         # Pelo menos os índices Onda P
         onda_p_indexes = [m for m in _IDEMPOTENT_MIGRATIONS if m.startswith("CREATE INDEX IF NOT EXISTS idx_")]
         for sql in onda_p_indexes:

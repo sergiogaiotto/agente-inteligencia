@@ -15,7 +15,6 @@ Skills raramente declaram isso manualmente. Fix: helper
 """
 from __future__ import annotations
 
-import pytest
 
 from app.core.text_utils import coerce_to_openai_strict_schema
 

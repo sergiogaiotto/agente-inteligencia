@@ -22,7 +22,6 @@ Cobertura:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI

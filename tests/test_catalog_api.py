@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Optional
 
 import pytest
 from fastapi import FastAPI
@@ -1287,7 +1286,6 @@ class TestInventoryDetails:
                     entry_id="e1", kind="agent", with_disclosure=True,
                     disclosure_overrides=None, external=None, recipe=None,
                     submissions=None, owner_email="alice@empresa.com"):
-        from app.routes.catalog import get_recipe as _real_get_recipe
         # Entry
         fake_storage["entries"][entry_id] = {
             "id": entry_id,
@@ -1950,7 +1948,6 @@ def _create_recipe_draft(client, storage, owner_id: str) -> str:
 
 def _seed_target(storage, name="Step Target", kind="agent"):
     """Insere uma entry no fake storage diretamente (sem passar pela API)."""
-    import uuid
     tid = f"target-{uuid.uuid4().hex[:8]}"
     storage["entries"][tid] = {
         "id": tid, "name": name, "kind": kind, "status": "published",

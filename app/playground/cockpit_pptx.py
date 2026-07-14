@@ -101,9 +101,9 @@ def _ms(x: Any) -> str:
     return f"{v / 1000:.1f} s" if v >= 1000 else f"{int(v)} ms"
 
 
-def _txt(slide, l, t, w, h, text, *, size=14, bold=False, color=INK,
+def _txt(slide, lft, t, w, h, text, *, size=14, bold=False, color=INK,
          align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP, italic=False, spacing=1.0):
-    box = slide.shapes.add_textbox(Emu(l), Emu(t), Emu(w), Emu(h))
+    box = slide.shapes.add_textbox(Emu(lft), Emu(t), Emu(w), Emu(h))
     tf = box.text_frame
     tf.word_wrap = True
     tf.vertical_anchor = anchor
@@ -122,9 +122,9 @@ def _txt(slide, l, t, w, h, text, *, size=14, bold=False, color=INK,
     return box
 
 
-def _rect(slide, l, t, w, h, fill, line=None):
+def _rect(slide, lft, t, w, h, fill, line=None):
     from pptx.enum.shapes import MSO_SHAPE
-    shp = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Emu(l), Emu(t), Emu(w), Emu(h))
+    shp = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Emu(lft), Emu(t), Emu(w), Emu(h))
     shp.fill.solid()
     shp.fill.fore_color.rgb = fill
     if line is None:
@@ -151,12 +151,12 @@ def _gate_color(k: str) -> RGBColor:
     return {"ok": GOOD, "warn": WARN, "crit": CRIT}.get(k or "", MUTED)
 
 
-def _kv_lines(slide, l, t, w, rows, *, size=13, gap=430000):
+def _kv_lines(slide, lft, t, w, rows, *, size=13, gap=430000):
     """rows: list of (label, value, value_color)."""
     y = t
     for label, value, vcolor in rows:
-        _txt(slide, l, y, int(w * 0.62), gap, label, size=size, color=MUTED)
-        _txt(slide, l + int(w * 0.62), y, int(w * 0.38), gap, value, size=size,
+        _txt(slide, lft, y, int(w * 0.62), gap, label, size=size, color=MUTED)
+        _txt(slide, lft + int(w * 0.62), y, int(w * 0.38), gap, value, size=size,
              bold=True, color=vcolor, align=PP_ALIGN.RIGHT)
         y += gap
     return y

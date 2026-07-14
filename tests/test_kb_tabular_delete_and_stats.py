@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 from pathlib import Path
-from typing import Optional
 
 import pytest
 from fastapi import FastAPI

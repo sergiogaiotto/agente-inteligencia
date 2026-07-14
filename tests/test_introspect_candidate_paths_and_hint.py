@@ -36,7 +36,6 @@ como primeira opção confunde quem é leigo em OpenAPI.
 """
 from __future__ import annotations
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

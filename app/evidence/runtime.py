@@ -26,7 +26,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from app.core.config import get_settings
-from app.core.database import knowledge_repo, evidences_repo, _get_pool
+from app.core.database import knowledge_repo, _get_pool
 from app.core.llm_providers import get_provider
 from app.core.otel import get_tracer
 from app.evidence.embedder import embed_query

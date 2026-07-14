@@ -16,7 +16,6 @@ no XLSX).
 """
 from __future__ import annotations
 
-import pytest
 
 from app.agents.engine import _build_execution_log
 
