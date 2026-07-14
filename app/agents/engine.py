@@ -1778,11 +1778,13 @@ async def _run_declarative_as_interaction(
                 **({"owner_user_id": _owner} if _owner else {}),
                 **({"customer_hash": _chash} if _chash else {}),
             })
+        from app.core.interaction_access import turn_customer_hash_fragment
         await turns_repo.create({
             "id": str(uuid.uuid4()),
             "turn_number": next_turn,
             "user_text_redacted": _maybe_redact(msg),
             "interaction_id": interaction_id,
+            **turn_customer_hash_fragment(),  # LGPD-2 por-turno (35.15.0)
         })
         persisted = True
     except Exception as e:
@@ -1821,6 +1823,7 @@ async def _run_declarative_as_interaction(
 
     if persisted:
         try:
+            from app.core.interaction_access import turn_customer_hash_fragment
             await turns_repo.create({
                 "id": str(uuid.uuid4()),
                 "turn_number": next_turn + 1,
@@ -1829,6 +1832,7 @@ async def _run_declarative_as_interaction(
                 # FIN-3: caminho declarativo não gasta LLM → tokens 0 legítimo.
                 "tokens_used": 0,
                 "latency_ms": float(decl.get("duration_ms") or 0),
+                **turn_customer_hash_fragment(),  # LGPD-2 por-turno (35.15.0)
             })
         except Exception as e:
             logger.warning("Declarativo (via cadeia): falha ao persistir turno de saída %s: %s", interaction_id, e)
@@ -4595,6 +4599,7 @@ async def execute_pipeline(
                 _step_out = step["output"]
                 if _gs_dlp().dlp_enabled:
                     _step_out = redact_for_persist(_step_out)
+                from app.core.interaction_access import turn_customer_hash_fragment
                 await turns_repo.create({
                     "id": str(_uuid.uuid4()),
                     "turn_number": turn_number,
@@ -4604,6 +4609,7 @@ async def execute_pipeline(
                     # já calculados no step (custo auto-wire PR7).
                     "tokens_used": int(step.get("tokens_used") or 0),
                     "latency_ms": float(step.get("duration_ms") or 0),
+                    **turn_customer_hash_fragment(),  # LGPD-2 por-turno (35.15.0)
                 })
                 turn_number += 1
 

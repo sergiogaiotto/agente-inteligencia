@@ -44,6 +44,8 @@ class FakeCon:
 
     async def fetch(self, sql, *a):
         self.calls.append(("fetch", sql, a))
+        if "uploaded_files" in sql:  # 35.15.0 G: sem arquivos neste fake
+            return []
         return [{"id": i} for i in (self._batches.pop(0) if self._batches else [])]
 
     async def execute(self, sql, *a):
@@ -197,7 +199,10 @@ class TestFiacao:
         # titular). O ref AINDA entra no fingerprint da idempotência (troca de
         # titular na mesma key → 409), então checamos a linha do PAYLOAD.
         assert '**({"customer_ref": data.customer_ref}' not in rotas  # não vai + ao payload
-        assert "customer_hash=hash_customer_ref(data.customer_ref)" in rotas
+        # 35.15.0 (E): o hash vem do ref DESTE request, com fallback herdado da
+        # sessão reusada (customer_hash_of_interaction) → _effective_hash.
+        assert "hash_customer_ref(data.customer_ref)" in rotas
+        assert "customer_hash=_effective_hash" in rotas
         assert '"customer_ref": data.customer_ref,' in rotas  # está no fingerprint
         jobs = Path("app/core/invoke_jobs.py").read_text(encoding="utf-8")
         # 35.14.2: worker passa o HASH (job.customer_hash), não o ref cru

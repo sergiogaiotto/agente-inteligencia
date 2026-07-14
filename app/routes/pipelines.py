@@ -961,6 +961,34 @@ async def _finalize_invoke_inputs(pid: str, p: dict, root: str,
     # de executar. Sessão nova / legada-sem-dono passa; dono divergente → 404.
     from app.core.interaction_access import assert_can_access_interaction
     await assert_can_access_interaction(data.session_id, user)
+
+    # Elo arquivo→titular (35.15.0, G): associa os uploads DESTE invoke ao pivô
+    # LGPD, para o forget/retenção alcançarem o binário em data/uploads. Titular =
+    # customer_ref do request (ou herdado da sessão, como o job async). first-
+    # writer-wins (não reassocia). Best-effort — nunca bloqueia o invoke.
+    try:
+        # _names PRIMEIRO (achado do review): sem anexos não há o que associar —
+        # evita um round-trip de DB (lookup do hash da sessão) no hot-path de
+        # todo follow-up multi-turno sem arquivo.
+        _names = [Path(att.get("path", "") or "").name
+                  for att in (data.attachments or []) if att.get("path")]
+        _fhash = None
+        if _names:
+            from app.core.retention import hash_customer_ref
+            from app.core.interaction_access import customer_hash_of_interaction
+            _fhash = hash_customer_ref(data.customer_ref)
+            if not _fhash and data.session_id:
+                _fhash = await customer_hash_of_interaction(data.session_id)
+        if _fhash and _names:
+            from app.core.database import _get_pool
+            async with _get_pool().acquire() as con:
+                await con.execute(
+                    "UPDATE uploaded_files SET customer_hash = $1, "
+                    "interaction_id = COALESCE(interaction_id, $2) "
+                    "WHERE disk_name = ANY($3) AND customer_hash IS NULL",
+                    _fhash, data.session_id, _names)
+    except Exception as _assoc_e:
+        logger.warning("event=upload_associate_failed error=%s", str(_assoc_e)[:150])
     return user_input, sealed_inputs, pipeline_attachments
 
 
@@ -1363,13 +1391,24 @@ async def invoke_pipeline_async(
 
     from app.core.invoke_jobs import create_job, dispatch
     from app.core.retention import hash_customer_ref
+    # Pivô do forget (35.14.2): hash do customer_ref DESTE request. Fallback
+    # (35.15.0, achado de auditoria #3-E): um follow-up que reusa session_id mas
+    # OMITE customer_ref herda o pivô da SESSÃO — senão o job nascia com hash NULL
+    # e a conversa (request_payload.user_input) sobrevivia ao forget do titular
+    # do turn 1. A posse do session_id já foi checada em _finalize_invoke_inputs
+    # (assert_can_access_interaction) → só o dono herda. Não toca o fingerprint
+    # (idempotência compara o corpo cru; herdar o hash não vaza cross-subject).
+    _effective_hash = hash_customer_ref(data.customer_ref)
+    if not _effective_hash and data.session_id:
+        from app.core.interaction_access import customer_hash_of_interaction
+        _effective_hash = await customer_hash_of_interaction(data.session_id)
     job, created = await create_job(
         pipeline_id=pid,
         owner_user_id=user.get("id"),
         api_key_id=request_payload["api_key_id"],
         idempotency_key=idempotency_key,
         request_payload=request_payload,
-        customer_hash=hash_customer_ref(data.customer_ref),  # 35.14.2: pivô do forget
+        customer_hash=_effective_hash,
     )
     if created:
         dispatch(job["id"])

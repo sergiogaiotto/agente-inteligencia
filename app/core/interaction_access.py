@@ -71,6 +71,16 @@ def interaction_customer_hash_for_creation() -> Optional[str]:
     return _creation_customer.get()
 
 
+def turn_customer_hash_fragment() -> dict:
+    """Fragmento `{"customer_hash": h}` (ou vazio) p/ carimbar CADA turno com o
+    titular DO TURNO (35.15.0, LGPD-2 por-turno). Numa sessão reusada por mais de
+    um cliente-final, o hash da interaction é first-writer-wins (fica no 1º); o
+    hash por-turno deixa o forget alcançar os turns de cada titular. Lê o mesmo
+    ContextVar da criação (setado por execute_pipeline/interaction p/ o turno atual)."""
+    h = _creation_customer.get()
+    return {"customer_hash": h} if h else {}
+
+
 def _can_bypass(user: Optional[dict]) -> bool:
     """Só `root` acessa interaction alheia (suporte/operação). `admin` NÃO lê
     conversa de terceiros por padrão — privacidade > conveniência."""
@@ -90,6 +100,27 @@ async def owner_of_interaction(interaction_id: Optional[str]) -> Optional[str]:
             )
     except Exception as e:
         logger.warning("interaction_access.owner_lookup_failed id=%s: %s",
+                       interaction_id, str(e)[:150])
+        return None
+
+
+async def customer_hash_of_interaction(interaction_id: Optional[str]) -> Optional[str]:
+    """`customer_hash` da interaction, ou None. Espelho de owner_of_interaction.
+
+    Uso (35.15.0, LGPD-2): no accept do invoke ASSÍNCRONO, um follow-up que reusa
+    session_id mas OMITE customer_ref nascia com hash NULL no job → sobrevivia ao
+    forget do titular do turn 1. Aqui herdamos o pivô da sessão reusada.
+    Fail-open a None em erro de DB (o caller trata None como 'sem pivô')."""
+    if not interaction_id:
+        return None
+    try:
+        from app.core.database import _get_pool
+        async with _get_pool().acquire() as con:
+            return await con.fetchval(
+                "SELECT customer_hash FROM interactions WHERE id = $1", interaction_id
+            )
+    except Exception as e:
+        logger.warning("interaction_access.customer_lookup_failed id=%s: %s",
                        interaction_id, str(e)[:150])
         return None
 

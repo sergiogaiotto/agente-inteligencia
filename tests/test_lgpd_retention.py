@@ -29,6 +29,8 @@ class FakeCon:
 
     async def fetch(self, sql, *a):
         self.calls.append(("fetch", sql, a))
+        if "uploaded_files" in sql:  # 35.15.0 G: sem arquivos neste fake
+            return []
         return [{"id": i} for i in self._ids]
 
     async def execute(self, sql, *a):
@@ -129,7 +131,8 @@ class TestPurga:
     async def test_lote_vazio_para_cedo(self, monkeypatch):
         con = _wire(monkeypatch, days=30, ids=())
         out = await retention.purge_interactions_once()
-        assert out == {"deleted": 0, "scrubbed_verifications": 0, "purged_jobs": 0}
+        assert out == {"deleted": 0, "scrubbed_verifications": 0,
+                       "purged_jobs": 0, "purged_files": 0}
         assert con.sql("SELECT id FROM interactions")  # consultou
         assert not con.sql("DELETE FROM interactions")  # mas nada a apagar
 

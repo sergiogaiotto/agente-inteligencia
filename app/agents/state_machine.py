@@ -237,11 +237,13 @@ class InteractionStateMachine:
                 **({"owner_user_id": _owner} if _owner else {}),
                 **({"customer_hash": _chash} if _chash else {}),
             })
+        from app.core.interaction_access import turn_customer_hash_fragment
         await turns_repo.create({
             "id": str(uuid.uuid4()),
             "turn_number": self.ctx.next_user_turn,
             "user_text_redacted": _maybe_redact(user_input),
             "interaction_id": self.ctx.interaction_id,
+            **turn_customer_hash_fragment(),  # LGPD-2 por-turno (35.15.0)
         })
         await self.transition(State.POLICY_CHECK)
 
@@ -337,6 +339,7 @@ class InteractionStateMachine:
                     _lat = round((time.monotonic() - _t0) * 1000, 2)
             except Exception:
                 pass
+            from app.core.interaction_access import turn_customer_hash_fragment
             await turns_repo.create({
                 "id": str(uuid.uuid4()),
                 "turn_number": output_turn,
@@ -344,5 +347,6 @@ class InteractionStateMachine:
                 "interaction_id": self.ctx.interaction_id,
                 "tokens_used": _tok,
                 "latency_ms": _lat,
+                **turn_customer_hash_fragment(),  # LGPD-2 por-turno (35.15.0)
             })
         return self.ctx

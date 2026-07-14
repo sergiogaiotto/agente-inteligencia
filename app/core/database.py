@@ -167,6 +167,24 @@ CREATE TABLE IF NOT EXISTS turns (
     envelope_id TEXT,
     latency_ms REAL DEFAULT 0,
     tokens_used INTEGER DEFAULT 0,
+    -- Pivô LGPD-2 POR TURNO (35.15.0): uma sessão reusada por MAIS DE UM
+    -- cliente-final (call-center) tinha só 1 hash na interaction (first-writer-
+    -- wins) → o 2º titular ficava inesquecível. O hash por-turno deixa o forget
+    -- alcançar os turns de CADA titular sem dropar a interaction do outro.
+    customer_hash TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+-- ═══════════════════════════════════════════════════════════════
+-- Arquivos de upload (35.15.0, LGPD): elo arquivo-em-disco → titular, para o
+-- forget/retenção alcançarem o BINÁRIO em data/uploads (antes só o banco era
+-- purgado; o arquivo cru com PII sobrevivia para sempre). Registrado no upload
+-- (disk_name+created_at) e ASSOCIADO ao titular no invoke (customer_hash).
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS uploaded_files (
+    disk_name TEXT PRIMARY KEY,
+    customer_hash TEXT,
+    interaction_id TEXT,
     created_at TIMESTAMP DEFAULT now()
 );
 
@@ -1377,6 +1395,12 @@ _IDEMPOTENT_MIGRATIONS = [
     # Índice DEPOIS da coluna (mesma lista → ordem garantida): em DB existente a
     # coluna só nasce aqui, então o índice NÃO pode estar no SCHEMA (boot crash).
     "CREATE INDEX IF NOT EXISTS idx_invoke_jobs_customer ON invoke_jobs (customer_hash) WHERE customer_hash IS NOT NULL",
+    # ── Pivô LGPD por-turno + arquivos de upload (35.15.0, decisão do dono D/G) ──
+    # A coluna nasce aqui em DB EXISTENTE (no SCHEMA base p/ DB fresco/CI). O índice
+    # DEPOIS da coluna (nunca no SCHEMA — coluna inexistente = boot crash).
+    "ALTER TABLE turns ADD COLUMN IF NOT EXISTS customer_hash TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_turns_customer ON turns (customer_hash) WHERE customer_hash IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_uploaded_files_customer ON uploaded_files (customer_hash) WHERE customer_hash IS NOT NULL",
 ]
 
 
