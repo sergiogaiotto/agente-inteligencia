@@ -238,6 +238,20 @@ from app.core.analytics_tasks import (  # noqa: E402
 )
 
 
+def _record_invoke_failure(kind: str, status: str) -> None:
+    """Registra uma invocação que FALHOU nas métricas RED (35.14.3, achado de
+    auditoria). O record_invocation só rodava no caminho de SUCESSO (dentro do
+    recorder agendado após execute_pipeline retornar) → 409/500/timeout/erro
+    do worker NÃO contavam: o dashboard RED e o alerta HighErrorRate ficavam
+    CEGOS a falhas. inc()/observe() são in-memory (não-bloqueante), então
+    chamamos síncrono aqui mesmo, no handler da exceção."""
+    try:
+        from app.core.metrics import record_invocation
+        record_invocation(kind=kind, status=status, duration_s=0.0, error=True)
+    except Exception as e:
+        logger.warning("event=invoke_failure_metric_failed error=%s", str(e)[:150])
+
+
 async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_id,
                                    api_key_name, actor_user_id, arg_keys, channel=None,
                                    stream=False, kind=None) -> None:
@@ -991,11 +1005,13 @@ async def invoke_pipeline(
             customer_ref=data.customer_ref,  # 35.9.0 LGPD-2: pivô do esquecimento
         )
     except ValueError as e:
+        _record_invoke_failure("invoke", "rejected")  # RED: 409 conta
         raise HTTPException(409, str(e))
     except Exception:
         # NÃO vazar str(e) do engine ao cliente externo (info-leak). Loga o erro
         # completo (com traceback) e devolve código estável + request_id p/ o
         # operador correlacionar no log sem expor internals.
+        _record_invoke_failure("invoke", "error")  # RED: 500 conta
         rid = _current_request_id()
         logger.exception(
             "event=pipeline_invoke_failed pipeline_id=%s request_id=%s", pid, rid
@@ -1147,6 +1163,7 @@ async def invoke_pipeline_stream(
                 channel=data.channel, stream=True,
             ))
         except Exception as e:
+            _record_invoke_failure("invoke_stream", "error")  # RED: falha do stream conta
             await queue.put({"type": "stream_error", "error": str(e)[:300]})
         finally:
             await queue.put(_DONE)
