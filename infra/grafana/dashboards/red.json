@@ -1,0 +1,178 @@
+{
+  "id": null,
+  "uid": "agente-red",
+  "title": "AgenteInteligência — RED (Rate · Errors · Duration)",
+  "tags": ["agente-inteligencia", "red", "slo"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Invocações / min (5m)",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(maestro_invocations_total[5m])) * 60",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "opm", "decimals": 2 } }
+    },
+    {
+      "type": "stat",
+      "title": "Taxa de erro (5m)",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(maestro_invocation_errors_total[5m])) / clamp_min(sum(rate(maestro_invocations_total[5m])), 1e-9)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "p95 duração (5m)",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(maestro_invocation_duration_seconds_bucket[5m])) by (le))",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 30 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Escalonamentos + recusas / min (5m)",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(rate(maestro_escalations_total[5m])) + sum(rate(maestro_refusals_total[5m]))) * 60",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "opm", "decimals": 2 } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Rate — invocações/s por caminho (invoke · invoke_stream · invoke_async)",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(maestro_invocations_total[5m])) by (kind)",
+          "legendFormat": "{{kind}}",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 12 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors — erros/s e status ≠ completed",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(maestro_invocation_errors_total[5m]))",
+          "legendFormat": "erros",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(maestro_invocations_total{status!=\"completed\"}[5m])) by (status)",
+          "legendFormat": "status {{status}}",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 12 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Duration — p50 / p95 / p99 (5m)",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(maestro_invocation_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(maestro_invocation_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum(rate(maestro_invocation_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 8 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Postura — escalonamentos e recusas /s (FSM)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(maestro_escalations_total[5m]))",
+          "legendFormat": "escalonamentos",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(maestro_refusals_total[5m]))",
+          "legendFormat": "recusas",
+          "datasource": { "type": "prometheus", "uid": "prometheus" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 12 } } }
+    }
+  ]
+}
