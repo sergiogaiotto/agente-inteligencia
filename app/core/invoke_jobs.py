@@ -164,6 +164,7 @@ async def _run_job(job_id: str) -> None:
                 "error": "pipeline_not_invocable",
                 "hint": "O pipeline foi removido ou aposentado depois do aceite do job.",
             })
+            _notify_finish(job_id, pid, req, "failed", "pipeline_not_invocable")
             return
         # TOCTOU do IDOR (review): a posse do session_id foi checada no aceite,
         # mas uma interaction legada-sem-dono pode GANHAR dono no meio-tempo —
@@ -174,6 +175,7 @@ async def _run_job(job_id: str) -> None:
             sess_owner = await owner_of_interaction(sess)
             if sess_owner and sess_owner != job.get("owner_user_id"):
                 await _finish_failed(job_id, {"error": "session_not_accessible"})
+                _notify_finish(job_id, pid, req, "failed", "session_not_accessible")
                 return
         api_key_id = req.get("api_key_id")
         if api_key_id:
@@ -183,6 +185,7 @@ async def _run_job(job_id: str) -> None:
                     "SELECT revoked_at FROM api_keys WHERE id = $1", api_key_id)
             if krow is None or krow["revoked_at"] is not None:
                 await _finish_failed(job_id, {"error": "api_key_revoked"})
+                _notify_finish(job_id, pid, req, "failed", "api_key_revoked")
                 return
             from fastapi import HTTPException
             from app.core.api_key_budget import enforce_budget
@@ -191,6 +194,7 @@ async def _run_job(job_id: str) -> None:
             except HTTPException as e:
                 detail = e.detail if isinstance(e.detail, dict) else {"error": "cost_budget_exceeded"}
                 await _finish_failed(job_id, detail)
+                _notify_finish(job_id, pid, req, "failed", "cost_budget_exceeded")
                 return
     except Exception:
         # Recheck é defesa extra — falha DELE não pode matar um job válido.
@@ -282,11 +286,13 @@ async def _run_job(job_id: str) -> None:
             ))
         except Exception:
             logger.warning("event=invoke_job_timeout_analytics_failed job_id=%s", job_id)
+        _notify_finish(job_id, pid, req, "failed", "job_timeout")
         return
     except ValueError as e:
         # Paridade com o sync (409): mensagem do engine é controlada/exposta.
         await _finish_failed(job_id, {"error": "pipeline_execution_rejected",
                                       "detail": str(e)[:300]})
+        _notify_finish(job_id, pid, req, "failed", "pipeline_execution_rejected")
         return
     except Exception:
         # Paridade com o sync (500): NUNCA vazar str(e) ao cliente do GET.
@@ -297,6 +303,7 @@ async def _run_job(job_id: str) -> None:
             "request_id": req.get("request_id"),
             "hint": "Falha ao executar o pipeline. Cite o request_id ao suporte.",
         })
+        _notify_finish(job_id, pid, req, "failed", "pipeline_execution_failed")
         return
 
     # Posse ANTES de expor o interaction_id ao polling (primitivo de segurança —
@@ -322,6 +329,7 @@ async def _run_job(job_id: str) -> None:
         "duration_ms": r.get("duration_ms"),
     }
     await _finish_completed(job_id, payload_full)
+    _notify_finish(job_id, pid, req, "completed")
 
     # Analytics/custo/métricas: o MESMO recorder off-path do sync (auditoria +
     # atribuição por-key + débito + SSOT invocation_costs + Prometheus), com
@@ -390,6 +398,94 @@ _LOST_ERROR = {"error": "job_interrupted",
                        "NOVA Idempotency-Key) se ainda precisar."}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Webhook de conclusão (35.6.0, padrão fallback: callback_url por request >
+# webhook_url da API-key). Payload LEVE — nunca envia o result (o receptor
+# busca via GET autenticado): não exfiltra PII para a URL e o SSRF vira só
+# um ping assinado. HMAC-SHA256 com segredo = key_hash (sha256 da key — o
+# cliente DETÉM a key e deriva o mesmo segredo; nada novo p/ gerir); jobs de
+# cookie/UI assinam com MAESTRO_SECRET_KEY.
+# ─────────────────────────────────────────────────────────────────────────────
+
+WEBHOOK_ATTEMPTS = 3
+WEBHOOK_TIMEOUT_S = 10.0
+
+
+async def _webhook_secret(api_key_id: Optional[str]) -> str:
+    if api_key_id:
+        try:
+            async with _pool().acquire() as con:
+                row = await con.fetchrow(
+                    "SELECT key_hash FROM api_keys WHERE id = $1", api_key_id)
+            if row and row.get("key_hash"):
+                return str(row["key_hash"])
+        except Exception:
+            pass
+    import os
+    return os.environ.get("MAESTRO_SECRET_KEY", "") or "maestro-webhook"
+
+
+async def _deliver_webhook(url: str, payload: dict, api_key_id: Optional[str]) -> None:
+    """POST assinado, best-effort com retries — NUNCA afeta o job.
+    Re-valida SSRF no ENVIO (DNS pode ter mudado desde o aceite)."""
+    import hashlib as _hashlib
+    import hmac as _hmac
+    try:
+        from app.core.ssrf import validate_public_url
+        validate_public_url(url, allow_http=True)
+    except Exception as e:
+        logger.warning("event=invoke_job_webhook_blocked url_invalid error=%s", str(e)[:150])
+        return
+    body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+    secret = await _webhook_secret(api_key_id)
+    signature = _hmac.new(secret.encode("utf-8"), body, _hashlib.sha256).hexdigest()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Maestro-Event": str(payload.get("event") or "invoke_job.finished"),
+        "X-Maestro-Signature": f"sha256={signature}",
+    }
+    import httpx
+    for attempt in range(WEBHOOK_ATTEMPTS):
+        try:
+            async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT_S,
+                                         follow_redirects=False) as client:
+                resp = await client.post(url, content=body, headers=headers)
+            if resp.status_code < 300:
+                logger.info("event=invoke_job_webhook_delivered job_id=%s status=%s",
+                            payload.get("job_id"), resp.status_code)
+                return
+            logger.warning("event=invoke_job_webhook_rejected job_id=%s http=%s attempt=%s",
+                           payload.get("job_id"), resp.status_code, attempt + 1)
+        except Exception as e:
+            logger.warning("event=invoke_job_webhook_failed job_id=%s attempt=%s error=%s",
+                           payload.get("job_id"), attempt + 1, str(e)[:150])
+        await asyncio.sleep(1.0 * (attempt + 1))
+
+
+def _notify_finish(job_id: str, pipeline_id: Optional[str], req: dict,
+                   status: str, error_code: Optional[str] = None) -> None:
+    """Agenda a notificação off-path (fila de analytics, drenada no shutdown).
+    No-op sem webhook resolvido no aceite."""
+    url = (req or {}).get("webhook_url")
+    if not url:
+        return
+    payload = {
+        "event": "invoke_job.finished",
+        "job_schema_version": "1",
+        "job_id": job_id,
+        "pipeline_id": pipeline_id,
+        "status": status,
+        "status_url": f"/api/v1/pipelines/{pipeline_id}/jobs/{job_id}",
+        **({"error": error_code} if error_code else {}),
+        **({"idempotency_key": req.get("idempotency_key")} if req.get("idempotency_key") else {}),
+    }
+    try:
+        from app.core.analytics_tasks import schedule_analytics
+        schedule_analytics(_deliver_webhook(url, payload, (req or {}).get("api_key_id")))
+    except Exception:
+        logger.warning("event=invoke_job_webhook_schedule_failed job_id=%s", job_id)
+
+
 def _async_enabled() -> bool:
     from app.core.config import get_settings
     try:
@@ -407,15 +503,19 @@ async def resume_invoke_jobs() -> dict:
     o toggle tem que parar o backlog, não só os 202 novos. Religar retoma."""
     out = {"lost": 0, "dispatched": 0}
     async with _pool().acquire() as con:
-        res = await con.execute(
+        lost_rows = await con.fetch(
             "UPDATE invoke_jobs SET status='lost', error=$1, finished_at=now(), "
-            "updated_at=now() WHERE status='running'",
+            "updated_at=now() WHERE status='running' "
+            "RETURNING id, pipeline_id, request_payload",
             json.dumps(_LOST_ERROR, ensure_ascii=False),
         )
-        try:
-            out["lost"] = int(str(res).split()[-1])
-        except Exception:
-            pass
+        out["lost"] = len(lost_rows)
+        for lr in lost_rows:
+            try:
+                _lreq = json.loads(lr.get("request_payload") or "{}")
+                _notify_finish(lr["id"], lr.get("pipeline_id"), _lreq, "lost", "job_interrupted")
+            except Exception:
+                pass
         rows = []
         if _async_enabled():
             rows = await con.fetch(

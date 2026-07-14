@@ -408,7 +408,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
     -- a key só lê/descobre, não invoca (403). DB fresco/CI pega aqui; DBs
     -- EXISTENTES migram via Alembic 0004.
     allowed_pipeline_ids TEXT,
-    read_only BOOLEAN DEFAULT FALSE
+    read_only BOOLEAN DEFAULT FALSE,
+    -- Webhook de conclusão do invoke-job (35.6.0, padrão fallback): URL default
+    -- da integração — o callback_url por request SOBREPÕE. Validada com guarda
+    -- SSRF no PATCH e no envio. Também em _IDEMPOTENT_MIGRATIONS (tabela existente).
+    webhook_url TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash) WHERE revoked_at IS NULL;
@@ -1347,6 +1351,8 @@ _IDEMPOTENT_MIGRATIONS = [
     # quem era o drift — múltiplos alvos por release se misturavam na leitura.
     "ALTER TABLE drift_events ADD COLUMN IF NOT EXISTS agent_id TEXT",
     "ALTER TABLE drift_events ADD COLUMN IF NOT EXISTS pipeline_id TEXT",
+    # ── Webhook de conclusão do invoke-job (35.6.0) ──
+    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS webhook_url TEXT",
 ]
 
 

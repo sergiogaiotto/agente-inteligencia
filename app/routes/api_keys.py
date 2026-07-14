@@ -69,6 +69,9 @@ class APIKeyScopeUpdate(BaseModel):
     # Substitui o escopo: allowed_pipeline_ids (None/[] = liberar todos) + read_only.
     allowed_pipeline_ids: Optional[list[str]] = None
     read_only: Optional[bool] = False
+    # Webhook default da integração (35.6.0): notificado quando um invoke-job
+    # da key termina; o callback_url por request SOBREPÕE. ''/None = sem webhook.
+    webhook_url: Optional[str] = None
 
 
 class APIKeyBudgetUpdate(BaseModel):
@@ -155,19 +158,32 @@ async def update_api_key_scope(key_id: str, data: APIKeyScopeUpdate, user: dict 
     if not row or (row.get("user_id") != user.get("id") and not is_root):
         raise HTTPException(404, "API key não encontrada")
     allowed = json.dumps(data.allowed_pipeline_ids) if data.allowed_pipeline_ids else None
+    webhook = (data.webhook_url or "").strip() or None
+    if webhook:
+        # Guarda SSRF no REGISTRO (o envio re-valida): URL privada/inválida → 422.
+        from app.core.ssrf import validate_public_url
+        try:
+            validate_public_url(webhook, allow_http=True)
+        except Exception as e:
+            raise HTTPException(422, {
+                "error": "invalid_webhook_url", "detail": str(e)[:200],
+                "hint": "O webhook precisa ser uma URL pública (guarda SSRF).",
+            })
     await api_keys_repo.update(key_id, {
         "allowed_pipeline_ids": allowed,
         "read_only": bool(data.read_only),
+        "webhook_url": webhook,
     })
     await audit_repo.create({
         "entity_type": "api_key", "entity_id": key_id, "action": "scope_updated",
         "actor": user["id"],
         "details": json.dumps({
             "allowed_pipeline_ids": data.allowed_pipeline_ids, "read_only": bool(data.read_only),
+            "webhook_url": webhook,
         }),
     })
     return {"id": key_id, "allowed_pipeline_ids": data.allowed_pipeline_ids or [],
-            "read_only": bool(data.read_only)}
+            "read_only": bool(data.read_only), "webhook_url": webhook}
 
 
 def _parse_scope_list(raw) -> list:
@@ -227,6 +243,8 @@ async def list_api_keys(user: dict = Depends(require_user)):
             # Escopo (35.2.0): a UI mostra/edita o que o gate #585 aplica.
             "read_only": bool(r.get("read_only")),
             "allowed_pipeline_ids": _parse_scope_list(r.get("allowed_pipeline_ids")),
+            # Webhook default da integração (35.6.0, padrão fallback).
+            "webhook_url": r.get("webhook_url") or None,
         })
     return {"keys": keys, "budget_enabled": budget_enabled}
 
