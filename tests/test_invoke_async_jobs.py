@@ -388,6 +388,23 @@ def _fingerprint_de(pid, **body):
     return _request_fingerprint(pid, PipelineInvokeRequest(**body))
 
 
+class TestFingerprintCustomerRef:
+    """Achado de auditoria (35.14.2): o fingerprint da Idempotency-Key OMITIA
+    customer_ref → replay da mesma key com OUTRO titular devolvia o job do
+    primeiro (vazamento cross-subject LGPD). Agora troca de titular muda o
+    hash → 409 idempotency_key_reuse."""
+
+    def test_customer_ref_muda_o_fingerprint(self):
+        h1 = _fingerprint_de("p1", message="status?", customer_ref="cpf-111")
+        h2 = _fingerprint_de("p1", message="status?", customer_ref="cpf-222")
+        assert h1 != h2
+
+    def test_mesmo_titular_mesmo_fingerprint(self):
+        h1 = _fingerprint_de("p1", message="status?", customer_ref="cpf-111")
+        h2 = _fingerprint_de("p1", message="status?", customer_ref="cpf-111")
+        assert h1 == h2
+
+
 class TestPostInvokeAsync:
     def test_gated_off_403(self, monkeypatch):
         _settings_stub(monkeypatch, invoke_async_enabled=False)

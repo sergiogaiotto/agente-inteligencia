@@ -10,8 +10,9 @@ Ordem segura de purga por LOTE de interaction_ids (do mapa LGPD):
   2. SCRUB das verifications (question/draft/reasons → placeholder; a linha
      FICA — cascatear apagaria a auditoria do juiz e quebraria agregados).
   3. Varre pelos MESMOS ids as tabelas que NÃO cascateiam de interactions e
-     guardam conteúdo cru: invoke_jobs (request/result_payload), api_call_logs
-     (request/response_body, sem FK), verifier_jobs (payload).
+     guardam conteúdo cru: api_call_logs (request/response_body, sem FK),
+     verifier_jobs (payload). O forget também apaga invoke_jobs por
+     customer_hash — a conversa vive no request_payload (35.14.2).
   4. DELETE das interactions → o CASCADE (#571) leva turns/tool_calls/
      binding_executions.
   5. invocation_costs / api_key_cost_ledger / catalog_costs FICAM (só números
@@ -80,31 +81,39 @@ async def purge_interactions_once() -> dict:
 async def _purge_ids(con, ids: list) -> dict:
     """Miolo compartilhado por retenção (idade) e esquecimento (titular): dado
     um lote de interaction_ids, SCRUB das verifications (preserva a linha) →
-    varre órfãs não-cascade → DELETE das interactions (cascade). Recebe a
-    conexão (o caller controla pool/transação)."""
+    varre órfãs não-cascade → DELETE das interactions (cascade). No esquecimento
+    (customer_hash dado) também apaga os invoke_jobs do titular — a conversa vive
+    em invoke_jobs.request_payload e sem isto sobrevivia ao forget (achado de
+    auditoria 35.14.2).
+
+    TRANSACIONAL (achado de auditoria): scrub + deletes num con.transaction() —
+    all-or-nothing por lote. Antes, em autocommit, um timeout no DELETE das
+    interactions (o statement mais pesado) deixava a conversa VIVA com a
+    auditoria do juiz já redigida (scrub irreversível de dado não-apagado)."""
     out = {"deleted": 0, "scrubbed_verifications": 0}
     if not ids:
         return out
-    res = await con.execute(
-        "UPDATE verifications SET "
-        "question_redacted = $2, draft_redacted = $2, "
-        "factuality_reason = NULL, completeness_reason = NULL, "
-        "tone_reason = NULL, safety_reason = NULL, "
-        "unsupported_claims = '[]' "
-        "WHERE interaction_id = ANY($1)",
-        ids, _SCRUB,
-    )
-    try:
-        out["scrubbed_verifications"] = int(str(res).split()[-1])
-    except Exception:
-        pass
-    await con.execute("DELETE FROM api_call_logs WHERE interaction_id = ANY($1)", ids)
-    await con.execute("DELETE FROM verifier_jobs WHERE interaction_id = ANY($1)", ids)
-    res = await con.execute("DELETE FROM interactions WHERE id = ANY($1)", ids)
-    try:
-        out["deleted"] = int(str(res).split()[-1])
-    except Exception:
-        out["deleted"] = len(ids)
+    async with con.transaction():
+        res = await con.execute(
+            "UPDATE verifications SET "
+            "question_redacted = $2, draft_redacted = $2, "
+            "factuality_reason = NULL, completeness_reason = NULL, "
+            "tone_reason = NULL, safety_reason = NULL, "
+            "unsupported_claims = '[]' "
+            "WHERE interaction_id = ANY($1)",
+            ids, _SCRUB,
+        )
+        try:
+            out["scrubbed_verifications"] = int(str(res).split()[-1])
+        except Exception:
+            pass
+        await con.execute("DELETE FROM api_call_logs WHERE interaction_id = ANY($1)", ids)
+        await con.execute("DELETE FROM verifier_jobs WHERE interaction_id = ANY($1)", ids)
+        res = await con.execute("DELETE FROM interactions WHERE id = ANY($1)", ids)
+        try:
+            out["deleted"] = int(str(res).split()[-1])
+        except Exception:
+            out["deleted"] = len(ids)
     return out
 
 
@@ -129,6 +138,16 @@ async def forget_customer(customer_hash: str) -> dict:
     if not customer_hash:
         return total
     async with _pool().acquire() as con:
+        # invoke_jobs FORA do loop de interactions: um job 'queued'/'running' do
+        # titular pode ainda NÃO ter criado interaction — o loop abaixo sairia
+        # vazio e a conversa (request_payload) sobreviveria. Este DELETE por
+        # customer_hash cobre TODOS os jobs do titular, com ou sem interaction.
+        res = await con.execute(
+            "DELETE FROM invoke_jobs WHERE customer_hash = $1", customer_hash)
+        try:
+            total["invoke_jobs_deleted"] = int(str(res).split()[-1])
+        except Exception:
+            total["invoke_jobs_deleted"] = 0
         while True:
             rows = await con.fetch(
                 "SELECT id FROM interactions WHERE customer_hash = $1 LIMIT $2",
@@ -143,8 +162,9 @@ async def forget_customer(customer_hash: str) -> dict:
             total["batches"] += 1
             if len(ids) < _PURGE_BATCH:
                 break
-    logger.info("event=customer_forgotten deleted=%s scrubbed=%s batches=%s",
-                total["deleted"], total["scrubbed_verifications"], total["batches"])
+    logger.info("event=customer_forgotten deleted=%s scrubbed=%s invoke_jobs=%s batches=%s",
+                total["deleted"], total["scrubbed_verifications"],
+                total.get("invoke_jobs_deleted", 0), total["batches"])
     return total
 
 

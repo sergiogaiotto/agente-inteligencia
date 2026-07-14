@@ -43,6 +43,17 @@ class FakeCon:
     def sql(self, frag):
         return [c for c in self.calls if frag in c[1]]
 
+    def transaction(self):  # 35.14.2: _purge_ids agora é atômico
+        con = self
+        class _Tx:
+            async def __aenter__(self):
+                con.calls.append(("tx", "BEGIN", ()))
+                return con
+            async def __aexit__(self, *a):
+                con.calls.append(("tx", "COMMIT" if a[0] is None else "ROLLBACK", ()))
+                return False
+        return _Tx()
+
 
 class FakePool:
     def __init__(self, con):

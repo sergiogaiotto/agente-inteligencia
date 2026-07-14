@@ -616,10 +616,18 @@ CREATE TABLE IF NOT EXISTS invoke_jobs (
     created_at TIMESTAMP DEFAULT now(),
     started_at TIMESTAMP,
     finished_at TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT now()
+    updated_at TIMESTAMP DEFAULT now(),
+    -- Pivô do direito ao esquecimento (35.14.2): SÓ o hash (nunca o ref cru).
+    -- O request_payload guarda a conversa (user_input) — o forget precisa
+    -- alcançar o job por titular, senão a PII sobrevive até o reaper de 72h.
+    customer_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_invoke_jobs_status ON invoke_jobs (status);
 CREATE INDEX IF NOT EXISTS idx_invoke_jobs_owner ON invoke_jobs (owner_user_id, created_at DESC);
+-- idx_invoke_jobs_customer NÃO vai aqui: customer_hash é coluna NOVA em tabela
+-- EXISTENTE (adicionada via _IDEMPOTENT_MIGRATIONS, que roda DEPOIS do SCHEMA).
+-- Índice no SCHEMA = boot crash em DB existente (incidente 2026-07-04). Vive na
+-- migração idempotente, ao lado do ALTER TABLE ADD COLUMN.
 -- Idempotência escopada POR KEY-criadora (COALESCE: NULL = cookie/UI) — duas
 -- integrações (keys) do MESMO dono não colidem chaves entre si.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_invoke_jobs_idem
@@ -1364,6 +1372,11 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS webhook_url TEXT",
     # ── Auditoria com IP (35.11.0) ──
     "ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS ip TEXT",
+    # ── Esquecimento alcança invoke_jobs (35.14.2, achado de auditoria) ──
+    "ALTER TABLE invoke_jobs ADD COLUMN IF NOT EXISTS customer_hash TEXT",
+    # Índice DEPOIS da coluna (mesma lista → ordem garantida): em DB existente a
+    # coluna só nasce aqui, então o índice NÃO pode estar no SCHEMA (boot crash).
+    "CREATE INDEX IF NOT EXISTS idx_invoke_jobs_customer ON invoke_jobs (customer_hash) WHERE customer_hash IS NOT NULL",
 ]
 
 

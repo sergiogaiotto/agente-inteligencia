@@ -1911,6 +1911,9 @@ async def execute_interaction(
     # customer_ref (35.9.0, LGPD-2): id do cliente-final → hash na interaction
     # (pivô do esquecimento). None = sem pivô (comportamento atual).
     customer_ref: str | None = None,
+    # customer_hash (35.14.2): o HASH já pronto — usado pelo worker do 202, que
+    # NÃO recebe mais o ref cru (a PII não é persistida no job). Vence customer_ref.
+    customer_hash: str | None = None,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
 
@@ -1940,7 +1943,10 @@ async def execute_interaction(
     if owner_user_id:
         from app.core.interaction_access import set_interaction_owner_for_creation
         set_interaction_owner_for_creation(owner_user_id)
-    if customer_ref:  # LGPD-2: pivô do esquecimento (hash na criação)
+    if customer_hash:  # 35.14.2: hash já pronto (worker do 202)
+        from app.core.interaction_access import set_interaction_customer_hash_for_creation
+        set_interaction_customer_hash_for_creation(customer_hash)
+    elif customer_ref:  # LGPD-2: pivô do esquecimento (hash na criação)
         from app.core.interaction_access import set_interaction_customer_for_creation
         set_interaction_customer_for_creation(customer_ref)
     agent = await _topo_agent(agent_id)
@@ -3534,6 +3540,8 @@ async def execute_pipeline(
     # customer_ref (35.9.0, LGPD-2): id do cliente-final → hash na interaction
     # (master + filhas), pivô do direito ao esquecimento. None = sem pivô.
     customer_ref: str | None = None,
+    # customer_hash (35.14.2): hash já pronto (worker do 202). Vence customer_ref.
+    customer_hash: str | None = None,
 ) -> dict:
     """Executa pipeline completo pelo AI Mesh.
 
@@ -3561,7 +3569,10 @@ async def execute_pipeline(
     if owner_user_id:
         from app.core.interaction_access import set_interaction_owner_for_creation
         set_interaction_owner_for_creation(owner_user_id)
-    if customer_ref:  # LGPD-2: pivô do esquecimento (hash na criação)
+    if customer_hash:  # 35.14.2: hash já pronto (worker do 202)
+        from app.core.interaction_access import set_interaction_customer_hash_for_creation
+        set_interaction_customer_hash_for_creation(customer_hash)
+    elif customer_ref:  # LGPD-2: pivô do esquecimento (hash na criação)
         from app.core.interaction_access import set_interaction_customer_for_creation
         set_interaction_customer_for_creation(customer_ref)
     # Cache de topologia por requisição (25.2.0): liga o memo de mesh/agents
