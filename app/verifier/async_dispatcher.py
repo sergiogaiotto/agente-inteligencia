@@ -324,6 +324,71 @@ async def resume_jobs(batch: int = 20) -> int:
     return n
 
 
+async def sweep_pending(batch: int = 20) -> int:
+    """Sweep PERIÓDICO da fila (35.3.0, fast-follow do #584): re-despacha
+    'pending' acumulado ENTRE boots — antes, samples dropados por backpressure
+    e retries de jobs falhos só rodavam no próximo restart. Pega carona no
+    reaper do invoke_jobs (o 1º loop periódico do app, #590).
+
+    ≠ resume_jobs: NÃO reseta 'running' (fora do boot há tasks legítimas em
+    voo — o reset cego causaria double-processing). Guardas:
+    - só linhas paradas há 2+ min (updated_at) — cobre a janela dispatch→
+      _job_start de um pending recém-criado que JÁ tem task;
+    - respeita o slot in-process (max_concurrent - tasks vivas).
+    Best-effort: nunca propaga exceção ao reaper."""
+    try:
+        from app.core.config import get_settings
+        from app.core.database import _get_pool
+        settings = get_settings()
+        mx = int(settings.verifier_job_max_attempts or 3)
+        # `or` engoliria cap=0 (falsy) — 0 é válido e significa "sweep desligado"
+        raw_cap = settings.verifier_max_concurrent_jobs
+        cap = int(raw_cap) if raw_cap is not None else 20
+        slots = max(0, cap - len(_pending_tasks))
+        if slots == 0:
+            return 0
+        async with _get_pool().acquire() as con:
+            rows = await con.fetch(
+                "SELECT id, payload FROM verifier_jobs "
+                "WHERE status='pending' AND attempts < $1 "
+                "AND updated_at < now() - interval '2 minutes' "
+                "ORDER BY created_at LIMIT $2",
+                mx, min(batch, slots),
+            )
+    except Exception as e:
+        logger.warning("sweep_pending: consulta falhou: %s", str(e)[:150])
+        return 0
+
+    n = 0
+    for r in rows:
+        try:
+            p = json.loads(r["payload"] or "{}")
+            task = asyncio.create_task(
+                _run_verification(
+                    job_id=r["id"],
+                    draft=p.get("draft", ""),
+                    evidences=_deserialize_evidences(p.get("evidences")),
+                    output_contract=p.get("output_contract", ""),
+                    guardrails=p.get("guardrails", ""),
+                    user_question=p.get("user_question", ""),
+                    profile=p.get("profile", "standard"),
+                    interaction_id=p.get("interaction_id"),
+                    agent_id=p.get("agent_id"),
+                    pipeline_id=p.get("pipeline_id"),
+                ),
+                name=f"verifier_sweep_{str(r['id'])[:8]}",
+            )
+            _pending_tasks.add(task)
+            task.add_done_callback(_on_task_done)
+            n += 1
+        except Exception as e:
+            logger.warning("sweep_pending: re-dispatch do job %s falhou: %s", r["id"], str(e)[:150])
+    if n:
+        _stats["resumed"] += n
+        logger.info("verifier_jobs: sweep periódico re-despachou %d job(s)", n)
+    return n
+
+
 async def drain(timeout: float = 5.0) -> int:
     """Aguarda as tasks pendentes por até `timeout` s. Retorna quantas seguem
     pendentes no fim (0 = todas drenadas). Chamado no lifespan antes do close_db.

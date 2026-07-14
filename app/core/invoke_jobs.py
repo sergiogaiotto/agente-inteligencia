@@ -412,6 +412,16 @@ async def _reaper_loop() -> None:
             raise
         except Exception as e:
             logger.warning("event=invoke_jobs_reaper_failed error=%s", str(e)[:200])
+        # Carona (35.3.0): sweep periódico da fila do JUIZ — 'pending' entre
+        # boots (backpressure/falhas) antes só rodava no próximo restart
+        # (fast-follow conhecido do #584). Best-effort, isolado do reap.
+        try:
+            from app.verifier.async_dispatcher import sweep_pending
+            await sweep_pending()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("event=verifier_sweep_failed error=%s", str(e)[:200])
 
 
 def start_reaper() -> None:

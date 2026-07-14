@@ -1330,6 +1330,33 @@ async def invoke_pipeline_async(
     )
 
 
+@router.get("/{pid}/jobs")
+async def list_invoke_jobs(
+    pid: str,
+    user: dict = Depends(require_user),
+    status: Optional[str] = Query(None, description="queued | running | completed | failed | lost"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Lista os jobs do invoke assíncrono deste pipeline — o caminho de
+    RECUPERAÇÃO quando o cliente perdeu o job_id do 202 (proxy caiu antes da
+    resposta) e não usou Idempotency-Key (fast-follow do #590).
+
+    Escopo de POSSE: cada um vê SÓ os próprios jobs (root vê todos os do
+    pipeline) — mesmo racional do 404 anti-enumeração do GET por id. Envelope
+    LEVE (sem result/erro — o detalhe vem do GET /jobs/{job_id})."""
+    from app.core.database import invoke_jobs_repo
+    filters = {"pipeline_id": pid}
+    if (user.get("role") or "").strip().lower() != "root":
+        filters["owner_user_id"] = user.get("id")
+    if status:
+        filters["status"] = status
+    rows = await invoke_jobs_repo.find_all(limit=limit, **filters)
+    return {"jobs": [
+        _job_envelope(j, status_url=f"/api/v1/pipelines/{pid}/jobs/{j.get('id')}")
+        for j in rows
+    ]}
+
+
 @router.get("/{pid}/jobs/{job_id}")
 async def get_invoke_job(
     pid: str,

@@ -3431,6 +3431,9 @@ def _build_pipeline_trace_data(
         "duration_ms": final_result.get("duration_ms", 0),
         "trace": final_result.get("trace", {}),
         "pipeline_steps": final_result.get("pipeline_steps", []),
+        # QUEM respondeu (Pacote B, 35.x) — persistido para o reload da sessão
+        # mostrar a autoria; None em envelopes pré-35.0.0 (aditivo, inofensivo).
+        "output_agent": final_result.get("output_agent"),
         "mode": "pipeline",
     }
 
