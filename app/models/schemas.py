@@ -236,6 +236,12 @@ class PipelineInvokeRequest(BaseModel):
     # text_content, path}). O engine roteia cada um aos agentes que aceitam
     # doc/imagem (dispatcher) — agentes que não aceitam ignoram.
     attachments: Optional[list] = None
+    # Webhook de conclusão (35.6.0, SÓ no /invoke/async): URL notificada quando
+    # o job termina (padrão fallback: este campo SOBREPÕE o webhook_url default
+    # da API-key). Payload LEVE sem result (o receptor busca via GET autenticado)
+    # + assinatura HMAC-SHA256 em X-Maestro-Signature (segredo = sha256 da key).
+    # Validada com guarda SSRF no aceite E no envio. Ignorado no sync/stream.
+    callback_url: Optional[str] = None
 
 class PlaygroundRunCreate(BaseModel):
     """Uma execução do Playground a persistir no histórico do usuário.

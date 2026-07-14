@@ -1297,7 +1297,32 @@ async def invoke_pipeline_async(
         "arg_keys": (sorted(data.args.keys()) if isinstance(data.args, dict) else []),
         "request_id": _current_request_id(),
         "request_hash": fingerprint,
+        **({"idempotency_key": idempotency_key} if idempotency_key else {}),
     }
+
+    # Webhook de conclusão (35.6.0, padrão FALLBACK): callback_url do request
+    # SOBREPÕE o webhook_url default da API-key. Validação SSRF no ACEITE
+    # (400 nomeado) — e o envio re-valida (DNS pode mudar). Resolvido AGORA e
+    # persistido como VALOR: o worker não tem request/key à mão.
+    webhook_url = (data.callback_url or "").strip() or None
+    if not webhook_url and request_payload["api_key_id"]:
+        try:
+            from app.core.database import api_keys_repo
+            _krow = await api_keys_repo.find_by_id(request_payload["api_key_id"])
+            webhook_url = ((_krow or {}).get("webhook_url") or "").strip() or None
+        except Exception:
+            webhook_url = None
+    if webhook_url:
+        from app.core.ssrf import validate_public_url
+        try:
+            validate_public_url(webhook_url, allow_http=True)
+        except Exception as e:
+            raise HTTPException(400, {
+                "error": "invalid_callback_url",
+                "detail": str(e)[:200],
+                "hint": "A URL de callback precisa ser pública (guarda SSRF).",
+            })
+        request_payload["webhook_url"] = webhook_url
 
     from app.core.invoke_jobs import create_job, dispatch
     job, created = await create_job(

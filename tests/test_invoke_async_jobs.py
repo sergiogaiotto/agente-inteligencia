@@ -267,23 +267,35 @@ def _closed_coro():
 class TestResumeEReaper:
     @pytest.mark.asyncio
     async def test_boot_running_orfao_vira_lost_e_queued_retoma(self, monkeypatch):
-        con = FakeCon(execute_results=["UPDATE 2"], fetch_results=[[{"id": "q1"}, {"id": "q2"}]])
+        # 35.6.0: o UPDATE→lost virou fetch(RETURNING) p/ notificar webhooks —
+        # 1º fetch = lost rows; 2º = queued.
+        lost_rows = [
+            {"id": "l1", "pipeline_id": "p1",
+             "request_payload": json.dumps({"webhook_url": "https://x.example.com/h"})},
+            {"id": "l2", "pipeline_id": "p1", "request_payload": "{}"},
+        ]
+        con = FakeCon(fetch_results=[lost_rows, [{"id": "q1"}, {"id": "q2"}]])
         _use_pool(monkeypatch, con)
         _settings_stub(monkeypatch)
         despachados = []
         monkeypatch.setattr(invoke_jobs, "dispatch", lambda j: despachados.append(j) or True)
+        notificados = []
+        monkeypatch.setattr(invoke_jobs, "_notify_finish",
+                            lambda jid, pid, req, status, code=None: notificados.append((jid, status)))
         out = await invoke_jobs.resume_invoke_jobs()
         assert out == {"lost": 2, "dispatched": 2} and despachados == ["q1", "q2"]
         lost_sql = con.sql_containing("SET status='lost'")[0]
-        assert "WHERE status='running'" in lost_sql[0]
+        assert "WHERE status='running'" in lost_sql[0] and "RETURNING" in lost_sql[0]
         assert json.loads(lost_sql[1][0])["error"] == "job_interrupted"
+        # webhook do lost notificado (o _notify_finish decide pelo payload)
+        assert ("l1", "lost") in notificados and ("l2", "lost") in notificados
 
     @pytest.mark.asyncio
     async def test_kill_switch_congela_fila_mas_mantem_higiene(self, monkeypatch):
         """Review (major): desligar invoke_async_enabled tem que parar o BACKLOG
         (nada novo paga LLM), não só os 202 novos — mas a higiene (running órfão
         → lost, retenção) continua."""
-        con = FakeCon(execute_results=["UPDATE 1"])
+        con = FakeCon(fetch_results=[[{"id": "l1", "pipeline_id": "p1", "request_payload": "{}"}]])
         _use_pool(monkeypatch, con)
         _settings_stub(monkeypatch, invoke_async_enabled=False)
         despachou = MagicMock()
