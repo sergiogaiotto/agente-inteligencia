@@ -625,6 +625,15 @@
                                 ao vivo
                             </span>
                         </div>
+                        <!-- Anexos do turno no balão do usuário (35.16.0) -->
+                        <div x-show="m.role === 'user' && (m.attachments || []).length" class="flex flex-wrap gap-1 mb-1">
+                            <template x-for="(nm, ni) in (m.attachments || [])" :key="ni">
+                                <span class="inline-flex items-center gap-1 rounded bg-white/20 px-1.5 py-0.5 text-[10px]">
+                                    <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                                    <span x-text="nm"></span>
+                                </span>
+                            </template>
+                        </div>
                         <span x-show="m.text" class="whitespace-pre-wrap" x-text="m.text"></span>
                         <span x-show="m.role === 'assistant' && m.streaming && !m.text && !(m.liveSteps || []).length" class="text-[11px] text-surface-400">respondendo…</span>
                     </div>
@@ -632,7 +641,25 @@
             </template>
         </div>
 
+        <!-- Chips dos anexos do PRÓXIMO turno (35.16.0) — mesmos do Executar -->
+        <div x-show="chatAttachments.length" class="flex flex-wrap gap-1.5" data-testid="pg-chat-attachments">
+            <template x-for="(a, i) in chatAttachments" :key="i">
+                <span class="inline-flex items-center gap-1 rounded-full border border-surface-200 bg-surface-50 px-2 py-0.5 text-[10.5px] text-brand-900">
+                    <span x-text="a.filename"></span>
+                    <button @click="chatAttachments.splice(i,1)" type="button" class="text-surface-400 hover:text-rose-500" aria-label="Remover anexo">&times;</button>
+                </span>
+            </template>
+        </div>
         <div class="flex items-end gap-2">
+            <input type="file" multiple x-ref="pgChatFiles" class="hidden" :disabled="!!(chatBusy || chatUploading)"
+                   @change="uploadChatFiles($event.target.files); $event.target.value=''">
+            <!-- 📎 anexo do turno (35.16.0): faltava no Conversar — só o Executar tinha -->
+            <button @click="$refs.pgChatFiles.click()" type="button" data-testid="pg-chat-attach" :disabled="!!(chatBusy || chatUploading)"
+                    title="Anexar arquivo a este turno (imagens vão a agentes multimodais; documentos viram texto)"
+                    class="inline-flex items-center justify-center rounded-lg border border-surface-200 bg-white px-3 py-2.5 text-surface-500 hover:text-brand-600 hover:border-brand-300 disabled:opacity-50">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                <span x-show="chatUploading" class="ml-1.5 text-[10.5px]">enviando…</span>
+            </button>
             <textarea x-model="chatInput" @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); chatSend() }" data-testid="pg-chat-input" rows="2"
                       placeholder="Escreva e Enter para enviar (Shift+Enter quebra linha)…"
                       class="flex-1 rounded-lg border border-surface-200 px-3 py-2 text-[13px] text-brand-900 outline-none focus:border-brand-400 resize-none"></textarea>
@@ -947,6 +974,9 @@ function playgroundPage() {
         // Anexos (opcional): subidos via /workspace/upload e enviados no corpo do
         // invoke — o engine roteia cada um aos agentes que aceitam doc/imagem.
         attachments: [], uploading: false,
+        // Anexos do modo CONVERSAR (por turno — separados dos do Executar, para
+        // um arquivo do builder não vazar ao chat sem intenção). Limpos no envio.
+        chatAttachments: [], chatUploading: false,
         // Helper de inputs: descobre o que o pipeline espera (inputs do agente-raiz)
         // e gera um template de payload. Cache por pipeline selecionado.
         inputsSchema: null, showInputs: false, inputsLoading: false, _schemaCache: null,
@@ -1086,6 +1116,21 @@ function playgroundPage() {
             } catch (e) { showToast('Falha no anexo: ' + e.message, 'error'); }
             finally { this.uploading = false; }
         },
+        // Anexo do CONVERSAR (35.16.0): mesmo /workspace/upload, mas popula a
+        // lista do turno atual do chat (chatAttachments) — não a do Executar.
+        async uploadChatFiles(fileList) {
+            if (!fileList || !fileList.length) return;
+            this.chatUploading = true;
+            try {
+                for (const file of Array.from(fileList)) {
+                    const fd = new FormData(); fd.append('file', file);
+                    const r = await fetch(window.location.origin + '/api/v1/workspace/upload', { method: 'POST', body: fd, credentials: 'same-origin' });
+                    if (!r.ok) throw new Error('falhou (' + r.status + ')');
+                    this.chatAttachments.push(await r.json());
+                }
+            } catch (e) { showToast('Falha no anexo: ' + e.message, 'error'); }
+            finally { this.chatUploading = false; }
+        },
 
         // ── Inputs esperados / template ──  introspecta o agente de ENTRADA do
         // pipeline (## Inputs + variáveis dos API Bindings) via GET /pipelines/{id}/
@@ -1224,7 +1269,10 @@ function playgroundPage() {
             if (!msg || this.chatBusy) return;
             if (!this.selectedId) { showToast('Escolha um destino primeiro', 'info'); return; }
             if (!this.apiKey) { showToast('Gere uma chave de API primeiro', 'info'); return; }
-            this.chat.push({ role: 'user', text: msg });
+            // Anexos deste TURNO (35.16.0): capturados agora e limpos da barra —
+            // o balão do usuário mostra o que subiu; o corpo do stream os leva.
+            const turnAtts = this.chatAttachments.splice(0, this.chatAttachments.length);
+            this.chat.push({ role: 'user', text: msg, attachments: turnAtts.map(a => a.filename) });
             this.chatInput = '';
             this.chatBusy = true;
             // O turno do assistente é o sink: _ev empurra liveSteps ao vivo e grava result.
@@ -1237,7 +1285,7 @@ function playgroundPage() {
             try {
                 // FULL: o cockpit precisa de custo/tokens/evidência/FSM/juiz por turno
                 // (Deploy/summary os corta no servidor). É o Playground (dono, X-API-Key).
-                await this._stream(this.selectedId, this.chatVerbosity, turn, { message: msg, sessionId: this.chatSessionId });
+                await this._stream(this.selectedId, this.chatVerbosity, turn, { message: msg, sessionId: this.chatSessionId, attachments: turnAtts });
                 if (turn.error) {                              // stream_error no meio (stream abriu, falhou depois)
                     turn.text = 'Falha no stream: ' + String(turn.error);
                     turn.error = true;
@@ -1290,6 +1338,8 @@ function playgroundPage() {
             if (opts.message == null) {
                 if (this.hasArgs) _body.args = this.argsPayload;  // args estruturados (validados no servidor antes de executar)
                 if (this.attachments.length) _body.attachments = this.attachments;  // anexos vão no corpo (igual o app real)
+            } else if (opts.attachments && opts.attachments.length) {
+                _body.attachments = opts.attachments;             // anexos do TURNO (modo Conversa, 35.16.0)
             }
             const resp = await fetch(window.location.origin + '/api/v1/pipelines/' + pipelineId + '/invoke/stream', {
                 method: 'POST', credentials: 'omit',
