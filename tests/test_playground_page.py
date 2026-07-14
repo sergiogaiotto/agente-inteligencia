@@ -173,7 +173,8 @@ def test_conversa_ao_vivo_multiturno():
     # ao vivo) e session_id no corpo — o mesmo stream que um app externo veria
     assert "async chatSend()" in src
     # o chat roda em FULL (chatVerbosity) pra alimentar o Cockpit da Conversa
-    assert "await this._stream(this.selectedId, this.chatVerbosity, turn, { message: msg, sessionId: this.chatSessionId })" in src
+    # 35.16.0: o turno também leva os anexos capturados (attachments: turnAtts)
+    assert "await this._stream(this.selectedId, this.chatVerbosity, turn, { message: msg, sessionId: this.chatSessionId, attachments: turnAtts })" in src
     assert 'data-testid="pg-chat-steps"' in src   # passo-a-passo por agente renderizado no balão
     # REATIVIDADE (footgun Alpine): o turno é mutado via a referência REATIVA
     # (this.chat[i]), não o objeto cru — senão o balão fica preso em "respondendo…"
@@ -367,6 +368,28 @@ def test_anexos_no_playground():
     assert "if (this.attachments.length) _body.attachments = this.attachments" in src
     # aviso honesto de tipos suportados
     assert "Imagens vão a agentes multimodais; documentos viram texto" in src
+
+
+def test_anexos_no_conversar():
+    """35.16.0 (pedido do dono): o modo CONVERSAR também anexa — faltava o botão
+    (só o Executar tinha). Anexos são POR TURNO: capturados no envio, limpos da
+    barra, exibidos no balão do usuário e enviados no corpo do stream."""
+    src = PG.read_text(encoding="utf-8")
+    # estado separado do Executar (um arquivo do builder não vaza ao chat)
+    assert "chatAttachments: [], chatUploading: false" in src
+    assert "async uploadChatFiles(fileList)" in src
+    # UI: botão 📎 + input oculto + chips com remover
+    assert 'data-testid="pg-chat-attach"' in src
+    assert 'data-testid="pg-chat-attachments"' in src
+    assert 'x-ref="pgChatFiles"' in src and "uploadChatFiles($event.target.files)" in src
+    assert "chatAttachments.splice(i,1)" in src
+    # footgun Alpine (memória): :disabled com undefined vira atributo PRESENTE → !!
+    assert ':disabled="!!(chatBusy || chatUploading)"' in src
+    # por turno: captura + limpa no envio; vai no corpo via opts; balão mostra
+    assert "const turnAtts = this.chatAttachments.splice(0" in src
+    assert "attachments: turnAtts" in src
+    assert "_body.attachments = opts.attachments" in src
+    assert "m.attachments || []" in src
 
 
 def test_helper_inputs_esperados_e_template():
