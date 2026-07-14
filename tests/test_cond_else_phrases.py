@@ -22,6 +22,9 @@ def test_frases_prova_estado_e_persistencia():
     # buildConfig sela SÓ o contrato {text, where, expect} em conditional
     assert "cfg.test_phrases = ed.testPhrases" in src
     assert "expect: p.expect !== false" in src
+    # achado do review: o select 'expect' precisa de .boolean, senão grava STRING
+    # "false" e "deve pular" quebra (veredito invertido + selo errado + round-trip)
+    assert 'x-model.boolean="p.expect"' in src
     # métodos: adicionar/remover/rodar + contador
     for m in ("addPhrase()", "removePhrase(i)", "async runPhrases()", "phrasesPassCount()"):
         assert m in src, f"falta {m}"
@@ -49,6 +52,16 @@ def test_veredito_nao_mente_apos_editar_regra():
     src = PG.read_text(encoding="utf-8")
     assert "(editor.testPhrases||[]).forEach(p=>p.pass=null)" in src  # textarea
     assert "(ed.testPhrases || []).forEach(p => p.pass = null)" in src  # syncExpr galeria
+
+
+def test_runphrases_tem_guarda_de_epoca():
+    """Achado do review: um loop de runPhrases em voo NÃO pode sobrescrever o
+    veredito de uma regra que foi editada no meio (senão mostra ✓ da regra velha)."""
+    src = PG.read_text(encoding="utf-8")
+    assert "this._phrasesGen" in src  # contador de época
+    # aborta se a época mudou OU a expr corrente difere da capturada
+    assert "gen !== this._phrasesGen" in src
+    assert "(this.editor.expr || '').trim() !== expr" in src
 
 
 def test_runtime_ignora_test_phrases_no_config():
