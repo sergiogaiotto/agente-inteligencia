@@ -1189,6 +1189,9 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                     "turn_number": next_turn + 1,
                     "output_text_redacted": output_text,
                     "interaction_id": interaction_id,
+                    # FIN-3 (35.12.0): declarativo → tokens 0; latência do result.
+                    "tokens_used": 0,
+                    "latency_ms": float(result.get("duration_ms") or 0),
                 })
                 result["interaction_id"] = interaction_id
             else:
@@ -1693,11 +1696,25 @@ async def _persist_invoke_turn(
             "user_text_redacted": message,
             "interaction_id": sid,
         })
+        # FIN-3 (35.12.0): grão do turno de saída derivado do trace_data
+        # (duration do run; tokens = soma dos steps quando pipeline). Defensivo:
+        # shape varia por caminho — qualquer falha vira 0, nunca quebra o persist.
+        _lat = 0.0
+        _tok = 0
+        try:
+            _lat = float((trace_data or {}).get("duration_ms") or 0)
+            _tok = sum(int(st.get("tokens_used") or 0)
+                       for st in (trace_data or {}).get("pipeline_steps") or []
+                       if isinstance(st, dict))
+        except Exception:
+            pass
         await turns_repo.create({
             "id": str(uuid.uuid4()),
             "turn_number": next_turn + 1,
             "output_text_redacted": output_text,
             "interaction_id": sid,
+            "tokens_used": _tok,
+            "latency_ms": _lat,
         })
         # Persistir trace_data quando fornecido (2026-06-02). Round-trip do
         # /sessions/{id} GET reconstrói Rastreabilidade + Execution Log a

@@ -1816,6 +1816,9 @@ async def _run_declarative_as_interaction(
                 "turn_number": next_turn + 1,
                 "output_text_redacted": _maybe_redact(output_text),
                 "interaction_id": interaction_id,
+                # FIN-3: caminho declarativo não gasta LLM → tokens 0 legítimo.
+                "tokens_used": 0,
+                "latency_ms": float(decl.get("duration_ms") or 0),
             })
         except Exception as e:
             logger.warning("Declarativo (via cadeia): falha ao persistir turno de saída %s: %s", interaction_id, e)
@@ -4551,6 +4554,10 @@ async def execute_pipeline(
                     "turn_number": turn_number,
                     "output_text_redacted": _step_out,
                     "interaction_id": master_interaction_id,
+                    # FIN-3 (35.12.0): grão por step — tokens/latência REAIS
+                    # já calculados no step (custo auto-wire PR7).
+                    "tokens_used": int(step.get("tokens_used") or 0),
+                    "latency_ms": float(step.get("duration_ms") or 0),
                 })
                 turn_number += 1
 

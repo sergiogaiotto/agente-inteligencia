@@ -968,7 +968,7 @@ function playgroundPage() {
         // o recorte (este turno | sessão inteira — evolui a cada mensagem). As entradas
         // de TCO são editáveis (premissas do BP). help = modal da regra ("?").
         chatVerbosity: 'full', cockpitScope: 'sessao', cockpitBusy: false,
-        tcoVolume: 1000, tcoFx: 5.30, tcoAlvo: 0.50, tcoSaas: 0, tcoJuizPct: 0.15,
+        tcoVolume: 1000, tcoFx: Number('{{ fx_usd_brl() }}') || 5.30, tcoAlvo: 0.50, tcoSaas: 0, tcoJuizPct: 0.15,
         // Pipeline · 30d: agregado histórico da população (verifications/stats).
         pipeline30d: null, pipeline30dLoading: false,
         help: { open: false, key: '' },

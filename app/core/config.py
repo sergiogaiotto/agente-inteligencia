@@ -330,6 +330,12 @@ class Settings(BaseSettings):
     # 0 = DESLIGADO (default — flags OFF-by-default; o dono liga com a política).
     interactions_retention_days: int = 0
 
+    # ── Câmbio USD→BRL do Cockpit/TCO (35.12.0, FIN do roadmap) ──
+    # O default do campo "Câmbio" do Cockpit (o operador ainda pode sobrepor na
+    # tela por simulação). Era 5.30 HARDCODED no template — agora o operador
+    # pina a taxa da política de custos da empresa em runtime.
+    fx_usd_brl: float = 5.30
+
     # ── Circuit-breaker do egress LLM (cross-worker via Redis) — 33.1.0 ──
     # Contém o raio de um provider caído: após N falhas de ALCANCE consecutivas
     # (rede/timeout/URL ausente — via is_llm_unreachable), o circuito ABRE e as
@@ -566,6 +572,7 @@ _UI_TO_ENV_MAP = {
     "invoke_jobs_max_concurrent": "INVOKE_JOBS_MAX_CONCURRENT",
     "invoke_job_timeout_minutes": "INVOKE_JOB_TIMEOUT_MINUTES",
     "interactions_retention_days": "INTERACTIONS_RETENTION_DAYS",
+    "fx_usd_brl": "FX_USD_BRL",
     # Circuit-breaker do egress LLM (33.1.0) — comportamento, não-selado.
     "circuit_breaker_enabled": "CIRCUIT_BREAKER_ENABLED",
     "cb_failure_threshold": "CB_FAILURE_THRESHOLD",
@@ -607,6 +614,7 @@ PARAMETER_UI_KEYS = (
     "invoke_jobs_max_concurrent",
     "invoke_job_timeout_minutes",
     "interactions_retention_days",
+    "fx_usd_brl",
     "wizard_reasoning_effort",
 )
 
