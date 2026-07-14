@@ -71,30 +71,46 @@ async def owner_of_interaction(interaction_id: Optional[str]) -> Optional[str]:
 
 
 async def assert_can_access_interaction(interaction_id: Optional[str], user: Optional[dict]) -> None:
-    """Barra IDOR: se a interaction TEM dono e NÃO é o do chamador (nem root) → 404.
+    """Barra IDOR: interaction de OUTRO dono → 404; LEGADA sem dono → só root.
 
     404 (não 403) de propósito: não confirma a EXISTÊNCIA da conversa a um
-    não-dono (evita enumeração de ids). No-op quando: sem `interaction_id`, ou a
-    interaction é inexistente/legada-sem-dono (owner None), ou o chamador é root.
-    """
+    não-dono (evita enumeração de ids). No-op quando: sem `interaction_id`,
+    id INEXISTENTE (sessão nova que o caller acabou de cunhar), ou root.
+
+    ENDURECIMENTO 35.7.0 (decisão do dono, FF7): legada-sem-dono deixou de ser
+    liberada a todos — era o buraco residual do IDOR (qualquer autenticado lia
+    E, ao reusar o session_id, SEQUESTRAVA a conversa via stamp do 1º acesso).
+    Com o dono-na-criação (#595) toda linha nova nasce carimbada; as NULL são
+    só o legado — root as vê e pode atribuí-las cirurgicamente (claim)."""
     if not interaction_id:
-        return
-    owner = await owner_of_interaction(interaction_id)
-    if owner is None:            # inexistente OU legada sem dono → nada a barrar aqui
         return
     if _can_bypass(user):
         return
-    if owner != (user or {}).get("id"):
-        logger.warning(
-            "interaction_access.idor_blocked",
-            extra={
-                "event": "security.idor_blocked",
-                "interaction_id": interaction_id,
-                "owner_user_id": owner,
-                "caller_user_id": (user or {}).get("id"),
-            },
-        )
-        raise HTTPException(404, "Sessão não encontrada")
+    # Distinguir INEXISTENTE (permite — id novo) de LEGADA sem dono (root-only)
+    # exige olhar a linha, não só o owner (ambos davam None no lookup antigo).
+    try:
+        from app.core.database import interactions_repo
+        row = await interactions_repo.find_by_id(interaction_id)
+    except Exception as e:
+        logger.warning("interaction_access.lookup_failed id=%s: %s",
+                       interaction_id, str(e)[:150])
+        return  # fail-open (paridade com owner_of_interaction)
+    if not row:
+        return  # sessão nova — o invoke a criará (com dono, #595)
+    owner = row.get("owner_user_id")
+    if owner == (user or {}).get("id"):
+        return
+    logger.warning(
+        "interaction_access.idor_blocked",
+        extra={
+            "event": "security.idor_blocked",
+            "interaction_id": interaction_id,
+            "owner_user_id": owner,
+            "caller_user_id": (user or {}).get("id"),
+            "legacy_unowned": owner is None,
+        },
+    )
+    raise HTTPException(404, "Sessão não encontrada")
 
 
 async def stamp_interaction_owner(interaction_id: Optional[str], user_id: Optional[str]) -> None:

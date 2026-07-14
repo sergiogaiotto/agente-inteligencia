@@ -49,41 +49,61 @@ def _patch_pool(monkeypatch, owner):
     return sink
 
 
+def _patch_row(monkeypatch, row):
+    """35.7.0: o gate lê a LINHA (interactions_repo.find_by_id) — precisa
+    distinguir id INEXISTENTE (passa) de legada owner-NULL (root-only)."""
+    from unittest.mock import AsyncMock
+    from app.core import database as db
+    mock = AsyncMock(return_value=row)
+    monkeypatch.setattr(db.interactions_repo, "find_by_id", mock)
+    return mock
+
+
 class TestAccessGate:
     @pytest.mark.asyncio
     async def test_dono_passa(self, monkeypatch):
-        _patch_pool(monkeypatch, owner="user-A")
+        _patch_row(monkeypatch, {"id": "int-1", "owner_user_id": "user-A"})
         await ia.assert_can_access_interaction("int-1", {"id": "user-A"})  # não levanta
 
     @pytest.mark.asyncio
     async def test_alheio_404(self, monkeypatch):
-        _patch_pool(monkeypatch, owner="user-A")
+        _patch_row(monkeypatch, {"id": "int-1", "owner_user_id": "user-A"})
         with pytest.raises(HTTPException) as ei:
             await ia.assert_can_access_interaction("int-1", {"id": "user-B"})
         assert ei.value.status_code == 404  # 404 (não 403) — não confirma existência
 
     @pytest.mark.asyncio
-    async def test_legada_sem_dono_passa(self, monkeypatch):
-        _patch_pool(monkeypatch, owner=None)  # interaction sem owner (legada/inexistente)
-        await ia.assert_can_access_interaction("int-1", {"id": "user-B"})  # não levanta
+    async def test_inexistente_passa(self, monkeypatch):
+        # Sessão NOVA (id cunhado pelo caller): o invoke a criará já com dono (#595)
+        _patch_row(monkeypatch, None)
+        await ia.assert_can_access_interaction("nova-1", {"id": "user-B"})  # não levanta
+
+    @pytest.mark.asyncio
+    async def test_legada_sem_dono_bloqueia_nao_root(self, monkeypatch):
+        """ENDURECIDO em 35.7.0 (FF7, decisão do dono): legada NULL era liberada
+        a todos — leitura + sequestro via stamp do 1º acesso. Agora root-only."""
+        _patch_row(monkeypatch, {"id": "int-1", "owner_user_id": None})
+        with pytest.raises(HTTPException) as ei:
+            await ia.assert_can_access_interaction("int-1", {"id": "user-B"})
+        assert ei.value.status_code == 404
 
     @pytest.mark.asyncio
     async def test_root_bypassa(self, monkeypatch):
-        _patch_pool(monkeypatch, owner="user-A")
+        _patch_row(monkeypatch, {"id": "int-1", "owner_user_id": "user-A"})
         await ia.assert_can_access_interaction("int-1", {"id": "user-B", "role": "root"})
 
     @pytest.mark.asyncio
     async def test_admin_NAO_bypassa(self, monkeypatch):
-        _patch_pool(monkeypatch, owner="user-A")
+        _patch_row(monkeypatch, {"id": "int-1", "owner_user_id": "user-A"})
         with pytest.raises(HTTPException):
             await ia.assert_can_access_interaction("int-1", {"id": "user-B", "role": "admin"})
 
     @pytest.mark.asyncio
     async def test_sem_interaction_id_noop(self, monkeypatch):
-        sink = _patch_pool(monkeypatch, owner="user-A")
+        mock = _patch_row(monkeypatch, {"id": "x", "owner_user_id": "user-A"})
         await ia.assert_can_access_interaction(None, {"id": "user-B"})
         await ia.assert_can_access_interaction("", {"id": "user-B"})
-        assert sink == {}  # nem consulta o banco
+        mock.assert_not_called()  # nem consulta o banco
 
 
 class TestStamp:
