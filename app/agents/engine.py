@@ -1754,8 +1754,10 @@ async def _run_declarative_as_interaction(
             await interactions_repo.update(interaction_id, {"state": "Intake"})
         else:
             # Dono na CRIAÇÃO (35.4.0) — paridade com o run_intake do FSM.
-            from app.core.interaction_access import interaction_owner_for_creation
+            from app.core.interaction_access import (
+                interaction_owner_for_creation, interaction_customer_hash_for_creation)
             _owner = interaction_owner_for_creation()
+            _chash = interaction_customer_hash_for_creation()  # LGPD-2: pivô do esquecimento
             await interactions_repo.create({
                 "id": interaction_id,
                 "title": _maybe_redact(msg)[:80].strip() or (agent.get("name") or "agent")[:80],
@@ -1764,6 +1766,7 @@ async def _run_declarative_as_interaction(
                 "journey_id": "",
                 "state": "Intake",
                 **({"owner_user_id": _owner} if _owner else {}),
+                **({"customer_hash": _chash} if _chash else {}),
             })
         await turns_repo.create({
             "id": str(uuid.uuid4()),
@@ -1903,6 +1906,9 @@ async def execute_interaction(
     # execute_pipeline). Aqui cobre o invoke de agente avulso quando o caller
     # optar por passar; None = comportamento atual (stamp pós-execução).
     owner_user_id: str | None = None,
+    # customer_ref (35.9.0, LGPD-2): id do cliente-final → hash na interaction
+    # (pivô do esquecimento). None = sem pivô (comportamento atual).
+    customer_ref: str | None = None,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
 
@@ -1932,6 +1938,9 @@ async def execute_interaction(
     if owner_user_id:
         from app.core.interaction_access import set_interaction_owner_for_creation
         set_interaction_owner_for_creation(owner_user_id)
+    if customer_ref:  # LGPD-2: pivô do esquecimento (hash na criação)
+        from app.core.interaction_access import set_interaction_customer_for_creation
+        set_interaction_customer_for_creation(customer_ref)
     agent = await _topo_agent(agent_id)
     if not agent:
         raise ValueError(f"Agente '{agent_id}' não encontrado.")
@@ -3521,6 +3530,9 @@ async def execute_pipeline(
     # (IDOR). Flui por ContextVar até os pontos de criação; o stamp pós-execução
     # das rotas vira rede de segurança (idempotente, WHERE owner IS NULL).
     owner_user_id: str | None = None,
+    # customer_ref (35.9.0, LGPD-2): id do cliente-final → hash na interaction
+    # (master + filhas), pivô do direito ao esquecimento. None = sem pivô.
+    customer_ref: str | None = None,
 ) -> dict:
     """Executa pipeline completo pelo AI Mesh.
 
@@ -3548,6 +3560,9 @@ async def execute_pipeline(
     if owner_user_id:
         from app.core.interaction_access import set_interaction_owner_for_creation
         set_interaction_owner_for_creation(owner_user_id)
+    if customer_ref:  # LGPD-2: pivô do esquecimento (hash na criação)
+        from app.core.interaction_access import set_interaction_customer_for_creation
+        set_interaction_customer_for_creation(customer_ref)
     # Cache de topologia por requisição (25.2.0): liga o memo de mesh/agents
     # do caminho quente quando o toggle permite. contextvar é request-scoped
     # (sem vazar entre requisições concorrentes); resetado antes do return.

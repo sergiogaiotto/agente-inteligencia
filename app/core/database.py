@@ -1330,6 +1330,11 @@ _IDEMPOTENT_MIGRATIONS = [
     # (default 'Intake'). Sem índice, viram seq scan conforme a tabela cresce.
     "CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_interactions_state ON interactions(state)",
+    # LGPD-2 (35.9.0): esquecimento por titular busca por customer_hash; sem
+    # índice viraria seq scan. Coluna já existe no SCHEMA base (parcial: só as
+    # linhas COM customer_hash — a maioria é NULL).
+    "CREATE INDEX IF NOT EXISTS idx_interactions_customer_hash "
+    "ON interactions(customer_hash) WHERE customer_hash IS NOT NULL",
     # ── Q5 anti-auto-preferência do juiz (33.9.0) ──
     # generator_model = modelo que GEROU o draft; self_judged = mesmo modelo
     # gerou E julgou (o juiz pode se favorecer). Torna o viés AUDITÁVEL.
