@@ -49,6 +49,12 @@ async def forget_customer_data(
             "customer_hash_prefix": chash[:16],
             "deleted": result["deleted"],
             "scrubbed_verifications": result["scrubbed_verifications"],
+            # 35.15.1 (achado da auditoria #4): um DSAR de sessão MISTA apaga
+            # turns/jobs/arquivos sem deletar interaction inteira — sem estes
+            # contadores o esquecimento parecia um no-op na auditoria.
+            "turns_deleted": result.get("turns_deleted", 0),
+            "invoke_jobs_deleted": result.get("invoke_jobs_deleted", 0),
+            "files_deleted": result.get("files_deleted", 0),
         }),
     })
     return {
@@ -56,6 +62,9 @@ async def forget_customer_data(
         "customer_hash_prefix": chash[:16],
         "deleted_interactions": result["deleted"],
         "scrubbed_verifications": result["scrubbed_verifications"],
+        "turns_deleted": result.get("turns_deleted", 0),
+        "invoke_jobs_deleted": result.get("invoke_jobs_deleted", 0),
+        "files_deleted": result.get("files_deleted", 0),
         "hint": ("Conversas apagadas e texto do juiz anonimizado. Os agregados "
                  "de custo/qualidade (sem conteúdo pessoal) foram preservados."),
     }

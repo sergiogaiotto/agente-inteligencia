@@ -294,6 +294,25 @@ async def _run_job(job_id: str) -> None:
                 "interaction_id": event.get("interaction_id"),
             })
 
+    # Re-herança do pivô LGPD em RUNTIME (35.15.1, achado da auditoria #4): a
+    # herança no ACEITE (customer_hash_of_interaction) podia perder a corrida —
+    # um follow-up sem customer_ref aceito ANTES do 1º job criar/carimbar a
+    # interaction nascia com hash NULL e a conversa (request_payload/result)
+    # sobrevivia ao forget. Aqui a interaction da sessão JÁ existe (o worker roda
+    # depois): re-resolve e PERSISTE no job (para o forget o alcançar).
+    _job_chash = job.get("customer_hash")
+    if not _job_chash and req.get("session_id"):
+        from app.core.interaction_access import customer_hash_of_interaction
+        _job_chash = await customer_hash_of_interaction(req.get("session_id"))
+        if _job_chash:
+            try:
+                async with _pool().acquire() as con:
+                    await con.execute(
+                        "UPDATE invoke_jobs SET customer_hash = $1 "
+                        "WHERE id = $2 AND customer_hash IS NULL", _job_chash, job_id)
+            except Exception:
+                logger.warning("event=invoke_job_rehash_failed job_id=%s", job_id)
+
     # Relógio do trecho executável (35.14.7): latência REAL dos abortos pós-
     # execução → histograma RED (o custo parcial não a alimenta mais desde o
     # emit_metrics=False do 35.14.6).
@@ -315,7 +334,7 @@ async def _run_job(job_id: str) -> None:
                 # aborto DETERMINÍSTICO pós-criação — sem isto, master/filhas
                 # ficavam órfãs SEM dono (listáveis/sequestráveis: IDOR).
                 owner_user_id=job.get("owner_user_id"),
-                customer_hash=job.get("customer_hash"),  # 35.14.2: hash (não ref cru)
+                customer_hash=_job_chash,  # 35.14.2: hash (não ref cru); re-herdado 35.15.1
             ),
             timeout=_timeout_min * 60.0,
         )
