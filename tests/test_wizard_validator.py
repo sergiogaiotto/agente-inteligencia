@@ -20,16 +20,12 @@ Testes cobrem:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from app.skill_parser.wizard_validator import (
-    IMPERATIVE_VERBS,
-    PASSIVE_VERBS,
-    ValidationResult,
-    Violation,
     _extract_operations_from_workflow,
     _has_imperative_verb,
     _find_passive_phrase,

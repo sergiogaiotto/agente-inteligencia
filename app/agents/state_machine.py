@@ -10,15 +10,12 @@ Invariantes:
 """
 
 import uuid
-import time
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 
 from app.core.datetime_utils import naive_utc_now
 from enum import Enum
-from typing import Optional
 from app.core.database import interactions_repo, turns_repo, audit_repo
 from app.core.config import get_settings
 from app.core.dlp import redact_for_persist, count_pii

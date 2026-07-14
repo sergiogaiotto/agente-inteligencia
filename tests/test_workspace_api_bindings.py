@@ -16,7 +16,6 @@ Cobertura:
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI

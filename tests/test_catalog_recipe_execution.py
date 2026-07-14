@@ -18,7 +18,6 @@ Cobre dois níveis:
 from __future__ import annotations
 
 import uuid
-from typing import Optional
 
 import pytest
 from fastapi import FastAPI

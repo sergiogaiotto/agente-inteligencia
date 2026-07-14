@@ -36,9 +36,7 @@ A cada save, mais uma camada de cifragem. Token efetivamente perdido.
 from __future__ import annotations
 
 import os
-from typing import Any
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

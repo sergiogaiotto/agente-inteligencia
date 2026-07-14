@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.core.crypto import encrypt_secret, decrypt_secret
+from app.core.crypto import encrypt_secret
 from app.core.ssrf import validate_public_url, SSRFError
 from app.core.http_auth import (
     build_auth_headers as _http_build_auth_headers,

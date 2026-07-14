@@ -97,7 +97,7 @@ def test_each_promote_or_append_invalidates_stats():
     assert not problems, (
         "Handler(s) de mutação de data_tables esquecem de invalidar stats "
         "do card de KB. Adicione `if (this.refreshStatsFor) await "
-        f"this.refreshStatsFor(sid);` após loadTablesForSource.\n\n"
+        "this.refreshStatsFor(sid);` após loadTablesForSource.\n\n"
         + "\n".join(problems)
     )
 

@@ -14,10 +14,7 @@ todos os testes que importam o service vão skip via pytest.importorskip.
 from __future__ import annotations
 
 import asyncio
-import os
-import uuid
 from pathlib import Path
-from typing import Any, Optional
 
 import pytest
 from fastapi import FastAPI
@@ -456,7 +453,7 @@ def isolated_storage(monkeypatch, tmp_path):
 
     # next_version_for_slug: começa em 1, incrementa por slug
     async def fake_next_version(ks_id, slug):
-        existing = [t for t in table_store.values()
+        _existing = [t for t in table_store.values()
                     if t["knowledge_source_id"] == ks_id
                     and t.get("urn", "").endswith(f":{slug}:" + t.get("version", ""))]
         # Conta tabelas com mesmo slug

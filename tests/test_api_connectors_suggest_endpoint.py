@@ -32,9 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

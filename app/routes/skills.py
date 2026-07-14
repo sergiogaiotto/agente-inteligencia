@@ -1,7 +1,7 @@
 """Rotas de skills — parse canônico SKILL.md §5."""
 import logging
 import re
-import uuid, json, hashlib
+import uuid, hashlib
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import SkillCreateRaw, SkillCreateManual
 from app.core.database import skills_repo, _get_pool

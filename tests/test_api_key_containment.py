@@ -11,7 +11,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.core import api_auth
 from app.core.api_auth import (
     _is_escalation_path,
     _is_public_surface,

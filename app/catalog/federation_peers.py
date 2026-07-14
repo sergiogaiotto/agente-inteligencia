@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
-from datetime import datetime
 
 from app.core.datetime_utils import naive_utc_now
 from typing import Optional

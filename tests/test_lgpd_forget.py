@@ -8,8 +8,7 @@ Pseudonimização: só o HASH é guardado, nunca o ref cru — nem na auditoria.
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -102,7 +101,6 @@ class TestForgetCustomer:
 
 
 def _client(monkeypatch, *, role="root", forget_result=None):
-    from app.core.auth import require_user
     from app.routes.privacy import router
     from app.core import auth as auth_mod
 

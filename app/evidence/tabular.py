@@ -39,9 +39,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from app.core.config import get_settings
 from app.core.database import (
-    _get_pool,
     data_table_query_logs_repo,
     data_tables_repo,
     knowledge_repo,
@@ -53,7 +51,6 @@ from app.data_tables.events import (
     EVT_APPEND_COMPLETED,
     EVT_APPEND_FAILED,
     EVT_APPEND_STARTED,
-    EVT_DUCKDB_ERROR,
     EVT_PROMOTE_COMPLETED,
     EVT_PROMOTE_FAILED,
     EVT_PROMOTE_STARTED,

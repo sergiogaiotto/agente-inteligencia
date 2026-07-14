@@ -34,7 +34,6 @@ from fastapi.testclient import TestClient
 from app.core.database import skills_repo
 from app.evidence import pgvector_store
 from app.evidence.runtime import Retriever
-from app.routes import skills as skills_routes
 from app.routes.skills import router as skills_router
 
 GOOD_UUID = "fabeca4a-9d47-4637-88c6-200fb43c7b22"

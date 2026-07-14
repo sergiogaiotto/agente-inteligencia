@@ -6,7 +6,6 @@ na dúvida, NEGA. 100% puro — sem DB, sem LLM.
 """
 from __future__ import annotations
 
-import pytest
 
 from app.data_tables.governance import (
     allowed_cols_from_catalog,

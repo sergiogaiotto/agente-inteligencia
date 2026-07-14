@@ -196,7 +196,6 @@ async def _check_duckdb() -> dict:
     Não tem UI nativa. Diretório raiz das tabelas é `data/tabular/`.
     Description menciona Onda Tabular para alinhar com outros services.
     """
-    from pathlib import Path
     t0 = time.perf_counter()
     description = "Engine SQL embarcado para tabelas tabulares (Onda Tabular)"
     try:

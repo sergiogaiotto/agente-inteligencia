@@ -7,7 +7,6 @@ sem I/O) e o cabeamento (rota + método/botão no template).
 import io
 from pathlib import Path
 
-import pytest
 
 from app.playground.cockpit_pptx import build_cockpit_pptx
 

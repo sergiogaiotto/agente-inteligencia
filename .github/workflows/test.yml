@@ -281,11 +281,11 @@ jobs:
         run: docker rm -f maestro_app || true
 
   lint:
-    # ruff ADVISORY (33.3.0): estabelece a linha de base de lint SEM travar merges
-    # (continue-on-error no step → job sempre verde). Promover a gate `required`
-    # depois de um PR de limpeza (hoje ~61 issues de alto sinal, ~50 auto-fixáveis).
-    # Config + ruleset em pyproject.toml.
-    name: ruff (advisory)
+    # ruff BLOQUEANTE (35.10.0): a base foi zerada (186 issues → 0 no PR de
+    # limpeza; re-exports deliberados marcados com noqa documentado). O job
+    # agora FALHA em lint novo — promova a required na branch protection
+    # (ação do dono) p/ virar gate de merge. Config em pyproject.toml.
+    name: ruff
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -301,9 +301,8 @@ jobs:
       - name: Install ruff
         run: pip install ruff
 
-      - name: ruff check (advisory — não bloqueia)
-        continue-on-error: true
-        run: ruff check app/ --output-format=github
+      - name: ruff check (bloqueante — base zerada em 35.10.0)
+        run: ruff check app/ tests/ --output-format=github
 
   security-audit:
     # pip-audit ADVISORY (33.3.0): varre requirements.txt por CVEs conhecidos.

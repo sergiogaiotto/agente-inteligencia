@@ -13,7 +13,6 @@ Cobertura desta fase 1:
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI

@@ -13,8 +13,7 @@ import re
 import hashlib
 import json
 import yaml
-from dataclasses import dataclass, field, asdict
-from typing import Optional
+from dataclasses import dataclass, field
 
 
 logger = logging.getLogger(__name__)

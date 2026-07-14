@@ -20,7 +20,6 @@ SEM erros. É a verificação (e a regressão) do fix entregue na config da skil
 """
 from __future__ import annotations
 
-import pytest
 
 from app.agents.declarative_engine import _apply_output_mapping
 

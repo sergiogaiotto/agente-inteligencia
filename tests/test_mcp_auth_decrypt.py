@@ -13,7 +13,6 @@ Espelha o que mcp/runtime.py já fazia em invocação real (linha 702).
 """
 from __future__ import annotations
 
-import pytest
 
 from app.core.secrets import encrypt
 from app.routes.dashboard import _build_mcp_auth

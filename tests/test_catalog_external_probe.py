@@ -13,7 +13,6 @@ Sem rede/Postgres: repos, queries de adapter e run_probe são monkeypatchados.
 from __future__ import annotations
 
 import asyncio
-import socket as _socket
 
 import pytest
 from fastapi import FastAPI

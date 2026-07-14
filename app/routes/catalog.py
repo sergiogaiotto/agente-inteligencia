@@ -22,7 +22,6 @@ import logging
 import uuid
 from typing import Optional
 
-from datetime import datetime, timezone
 
 from app.core.datetime_utils import naive_utc_now
 

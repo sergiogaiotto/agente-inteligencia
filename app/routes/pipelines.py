@@ -232,7 +232,9 @@ async def _debit_api_key_cost(api_key_id, pid: str, result: dict) -> None:
 # (`from app.routes.pipelines import drain_invoke_analytics`).
 from app.core.analytics_tasks import (  # noqa: E402
     schedule_analytics as _schedule_analytics,
-    drain_analytics as drain_invoke_analytics,
+    # RE-EXPORT deliberado (não é import morto): main.py e os testes consomem
+    # `from app.routes.pipelines import drain_invoke_analytics` (retrocompat 33.7.0).
+    drain_analytics as drain_invoke_analytics,  # noqa: F401
 )
 
 
@@ -990,7 +992,7 @@ async def invoke_pipeline(
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
-    except Exception as e:
+    except Exception:
         # NÃO vazar str(e) do engine ao cliente externo (info-leak). Loga o erro
         # completo (com traceback) e devolve código estável + request_id p/ o
         # operador correlacionar no log sem expor internals.
@@ -1064,7 +1066,6 @@ async def invoke_pipeline_stream(
     consome via fetch+ReadableStream e mostra o passo-a-passo ao vivo. Espelha o
     padrão do POST /workspace/chat/stream (queue + progress_callback + StreamingResponse).
     """
-    import asyncio
     from fastapi.responses import StreamingResponse
 
     # dry é IGNORADO no stream (contrato de schemas.py) — neutraliza ANTES dos

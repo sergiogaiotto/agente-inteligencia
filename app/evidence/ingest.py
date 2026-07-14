@@ -19,8 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.core.config import get_settings
-from app.core.database import _get_pool, evidence_chunks_repo, knowledge_repo
+from app.core.database import _get_pool, knowledge_repo
 from app.core.datetime_utils import naive_utc_now
 from app.core.otel import get_tracer
 from app.evidence.chunker import chunk_text

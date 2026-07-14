@@ -12,9 +12,7 @@ Stack desta PR:
 """
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI

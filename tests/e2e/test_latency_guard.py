@@ -9,7 +9,6 @@ Requer app docker de pé + Postgres acessível via `docker exec agente_postgres`
 """
 from __future__ import annotations
 
-import json
 import subprocess
 
 import pytest

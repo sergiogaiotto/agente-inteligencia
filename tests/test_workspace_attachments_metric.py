@@ -32,9 +32,7 @@ Helpers: `formatBytes`, `attachmentIcon`, `attachmentBadgeClass`,
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
-import pytest
 
 
 def _workspace_html() -> str:

@@ -4,9 +4,7 @@ POST /api/v1/pipelines/{id}/invoke resolve raiz+membros e executa via
 execute_pipeline DELIMITADO ao subgrafo. aposentado→409; sem message→400;
 sem raiz→422; happy→executa selado (allowed_agent_ids=membros).
 """
-import asyncio
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

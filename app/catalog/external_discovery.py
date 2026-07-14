@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
 
 from app.catalog.external_probe import _http_request
 from app.core.http_auth import build_auth_headers

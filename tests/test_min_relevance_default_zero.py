@@ -25,7 +25,6 @@ valor declarado — não há mudança nesse caminho.
 """
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 

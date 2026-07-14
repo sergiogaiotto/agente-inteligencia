@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 
-import pytest
 
 from app.core.llm_pricing import PRICING, compute_cost, get_pricing
 

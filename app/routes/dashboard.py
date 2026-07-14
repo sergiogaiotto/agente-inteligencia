@@ -142,7 +142,7 @@ def _build_mcp_auth(auth_type: str = "", auth_token: str = "", auth_config: str 
         cert_pem = config.get("client_cert", "")
         key_pem = config.get("client_key", "")
         if cert_pem and key_pem:
-            import tempfile, os
+            import tempfile
             # Escrever PEMs em arquivos temporários (httpx exige paths)
             cert_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
             cert_file.write(cert_pem)
@@ -225,11 +225,11 @@ def _cleanup_mcp_auth(auth_result: dict):
     if cert and isinstance(cert, tuple):
         for path in cert:
             try: os.unlink(path)
-            except: pass
+            except Exception: pass
     verify = auth_result.get("client_kwargs", {}).get("verify")
     if verify and isinstance(verify, str) and verify.endswith('.pem'):
         try: os.unlink(verify)
-        except: pass
+        except Exception: pass
 
 # ═══ Dashboard ═══
 @router.get("/dashboard/stats")
@@ -2385,7 +2385,7 @@ async def _test_mcp_connection_impl(data: MCPTestRequest) -> dict:
                 try:
                     await client.post(endpoint, json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
                                       headers=headers)
-                except: pass
+                except Exception: pass
 
                 try:
                     tools_resp = await client.post(endpoint, json={
@@ -2401,7 +2401,7 @@ async def _test_mcp_connection_impl(data: MCPTestRequest) -> dict:
                     if "result" in tools_data:
                         for t in tools_data["result"].get("tools", []):
                             discovered_tools.append({"name": t.get("name",""), "description": t.get("description",""), "inputSchema": t.get("inputSchema",{})})
-                except: pass
+                except Exception: pass
 
                 recommendations.append(f"Servidor: {server_name}")
                 if discovered_tools:
@@ -2907,7 +2907,7 @@ async def save_settings(
     try:
         from app.core.config import apply_settings_to_env
         applied = await apply_settings_to_env()
-    except Exception as e:
+    except Exception:
         applied = 0
     await audit_repo.create({
         "entity_type": "settings", "entity_id": "platform",

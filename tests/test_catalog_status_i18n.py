@@ -9,7 +9,6 @@ Garante que:
 """
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 import tempfile

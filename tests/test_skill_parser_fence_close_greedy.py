@@ -20,7 +20,6 @@ pegar o fim do fence onde quer que ele esteja. Aplicado a
 """
 from __future__ import annotations
 
-import pytest
 
 from app.skill_parser.parser import (
     _extract_fenced_yaml_body,

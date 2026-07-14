@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.core import config as _config
-from app.verifier.runtime import Verifier, VerificationResult
+from app.verifier.runtime import Verifier
 
 
 @pytest.fixture

@@ -26,8 +26,11 @@ import logging
 from collections import Counter
 
 from app.core.database import (
-    gold_cases_repo, eval_runs_repo, releases_repo, agents_repo, drift_repo,
+    gold_cases_repo, eval_runs_repo, agents_repo, drift_repo,
     pipelines_repo,
+    # Seam de teste (não é import morto): os testes monkeypatcham
+    # evaluator.releases_repo — remover quebra a suíte.
+    releases_repo,  # noqa: F401
 )
 from app.core.config import get_settings
 from app.agents.engine import execute_interaction, execute_pipeline

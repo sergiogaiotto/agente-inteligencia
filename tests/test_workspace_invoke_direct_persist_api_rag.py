@@ -14,9 +14,7 @@ no mesmo formato que o MCP, e retornam `interaction_id` no response.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

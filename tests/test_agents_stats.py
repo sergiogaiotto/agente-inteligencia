@@ -17,7 +17,7 @@ tests/integration/ (skipped quando sem DB).
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI

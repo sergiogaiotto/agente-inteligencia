@@ -7,7 +7,6 @@ passa (limitação conhecida); cap acomoda o maior corpo legítimo (anexos ~67MB
 
 from __future__ import annotations
 
-import json
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient

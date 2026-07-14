@@ -18,7 +18,6 @@ aparece, (b) extras carregam contexto suficiente para debug.
 """
 from __future__ import annotations
 
-import json
 import logging
 
 import pytest

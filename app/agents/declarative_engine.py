@@ -14,7 +14,6 @@ import logging
 import re
 import time
 import uuid
-from datetime import datetime
 
 from app.core.datetime_utils import naive_utc_now
 from typing import Any
@@ -1139,7 +1138,6 @@ async def execute_declarative(
                 elif on_failure == "fail":
                     fatal = True
             else:
-                level_had_success = True
                 level_additions = _deep_merge(level_additions, r["additions"])
 
         if level_additions:

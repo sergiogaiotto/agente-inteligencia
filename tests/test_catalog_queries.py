@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 
 from app.catalog.queries import (
     _user_domains,

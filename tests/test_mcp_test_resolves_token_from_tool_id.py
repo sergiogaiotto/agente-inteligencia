@@ -43,7 +43,6 @@ Token armazenado pode estar cifrado (`fernet:`); `_build_mcp_auth` chama
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import pytest
 from fastapi import FastAPI
@@ -101,7 +100,7 @@ def mocked_test_impl(monkeypatch):
     # rode de verdade. Em vez disso, paramos a execução após `_build_mcp_auth`
     # já ter sido chamado, retornando um stub de resultado.
 
-    real_impl = dashboard._test_mcp_connection_impl
+    _real_impl = dashboard._test_mcp_connection_impl
 
     async def lite_impl(data):
         # Roda _resolve + _build_mcp_auth (capturado pelo spy) e retorna

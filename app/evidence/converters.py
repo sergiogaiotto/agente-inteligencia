@@ -101,10 +101,10 @@ def convert_bytes(
             try:
                 stream = io.BytesIO(data)
                 result = md.convert_stream(stream, file_extension=Path(filename).suffix)
-            except Exception as e2:
+            except Exception:
                 # Fallback final: escreve em tmpfile e chama convert(path)
                 return _convert_via_tmpfile(md, data, filename, span)
-        except Exception as e:
+        except Exception:
             return _convert_via_tmpfile(md, data, filename, span)
 
         text = (result.text_content or "").strip()

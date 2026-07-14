@@ -9,10 +9,8 @@ Cobre:
 
 from __future__ import annotations
 
-import json
 import logging
 
-import pytest
 
 from app.agents.prompted_tools import (
     build_prompted_tools_system,
