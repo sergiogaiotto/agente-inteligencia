@@ -225,6 +225,11 @@ app.state.templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # {{ app_version }} (rodapé da UI). Fonte única: app/core/version.py (importado
 # no topo).
 app.state.templates.env.globals["app_version"] = APP_VERSION
+# Câmbio USD→BRL (35.12.0): default do Cockpit vem do setting (runtime, sem
+# restart — callable, mesmo padrão do text_to_sql_enabled). O template usa
+# {{ fx_usd_brl() }} como valor inicial de tcoFx.
+from app.core.config import get_settings as _gs_fx
+app.state.templates.env.globals["fx_usd_brl"] = lambda: _gs_fx().fx_usd_brl
 # Tier 2 (text-to-SQL governado): flag exposta como CALLABLE aos templates —
 # `{% if text_to_sql_enabled() %}` reflete o toggle em runtime (lê o env a cada
 # render), sem restart. Default OFF → a aba "Perguntar" não renderiza.

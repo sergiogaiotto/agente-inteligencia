@@ -190,6 +190,9 @@ class InteractionStateMachine:
         self.ctx.agent_id = agent_id
         self.ctx.journey = journey
         self.ctx.channel = channel
+        # FIN-3 (35.12.0): âncora p/ latency_ms do turno de saída (monotonic
+        # não retrocede; mede intake→close = a interação inteira).
+        self.ctx.metadata["_t0_monotonic"] = time.monotonic()
 
         # Conta PII para audit antes de redactar (sinaliza que existia)
         pii = count_pii(user_input)
@@ -308,10 +311,27 @@ class InteractionStateMachine:
             # legado preservado). Em sessão reutilizada: next_user_turn=N → output
             # turn=N+1, evitando sobrescrever turns anteriores.
             output_turn = (self.ctx.next_user_turn or 1) + 1
+            # FIN-3 (35.12.0): grão por turno — tokens da geração (billed) e
+            # latência intake→close no turno do ASSISTANT (o de input fica 0:
+            # a geração pertence à resposta). Colunas existiam mortas no DDL.
+            _tok = 0
+            try:
+                _tok = int((self.ctx.metadata.get("tokens") or {}).get("total_billed") or 0)
+            except Exception:
+                pass
+            _lat = 0.0
+            try:
+                _t0 = self.ctx.metadata.get("_t0_monotonic")
+                if _t0:
+                    _lat = round((time.monotonic() - _t0) * 1000, 2)
+            except Exception:
+                pass
             await turns_repo.create({
                 "id": str(uuid.uuid4()),
                 "turn_number": output_turn,
                 "output_text_redacted": _maybe_redact(self.ctx.final_output),
                 "interaction_id": self.ctx.interaction_id,
+                "tokens_used": _tok,
+                "latency_ms": _lat,
             })
         return self.ctx
