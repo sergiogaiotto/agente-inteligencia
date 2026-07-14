@@ -194,7 +194,8 @@ class TestEngineEWorkspaceInvariantes:
     def test_workspace_persiste_verification_no_trace_data(self):
         from pathlib import Path
         src = Path("app/routes/workspace.py").read_text(encoding="utf-8")
-        assert '"mode","verification"]' in src.replace("'", '"')
+        # 35.3.0: o allowlist ganhou output_agent (autoria no reload da sessão)
+        assert '"mode","verification","output_agent"]' in src.replace("'", '"')
 
     def test_ramo_async_exclui_steps_de_pipeline(self):
         """Finding MEDIUM da revisão: o judge async persistiria DEPOIS da
