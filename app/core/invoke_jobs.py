@@ -1,0 +1,475 @@
+"""Job store DURÁVEL do invoke assíncrono 202 — Onda 6 (34.0.0).
+
+POST /pipelines/{id}/invoke/async valida TUDO no aceite (mesmos gates do sync),
+persiste o contexto validado em `invoke_jobs` e devolve 202 + job_id; a execução
+roda numa task deste processo e o cliente faz polling em GET /jobs/{job_id}.
+
+Decisões (deliberadas, ≠ verifier_jobs onde o retry é barato):
+- O INSERT do job é ON-PATH e fail-loud: o 202 devolve um id que TEM que existir
+  (desvio consciente do padrão best-effort do dispatcher do juiz).
+- Órfão 'running' de um boot anterior vira 'lost' e NUNCA é re-executado — um
+  invoke paga LLM e pode ter efeitos colaterais (bindings HTTP). Só 'queued'
+  (nunca começou a executar) é retomado no boot/reaper.
+- O write de conclusão tem retry: se falhasse silencioso (padrão best-effort),
+  o cliente pollaria para sempre um job já terminado.
+- O reaper é o PRIMEIRO loop periódico do app: retenção de jobs terminais +
+  despacho de 'queued' quando abre vaga (o verifier só retoma no boot).
+- Single-process por design (uvicorn 1 worker, mesmo pressuposto do resto do
+  app): o claim atômico (UPDATE ... WHERE status='queued' RETURNING) já deixa
+  o caminho pronto para multi-worker sem double-run.
+"""
+import asyncio
+import json
+import logging
+import uuid
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+REAPER_INTERVAL_SECONDS = 60
+# 'running' mais velho que isto SEM task viva neste processo = zumbi (a folga
+# cobre a janela entre o claim e o registro em _active_job_ids — que na prática
+# é zero, pois o id entra no set ANTES do claim).
+_ZOMBIE_GRACE_MINUTES = 10
+
+# Retenção in-process (anti-GC + inventário p/ o zumbi-check e o shutdown).
+_active_tasks: set = set()
+_active_job_ids: set = set()
+_reaper_task: Optional[asyncio.Task] = None
+
+
+def _pool():
+    from app.core.database import _get_pool
+    return _get_pool()
+
+
+def _max_concurrent() -> int:
+    from app.core.config import get_settings
+    try:
+        return max(1, int(get_settings().invoke_jobs_max_concurrent or 4))
+    except Exception:
+        return 4
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Criação (ON-PATH no POST 202) + Idempotency-Key
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def find_existing_job(*, owner_user_id: Optional[str], api_key_id: Optional[str],
+                            pipeline_id: str, idempotency_key: Optional[str]) -> Optional[dict]:
+    """Replay-lookup da Idempotency-Key. A rota chama ANTES dos gates mutáveis
+    (orçamento/aposentado/escopo) — review adversarial: um retry legítimo NÃO
+    pode perder acesso ao job que já pagou porque o débito do próprio job
+    estourou o orçamento no meio-tempo. Escopo POR KEY (COALESCE): integrações
+    irmãs do mesmo dono não colidem chaves entre si."""
+    if not idempotency_key:
+        return None
+    async with _pool().acquire() as con:
+        row = await con.fetchrow(
+            "SELECT * FROM invoke_jobs WHERE owner_user_id = $1 AND pipeline_id = $2 "
+            "AND idempotency_key = $3 AND COALESCE(api_key_id, '') = COALESCE($4, '')",
+            owner_user_id, pipeline_id, idempotency_key, api_key_id,
+        )
+    return dict(row) if row else None
+
+
+async def create_job(*, pipeline_id: str, owner_user_id: Optional[str],
+                     api_key_id: Optional[str], idempotency_key: Optional[str],
+                     request_payload: dict) -> tuple[dict, bool]:
+    """INSERT do job. Retorna (job, created).
+
+    Replay de Idempotency-Key (mesmo dono+key-criadora+pipeline+chave) NÃO cria
+    linha nova: o UNIQUE parcial dispara o ON CONFLICT DO NOTHING e devolvemos o
+    job EXISTENTE (created=False) — é assim que o retry de um proxy com timeout
+    deixa de re-executar pagando LLM. A comparação de corpo (request_hash)
+    fica com o caller (409 se a mesma key vier com payload diferente)."""
+    job_id = f"ij_{uuid.uuid4().hex[:16]}"
+    payload_txt = json.dumps(request_payload, ensure_ascii=False, default=str)
+    async with _pool().acquire() as con:
+        row = await con.fetchrow(
+            "INSERT INTO invoke_jobs (id, pipeline_id, owner_user_id, api_key_id, "
+            "idempotency_key, request_payload, status) "
+            "VALUES ($1, $2, $3, $4, $5, $6, 'queued') "
+            "ON CONFLICT DO NOTHING RETURNING *",
+            job_id, pipeline_id, owner_user_id, api_key_id, idempotency_key, payload_txt,
+        )
+    if row:
+        return dict(row), True
+    # Conflito = replay da Idempotency-Key (único UNIQUE além da PK aleatória).
+    existing = await find_existing_job(
+        owner_user_id=owner_user_id, api_key_id=api_key_id,
+        pipeline_id=pipeline_id, idempotency_key=idempotency_key,
+    )
+    if existing:
+        return existing, False
+    raise RuntimeError("invoke_jobs: INSERT conflitou sem job existente (corrida de replay?)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Despacho + worker
+# ─────────────────────────────────────────────────────────────────────────────
+
+def dispatch(job_id: str) -> bool:
+    """Agenda a execução se houver vaga (invoke_jobs_max_concurrent). Sem vaga,
+    o job fica 'queued' e o reaper despacha quando abrir. Retorna se agendou."""
+    if job_id in _active_job_ids:
+        return False  # já em voo neste processo
+    if len(_active_job_ids) >= _max_concurrent():
+        return False
+    try:
+        # id entra no set ANTES do claim — o zumbi-check do reaper nunca vê um
+        # 'running' recém-claimado como órfão.
+        _active_job_ids.add(job_id)
+        task = asyncio.create_task(_run_job(job_id), name=f"invoke_job_{job_id[-8:]}")
+    except RuntimeError:
+        _active_job_ids.discard(job_id)
+        logger.warning("event=invoke_job_no_loop job_id=%s", job_id)
+        return False
+    _active_tasks.add(task)
+
+    def _done(t, jid=job_id):
+        _active_tasks.discard(t)
+        _active_job_ids.discard(jid)
+
+    task.add_done_callback(_done)
+    return True
+
+
+async def _run_job(job_id: str) -> None:
+    """Worker de UM job: claim atômico → rechecks baratos → execute_pipeline →
+    stamp de posse → persistência do resultado → analytics off-path."""
+    async with _pool().acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE invoke_jobs SET status='running', attempts=attempts+1, "
+            "started_at=COALESCE(started_at, now()), updated_at=now() "
+            "WHERE id=$1 AND status='queued' RETURNING *",
+            job_id,
+        )
+    if not row:
+        return  # outro caminho (boot × reaper) já claimou/terminou — no-op
+    job = dict(row)
+    try:
+        req = json.loads(job.get("request_payload") or "{}")
+    except Exception:
+        await _finish_failed(job_id, {"error": "job_payload_corrupt"})
+        return
+
+    pid = job.get("pipeline_id")
+    # Rechecks baratos: o mundo pode mudar entre o 202 e a execução.
+    try:
+        from app.core.database import pipelines_repo
+        p = await pipelines_repo.find_by_id(pid)
+        if not p or p.get("status") == "aposentado":
+            await _finish_failed(job_id, {
+                "error": "pipeline_not_invocable",
+                "hint": "O pipeline foi removido ou aposentado depois do aceite do job.",
+            })
+            return
+        # TOCTOU do IDOR (review): a posse do session_id foi checada no aceite,
+        # mas uma interaction legada-sem-dono pode GANHAR dono no meio-tempo —
+        # não injetar a conversa de outro usuário no LLM.
+        sess = req.get("session_id")
+        if sess:
+            from app.core.interaction_access import owner_of_interaction
+            sess_owner = await owner_of_interaction(sess)
+            if sess_owner and sess_owner != job.get("owner_user_id"):
+                await _finish_failed(job_id, {"error": "session_not_accessible"})
+                return
+        api_key_id = req.get("api_key_id")
+        if api_key_id:
+            # Key revogada entre o aceite e a execução → não executa em nome dela.
+            async with _pool().acquire() as con:
+                krow = await con.fetchrow(
+                    "SELECT revoked_at FROM api_keys WHERE id = $1", api_key_id)
+            if krow is None or krow["revoked_at"] is not None:
+                await _finish_failed(job_id, {"error": "api_key_revoked"})
+                return
+            from fastapi import HTTPException
+            from app.core.api_key_budget import enforce_budget
+            try:
+                await enforce_budget(api_key_id)
+            except HTTPException as e:
+                detail = e.detail if isinstance(e.detail, dict) else {"error": "cost_budget_exceeded"}
+                await _finish_failed(job_id, detail)
+                return
+    except Exception:
+        # Recheck é defesa extra — falha DELE não pode matar um job válido.
+        logger.warning("event=invoke_job_recheck_failed job_id=%s", job_id, exc_info=True)
+
+    from app.agents.engine import execute_pipeline
+    try:
+        result = await execute_pipeline(
+            entry_agent_id=req.get("root"),
+            user_input=req.get("user_input") or "",
+            channel=req.get("channel") or "api",
+            session_id=req.get("session_id"),
+            context_mode=req.get("context_mode") or "auto",
+            attachments=req.get("attachments") or None,
+            allowed_agent_ids=set(req.get("members") or []) or None,  # SELA ao subgrafo
+            sealed_inputs=req.get("sealed_inputs") or None,
+            pipeline_id=pid,
+        )
+    except ValueError as e:
+        # Paridade com o sync (409): mensagem do engine é controlada/exposta.
+        await _finish_failed(job_id, {"error": "pipeline_execution_rejected",
+                                      "detail": str(e)[:300]})
+        return
+    except Exception:
+        # Paridade com o sync (500): NUNCA vazar str(e) ao cliente do GET.
+        logger.exception("event=invoke_job_failed job_id=%s pipeline_id=%s request_id=%s",
+                         job_id, pid, req.get("request_id"))
+        await _finish_failed(job_id, {
+            "error": "pipeline_execution_failed",
+            "request_id": req.get("request_id"),
+            "hint": "Falha ao executar o pipeline. Cite o request_id ao suporte.",
+        })
+        return
+
+    # Posse ANTES de expor o interaction_id ao polling (primitivo de segurança —
+    # mesmo racional do await no caminho sync).
+    try:
+        from app.core.interaction_access import stamp_interaction_owner
+        await stamp_interaction_owner((result or {}).get("interaction_id"),
+                                      job.get("owner_user_id"))
+    except Exception:
+        logger.warning("event=invoke_job_stamp_failed job_id=%s", job_id)
+
+    r = result or {}
+    payload_full = {
+        "pipeline_id": pid,
+        "status": r.get("status", "completed"),
+        "output": r.get("output", ""),
+        "final_state": r.get("final_state"),
+        "interaction_id": r.get("interaction_id"),
+        "total_agents": r.get("total_agents", 0),
+        "completed_agents": r.get("completed_agents", 0),
+        "pipeline_steps": r.get("pipeline_steps", []),
+        "duration_ms": r.get("duration_ms"),
+    }
+    await _finish_completed(job_id, payload_full)
+
+    # Analytics/custo/métricas: o MESMO recorder off-path do sync (auditoria +
+    # atribuição por-key + débito + SSOT invocation_costs + Prometheus), com
+    # kind próprio — invocações async não podem sumir do RED/ledger.
+    try:
+        from app.core.analytics_tasks import schedule_analytics
+        from app.routes.pipelines import _record_invoke_analytics
+        schedule_analytics(_record_invoke_analytics(
+            pid=pid, root=req.get("root"),
+            member_count=len(req.get("members") or []), result=result,
+            api_key_id=req.get("api_key_id"), api_key_name=req.get("api_key_name"),
+            actor_user_id=job.get("owner_user_id"),
+            arg_keys=req.get("arg_keys") or [], channel=req.get("channel"),
+            kind="invoke_async",
+        ))
+    except Exception:
+        logger.warning("event=invoke_job_analytics_failed job_id=%s", job_id)
+
+
+async def _finish_completed(job_id: str, payload_full: dict) -> None:
+    """Persistência de conclusão COM retry — falha silenciosa aqui deixaria o
+    cliente pollando para sempre um job que já terminou."""
+    txt = json.dumps(payload_full, ensure_ascii=False, default=str)
+    await _finish_write(
+        job_id,
+        "UPDATE invoke_jobs SET status='completed', result_payload=$2, error=NULL, "
+        "finished_at=now(), updated_at=now() WHERE id=$1",
+        txt,
+    )
+
+
+async def _finish_failed(job_id: str, error_obj: dict) -> None:
+    txt = json.dumps(error_obj, ensure_ascii=False, default=str)
+    await _finish_write(
+        job_id,
+        "UPDATE invoke_jobs SET status='failed', error=$2, "
+        "finished_at=now(), updated_at=now() WHERE id=$1",
+        txt,
+    )
+
+
+async def _finish_write(job_id: str, sql: str, arg: str, retries: int = 3) -> None:
+    for attempt in range(retries):
+        try:
+            async with _pool().acquire() as con:
+                await con.execute(sql, job_id, arg)
+            return
+        except Exception as e:
+            if attempt == retries - 1:
+                logger.error(
+                    "event=invoke_job_finish_write_failed job_id=%s error=%s "
+                    "(cliente pode ficar pollando um running fantasma; o reaper "
+                    "marcará como lost)", job_id, str(e)[:200],
+                )
+            else:
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Boot-resume + reaper + shutdown (fiação no lifespan de app/main.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LOST_ERROR = {"error": "job_interrupted",
+               "hint": "A execução foi interrompida (restart da aplicação ou falha "
+                       "ao persistir o resultado). Re-submeta o invoke (com uma "
+                       "NOVA Idempotency-Key) se ainda precisar."}
+
+
+def _async_enabled() -> bool:
+    from app.core.config import get_settings
+    try:
+        return bool(get_settings().invoke_async_enabled)
+    except Exception:
+        return False
+
+
+async def resume_invoke_jobs() -> dict:
+    """Boot (lifespan, após init_db, antes de servir): 'running' órfão → 'lost'
+    (nunca re-executa — ver docstring do módulo); 'queued' → despacha até o cap.
+
+    Kill-switch (review adversarial): com invoke_async_enabled OFF, a HIGIENE
+    (running órfão → lost) roda sempre, mas NADA da fila é despachado — desligar
+    o toggle tem que parar o backlog, não só os 202 novos. Religar retoma."""
+    out = {"lost": 0, "dispatched": 0}
+    async with _pool().acquire() as con:
+        res = await con.execute(
+            "UPDATE invoke_jobs SET status='lost', error=$1, finished_at=now(), "
+            "updated_at=now() WHERE status='running'",
+            json.dumps(_LOST_ERROR, ensure_ascii=False),
+        )
+        try:
+            out["lost"] = int(str(res).split()[-1])
+        except Exception:
+            pass
+        rows = []
+        if _async_enabled():
+            rows = await con.fetch(
+                "SELECT id FROM invoke_jobs WHERE status='queued' ORDER BY created_at LIMIT $1",
+                _max_concurrent(),
+            )
+    for r in rows:
+        if dispatch(r["id"]):
+            out["dispatched"] += 1
+    if out["lost"] or out["dispatched"]:
+        logger.info("event=invoke_jobs_resumed lost=%s dispatched=%s",
+                    out["lost"], out["dispatched"])
+    return out
+
+
+async def reap_once() -> dict:
+    """Uma passada do reaper: retenção de terminais + zumbis + despacho de queued."""
+    from app.core.config import get_settings
+    out = {"deleted": 0, "lost": 0, "dispatched": 0}
+    try:
+        retention_h = float(get_settings().invoke_jobs_retention_hours or 72)
+    except Exception:
+        retention_h = 72.0
+    async with _pool().acquire() as con:
+        res = await con.execute(
+            "DELETE FROM invoke_jobs WHERE status IN ('completed','failed','lost') "
+            "AND updated_at < now() - ($1 * interval '1 hour')",
+            retention_h,
+        )
+        try:
+            out["deleted"] = int(str(res).split()[-1])
+        except Exception:
+            pass
+        # Zumbi: 'running' velho SEM task viva neste processo (ex.: o write de
+        # conclusão falhou nas 3 tentativas). Single-process → o set é autoridade.
+        rows = await con.fetch(
+            "SELECT id FROM invoke_jobs WHERE status='running' "
+            "AND updated_at < now() - ($1 * interval '1 minute')",
+            float(_ZOMBIE_GRACE_MINUTES),
+        )
+        zombies = [r["id"] for r in rows if r["id"] not in _active_job_ids]
+        if zombies:
+            await con.execute(
+                "UPDATE invoke_jobs SET status='lost', error=$2, finished_at=now(), "
+                "updated_at=now() WHERE id = ANY($1) AND status='running'",
+                zombies, json.dumps(_LOST_ERROR, ensure_ascii=False),
+            )
+            out["lost"] = len(zombies)
+        # Kill-switch: OFF = a fila congela (queued fica queued; nada paga LLM).
+        # Retenção + zumbi-check acima são higiene e rodam SEMPRE.
+        queued = []
+        if _async_enabled():
+            queued = await con.fetch(
+                "SELECT id FROM invoke_jobs WHERE status='queued' ORDER BY created_at LIMIT 50",
+            )
+    for r in queued:
+        if dispatch(r["id"]):
+            out["dispatched"] += 1
+    return out
+
+
+async def _reaper_loop() -> None:
+    while True:
+        await asyncio.sleep(REAPER_INTERVAL_SECONDS)
+        try:
+            await reap_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("event=invoke_jobs_reaper_failed error=%s", str(e)[:200])
+
+
+def start_reaper() -> None:
+    """Cria o loop do reaper (1º task periódico do app). Idempotente."""
+    global _reaper_task
+    if _reaper_task is not None and not _reaper_task.done():
+        return
+    _reaper_task = asyncio.create_task(_reaper_loop(), name="invoke_jobs_reaper")
+
+
+async def shutdown_invoke_jobs(timeout: float = 5.0) -> None:
+    """Shutdown gracioso ANTES do close_db: cancela o reaper, espera os jobs
+    ativos até o timeout e marca os restantes como 'lost' (o cliente não fica
+    pollando um 'running' que nunca vai terminar — o processo está morrendo)."""
+    global _reaper_task
+    if _reaper_task is not None:
+        _reaper_task.cancel()
+        await asyncio.gather(_reaper_task, return_exceptions=True)
+        _reaper_task = None
+    pending = {t for t in _active_tasks if not t.done()}
+    if pending:
+        await asyncio.wait(pending, timeout=timeout)
+    leftovers = sorted(_active_job_ids)
+    if leftovers:
+        stragglers = [t for t in _active_tasks if not t.done()]
+        for t in stragglers:
+            t.cancel()  # CancelledError NÃO cai no except Exception do worker
+        if stragglers:
+            # Aguarda o cancelamento aterrissar ANTES do mark-lost — senão a task
+            # morrendo corre contra o close_db (mesma razão dos drains do lifespan).
+            await asyncio.gather(*stragglers, return_exceptions=True)
+        try:
+            async with _pool().acquire() as con:
+                await con.execute(
+                    "UPDATE invoke_jobs SET status='lost', error=$2, finished_at=now(), "
+                    "updated_at=now() WHERE id = ANY($1) AND status='running'",
+                    leftovers, json.dumps(_LOST_ERROR, ensure_ascii=False),
+                )
+            logger.info("event=invoke_jobs_shutdown_lost count=%s", len(leftovers))
+        except Exception as e:
+            logger.warning("event=invoke_jobs_shutdown_mark_failed error=%s", str(e)[:200])
+
+
+def _reset_for_tests() -> None:
+    """Higiene de estado módulo-level entre testes (lição do breaker #566).
+    Cancela workers vivos — um worker vazado escreveria no FakePool do teste
+    seguinte."""
+    global _reaper_task
+    for t in list(_active_tasks):
+        try:
+            if not t.done():
+                t.cancel()
+        except RuntimeError:
+            pass  # loop do teste anterior já fechou — nada a cancelar
+    _active_tasks.clear()
+    _active_job_ids.clear()
+    try:
+        if _reaper_task is not None and not _reaper_task.done():
+            _reaper_task.cancel()
+    except RuntimeError:
+        pass
+    _reaper_task = None

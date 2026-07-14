@@ -80,13 +80,19 @@ def _is_public_surface(method: str, path: str) -> bool:
     """Superfície PÚBLICA de integração: descoberta + invoke de pipelines.
 
     Um frontend externo só precisa disto. GET em /pipelines/* (list/detail/
-    inputs-schema) e POST no invoke[/stream]. Criar/mutar pipeline NÃO entra.
+    inputs-schema/jobs) e POST no invoke[/stream|/async]. Criar/mutar pipeline
+    NÃO entra. O GET /pipelines/{id}/jobs/{job_id} (polling do 202) já passa
+    pelo ramo GET — a key que criou o job consegue consultá-lo.
     """
     if path.startswith("/api/v1/pipelines"):
         m = method.upper()
         if m == "GET":
             return True
-        if m == "POST" and (path.endswith("/invoke") or path.endswith("/invoke/stream")):
+        if m == "POST" and (
+            path.endswith("/invoke")
+            or path.endswith("/invoke/stream")
+            or path.endswith("/invoke/async")
+        ):
             return True
     return False
 

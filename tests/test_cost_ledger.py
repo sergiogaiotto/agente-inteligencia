@@ -93,7 +93,10 @@ def test_invoke_escreve_ledger_offpath():
     src = Path("app/routes/pipelines.py").read_text(encoding="utf-8")
     # a escrita do ledger vive DENTRO de _record_invoke_analytics (agendado detached)
     assert "record_invocation_cost(" in src
-    assert 'source="invoke_stream" if stream else "invoke"' in src
+    # 34.0.0: o source virou effective_kind (invoke | invoke_stream | invoke_async
+    # do worker do 202) — a semântica antiga é o fallback quando kind não vem.
+    assert 'effective_kind = kind or ("invoke_stream" if stream else "invoke")' in src
+    assert "source=effective_kind" in src
     assert "_schedule_analytics(_record_invoke_analytics(" in src
 
 

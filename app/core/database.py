@@ -580,6 +580,38 @@ CREATE TABLE IF NOT EXISTS verifier_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_verifier_jobs_status ON verifier_jobs (status);
 
+-- Job store DURÁVEL do invoke assíncrono 202 (Onda 6, 34.0.0). Cada POST
+-- /pipelines/{id}/invoke/async vira uma linha; o cliente faz polling em
+-- GET /pipelines/{id}/jobs/{job_id}. Payloads em TEXT+json.dumps (SQL cru não
+-- passa pela coerção da Repository — footgun asyncpg/JSONB). Estados:
+-- queued → running → completed | failed; 'lost' = órfão de restart — ao
+-- contrário do verifier_jobs, um invoke NUNCA é re-executado (paga LLM e pode
+-- ter efeitos colaterais via bindings); só 'queued' (nunca começou) retoma.
+-- TABELA NOVA → CREATE + índices no SCHEMA, sem Alembic (regra do verifier_jobs).
+CREATE TABLE IF NOT EXISTS invoke_jobs (
+    id TEXT PRIMARY KEY,
+    pipeline_id TEXT NOT NULL,
+    owner_user_id TEXT,                      -- dono (gate de posse no GET; padrão IDOR #581)
+    api_key_id TEXT,                         -- key criadora (analytics/débito), NULL = cookie/UI
+    idempotency_key TEXT,                    -- header Idempotency-Key (replay devolve o MESMO job)
+    request_payload TEXT NOT NULL DEFAULT '{}',  -- JSON: contexto VALIDADO no aceite (input dobrado, sealed, anexos...)
+    result_payload TEXT,                     -- JSON: payload FULL do invoke (projeção acontece no GET)
+    error TEXT,                              -- JSON estruturado (código estável; nunca str(e) cru do engine)
+    status TEXT NOT NULL DEFAULT 'queued',   -- queued | running | completed | failed | lost
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT now(),
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_invoke_jobs_status ON invoke_jobs (status);
+CREATE INDEX IF NOT EXISTS idx_invoke_jobs_owner ON invoke_jobs (owner_user_id, created_at DESC);
+-- Idempotência escopada POR KEY-criadora (COALESCE: NULL = cookie/UI) — duas
+-- integrações (keys) do MESMO dono não colidem chaves entre si.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_invoke_jobs_idem
+    ON invoke_jobs (owner_user_id, (COALESCE(api_key_id, '')), pipeline_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
 -- ═══════════════════════════════════════════════════════════════
 -- Catálogo / Marketplace corporativo (Onda 1)
 -- Agentes, skills e (futuro) recipes/external_platforms publicáveis
@@ -1811,6 +1843,10 @@ pipelines_repo = Repository("pipelines")
 federation_peers_repo = Repository("federation_peers")
 playground_runs_repo = Repository("playground_runs")  # Feature 1 — histórico do Playground por usuário
 playground_threads_repo = Repository("playground_run_threads")  # thread completa p/ restaurar painéis
+# Invoke assíncrono 202 (Onda 6, 34.0.0): leituras simples do job store. As
+# TRANSIÇÕES de status (claim/finish) são SQL cru em app/core/invoke_jobs.py —
+# a Repository não faz UPDATE condicional (WHERE status=...) nem RETURNING.
+invoke_jobs_repo = Repository("invoke_jobs")
 
 
 # ═══════════════════════════════════════════════════════════════
