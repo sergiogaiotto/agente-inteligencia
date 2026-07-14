@@ -893,7 +893,7 @@
                                                   :class="p.pass === true ? 'text-emerald-600' : (p.pass === false ? 'text-rose-500' : 'text-surface-300')"></span>
                                             <span class="flex-1 truncate" :class="p.pass === false ? 'text-rose-600' : 'text-surface-700'" x-text="p.text"></span>
                                             <span class="flex-none text-[9.5px] text-surface-400" x-text="p.where === 'output' ? 'resposta' : 'pergunta'"></span>
-                                            <select x-model="p.expect" @change="runPhrases()" class="flex-none rounded border border-surface-200 text-[10px] px-1 py-0.5">
+                                            <select x-model.boolean="p.expect" @change="p.pass=null; runPhrases()" class="flex-none rounded border border-surface-200 text-[10px] px-1 py-0.5">
                                                 <option :value="true">deve rodar</option>
                                                 <option :value="false">deve pular</option>
                                             </select>
@@ -2134,11 +2134,17 @@ function meshFlowPage() {
             const ed = this.editor;
             const expr = (ed.expr || '').trim();
             if (!expr || !(ed.testPhrases || []).length) return;
+            // Guarda de época (achado do review): se a regra é editada durante o
+            // loop de N chamadas, uma resposta que chega DEPOIS não pode sobrescrever
+            // o veredito já invalidado (senão mostra ✓/✗ da regra VELHA como se
+            // validasse a nova — o oposto de "veredito não mente").
+            const gen = (this._phrasesGen = (this._phrasesGen || 0) + 1);
             for (const p of ed.testPhrases) {
                 try {
                     const body = { expr, final_state: 'Recommend' };
                     if (p.where === 'output') body.output = p.text; else body.input = p.text;
                     const r = await api.post('/api/v1/mesh/connections/test-conditional', body);
+                    if (gen !== this._phrasesGen || (this.editor && (this.editor.expr || '').trim() !== expr)) return;  // regra mudou → aborta
                     p.pass = r.error ? null : (!!r.result === (p.expect !== false));
                     p.got = r.error ? null : !!r.result;
                 } catch (_) { p.pass = null; p.got = null; }
