@@ -596,6 +596,16 @@ async def _reaper_loop() -> None:
             raise
         except Exception as e:
             logger.warning("event=verifier_sweep_failed error=%s", str(e)[:200])
+        # Carona (35.8.0, arco LGPD-1): retenção de conversas por IDADE.
+        # Auto-limita a ~1x/hora (o loop roda a cada 60s); no-op quando o
+        # setting é 0. try/except PRÓPRIO — falha na purga não derruba o reaper.
+        try:
+            from app.core.retention import maybe_purge
+            await maybe_purge()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("event=retention_purge_failed error=%s", str(e)[:200])
 
 
 def start_reaper() -> None:
