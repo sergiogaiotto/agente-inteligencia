@@ -128,7 +128,8 @@ class TestGetSessionRoundTrip:
         )
         monkeypatch.setattr("app.routes.workspace.turns_repo.find_all", fake_turns)
 
-        out = await ws.get_session("sess-1")
+        # 35.7.0: o gate estrito exige caller; root passa em legada sem dono
+        out = await ws.get_session("sess-1", user={"id": "adm", "role": "root"})
         assert out["trace"]["mode"] == "pipeline"
         assert out["trace"]["pipeline_steps"] == [{"agent_id": "a1", "status": "completed"}]
         assert out["trace"]["trace"]["execution_log"] == [{"title": "passo 1"}]
@@ -150,7 +151,7 @@ class TestGetSessionRoundTrip:
         )
         monkeypatch.setattr("app.routes.workspace.turns_repo.find_all", fake_turns)
 
-        out = await ws.get_session("sess-2")
+        out = await ws.get_session("sess-2", user={"id": "adm", "role": "root"})
         assert out["trace"]["mode"] == "agent"
 
 

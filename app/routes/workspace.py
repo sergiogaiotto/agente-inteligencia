@@ -12,10 +12,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from app.core.auth import require_user
+from app.core.auth import require_user, require_role
 from app.models.schemas import ChatMessage
 from app.agents.engine import execute_interaction
-from app.core.database import interactions_repo, turns_repo
+from app.core.database import interactions_repo, turns_repo, audit_repo
 
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "uploads"
 
@@ -308,16 +308,18 @@ async def _nl_table_answer(parsed_skill, msg: str, user: dict,
 @router.get("/sessions")
 async def list_sessions(agent_id: str = None, limit: int = 30, offset: int = 0,
                         user: dict = Depends(require_user)):
-    # IDOR (33.15.0): só as sessões do DONO (+ legadas sem dono — não dá pra
-    # atribuir retroativamente); root vê todas. Antes listava TODAS as sessões de
-    # TODOS os usuários (vazava títulos/PII cross-tenant) e era anônimo.
+    # IDOR (33.15.0 → endurecido 35.7.0/FF7, decisão do dono): usuário comum vê
+    # SÓ as próprias sessões. A cláusula que incluía legadas sem dono saiu — era
+    # o buraco residual: qualquer autenticado via títulos/PII das antigas. Com o
+    # dono-na-criação (#595) linha nova nasce carimbada; as NULL (legado) ficam
+    # visíveis só ao root, que pode atribuí-las via POST /sessions/{id}/claim.
     from app.core.database import _get_pool
     is_root = (user.get("role") or "").strip().lower() == "root"
     conds: list[str] = []
     params: list = []
     if not is_root:
         params.append(user.get("id"))
-        conds.append(f"(owner_user_id = ${len(params)} OR owner_user_id IS NULL)")
+        conds.append(f"owner_user_id = ${len(params)}")
     if agent_id:
         params.append(agent_id)
         conds.append(f"agent_id = ${len(params)}")
@@ -330,6 +332,47 @@ async def list_sessions(agent_id: str = None, limit: int = 30, offset: int = 0,
         )
         total = await con.fetchval(f"SELECT count(*) FROM interactions{where}", *params)
     return {"sessions": [dict(r) for r in rows], "total": total}
+
+
+@router.post("/sessions/{session_id}/claim")
+async def claim_session(session_id: str, data: dict,
+                        user: dict = Depends(require_role("root"))):
+    """Claim CIRÚRGICO de sessão legada sem dono (FF7, decisão do dono): quando
+    um usuário sente falta de uma sessão antiga (as NULL saíram da listagem em
+    35.7.0), o ROOT verifica o contexto e atribui o dono correto — UPDATE só
+    quando `owner_user_id IS NULL` (nunca re-atribui conversa já possuída).
+
+    Body: {"user_id": "<novo dono>"}. 404 sessão inexistente; 409 já tem dono;
+    422 user_id ausente/inexistente. Auditado."""
+    new_owner = (data or {}).get("user_id", "").strip()
+    if not new_owner:
+        raise HTTPException(422, "Informe user_id (o novo dono da sessão).")
+    from app.core.database import users_repo, _get_pool
+    target_user = await users_repo.find_by_id(new_owner)
+    if not target_user:
+        raise HTTPException(422, f"Usuário '{new_owner}' não existe.")
+    s = await interactions_repo.find_by_id(session_id)
+    if not s:
+        raise HTTPException(404, "Sessão não encontrada")
+    if s.get("owner_user_id"):
+        raise HTTPException(409, {
+            "error": "session_already_owned",
+            "hint": "A sessão já tem dono — claim é só para legadas sem dono.",
+        })
+    async with _get_pool().acquire() as con:
+        res = await con.execute(
+            "UPDATE interactions SET owner_user_id = $1 "
+            "WHERE id = $2 AND owner_user_id IS NULL",
+            new_owner, session_id,
+        )
+    if not str(res).endswith("1"):
+        raise HTTPException(409, {"error": "session_already_owned"})  # corrida
+    await audit_repo.create({
+        "entity_type": "interaction", "entity_id": session_id,
+        "action": "session_claimed", "actor": user["id"],
+        "details": json.dumps({"new_owner_user_id": new_owner}),
+    })
+    return {"id": session_id, "owner_user_id": new_owner}
 
 
 @router.get("/sessions/{session_id}")

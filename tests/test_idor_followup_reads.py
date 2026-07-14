@@ -48,7 +48,10 @@ class TestListSessionsScoping:
         sink: dict = {}
         monkeypatch.setattr("app.core.database._get_pool", lambda: _FakePool(sink))
         await list_sessions(user={"id": "u1", "role": "comum"})
-        assert "owner_user_id = $1 OR owner_user_id IS NULL" in sink["fetch_sql"]
+        # 35.7.0 (FF7): estrito — SÓ as do dono (a cláusula de legadas NULL saiu;
+        # elas ficaram root-only, com claim cirúrgico via POST /sessions/{id}/claim)
+        assert "owner_user_id = $1" in sink["fetch_sql"]
+        assert "IS NULL" not in sink["fetch_sql"]
         assert sink["fetch_params"][0] == "u1"   # 1º param = o dono
         assert "owner_user_id" in sink["count_sql"]
 
