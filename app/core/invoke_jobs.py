@@ -239,6 +239,7 @@ async def _run_job(job_id: str) -> None:
         "pipeline_id": pid,
         "status": r.get("status", "completed"),
         "output": r.get("output", ""),
+        "output_agent": r.get("output_agent"),  # Pacote B: QUEM respondeu
         "final_state": r.get("final_state"),
         "interaction_id": r.get("interaction_id"),
         "total_agents": r.get("total_agents", 0),

@@ -147,6 +147,7 @@ def project_pipeline_result(result: dict, verbosity: str) -> dict:
     # summary: + contadores e a narrativa por step (sem trace/custo/SQL)
     base.update({
         "final_state": result.get("final_state"),
+        "output_agent": result.get("output_agent"),  # Pacote B (35.0.0): quem respondeu
         "total_agents": result.get("total_agents", 0),
         "completed_agents": result.get("completed_agents", 0),
         "duration_ms": result.get("duration_ms"),

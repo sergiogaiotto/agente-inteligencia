@@ -1023,6 +1023,7 @@ async def invoke_pipeline(
         "pipeline_id": pid,
         "status": result.get("status", "completed"),
         "output": result.get("output", ""),
+        "output_agent": result.get("output_agent"),  # Pacote B: QUEM respondeu
         "final_state": result.get("final_state"),
         "interaction_id": result.get("interaction_id"),
         "total_agents": result.get("total_agents", 0),
@@ -1100,6 +1101,7 @@ async def invoke_pipeline_stream(
                 "pipeline_id": pid,
                 "status": res.get("status", "completed"),
                 "output": res.get("output", ""),
+                "output_agent": res.get("output_agent"),  # Pacote B: QUEM respondeu
                 "final_state": res.get("final_state"),
                 "interaction_id": res.get("interaction_id"),
                 "total_agents": res.get("total_agents", 0),

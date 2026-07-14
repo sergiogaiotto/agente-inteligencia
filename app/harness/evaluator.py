@@ -496,12 +496,12 @@ async def run_evaluation(
 
             if pipeline_id:
                 # Reancora decisão E julgamento no ÚLTIMO step COMPLETADO — o
-                # dono do output avaliado. O envelope do engine expõe
-                # final_state/transitions de steps[-1] (último nó da CADEIA),
-                # que em fan-out 1-de-N pode ser um step PULADO: sem isso,
-                # casos roteados a qualquer ramo que não seja o último nó BFS
-                # reprovariam por state_mismatch='SkippedConditional' apesar
-                # de roteamento e output corretos (blocker do review). Idem
+                # dono do output avaliado. Nota histórica: até a 34.x o envelope
+                # do engine expunha final_state/transitions de steps[-1] (que em
+                # fan-out 1-de-N podia ser um step PULADO) — o Pacote B (35.0.0)
+                # reancorou o PRÓPRIO envelope, tornando isto redundante para
+                # envelopes novos; fica como defesa-em-profundidade (o harness
+                # não depende da versão do engine que gerou o result). Idem
                 # verification: usar a de OUTRO step (ex.: Maestro rigorous)
                 # julgaria o texto errado — se o dono do output não tem
                 # snapshot, deixa None e o _judge_draft julga o output certo.

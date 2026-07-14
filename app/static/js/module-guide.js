@@ -600,7 +600,7 @@ docker compose up -d caddy</pre>`,
 curl -X POST /api/v1/pipelines/{id}/agents -d '{"agent_id":"..."}'</pre>`,
     usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
   <li>No <a href="/mesh/flow" class="text-brand-500 underline">Fluxo de agentes</a>, crie um pipeline, arraste os agentes membros e defina o nó <b>Início</b>.</li>
-  <li>Conecte os agentes: <b>Sequencial</b> (um alimenta o outro), <b>Paralelo</b> (todos com o mesmo input), <b>Condicional</b> (roteamento 1-de-N por regra) e <b>Padrão/default</b> (o else, quando nenhuma regra casa). Para regras condicionais você não decora sintaxe: <b>descreva em português</b> (a IA traduz), <b>monte por cards</b> com E/OU, e <b>teste no Simulador</b> antes de salvar.</li>
+  <li>Conecte os agentes: <b>Sequencial</b> (um alimenta o outro), <b>Sempre dispara</b> (todos recebem o mesmo input, um após o outro), <b>Condicional</b> (roteamento 1-de-N por regra) e <b>Padrão/default</b> (o else, quando nenhuma regra casa). Para regras condicionais você não decora sintaxe: <b>descreva em português</b> (a IA traduz), <b>monte por cards</b> com E/OU, e <b>teste no Simulador</b> antes de salvar.</li>
   <li>Clique em <b>Publicar no Catálogo</b> (cria um rascunho de entry <code>kind=pipeline</code>); aprove e publique pela <a href="/catalog" class="text-brand-500 underline">página do Catálogo</a>.</li>
   <li>Invoque <code>POST /api/v1/pipelines/{id}/invoke</code> com <code>{"message":"..."}</code> — use o botão "cURL do invoke" no Fluxo de agentes para copiar o comando pronto.</li>
 </ol>`

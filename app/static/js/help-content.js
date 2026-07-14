@@ -458,7 +458,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           <p>Quatro tipos de conexão entre agents:</p>
           <ul>
             <li><strong>Sequencial</strong> — A → B → C. O output de A vira contexto de B.</li>
-            <li><strong>Paralela (fan-out)</strong> — A → (B + C + D). Os destinos rodam TODOS ao mesmo tempo com o mesmo input (não é escolha 1-de-N).</li>
+            <li><strong>Sempre dispara (fan-out)</strong> — A → (B + C + D). Os destinos rodam TODOS com o mesmo input, um após o outro em sequência (não é escolha 1-de-N nem execução simultânea).</li>
             <li><strong>Condicional</strong> — A → B só se uma regra casar. É o roteamento 1-de-N: o destino roda conforme a pergunta do usuário, a resposta do agente anterior ou um parâmetro exato do pedido (ex.: <code>inputs.tier == 'gold'</code>).</li>
             <li><strong>Padrão (default)</strong> — o destino "else": roda quando NENHUMA regra condicional do fan-out casou. Combine um <code>default</code> com várias <code>conditional</code> para garantir que sempre haja um caminho.</li>
           </ul>
@@ -485,7 +485,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
         title: 'Casos de uso',
         items: [
           { title: 'Pipeline ETL com IA (publicável)', body: 'No Fluxo de agentes: Agent 1 extrai dados de um e-mail → Agent 2 valida CNPJ via tool MCP → Agent 3 gera resumo executivo. Salve como pipeline, publique no Catálogo e invoque por uma chamada só: POST /api/v1/pipelines/{id}/invoke.' },
-          { title: 'Comparar múltiplos modelos', body: 'Fan-out: a mesma pergunta para três agents idênticos exceto pelo modelo (ex.: gpt-4o, claude e um modelo local). Você vê as respostas em paralelo para comparar qualidade.' },
+          { title: 'Comparar múltiplos modelos', body: 'Fan-out "Sempre dispara": a mesma pergunta para três agents idênticos exceto pelo modelo (ex.: gpt-4o, claude e um modelo local). Você vê as três respostas lado a lado para comparar qualidade (a execução é um após o outro).' },
           { title: 'Roteamento por anexo, em português', body: 'Conexão condicional para o agent de documentos com a regra descrita como "quando o usuário anexar um documento" — a IA traduz para has_document. Adicione uma conexão default para o agent genérico cobrir o caso sem anexo.' }
         ]
       },
@@ -496,6 +496,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
           { title: 'Mesh / Pipeline ≠ CAR ≠ Recipe', severity: 'info', body: 'Fluxo de agentes/Pipeline = fluxo desenhado visualmente (você define), publicável no Catálogo como kind=pipeline. CAR = catálogo para roteamento automático (o Maestro decide). Recipe = composição declarativa no Catálogo. Conceitos distintos.' },
           { title: 'Sempre teste a regra no Simulador', severity: 'warning', body: 'O Simulador honra pergunta, anexos E a decisão (Recommend/Refuse/Escalate) — não só o texto da resposta. Uma regra sobre a pergunta (input_lower) ou sobre anexo (has_document) que parece errada pode estar certa: confirme no Simulador antes de salvar.' },
           { title: 'Condicional sem default vira buraco', severity: 'warning', body: 'Num fan-out 1-de-N, se nenhuma regra condicional casar e não houver conexão default, nenhum destino roda. Adicione um destino default como rede de segurança.' },
+          { title: 'Citar o NOME do agente na resposta roteia', severity: 'info', body: 'Se a resposta do agente anterior contém um cue de roteamento + o nome exato de um agente seguinte (ex.: "Encaminhar ao agente Rentab"), esse alvo RODA mesmo que a regra da aresta não case — é o override "o roteador mandou". Salvaguardas: o nome só conta em contexto de roteamento (não em prosa) e um anexo incompatível com o alvo VETA o override. O sinal mais forte continua sendo o bloco estruturado {"target": ...}. Rastro: eventos mesh.conditional.* no log.' },
           { title: 'Pass-through sumiu da execução', severity: 'info', body: 'Se um agent "desapareceu" do log, provavelmente está pass-through (sem skill nem prompt). Adicione skill ou prompt customizado para ativar.' },
           { title: 'Publicar SELA o contrato de entrada', severity: 'info', body: 'Ao publicar um pipeline (rascunho → publicado), o formato esperado da entrada (o ## Inputs do agente-raiz) é CONGELADO como um contrato selado. A partir daí, o invoke valida contra esse contrato — não contra a skill que você editar depois. Para atualizar a API publicada, RE-PUBLIQUE (a versão sobe se o formato mudou). O Playground avisa quando há alterações não publicadas.' }
         ]
