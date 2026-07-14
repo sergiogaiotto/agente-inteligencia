@@ -21,6 +21,7 @@ Decisões (deliberadas, ≠ verifier_jobs onde o retry é barato):
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import Optional
 
@@ -139,14 +140,22 @@ def dispatch(job_id: str) -> bool:
     return True
 
 
-def _record_async_failure(status: str) -> None:
+def _record_async_failure(status: str, duration_s: float = 0.0) -> None:
     """RED (35.14.3): invoke_async que falhou conta nas métricas — o worker
     só registrava no SUCESSO e no TIMEOUT; os demais error branches (aposentado,
     session, key revogada, orçamento, ValueError, Exception, payload corrupt)
-    ficavam invisíveis ao dashboard/alerta."""
+    ficavam invisíveis ao dashboard/alerta.
+
+    `duration_s` (35.14.7, achado de auditoria #3): abortos PÓS-execução
+    (timeout/rejected/error) alimentam o histograma de latência RED com o tempo
+    real gasto — antes o custo parcial o fazia via _record_invoke_analytics, mas
+    o emit_metrics=False (35.14.6) que fechou a dupla-contagem também apagou a
+    ÚNICA amostra de latência dos timeouts (p95/p99 cegos a abortos). Rechecks
+    pré-execução mantêm 0.0 (não houve trabalho a medir)."""
     try:
         from app.core.metrics import record_invocation
-        record_invocation(kind="invoke_async", status=status, duration_s=0.0, error=True)
+        record_invocation(kind="invoke_async", status=status,
+                          duration_s=duration_s, error=True)
     except Exception:
         logger.warning("event=invoke_async_failure_metric_failed status=%s", status)
 
@@ -285,6 +294,10 @@ async def _run_job(job_id: str) -> None:
                 "interaction_id": event.get("interaction_id"),
             })
 
+    # Relógio do trecho executável (35.14.7): latência REAL dos abortos pós-
+    # execução → histograma RED (o custo parcial não a alimenta mais desde o
+    # emit_metrics=False do 35.14.6).
+    _exec_t0 = time.monotonic()
     try:
         result = await asyncio.wait_for(
             execute_pipeline(
@@ -321,7 +334,7 @@ async def _run_job(job_id: str) -> None:
         # O gasto dos steps CONCLUÍDOS entra no ledger/orçamento/RED mesmo no
         # aborto (custo parcial não some — 35.14.4).
         _schedule_partial_cost(job, req, _done_steps, "JobTimeout")
-        _record_async_failure("timeout")
+        _record_async_failure("timeout", time.monotonic() - _exec_t0)
         _notify_finish(job_id, pid, req, "failed", "job_timeout")
         return
     except ValueError as e:
@@ -329,7 +342,7 @@ async def _run_job(job_id: str) -> None:
         await _finish_failed(job_id, {"error": "pipeline_execution_rejected",
                                       "detail": str(e)[:300]})
         _schedule_partial_cost(job, req, _done_steps, "Rejected")  # 35.14.4
-        _record_async_failure("rejected")
+        _record_async_failure("rejected", time.monotonic() - _exec_t0)
         _notify_finish(job_id, pid, req, "failed", "pipeline_execution_rejected")
         return
     except Exception:
@@ -342,7 +355,7 @@ async def _run_job(job_id: str) -> None:
             "hint": "Falha ao executar o pipeline. Cite o request_id ao suporte.",
         })
         _schedule_partial_cost(job, req, _done_steps, "Failed")  # 35.14.4
-        _record_async_failure("error")
+        _record_async_failure("error", time.monotonic() - _exec_t0)
         _notify_finish(job_id, pid, req, "failed", "pipeline_execution_failed")
         return
 

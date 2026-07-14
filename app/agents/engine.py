@@ -1751,6 +1751,17 @@ async def _run_declarative_as_interaction(
             old_turns = await turns_repo.find_all(interaction_id=interaction_id, limit=500)
             next_turn = max((int(t.get("turn_number") or 0) for t in old_turns), default=0) + 1
             await interactions_repo.update(interaction_id, {"state": "Intake"})
+            # LGPD-2 (35.14.7, achado de auditoria #3): PARIDADE com o ramo
+            # `existing` do run_intake do FSM (state_machine.py) — a cadeia
+            # declarativa é uma via de criação DUPLICADA e o stamp do reuso (35.14.6)
+            # só tocou o FSM. Sem isto, uma conversa de pipeline com agente-raiz
+            # DECLARATIVO, reusando sessão nascida sem pivô, sobrevivia ao
+            # forget_customer (casa por customer_hash). first-writer-wins.
+            from app.core.interaction_access import (
+                interaction_customer_hash_for_creation, stamp_interaction_customer_hash)
+            _chash_reuse = interaction_customer_hash_for_creation()
+            if _chash_reuse:
+                await stamp_interaction_customer_hash(interaction_id, _chash_reuse)
         else:
             # Dono na CRIAÇÃO (35.4.0) — paridade com o run_intake do FSM.
             from app.core.interaction_access import (

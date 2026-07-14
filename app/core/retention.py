@@ -78,10 +78,16 @@ async def purge_interactions_once() -> dict:
         # PROMETIDA por interactions_retention_days — dias além (achado de
         # auditoria 35.14.6). Purga por IDADE, em lote (DELETE não tem LIMIT →
         # subselect). O forget por titular já cobre invoke_jobs em _purge_ids.
+        # SÓ status TERMINAL (35.14.7, achado de auditoria #3): apagar
+        # queued/running por idade violaria o contrato ("jobs na fila/executando
+        # nunca são apagados", config.py) e podia deletar um job EM VOO (cliente
+        # pollando a Location do 202 recebe 404; o UPDATE de conclusão vira no-op
+        # silencioso). Mesmo filtro do reaper de jobs.
         jres = await con.execute(
             "DELETE FROM invoke_jobs WHERE id IN ("
             "  SELECT id FROM invoke_jobs "
             "  WHERE created_at < now() - ($1 * interval '1 day') "
+            "    AND status IN ('completed', 'failed', 'lost') "
             "  ORDER BY created_at LIMIT $2)",
             float(days), _PURGE_BATCH,
         )
