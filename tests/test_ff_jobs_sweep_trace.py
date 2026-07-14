@@ -124,7 +124,7 @@ class TestVerifierSweep:
     def test_reaper_chama_o_sweep(self):
         src = Path("app/core/invoke_jobs.py").read_text(encoding="utf-8")
         assert "from app.verifier.async_dispatcher import sweep_pending" in src
-        assert "await sweep_pending()" in src
+        assert "asyncio.wait_for(sweep_pending()" in src  # 35.14.4: com teto de latência
 
 
 class TestOutputAgentNoTrace:

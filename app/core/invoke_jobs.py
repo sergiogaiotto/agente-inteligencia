@@ -27,6 +27,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 REAPER_INTERVAL_SECONDS = 60
+# Teto de latência das CARONAS de higiene (sweep/purga) no loop do reaper — uma
+# carona lenta sob contenção de pool não atrasa o despacho de jobs (35.14.4).
+_CARONA_TIMEOUT_S = 30.0
 # 'running' mais velho que isto SEM task viva neste processo = zumbi (a folga
 # cobre a janela entre o claim e o registro em _active_job_ids — que na prática
 # é zero, pois o id entra no set ANTES do claim).
@@ -146,6 +149,36 @@ def _record_async_failure(status: str) -> None:
         record_invocation(kind="invoke_async", status=status, duration_s=0.0, error=True)
     except Exception:
         logger.warning("event=invoke_async_failure_metric_failed status=%s", status)
+
+
+def _schedule_partial_cost(job: dict, req: dict, done_steps: list, final_state: str) -> None:
+    """Agenda o custo dos steps CONCLUÍDOS antes de um aborto (timeout/erro/
+    rejeição) para o SSOT invocation_costs + débito por-key + RED — o gasto de
+    LLM já realizado NÃO some (35.14.4: antes só o timeout o preservava, os
+    demais aborts o descartavam). Best-effort; result sintético."""
+    if not done_steps:
+        return
+    try:
+        _iid = next((s.get("interaction_id") for s in done_steps
+                     if s.get("interaction_id")), None)
+        synthetic = {
+            "status": "failed", "final_state": final_state,
+            "interaction_id": _iid,
+            "duration_ms": sum(float(s.get("duration_ms") or 0) for s in done_steps),
+            "pipeline_steps": done_steps,
+        }
+        from app.core.analytics_tasks import schedule_analytics
+        from app.routes.pipelines import _record_invoke_analytics
+        schedule_analytics(_record_invoke_analytics(
+            pid=job.get("pipeline_id"), root=req.get("root"),
+            member_count=len(req.get("members") or []), result=synthetic,
+            api_key_id=req.get("api_key_id"), api_key_name=req.get("api_key_name"),
+            actor_user_id=job.get("owner_user_id"),
+            arg_keys=req.get("arg_keys") or [], channel=req.get("channel"),
+            kind="invoke_async",
+        ))
+    except Exception:
+        logger.warning("event=invoke_job_partial_cost_failed job_id=%s", job.get("id"))
 
 
 async def _run_job(job_id: str) -> None:
@@ -281,30 +314,9 @@ async def _run_job(job_id: str) -> None:
                     "e foi cancelada. Ajuste o parâmetro se o pipeline for "
                     "legitimamente longo.",
         })
-        # O gasto dos steps CONCLUÍDOS entra no ledger/orçamento/RED mesmo com
-        # timeout (result sintético: cost_and_tokens_from_result soma os steps).
-        try:
-            _master_iid = next((s.get("interaction_id") for s in _done_steps
-                                if s.get("interaction_id")), None)
-            synthetic = {
-                "status": "failed",
-                "final_state": "JobTimeout",
-                "interaction_id": _master_iid,
-                "duration_ms": _timeout_min * 60000.0,
-                "pipeline_steps": _done_steps,
-            }
-            from app.core.analytics_tasks import schedule_analytics
-            from app.routes.pipelines import _record_invoke_analytics
-            schedule_analytics(_record_invoke_analytics(
-                pid=pid, root=req.get("root"),
-                member_count=len(req.get("members") or []), result=synthetic,
-                api_key_id=req.get("api_key_id"), api_key_name=req.get("api_key_name"),
-                actor_user_id=job.get("owner_user_id"),
-                arg_keys=req.get("arg_keys") or [], channel=req.get("channel"),
-                kind="invoke_async",
-            ))
-        except Exception:
-            logger.warning("event=invoke_job_timeout_analytics_failed job_id=%s", job_id)
+        # O gasto dos steps CONCLUÍDOS entra no ledger/orçamento/RED mesmo no
+        # aborto (custo parcial não some — 35.14.4).
+        _schedule_partial_cost(job, req, _done_steps, "JobTimeout")
         _record_async_failure("timeout")
         _notify_finish(job_id, pid, req, "failed", "job_timeout")
         return
@@ -312,6 +324,7 @@ async def _run_job(job_id: str) -> None:
         # Paridade com o sync (409): mensagem do engine é controlada/exposta.
         await _finish_failed(job_id, {"error": "pipeline_execution_rejected",
                                       "detail": str(e)[:300]})
+        _schedule_partial_cost(job, req, _done_steps, "Rejected")  # 35.14.4
         _record_async_failure("rejected")
         _notify_finish(job_id, pid, req, "failed", "pipeline_execution_rejected")
         return
@@ -324,6 +337,7 @@ async def _run_job(job_id: str) -> None:
             "request_id": req.get("request_id"),
             "hint": "Falha ao executar o pipeline. Cite o request_id ao suporte.",
         })
+        _schedule_partial_cost(job, req, _done_steps, "Failed")  # 35.14.4
         _record_async_failure("error")
         _notify_finish(job_id, pid, req, "failed", "pipeline_execution_failed")
         return
@@ -602,20 +616,25 @@ async def reap_once() -> dict:
 async def _reaper_loop() -> None:
     while True:
         await asyncio.sleep(REAPER_INTERVAL_SECONDS)
+        # reap_once é o despacho de jobs — roda SEM timeout (é o trabalho
+        # principal). As CARONAS (sweep do juiz, purga de retenção) ganham um
+        # teto de latência (35.14.4): sob contenção de pool, uma carona lenta
+        # (ex.: cascade DELETE de 500 interactions segurando conexão) NÃO pode
+        # atrasar o próximo tick de despacho de invoke-jobs.
         try:
             await reap_once()
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.warning("event=invoke_jobs_reaper_failed error=%s", str(e)[:200])
-        # Carona (35.3.0): sweep periódico da fila do JUIZ — 'pending' entre
-        # boots (backpressure/falhas) antes só rodava no próximo restart
-        # (fast-follow conhecido do #584). Best-effort, isolado do reap.
+        # Carona (35.3.0): sweep periódico da fila do JUIZ.
         try:
             from app.verifier.async_dispatcher import sweep_pending
-            await sweep_pending()
+            await asyncio.wait_for(sweep_pending(), timeout=_CARONA_TIMEOUT_S)
         except asyncio.CancelledError:
             raise
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning("event=verifier_sweep_timeout")
         except Exception as e:
             logger.warning("event=verifier_sweep_failed error=%s", str(e)[:200])
         # Carona (35.8.0, arco LGPD-1): retenção de conversas por IDADE.
@@ -623,9 +642,11 @@ async def _reaper_loop() -> None:
         # setting é 0. try/except PRÓPRIO — falha na purga não derruba o reaper.
         try:
             from app.core.retention import maybe_purge
-            await maybe_purge()
+            await asyncio.wait_for(maybe_purge(), timeout=_CARONA_TIMEOUT_S)
         except asyncio.CancelledError:
             raise
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning("event=retention_purge_timeout")
         except Exception as e:
             logger.warning("event=retention_purge_failed error=%s", str(e)[:200])
 
