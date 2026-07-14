@@ -32,6 +32,29 @@ def _parse_allowed(raw) -> list:
         return []
 
 
+def assert_api_key_can_read_pipeline(request: Request, pipeline_id: str) -> None:
+    """Escopo de LEITURA por pipeline (35.4.0, tema #583): uma key escopada a
+    [P1] não lê artefatos de execução de P2 (jobs/resultados) — o escopo
+    delimita o raio de exposição de uma key vazada, não só a execução.
+
+    ≠ do gate de invoke: `read_only` PODE ler (é o propósito dela); só a lista
+    allowed_pipeline_ids restringe. No-op p/ cookie/UI. 403 (não 404): a
+    existência do PIPELINE é descoberta pública p/ keys — o que se nega é o
+    acesso ao conteúdo, e o erro nomeado orienta a integração."""
+    scope = getattr(request.state, "api_key_scope", None)
+    if not scope:
+        return
+    allowed = _parse_allowed(scope.get("allowed_pipeline_ids"))
+    if allowed and pipeline_id not in allowed:
+        logger.info(
+            "apikey_scope.pipeline_read_blocked",
+            extra={"event": "security.apikey_pipeline_read_blocked",
+                   "api_key_id": getattr(request.state, "api_key_id", None),
+                   "pipeline_id": pipeline_id},
+        )
+        raise HTTPException(403, "Esta API key não está autorizada a ler os jobs deste pipeline.")
+
+
 def assert_api_key_can_invoke(request: Request, pipeline_id: Optional[str] = None) -> None:
     """Barra o invoke conforme o escopo da API-key. No-op p/ cookie/UI (sem escopo).
 

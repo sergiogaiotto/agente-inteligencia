@@ -1753,6 +1753,9 @@ async def _run_declarative_as_interaction(
             next_turn = max((int(t.get("turn_number") or 0) for t in old_turns), default=0) + 1
             await interactions_repo.update(interaction_id, {"state": "Intake"})
         else:
+            # Dono na CRIAÇÃO (35.4.0) — paridade com o run_intake do FSM.
+            from app.core.interaction_access import interaction_owner_for_creation
+            _owner = interaction_owner_for_creation()
             await interactions_repo.create({
                 "id": interaction_id,
                 "title": _maybe_redact(msg)[:80].strip() or (agent.get("name") or "agent")[:80],
@@ -1760,6 +1763,7 @@ async def _run_declarative_as_interaction(
                 "channel": "api",
                 "journey_id": "",
                 "state": "Intake",
+                **({"owner_user_id": _owner} if _owner else {}),
             })
         await turns_repo.create({
             "id": str(uuid.uuid4()),
@@ -1895,6 +1899,10 @@ async def execute_interaction(
     # quando a consolidação re-aponta e deleta as filhas).
     audit_posture: str = "inherit",
     master_interaction_id: str | None = None,
+    # Dono na CRIAÇÃO (35.4.0): interaction nasce com owner_user_id (ver
+    # execute_pipeline). Aqui cobre o invoke de agente avulso quando o caller
+    # optar por passar; None = comportamento atual (stamp pós-execução).
+    owner_user_id: str | None = None,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
 
@@ -1920,6 +1928,10 @@ async def execute_interaction(
     vetorial com o texto do upstream. Ver `execute_pipeline`.
     """
     start = time.time()
+    # Dono na CRIAÇÃO (35.4.0): interaction nasce carimbada quando informado.
+    if owner_user_id:
+        from app.core.interaction_access import set_interaction_owner_for_creation
+        set_interaction_owner_for_creation(owner_user_id)
     agent = await _topo_agent(agent_id)
     if not agent:
         raise ValueError(f"Agente '{agent_id}' não encontrado.")
@@ -3503,6 +3515,12 @@ async def execute_pipeline(
     # False p/ reprodutibilidade (mesma razão do modo agente: golden datasets
     # calibrados antes da guarda anti-conhecimento-paramétrico).
     grounding_strict: bool | None = None,
+    # Dono na CRIAÇÃO (35.4.0): quando informado, TODA interaction criada nesta
+    # execução (master + filhas) nasce com owner_user_id — um aborto server-side
+    # (timeout do invoke-job, crash) não deixa mais conversa órfã sem dono
+    # (IDOR). Flui por ContextVar até os pontos de criação; o stamp pós-execução
+    # das rotas vira rede de segurança (idempotente, WHERE owner IS NULL).
+    owner_user_id: str | None = None,
 ) -> dict:
     """Executa pipeline completo pelo AI Mesh.
 
@@ -3526,6 +3544,10 @@ async def execute_pipeline(
     é absorvido — não afeta a execução do pipeline.
     """
     start = time.time()
+    # Dono na CRIAÇÃO (35.4.0): o contexto vale para master E filhas da cadeia.
+    if owner_user_id:
+        from app.core.interaction_access import set_interaction_owner_for_creation
+        set_interaction_owner_for_creation(owner_user_id)
     # Cache de topologia por requisição (25.2.0): liga o memo de mesh/agents
     # do caminho quente quando o toggle permite. contextvar é request-scoped
     # (sem vazar entre requisições concorrentes); resetado antes do return.
@@ -4469,6 +4491,12 @@ async def execute_pipeline(
                 "duration_ms": result.get("duration_ms", 0),
                 "final_state": result.get("final_state", ""),
                 "output_preview": (result.get("output", "") or "")[:300],
+                # 35.4.0 (aditivo): custo/tokens REAIS do step + iid — o worker
+                # do invoke-job acumula via callback p/ que um TIMEOUT não suma
+                # com o gasto dos steps já concluídos (ledger/orçamento por key).
+                "cost_usd": _step_cost,
+                "tokens_used": _step_tokens,
+                "interaction_id": iid,
             })
         except Exception as e:
             steps.append({

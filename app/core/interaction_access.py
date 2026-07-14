@@ -19,11 +19,32 @@ API-key — `require_user` resolve os dois para o usuário DONO).
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from typing import Optional
 
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
+
+# ── Dono na CRIAÇÃO (35.4.0, review do deadline por job) ──
+# O stamp pós-execução deixava uma janela: um aborto server-side DEPOIS da
+# criação (o timeout do invoke-job foi o 1º caminho DETERMINÍSTICO) órfãva a
+# interaction SEM dono — listável por todo autenticado (`OR owner IS NULL`) e
+# sequestrável no reuso do session_id. O caller (rota/worker) seta o dono no
+# CONTEXTO da execução e os pontos de criação (FSM run_intake + cadeia
+# declarativa) o incluem no INSERT — nasce com dono; o stamp pós vira rede de
+# segurança. ContextVar: flui por await/task-filho sem threading de assinatura.
+_creation_owner: ContextVar[Optional[str]] = ContextVar(
+    "interaction_creation_owner", default=None
+)
+
+
+def set_interaction_owner_for_creation(user_id: Optional[str]) -> None:
+    _creation_owner.set((user_id or "").strip() or None)
+
+
+def interaction_owner_for_creation() -> Optional[str]:
+    return _creation_owner.get()
 
 
 def _can_bypass(user: Optional[dict]) -> bool:

@@ -197,18 +197,92 @@ async def _run_job(job_id: str) -> None:
         logger.warning("event=invoke_job_recheck_failed job_id=%s", job_id, exc_info=True)
 
     from app.agents.engine import execute_pipeline
+    # Deadline por job (35.4.0, fast-follow do #590): um execute_pipeline
+    # pendurado (LLM/tool travado além dos timeouts internos) ocupava vaga do
+    # cap PARA SEMPRE — o reaper de propósito não mata 'running' com task viva.
+    # wait_for CANCELA a execução no estouro (o engine aborta a chamada em
+    # curso; persistências parciais de steps já concluídos são aceitas).
+    from app.core.config import get_settings as _gs
     try:
-        result = await execute_pipeline(
-            entry_agent_id=req.get("root"),
-            user_input=req.get("user_input") or "",
-            channel=req.get("channel") or "api",
-            session_id=req.get("session_id"),
-            context_mode=req.get("context_mode") or "auto",
-            attachments=req.get("attachments") or None,
-            allowed_agent_ids=set(req.get("members") or []) or None,  # SELA ao subgrafo
-            sealed_inputs=req.get("sealed_inputs") or None,
-            pipeline_id=pid,
+        _timeout_min = float(_gs().invoke_job_timeout_minutes or 30)
+    except Exception:
+        _timeout_min = 30.0
+
+    # Coletor de steps CONCLUÍDOS (review do FF4): num timeout, o gasto REAL de
+    # LLM dos steps que completaram não pode sumir do ledger/orçamento — o
+    # agent_done carrega cost_usd/tokens_used/interaction_id (35.4.0) e este
+    # callback os acumula fora da task cancelável.
+    _done_steps: list = []
+
+    async def _collect(event) -> None:
+        if isinstance(event, dict) and event.get("type") == "agent_done":
+            _done_steps.append({
+                "agent_id": event.get("agent_id"),
+                "agent_name": event.get("agent_name"),
+                "status": "completed",
+                "cost_usd": event.get("cost_usd") or 0.0,
+                "tokens_used": event.get("tokens_used") or 0,
+                "duration_ms": event.get("duration_ms") or 0,
+                "interaction_id": event.get("interaction_id"),
+            })
+
+    try:
+        result = await asyncio.wait_for(
+            execute_pipeline(
+                entry_agent_id=req.get("root"),
+                user_input=req.get("user_input") or "",
+                channel=req.get("channel") or "api",
+                session_id=req.get("session_id"),
+                context_mode=req.get("context_mode") or "auto",
+                attachments=req.get("attachments") or None,
+                allowed_agent_ids=set(req.get("members") or []) or None,  # SELA ao subgrafo
+                sealed_inputs=req.get("sealed_inputs") or None,
+                pipeline_id=pid,
+                progress_callback=_collect,
+                # Dono na CRIAÇÃO (review do FF4): o cancel do deadline era o 1º
+                # aborto DETERMINÍSTICO pós-criação — sem isto, master/filhas
+                # ficavam órfãs SEM dono (listáveis/sequestráveis: IDOR).
+                owner_user_id=job.get("owner_user_id"),
+            ),
+            timeout=_timeout_min * 60.0,
         )
+    except (TimeoutError, asyncio.TimeoutError):
+        # ANTES do except Exception (TimeoutError herda de Exception): o
+        # cliente recebe um erro nomeado e a vaga do cap é liberada.
+        logger.error("event=invoke_job_timeout job_id=%s pipeline_id=%s timeout_min=%s",
+                     job_id, pid, _timeout_min)
+        await _finish_failed(job_id, {
+            "error": "job_timeout",
+            "timeout_minutes": _timeout_min,
+            "hint": "A execução excedeu o deadline (invoke_job_timeout_minutes) "
+                    "e foi cancelada. Ajuste o parâmetro se o pipeline for "
+                    "legitimamente longo.",
+        })
+        # O gasto dos steps CONCLUÍDOS entra no ledger/orçamento/RED mesmo com
+        # timeout (result sintético: cost_and_tokens_from_result soma os steps).
+        try:
+            _master_iid = next((s.get("interaction_id") for s in _done_steps
+                                if s.get("interaction_id")), None)
+            synthetic = {
+                "status": "failed",
+                "final_state": "JobTimeout",
+                "interaction_id": _master_iid,
+                "duration_ms": _timeout_min * 60000.0,
+                "pipeline_steps": _done_steps,
+            }
+            from app.core.analytics_tasks import schedule_analytics
+            from app.routes.pipelines import _record_invoke_analytics
+            schedule_analytics(_record_invoke_analytics(
+                pid=pid, root=req.get("root"),
+                member_count=len(req.get("members") or []), result=synthetic,
+                api_key_id=req.get("api_key_id"), api_key_name=req.get("api_key_name"),
+                actor_user_id=job.get("owner_user_id"),
+                arg_keys=req.get("arg_keys") or [], channel=req.get("channel"),
+                kind="invoke_async",
+            ))
+        except Exception:
+            logger.warning("event=invoke_job_timeout_analytics_failed job_id=%s", job_id)
+        return
     except ValueError as e:
         # Paridade com o sync (409): mensagem do engine é controlada/exposta.
         await _finish_failed(job_id, {"error": "pipeline_execution_rejected",

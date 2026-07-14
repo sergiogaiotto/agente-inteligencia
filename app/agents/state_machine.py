@@ -209,6 +209,11 @@ class InteractionStateMachine:
                 "state": State.INTAKE.value,
             })
         else:
+            # Dono na CRIAÇÃO (35.4.0): nasce carimbado quando o caller setou o
+            # contexto — um aborto (timeout do invoke-job, crash) não deixa mais
+            # interaction órfã sem dono (IDOR). Ver interaction_access.
+            from app.core.interaction_access import interaction_owner_for_creation
+            _owner = interaction_owner_for_creation()
             await interactions_repo.create({
                 "id": self.ctx.interaction_id,
                 "title": _maybe_redact(user_input)[:80].strip(),
@@ -216,6 +221,7 @@ class InteractionStateMachine:
                 "channel": channel,
                 "journey_id": journey,
                 "state": State.INTAKE.value,
+                **({"owner_user_id": _owner} if _owner else {}),
             })
         await turns_repo.create({
             "id": str(uuid.uuid4()),
