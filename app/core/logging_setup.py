@@ -58,6 +58,12 @@ trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
 user_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "user_id", default=""
 )
+# IP do cliente (35.11.0, auditoria): resolvido com a guarda anti-spoof do XFF
+# (ratelimit.resolve_client_ip) no RequestContextMiddleware; "" fora de request
+# (jobs/sweeps de background → audit grava NULL, semanticamente correto).
+client_ip_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "client_ip", default=""
+)
 
 
 # ─── PII redaction ────────────────────────────────────────────────

@@ -327,6 +327,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
     actor TEXT,
     details TEXT DEFAULT '{}',
     trace_id TEXT,
+    -- IP do cliente (35.11.0): injetado pela AuditRepository via contextvar
+    -- (resolução anti-spoof do #560). NULL = escrita fora de request (jobs).
+    -- Também em _IDEMPOTENT_MIGRATIONS (tabela existente).
+    ip TEXT,
     created_at TIMESTAMP DEFAULT now()
 );
 
@@ -1358,6 +1362,8 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE drift_events ADD COLUMN IF NOT EXISTS pipeline_id TEXT",
     # ── Webhook de conclusão do invoke-job (35.6.0) ──
     "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS webhook_url TEXT",
+    # ── Auditoria com IP (35.11.0) ──
+    "ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS ip TEXT",
 ]
 
 
@@ -1836,7 +1842,37 @@ releases_repo = Repository("releases")
 gold_cases_repo = Repository("gold_cases")
 eval_runs_repo = Repository("eval_runs")
 car_repo = Repository("car_entries")
-audit_repo = Repository("audit_log")
+class AuditRepository(Repository):
+    """Repository do audit_log que INJETA contexto de request (35.11.0):
+    `ip` (contextvar com a resolução anti-spoof do #560) e `actor` fallback
+    (user_id_var) quando o caller não passou — cobre os ~37 call sites de
+    auditoria SEM tocar nenhum. Tolerante: se o INSERT falhar (ex.: coluna ip
+    ausente porque a migração idempotente falhou fail-open no boot), re-tenta
+    SEM as keys injetadas — auditoria nunca vira 500."""
+
+    async def create(self, data: dict):
+        enriched = dict(data)
+        try:
+            from app.core.logging_setup import client_ip_var, user_id_var
+            ip = (client_ip_var.get() or "").strip()
+            if ip and "ip" not in enriched:
+                enriched["ip"] = ip[:64]
+            if not (enriched.get("actor") or "").strip():
+                uid = (user_id_var.get() or "").strip()
+                if uid:
+                    enriched["actor"] = uid
+        except Exception:
+            enriched = dict(data)
+        try:
+            return await super().create(enriched)
+        except Exception:
+            if enriched.keys() != data.keys():
+                # fallback: grava sem o contexto injetado (nunca perde o evento)
+                return await super().create(data)
+            raise
+
+
+audit_repo = AuditRepository("audit_log")
 drift_repo = Repository("drift_events")
 prompts_repo = Repository("system_prompts")
 users_repo = Repository("users")
