@@ -171,26 +171,11 @@ async def _unlink_uploaded_files(con, *, customer_hash: Optional[str] = None,
     import os
     import asyncio
     from app.routes.workspace import UPLOAD_DIR
-    if customer_hash:
-        # LIMIT também no forget (achado da auditoria #4): um titular com muitos
-        # uploads não pode fazer uma passada única bloqueante no handler HTTP.
-        rows = await con.fetch(
-            "SELECT disk_name FROM uploaded_files WHERE customer_hash = $1 "
-            "ORDER BY created_at LIMIT $2", customer_hash, _PURGE_BATCH)
-    elif older_than_days is not None:
-        rows = await con.fetch(
-            "SELECT disk_name FROM uploaded_files "
-            "WHERE created_at < now() - ($1 * interval '1 day') "
-            "ORDER BY created_at LIMIT $2",
-            float(older_than_days), _PURGE_BATCH)
-    else:
-        return 0
-    names = [r["disk_name"] for r in rows]
-    if not names:
+    if not customer_hash and older_than_days is None:
         return 0
     base = str(UPLOAD_DIR.resolve())
 
-    def _unlink_batch() -> list:
+    def _unlink_batch(names: list) -> list:
         # I/O de filesystem SÍNCRONO fora do event loop (achado da auditoria #4):
         # data/uploads em volume lento/travado (NFS/overlay) congelaria o loop
         # inteiro — e o teto de 30s da carona do reaper não interrompe seção
@@ -211,10 +196,33 @@ async def _unlink_uploaded_files(con, *, customer_hash: Optional[str] = None,
                 logger.warning("event=retention_unlink_failed name=%s: %s", name, str(e)[:150])
         return [_removed, _done]
 
-    removed, done = await asyncio.to_thread(_unlink_batch)
-    if done:
-        await con.execute("DELETE FROM uploaded_files WHERE disk_name = ANY($1)", done)
-    return removed
+    total_removed = 0
+    while True:
+        if customer_hash:
+            rows = await con.fetch(
+                "SELECT disk_name FROM uploaded_files WHERE customer_hash = $1 "
+                "ORDER BY created_at LIMIT $2", customer_hash, _PURGE_BATCH)
+        else:
+            rows = await con.fetch(
+                "SELECT disk_name FROM uploaded_files "
+                "WHERE created_at < now() - ($1 * interval '1 day') "
+                "ORDER BY created_at LIMIT $2",
+                float(older_than_days), _PURGE_BATCH)
+        names = [r["disk_name"] for r in rows]
+        if not names:
+            break
+        removed, done = await asyncio.to_thread(_unlink_batch, names)
+        total_removed += removed
+        if done:
+            await con.execute("DELETE FROM uploaded_files WHERE disk_name = ANY($1)", done)
+        # forget (por titular) ESGOTA em lotes — completude LGPD (achado da
+        # auditoria #5: um LIMIT sem loop deixava >500 arquivos do titular no
+        # disco). Retenção por IDADE é incremental (1 lote/passada, throttle 1x/h).
+        # Guarda contra loop infinito: se NADA foi removível (todos os unlinks
+        # falharam → done vazio → linhas ficam), para (o próximo ciclo tenta).
+        if older_than_days is not None or len(names) < _PURGE_BATCH or not done:
+            break
+    return total_removed
 
 
 async def forget_customer(customer_hash: str) -> dict:
@@ -277,12 +285,19 @@ async def forget_customer(customer_hash: str) -> dict:
                 # sessão mista → apaga a telemetria toda (privacy-safe; a
                 # conversa/turns do OUTRO titular fica). Guardam PII crua:
                 # api_call_logs (request/response_body), tool_calls (input/output),
-                # binding_executions, verifier_jobs (draft/user_question no
-                # payload), evidences (snippet).
+                # binding_executions, verifier_jobs (draft/user_question no payload).
                 for _tbl in ("api_call_logs", "tool_calls", "binding_executions",
-                             "verifier_jobs", "evidences"):
+                             "verifier_jobs"):
                     await con.execute(
                         "DELETE FROM " + _tbl + " WHERE interaction_id = ANY($1)", mids)
+                # evidences NÃO tem interaction_id — só turn_id (achado da auditoria
+                # #5, BLOCKER: por interaction_id dava UndefinedColumnError e o
+                # ROLLBACK deixava turns/telemetria do titular VIVOS → PII sobrevivia
+                # ao forget). Delete cirúrgico pelos turns DESTE titular (o snippet
+                # é do turno; os turns de A na mesma interaction ficam).
+                await con.execute(
+                    "DELETE FROM evidences WHERE turn_id IN "
+                    "(SELECT id FROM turns WHERE customer_hash = $1)", customer_hash)
                 # verifications.turn_id é NULL no runtime (o verifier persiste
                 # sem turn_id) → scrub por interaction_id, não por turn_id (que
                 # afetaria 0 linhas). Over-scrub deliberado, mesma direção.

@@ -106,16 +106,53 @@ async def test_forget_sessao_mista_alcanca_pii_fora_de_turns(monkeypatch):
     con = _MixedCon()
     monkeypatch.setattr("app.core.database._get_pool", lambda: _Pool(con))
     await retention.forget_customer("h-bob")
-    # over-delete deliberado das 5 tabelas por interaction_id da sessão mista
-    for tbl in ("api_call_logs", "tool_calls", "binding_executions",
-                "verifier_jobs", "evidences"):
+    # over-delete deliberado das 4 tabelas COM interaction_id da sessão mista
+    for tbl in ("api_call_logs", "tool_calls", "binding_executions", "verifier_jobs"):
         hits = con.sql("DELETE FROM " + tbl + " WHERE interaction_id = ANY($1)")
         assert hits and hits[0][1][0] == ["int-de-alice"], f"{tbl} não alcançada"
+    # evidences NÃO tem interaction_id (auditoria #5, BLOCKER) → por turn_id
+    ev = con.sql("DELETE FROM evidences WHERE turn_id IN")
+    assert ev, "evidences deve ser apagada por turn_id, não interaction_id"
+    assert not con.sql("DELETE FROM evidences WHERE interaction_id")  # nunca
     # verifications scrubadas por interaction_id (NÃO por turn_id, que é NULL)
     uv = con.sql("UPDATE verifications SET")
     assert uv and "interaction_id = ANY($1)" in uv[0][0]
     # title (mensagem crua) + trace_data do master reusado scrubados
     assert con.sql("UPDATE interactions SET title")
+
+
+class _DrainFileCon:
+    """1º fetch = lote CHEIO (continua) → 2º = parcial (para). Testa o loop."""
+    def __init__(self):
+        self.fetches = 0
+        self.deleted = []
+
+    async def fetch(self, sql, *a):
+        self.fetches += 1
+        from app.core import retention
+        if self.fetches == 1:
+            return [{"disk_name": f"f{i}.txt"} for i in range(retention._PURGE_BATCH)]
+        if self.fetches == 2:
+            return [{"disk_name": "last.txt"}]
+        return []
+
+    async def execute(self, sql, *a):
+        if "DELETE FROM uploaded_files" in sql:
+            self.deleted.append(a[0])
+        return "DELETE 0"
+
+
+@pytest.mark.asyncio
+async def test_forget_uploads_esgota_em_lotes(monkeypatch, tmp_path):
+    """Achado da auditoria #5 (major): o forget de uploads com LIMIT sem loop
+    deixava >500 arquivos do titular no disco. Agora ESGOTA em lotes."""
+    from app.core import retention
+    from app.routes import workspace
+    monkeypatch.setattr(workspace, "UPLOAD_DIR", tmp_path)
+    con = _DrainFileCon()
+    await retention._unlink_uploaded_files(con, customer_hash="h-grande")
+    assert con.fetches == 2         # 1º lote CHEIO → continua; 2º parcial → para
+    assert len(con.deleted) == 2    # um DELETE por lote (drenou tudo)
 
 
 @pytest.mark.asyncio
@@ -252,8 +289,8 @@ def test_worker_reherda_hash_em_runtime():
 def test_unlink_roda_em_thread_e_forget_tem_limit():
     """L (auditoria #4): I/O de filesystem fora do event loop + LIMIT no forget."""
     ret = Path("app/core/retention.py").read_text(encoding="utf-8")
-    assert "await asyncio.to_thread(_unlink_batch)" in ret
-    # ramo por titular (forget) agora tem LIMIT como o ramo por idade
+    assert "await asyncio.to_thread(_unlink_batch, names)" in ret
+    # ramo por titular (forget) tem LIMIT + LOOP de drenagem (auditoria #5)
     assert "WHERE customer_hash = $1 " in ret and "LIMIT $2" in ret
 
 
