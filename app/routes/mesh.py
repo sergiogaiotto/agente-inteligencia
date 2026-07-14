@@ -591,8 +591,8 @@ MESH_CONNECTION_TYPES_HELP: list[dict] = [
     },
     {
         "id": "parallel",
-        "label": "Paralelo",
-        "what": "Vários destinos da mesma origem rodam TODOS, com o mesmo input (sem o roteador escolher um).",
+        "label": "Sempre dispara",
+        "what": "Vários destinos da mesma origem rodam TODOS, com o mesmo input, um após o outro em sequência (sem o roteador escolher um; a execução não é simultânea).",
         "when": "Quando você quer respostas independentes de cada destino para combinar depois — não é roteamento 1-de-N.",
     },
     {

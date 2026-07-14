@@ -3668,6 +3668,10 @@ async def execute_pipeline(
         except Exception:
             session_text = ""  # fail-open: sinal pegajoso é melhoria, não requisito
     last_result = None
+    # Âncora do envelope (Pacote B, 35.0.0): referência ao ENTRY de steps do
+    # agente que produziu o last_result vigente — decisão/transições/evidência
+    # do envelope saem DELE (nunca de steps[-1], que pode ser um step pulado).
+    owner_step = None
     master_interaction_id = None
     child_interaction_ids = []
     # Tracking por-id pro roteamento contra o PARENT REAL (fan-out / branch).
@@ -3891,6 +3895,7 @@ async def execute_pipeline(
             names_by_id[agent_id] = agent.get("name", "")
             last_result = {"output": "", "final_state": "FastRouted",
                            "interaction_id": None, "agent_id": agent_id}
+            owner_step = steps[-1]  # âncora acompanha o last_result (Pacote B)
             await _emit({"type": "agent_fast_routed", "step_index": i,
                          "agent_id": agent_id, "agent_name": agent.get("name", "")})
             continue
@@ -4445,6 +4450,7 @@ async def execute_pipeline(
                 **({"dispatched_attachments": _fwd_names} if _fwd_names else {}),
             })
             last_result = result
+            owner_step = steps[-1]  # âncora acompanha o last_result (Pacote B)
             # Tracking por-id pro roteamento parent-aware (fan-out): registra
             # output/estado/nome deste nó pra que filhos cujo parent NÃO é o
             # irmão anterior avaliem contra o output correto.
@@ -4592,18 +4598,36 @@ async def execute_pipeline(
             all_exec_logs.append({"cat": "pipeline", "icon": "🔗", "title": f"─── {step_name} ({status_label}) ───", "detail": "", "level": "info"})
             all_exec_logs.extend(s["trace"]["execution_log"])
 
+    # ── Âncora do envelope (Pacote B, 35.0.0) ──
+    # O `output` sempre veio do dono do last_result, mas final_state/transitions
+    # vinham de steps[-1] — que em fan-out 1-de-N pode ser um step PULADO: a
+    # resposta era de um agente e o "estado final" de outro (às vezes de um que
+    # nem rodou). Agora decisão, transições e evidence_score vêm do MESMO step
+    # que produziu o output (owner_step acompanha cada atribuição de last_result
+    # — mesma proteção que o harness modo-pipeline #589 já fazia por fora), e o
+    # envelope declara QUEM respondeu (`output_agent`, aditivo). evidence_score
+    # deixou de ser o MAX da cadeia (inflava confiança quando quem respondeu não
+    # citou evidência). Fallback steps[-1]: cadeia sem nenhum produtor (tudo
+    # skip/passthrough) preserva o comportamento antigo.
+    _owner_step = owner_step if owner_step is not None else (steps[-1] if steps else None)
     final_result = {
         "mode": "pipeline",
         "output": final_output,
+        # output_agent SÓ quando houve produtor REAL (owner_step) — no fallback
+        # steps[-1] (cadeia sem produtor: tudo skip/erro) atribuir autoria a um
+        # agente que não respondeu seria mentira (review adversarial). Os demais
+        # campos usam o fallback p/ preservar o comportamento legado degenerado.
+        "output_agent": ({"id": owner_step.get("agent_id"), "name": owner_step.get("agent_name")}
+                         if owner_step is not None else None),
         "pipeline_steps": steps,
         "total_agents": len(chain),
         "completed_agents": executed_count,
         "passthrough_agents": passthrough_count,
         "duration_ms": total_duration,
         "interaction_id": master_interaction_id,
-        "final_state": steps[-1].get("final_state") if steps else None,
-        "evidence_score": max((s.get("evidence_score",0) for s in steps), default=0),
-        "transitions": steps[-1].get("transitions",[]) if steps else [],
+        "final_state": _owner_step.get("final_state") if _owner_step else None,
+        "evidence_score": _owner_step.get("evidence_score", 0) if _owner_step else 0,
+        "transitions": _owner_step.get("transitions", []) if _owner_step else [],
         "status": "completed",
         "trace": {
             "total_steps": sum(len(s.get("transitions",[])) for s in steps),
