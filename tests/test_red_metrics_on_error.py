@@ -48,9 +48,14 @@ class TestAsyncWorkerFailures:
 
     def test_todos_os_error_branches_contam(self):
         src = Path("app/core/invoke_jobs.py").read_text(encoding="utf-8")
+        # rechecks PRÉ-execução: sem latência (não houve trabalho) → 1 arg.
         for status in ["payload_corrupt", "pipeline_not_invocable", "session_not_accessible",
-                       "api_key_revoked", "cost_budget_exceeded", "timeout", "rejected", "error"]:
+                       "api_key_revoked", "cost_budget_exceeded"]:
             assert f'_record_async_failure("{status}")' in src, f"branch {status} não conta"
+        # abortos PÓS-execução: latência REAL vai ao histograma (35.14.7) → 2 args.
+        for status in ["timeout", "rejected", "error"]:
+            assert f'_record_async_failure("{status}", time.monotonic() - _exec_t0)' in src, \
+                f"branch {status} não conta com latência"
 
 
 class TestFalhaGeraMetrica:

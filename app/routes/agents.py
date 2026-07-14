@@ -771,6 +771,11 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
                 # = stateless (integração idempotente).
                 session_id=data.session_id,
                 context_mode=data.context_mode or "auto",
+                # Dono na CRIAÇÃO (35.14.7, achado de auditoria #3): o invoke de
+                # AGENTE nascia órfão (só o stamp pós-execução carimbava) — um
+                # crash no meio deixava a row NULL e, com FF7, o PRÓPRIO criador
+                # que deu o session_id recebia 404 no retry. Nasce com dono.
+                owner_user_id=_caller.get("id"),
             )
         except ValueError as e:
             raise HTTPException(404, str(e))
@@ -837,6 +842,9 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
             attachments=attachments_internal or None,
             pipeline_context=pipeline_context,
             context_mode=data.context_mode or "auto",
+            # Dono na CRIAÇÃO (35.14.7): idem branch pipeline — a interaction de
+            # agente avulso nasce carimbada (era órfã até o stamp pós-execução).
+            owner_user_id=_caller.get("id"),
         )
     except ValueError as e:
         raise HTTPException(404, str(e))
