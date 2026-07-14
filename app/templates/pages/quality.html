@@ -228,6 +228,52 @@
         </div>
     </div>
 
+    <!-- ─── Drift entre execuções do harness (35.5.0) ───
+         Dá OLHOS ao drift_events: o writer existe desde 33.11.0 e o alvo desde
+         35.1.0, mas o operador só via um CONTADOR no /observability. Nomes de
+         alvo resolvidos client-side (agentOptions/pipelineOptions já carregados
+         pelos combos de filtro — zero fetch extra). -->
+    <div class="rounded-lg border border-surface-200 bg-white p-3 mb-4" data-testid="quality-drift-panel">
+        <div class="flex items-center justify-between mb-2">
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-surface-400">
+                Drift entre execuções do harness
+                <span class="normal-case font-normal tracking-normal text-surface-400">— movimento de métrica vs o baseline do MESMO alvo (além do ruído de 1%)</span>
+            </div>
+            <div class="flex items-center gap-1">
+                <template x-for="sev in ['critical','warning','info']" :key="sev">
+                    <button @click="driftSeverity = (driftSeverity === sev ? '' : sev)"
+                            class="text-[9px] px-1.5 py-0.5 rounded border"
+                            :class="driftSeverity === sev
+                                ? (sev==='critical' ? 'bg-rose-50 border-rose-300 text-rose-700' : sev==='warning' ? 'bg-amber-50 border-amber-300 text-amber-700' : 'bg-emerald-50 border-emerald-300 text-emerald-700')
+                                : 'border-surface-200 text-surface-400 hover:bg-surface-50'"
+                            x-text="sev === 'critical' ? 'crítico' : sev === 'warning' ? 'alerta' : 'melhora'"></button>
+                </template>
+            </div>
+        </div>
+        <template x-if="driftShown.length === 0">
+            <div class="text-[11px] text-surface-400">
+                Nenhum evento<span x-show="driftSeverity"> com esta severidade</span>.
+                Drift é gravado quando uma execução do harness compara com um baseline
+                <b>do mesmo alvo</b> (agente ou pipeline) e alguma métrica se move além do ruído —
+                rode baselines em <a href="/harness" class="text-brand-500 underline">Avaliações</a> para começar a acumular histórico.
+            </div>
+        </template>
+        <template x-for="e in driftShown" :key="e.id">
+            <div class="flex items-center gap-2 text-[11px] py-1 px-1.5 rounded hover:bg-surface-50">
+                <span class="text-[9px] px-1.5 py-0.5 rounded shrink-0 font-semibold"
+                      :class="e.severity==='critical' ? 'bg-rose-50 text-rose-700' : e.severity==='warning' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'"
+                      x-text="e.severity==='critical' ? 'crítico' : e.severity==='warning' ? 'alerta' : 'melhora'"></span>
+                <span class="text-brand-900 font-medium shrink-0" x-text="driftMetricLabel(e.metric_name)"></span>
+                <span class="text-surface-500 shrink-0">
+                    <span x-text="fmtDriftVal(e.baseline_value)"></span> → <span class="font-semibold" :class="e.severity==='info' ? 'text-emerald-700' : 'text-rose-700'" x-text="fmtDriftVal(e.current_value)"></span>
+                    <span class="text-surface-400" x-text="'(' + (e.magnitude > 0 ? '+' : '') + fmtDriftVal(e.magnitude) + ')'"></span>
+                </span>
+                <span class="truncate flex-1 text-surface-500" x-text="driftTargetLabel(e)" :title="e.agent_id || e.pipeline_id || ''"></span>
+                <span class="text-surface-400 text-[10px] shrink-0" x-text="fmtDriftWhen(e.created_at)"></span>
+            </div>
+        </template>
+    </div>
+
     <!-- ─── Explorador de alucinações (25.0.0) ─── -->
     <div class="rounded-lg border border-rose-200 bg-white p-3 mb-4" x-show="claims.length > 0" x-cloak data-testid="quality-claims-explorer">
         <div class="flex items-center justify-between mb-2">
@@ -440,7 +486,49 @@ function qualityPage(){return{
     filterInteractionId: (new URLSearchParams(window.location.search).get('interaction_id') || ''),
     // Production sample async (Onda 3)
     asyncStats: { stats: {}, config: {} },
+    // Drift do harness (35.5.0): lista do GET /dashboard/drift-events
+    driftEvents: [], driftSeverity: '',
     _pollHandle: null,
+    get driftShown() {
+        return this.driftSeverity
+            ? this.driftEvents.filter(e => e.severity === this.driftSeverity)
+            : this.driftEvents;
+    },
+    driftMetricLabel(m) {
+        return ({
+            accuracy: 'Acurácia', avg_factuality: 'Factualidade',
+            avg_completeness: 'Completude', avg_tone: 'Tom',
+            contract_compliance_rate: 'Conformidade de contrato',
+            correct_refusal_rate: 'Recusa correta',
+            safety_violation_rate: 'Violações de segurança',
+            hallucination_rate: 'Taxa de alucinação',
+            false_positive_rate: 'Falso positivo',
+        })[m] || m;
+    },
+    fmtDriftVal(v) { return (v == null) ? '—' : Number(v).toFixed(2); },
+    fmtDriftWhen(v) {
+        try { return (typeof tzDateTime === 'function') ? tzDateTime(v) : (v || ''); }
+        catch { return v || ''; }
+    },
+    driftTargetLabel(e) {
+        // Alvo do run (35.1.0): resolve o nome pelos combos já carregados.
+        // Evento pré-35.1.0 não tem alvo → rótulo honesto.
+        if (e.pipeline_id) {
+            const p = this.pipelineOptions.find(x => x.id === e.pipeline_id);
+            return '🔗 ' + (p ? p.name : e.pipeline_id.slice(0, 8) + '…');
+        }
+        if (e.agent_id) {
+            const a = this.agentOptions.find(x => x.id === e.agent_id);
+            return a ? a.name : e.agent_id.slice(0, 8) + '…';
+        }
+        return 'alvo não registrado (evento antigo)';
+    },
+    async loadDrift() {
+        try {
+            const r = await api.get('/api/v1/dashboard/drift-events?limit=30');
+            this.driftEvents = r.events || [];
+        } catch { this.driftEvents = []; }
+    },
     get okRate() {
         const t = this.stats.total || 0;
         const ok = this.stats.ok_count || 0;
@@ -500,6 +588,7 @@ function qualityPage(){return{
         } catch { this.items = []; this.total = 0; }
         if (this.agentOptions.length === 0) await this.loadOptions();
         await this.loadStats();
+        await this.loadDrift();
     },
     async loadOptions() {
         // Combos de filtro por dono — nomes humanos, 1 fetch por página.

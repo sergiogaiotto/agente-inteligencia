@@ -377,7 +377,7 @@
                         <button @click="expanded[i] = !expanded[i]" type="button" class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-50">
                             <span class="text-[13px] flex-none" :class="t.cls" x-text="t.icon"></span>
                             <span class="text-[12px] font-medium text-brand-900 flex-1 truncate" x-text="t.name"></span>
-                            <span class="text-[9.5px] font-mono text-surface-400 flex-none" title="Pontuação de evidência (0–1): o quanto a resposta se fundamentou em fonte real (anexo/RAG/tool). 0 = recusou ou não usou evidência." x-text="'evid ' + t.evidence"></span>
+                            <span class="text-[9.5px] font-mono text-surface-400 flex-none" title="Pontuação de evidência (0–1). COMO é calculada: com RAG, é a pontuação real de recuperação das fontes citadas; SEM RAG mas com anexo ou tool fundamentando a resposta, vale 0,8 FIXO (heurística de fundamentação — não é medida de relevância); 0 = recusou ou respondeu sem nenhuma evidência." x-text="'evid ' + t.evidence"></span>
                             <span x-show="t.cost" class="text-[9.5px] font-mono text-surface-400 flex-none" title="Custo deste agente (US$).">US$ <span x-text="t.cost"></span></span>
                             <svg class="w-3.5 h-3.5 text-surface-400 flex-none transition-transform" :class="expanded[i] ? 'rotate-90' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
                         </button>
