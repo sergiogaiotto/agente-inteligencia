@@ -1116,7 +1116,6 @@ async def execute_declarative(
         # Agrega additions com deep-merge (sequencial dentro do nível por
         # determinismo: ordem do SKILL.md → last-write-wins em colisão)
         level_additions: dict = {}
-        level_had_success = False
         compensations_to_run: list[str] = []
 
         for r, p in zip(exec_results, runnable_plans):
