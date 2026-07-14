@@ -341,6 +341,7 @@ async def run_evaluation(
     gold_version: str = "latest",
     run_type: str = "baseline",
     pipeline_id: str | None = None,
+    owner_user_id: str | None = None,
 ) -> dict:
     """Executa harness contra Golden Dataset e produz relatório multi-dim.
 
@@ -559,6 +560,16 @@ async def run_evaluation(
             # persist=False (não há linha p/ ligar). Best-effort, off da métrica.
             if engine_verified:
                 await _link_verification_to_gold_case(result.get("interaction_id"), case["id"])
+
+            # IDOR (35.2.0, fast-follow #581): interactions criadas pelo harness
+            # ficavam órfãs (legada-sem-dono = reutilizáveis como session_id por
+            # QUALQUER usuário). Carimba quem disparou o run. Best-effort.
+            if owner_user_id:
+                try:
+                    from app.core.interaction_access import stamp_interaction_owner
+                    await stamp_interaction_owner(result.get("interaction_id"), owner_user_id)
+                except Exception:
+                    pass
 
             dims = _extract_dim_scores(verification)
             dim_skipped = [k for k in ("factuality", "completeness", "tone", "safety")

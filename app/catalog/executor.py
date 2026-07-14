@@ -284,6 +284,14 @@ async def execute_recipe(
                 })
                 continue
 
+            # IDOR (35.2.0, fast-follow #581): carimba o CONSUMER como dono da
+            # interaction do step — antes ficava órfã (reutilizável como
+            # session_id por terceiros). Best-effort, idempotente.
+            try:
+                from app.core.interaction_access import stamp_interaction_owner
+                await stamp_interaction_owner(inv.get("interaction_id"), consumer_user_id)
+            except Exception:
+                pass
             # Success do step — calcula cost real (PR #69) e grava best-effort
             step_latency_ms = inv["duration_ms"] or int((time.time() - step_start) * 1000)
             step_tokens_in = inv["tokens_input"]
@@ -424,6 +432,14 @@ async def execute_pipeline_entry(
         logger.exception(f"execute_pipeline_entry crashed (engine): execution={execution_id}")
         await _finalize_failed(execution_id, start, e)
         return
+
+    # IDOR (35.2.0): dono do run de pipeline do Catálogo = consumer (mesmo
+    # racional do stamp do invoke selado). Best-effort.
+    try:
+        from app.core.interaction_access import stamp_interaction_owner
+        await stamp_interaction_owner(result.get("interaction_id"), consumer_user.get("id"))
+    except Exception:
+        pass
 
     # Gravação guardada: um erro de DB aqui NÃO pode deixar a row 'running' forever
     # (espelha o catch-all de execute_recipe). Sela como 'failed' no except.

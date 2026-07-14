@@ -710,6 +710,12 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
             outputs_dict["plans"] = result.get("dry_run_plans") or []
             outputs_dict["dry_run"] = True
         else:
+            # IDOR (35.2.0, fast-follow #581): o branch declarativo retornava SEM
+            # carimbar o dono — a interaction ficava órfã (legada-sem-dono) e
+            # reutilizável como session_id por terceiros; os branches pipe/LLM
+            # já carimbavam.
+            from app.core.interaction_access import stamp_interaction_owner
+            await stamp_interaction_owner(result.get("interaction_id"), _caller.get("id"))
             # F12: atribui a interação declarativa à key (débito ~$0 — sem LLM).
             # SSOT (33.7.0): registra o invoke direto de agente org-wide, off-path.
             _schedule_agent_invoke_cost(request, agent_id, result)

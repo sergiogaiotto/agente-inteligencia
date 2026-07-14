@@ -54,10 +54,16 @@ class TestGate:
         assert_api_key_can_invoke(
             _req({"read_only": False, "allowed_pipeline_ids": None}), pipeline_id="qualquer")
 
-    def test_sem_pipeline_id_so_gate_readonly(self):
-        # invoke de agente (sem pipeline_id): allowed_pipeline_ids NÃO bloqueia
-        assert_api_key_can_invoke(_req({"read_only": False, "allowed_pipeline_ids": '["p2"]'}))
-        # mas read_only bloqueia
+    def test_key_escopada_bloqueia_invoke_de_agente(self):
+        # 35.2.0 (fast-follow): key com allowed_pipeline_ids NÃO invoca agente
+        # avulso (pipeline_id=None) — senão invocar direto o especialista do
+        # pipeline driblaria o escopo. Antes era permitido (gap do #585).
+        with pytest.raises(HTTPException) as ei:
+            assert_api_key_can_invoke(_req({"read_only": False, "allowed_pipeline_ids": '["p2"]'}))
+        assert ei.value.status_code == 403
+        # sem escopo (allowed vazio), agente avulso segue liberado
+        assert_api_key_can_invoke(_req({"read_only": False, "allowed_pipeline_ids": None}))
+        # e read_only bloqueia sempre
         with pytest.raises(HTTPException):
             assert_api_key_can_invoke(_req({"read_only": True}))
 
