@@ -1609,6 +1609,13 @@ function settingsPage() {
                 {key:'query_topology_cache_enabled', type:'bool', label:'Cache de topologia/schema', desc:'Evita re-consultar o mesmo dado imutável (schema, arestas do mesh, agentes) durante um invoke — colapsa centenas de idas ao banco. Seguro; desligue só como válvula de rollback.'},
                 {key:'fast_routing_enabled', type:'bool', label:'Permitir roteamento rápido', desc:'Master switch: habilita pular a chamada LLM do agente de triagem (router) quando a rota é 100% decidida pelos args + pergunta. Sozinho não muda nada — cada pipeline ainda precisa ativar "Roteamento rápido" no Estúdio.'},
               ]},
+            { title: '🔁 Invoke assíncrono (202)',
+              hint: 'Execução em background com job durável: POST /pipelines/{id}/invoke/async devolve 202 + job_id; o cliente consulta GET /pipelines/{id}/jobs/{job_id}. O caminho síncrono não muda.',
+              items: [
+                {key:'invoke_async_enabled', type:'bool', label:'Habilitar invoke assíncrono', desc:'Liga a rota /invoke/async (202 + polling). Desligado, a rota responde 403. Útil p/ pipelines longos atrás de proxy com timeout — o retry do proxy não re-executa (Idempotency-Key devolve o mesmo job).'},
+                {key:'invoke_jobs_retention_hours', type:'number', min:1, max:8760, step:1, label:'Retenção de jobs (horas)', desc:'Jobs terminados (completed/failed/lost) mais velhos que isto são apagados pelo reaper. Jobs na fila ou executando nunca são apagados.'},
+                {key:'invoke_jobs_max_concurrent', type:'number', min:1, max:64, step:1, label:'Execuções simultâneas', desc:'Invokes assíncronos rodando ao mesmo tempo neste processo. Excedente fica na fila (queued) e entra quando abre vaga.'},
+              ]},
             { title: '🪄 Geração no Wizard',
               hint: 'Como a IA gera SKILL.md e agentes no Wizard. O esforço de raciocínio só tem efeito em modelos que suportam (gpt-oss sempre; Azure/OpenAI só o1/o3/o4/gpt-5 — gpt-4o/gpt-4.1 ignoram sem erro). Para usar reasoning alto, aponte "Skill Generation" no Roteamento LLM para um gpt-oss.',
               items: [

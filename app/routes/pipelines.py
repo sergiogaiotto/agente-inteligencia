@@ -238,8 +238,13 @@ from app.core.analytics_tasks import (  # noqa: E402
 
 async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_id,
                                    api_key_name, actor_user_id, arg_keys, channel=None,
-                                   stream=False) -> None:
-    """Auditoria + atribuição + débito + ledger de custo de UMA invocação — DETACHED."""
+                                   stream=False, kind=None) -> None:
+    """Auditoria + atribuição + débito + ledger de custo de UMA invocação — DETACHED.
+
+    `kind` sobrescreve o rótulo do caminho (source no ledger + kind no Prometheus)
+    — o worker do invoke assíncrono (34.0.0) passa 'invoke_async' para as
+    invocações 202 não sumirem do RED/custo nem se misturarem às síncronas."""
+    effective_kind = kind or ("invoke_stream" if stream else "invoke")
     interaction_id = (result or {}).get("interaction_id")
     try:
         await audit_repo.create({
@@ -250,6 +255,7 @@ async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_i
                 "interaction_id": interaction_id, "actor_user_id": actor_user_id,
                 "via": "api_key" if api_key_id else "session", "api_key_id": api_key_id,
                 **({"stream": True} if stream else {}),
+                **({"kind": effective_kind} if kind else {}),
                 "arg_keys": arg_keys,
             }, ensure_ascii=False),
         })
@@ -266,7 +272,7 @@ async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_i
         await record_invocation_cost(
             interaction_id=interaction_id, pipeline_id=pid, agent_id=root,
             user_id=actor_user_id, api_key_id=api_key_id, channel=channel,
-            source="invoke_stream" if stream else "invoke",
+            source=effective_kind,
             cost_usd=cost, tokens_used=tokens,
             latency_ms=(result or {}).get("duration_ms") or 0,
             final_state=(result or {}).get("final_state"),
@@ -283,7 +289,7 @@ async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_i
         status = str(r.get("status") or "unknown")
         final_state = str(r.get("final_state") or "")
         record_invocation(
-            kind="invoke_stream" if stream else "invoke",
+            kind=effective_kind,
             status=status,
             duration_s=(float(r.get("duration_ms") or 0) / 1000.0),
             escalated=("escal" in final_state.lower()),
@@ -853,29 +859,17 @@ async def set_pipeline_entry(pid: str, data: PipelineEntrySet):
     return _serialize(fresh, agent_ids)
 
 
-@router.post("/{pid}/invoke")
-async def invoke_pipeline(
-    pid: str,
-    data: PipelineInvokeRequest,
-    request: Request,
-    user: dict = Depends(require_user),
-    verbosity: Optional[str] = Query(
-        None, description="Detalhe da resposta: full | summary | minimal. "
-        "Sobrescreve o default por auth (sessão→full; X-API-Key→summary)."
-    ),
-):
-    """Invoca um pipeline pela ENTIDADE (contrato API-first SELADO — Trilha A PR-A2).
+# ─────────────────────────────────────────────────────────────────────────────
+# Gates compartilhados do invoke (34.0.0). O sync e o stream já tinham
+# DIVERGIDO por copy-paste (o stream perdeu escopo de key e IDOR do session_id)
+# — a 3ª variante (async 202) só entra extraindo o miolo. A ORDEM dos gates é
+# parte do contrato (dry é grátis e vem ANTES do orçamento).
+# ─────────────────────────────────────────────────────────────────────────────
 
-    Resolve a raiz + os membros do pipeline e executa via execute_pipeline
-    DELIMITADO ao subgrafo (allowed_agent_ids=membros) — a execução não vaza para
-    o mesh global. Mais estável que invocar o UUID do agente-raiz (que pode mudar
-    ao recabear o mesh). `aposentado` → 409 (não roteável); rascunho/publicado rodam.
-    Descoberta: GET /api/v1/pipelines (filtra ?status=publicado).
-
-    AUTH (contrato externo): exige cookie de sessão (UI) OU `X-API-Key: ag_live_...`
-    (integração). 401 sem credencial. Quando vem por chave, `request.state.api_key_id`
-    é registrado na auditoria pra distinguir a integração que disparou.
-    """
+async def _resolve_invoke_target(pid: str, data: PipelineInvokeRequest, request: Request):
+    """Gates 1–6 (pré-dry): existência 404 → aposentado 409 → published-only
+    403 → escopo da key 403 → entrada mínima 400 → subgrafo 422.
+    Retorna (p, root, members, user_input)."""
     p = await _require(pid)
     if p.get("status") == "aposentado":
         raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
@@ -900,12 +894,14 @@ async def invoke_pipeline(
     members = {n.get("id") for n in sub.get("nodes", []) if n.get("id")}
     if not root:
         raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar.")
+    return p, root, members, user_input
 
-    # Modo `dry`: RESOLVE os args (coage/defaults/valida) e devolve o payload
-    # resolvido + proveniência SEM executar (não gasta LLM). 422 se inválidos.
-    if data.dry:
-        return await _plan_args(pid, p, root, data.args or {})
 
+async def _finalize_invoke_inputs(pid: str, p: dict, root: str,
+                                  data: PipelineInvokeRequest, request: Request,
+                                  user: dict, user_input: str):
+    """Gates 7–10 (pós-dry): orçamento 402 → args 422 → anexos → IDOR do
+    session_id 404. Retorna (user_input, sealed_inputs, pipeline_attachments)."""
     # F6: teto de custo por API Key — DEPOIS do dry (que é grátis) e ANTES de
     # executar. 402 quando a janela corrente já atingiu o orçamento da key.
     await _guard_api_key_cost_budget(request)
@@ -937,9 +933,46 @@ async def invoke_pipeline(
     # IDOR (33.13.0): reusar um session_id exige ser DONO da interaction — senão
     # o context_mode='auto' reinjetaria a conversa alheia no LLM. ON-PATH, ANTES
     # de executar. Sessão nova / legada-sem-dono passa; dono divergente → 404.
-    from app.core.interaction_access import assert_can_access_interaction, stamp_interaction_owner
+    from app.core.interaction_access import assert_can_access_interaction
     await assert_can_access_interaction(data.session_id, user)
+    return user_input, sealed_inputs, pipeline_attachments
 
+
+@router.post("/{pid}/invoke")
+async def invoke_pipeline(
+    pid: str,
+    data: PipelineInvokeRequest,
+    request: Request,
+    user: dict = Depends(require_user),
+    verbosity: Optional[str] = Query(
+        None, description="Detalhe da resposta: full | summary | minimal. "
+        "Sobrescreve o default por auth (sessão→full; X-API-Key→summary)."
+    ),
+):
+    """Invoca um pipeline pela ENTIDADE (contrato API-first SELADO — Trilha A PR-A2).
+
+    Resolve a raiz + os membros do pipeline e executa via execute_pipeline
+    DELIMITADO ao subgrafo (allowed_agent_ids=membros) — a execução não vaza para
+    o mesh global. Mais estável que invocar o UUID do agente-raiz (que pode mudar
+    ao recabear o mesh). `aposentado` → 409 (não roteável); rascunho/publicado rodam.
+    Descoberta: GET /api/v1/pipelines (filtra ?status=publicado).
+
+    AUTH (contrato externo): exige cookie de sessão (UI) OU `X-API-Key: ag_live_...`
+    (integração). 401 sem credencial. Quando vem por chave, `request.state.api_key_id`
+    é registrado na auditoria pra distinguir a integração que disparou.
+    """
+    p, root, members, user_input = await _resolve_invoke_target(pid, data, request)
+
+    # Modo `dry`: RESOLVE os args (coage/defaults/valida) e devolve o payload
+    # resolvido + proveniência SEM executar (não gasta LLM). 422 se inválidos.
+    if data.dry:
+        return await _plan_args(pid, p, root, data.args or {})
+
+    user_input, sealed_inputs, pipeline_attachments = await _finalize_invoke_inputs(
+        pid, p, root, data, request, user, user_input
+    )
+
+    from app.core.interaction_access import stamp_interaction_owner
     from app.agents.engine import execute_pipeline
     try:
         result = await execute_pipeline(
@@ -1029,46 +1062,22 @@ async def invoke_pipeline_stream(
     padrão do POST /workspace/chat/stream (queue + progress_callback + StreamingResponse).
     """
     import asyncio
-    from pathlib import Path
     from fastapi.responses import StreamingResponse
-    from app.routes.workspace import UPLOAD_DIR
 
-    p = await _require(pid)
-    if p.get("status") == "aposentado":
-        raise HTTPException(409, f"Pipeline '{p.get('name')}' está aposentado — não é roteável.")
-    _guard_api_key_published_only(request, p)
-    # F6: teto de custo por API Key — 402 ANTES de abrir o stream (o cliente vê o
-    # erro estruturado limpo, sem SSE meia-boca). Stream não tem modo dry.
-    await _guard_api_key_cost_budget(request)
-    user_input = (data.message or data.input or "").strip()
-    # `is None` (não `not data.args`): `args:{}` engaja o contrato — paridade com o
-    # /invoke sync e com o gatilho de fold abaixo.
-    if not user_input and data.args is None:
-        raise HTTPException(400, "Informe 'message' (ou 'input') ou 'args'.")
+    # dry é IGNORADO no stream (contrato de schemas.py) — neutraliza ANTES dos
+    # helpers p/ preservar o 400 de entrada mínima de sempre (o guard compartilhado
+    # dispensa entrada quando dry=True, o que aqui abriria execução vazia).
+    if data.dry:
+        data = data.model_copy(update={"dry": False})
 
-    from app.catalog.pipeline_defs import _build_subgraph
-    sub = await _build_subgraph(pid)
-    root = sub.get("root_agent_id")
-    members = {n.get("id") for n in sub.get("nodes", []) if n.get("id")}
-    if not root:
-        raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a executar.")
-
-    # Args estruturados (D1/D2): mesma validação/coerção/defaults do /invoke sync,
-    # separando o envelope `param` selado da prosa.
-    sealed_inputs = None
-    if data.args is not None:
-        user_input, sealed_inputs = await _validate_and_fold_args(pid, p, root, user_input, data.args)
-
-    pipeline_attachments = [
-        {
-            "name": att.get("filename", ""),
-            "type": att.get("content_type", ""),
-            "size": att.get("size", 0),
-            "content": att.get("text_content", ""),
-            "abs_path": str(UPLOAD_DIR / Path(att.get("path", "") or "").name) if att.get("path") else "",
-        }
-        for att in (data.attachments or [])
-    ]
+    # 34.0.0 (review adversarial): o stream tinha DIVERGIDO do sync por copy-paste
+    # — faltavam o escopo por-key (#585) e o IDOR do session_id (#583). Com os
+    # helpers compartilhados ele ganha os MESMOS gates, na mesma ordem, todos
+    # ANTES de abrir o stream (o 402/403/404 chega estruturado, sem SSE meia-boca).
+    p, root, members, user_input = await _resolve_invoke_target(pid, data, request)
+    user_input, sealed_inputs, pipeline_attachments = await _finalize_invoke_inputs(
+        pid, p, root, data, request, user, user_input
+    )
 
     # Verbosidade: o pipeline_done final é PROJETADO igual ao /invoke sync (sessão→full;
     # X-API-Key→summary), pra que a console "ver como integração" não minta. Os eventos
@@ -1116,6 +1125,11 @@ async def invoke_pipeline_stream(
                 progress_callback=_cb,
                 pipeline_id=pid,  # auditoria: dono do julgamento nas verifications
             )
+            # IDOR (paridade c/ o sync, 34.0.0): carimba o dono na interaction —
+            # posse é primitivo de segurança; sem isso a sessão criada via stream
+            # ficava sem dono e reutilizável por terceiros.
+            from app.core.interaction_access import stamp_interaction_owner
+            await stamp_interaction_owner((result or {}).get("interaction_id"), user.get("id"))
             # INVARIANTE DE DESEMPENHO (paridade c/ o /invoke sync): auditoria +
             # atribuição + débito saem do caminho e rodam detached — NÃO atrasam o
             # fechamento do stream (o cliente já recebeu o pipeline_done).
@@ -1148,3 +1162,216 @@ async def invoke_pipeline_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Invoke ASSÍNCRONO 202 + job durável (Onda 6, 34.0.0) — ADITIVO: o contrato
+# SELADO do POST /invoke síncrono NÃO muda; o async é rota própria, gated pelo
+# setting invoke_async_enabled (default OFF).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_JOB_POLL_SECONDS = 2  # sugestão de intervalo de polling (Retry-After no 202)
+
+
+def _job_envelope(job: dict, *, status_url: str) -> dict:
+    """Envelope do job (contrato NOVO, versionado desde o dia 1 — não reusa o
+    schema_version do envelope síncrono)."""
+    return {
+        "job_schema_version": "1",
+        "job_id": job.get("id"),
+        "pipeline_id": job.get("pipeline_id"),
+        "status": job.get("status"),
+        "attempts": job.get("attempts"),
+        "created_at": _iso(job.get("created_at")),
+        "started_at": _iso(job.get("started_at")),
+        "finished_at": _iso(job.get("finished_at")),
+        "status_url": status_url,
+        "retry_after_seconds": _JOB_POLL_SECONDS,
+        **({"idempotency_key": job.get("idempotency_key")} if job.get("idempotency_key") else {}),
+    }
+
+
+def _request_fingerprint(pid: str, data: PipelineInvokeRequest) -> str:
+    """Hash canônico do corpo p/ detectar REUSO de Idempotency-Key com payload
+    diferente (409, semântica padrão de idempotência inbound). Preserva a
+    distinção args:None vs args:{} (engaja/não-engaja o contrato)."""
+    canon = json.dumps({
+        "pid": pid,
+        "message": data.message, "input": data.input,
+        "args": data.args, "args_engaged": data.args is not None,
+        "session_id": data.session_id, "context_mode": data.context_mode,
+        "channel": data.channel,
+        "attachments": [a.get("path") for a in (data.attachments or [])],
+    }, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+@router.post("/{pid}/invoke/async", status_code=202)
+async def invoke_pipeline_async(
+    pid: str,
+    data: PipelineInvokeRequest,
+    request: Request,
+    user: dict = Depends(require_user),
+):
+    """Aceita o invoke e devolve **202 + job durável** (tabela invoke_jobs) com
+    `Location` para polling em GET /pipelines/{pid}/jobs/{job_id}.
+
+    Para pipelines longos atrás de proxy com timeout: o retry do cliente com o
+    MESMO header `Idempotency-Key` devolve o MESMO job (não re-executa pagando
+    LLM). TODOS os gates do invoke sync rodam AQUI, no aceite (401/402/403/404/
+    409/422 síncronos) — o worker só re-checa o barato (aposentado/orçamento).
+    O job sobrevive a restart: 'queued' retoma; 'running' órfão vira 'lost'
+    (invoke nunca é re-executado às cegas — custo LLM + efeitos colaterais).
+    """
+    from fastapi.responses import JSONResponse
+    from app.core.config import get_settings
+    if not get_settings().invoke_async_enabled:
+        raise HTTPException(403, {
+            "error": "invoke_async_disabled",
+            "hint": "Habilite 'invoke_async_enabled' em Configurações → Parâmetros "
+                    "(🔁 Invoke assíncrono) ou use o POST /invoke síncrono.",
+        })
+    if data.dry:
+        raise HTTPException(400, {
+            "error": "dry_not_supported_async",
+            "hint": "O modo dry é síncrono e gratuito — use POST /invoke com dry=true.",
+        })
+
+    idempotency_key = (request.headers.get("Idempotency-Key") or "").strip() or None
+    fingerprint = _request_fingerprint(pid, data)
+
+    # Replay da Idempotency-Key ANTES dos gates MUTÁVEIS (review adversarial):
+    # o débito do PRÓPRIO job pode ter estourado o orçamento (402), ou o pipeline
+    # ter sido aposentado (409) entre o aceite e o retry do proxy — o cliente não
+    # pode perder acesso ao resultado que já pagou. O lookup é escopado ao
+    # (dono, key-criadora, pipeline): replay de outro principal não acha nada.
+    if idempotency_key:
+        from app.core.invoke_jobs import find_existing_job
+        existing = await find_existing_job(
+            owner_user_id=user.get("id"),
+            api_key_id=getattr(request.state, "api_key_id", None),
+            pipeline_id=pid, idempotency_key=idempotency_key,
+        )
+        if existing:
+            try:
+                stored = json.loads(existing.get("request_payload") or "{}")
+            except Exception:
+                stored = {}
+            if stored.get("request_hash") != fingerprint:
+                raise HTTPException(409, {
+                    "error": "idempotency_key_reuse",
+                    "job_id": existing.get("id"),
+                    "hint": "Esta Idempotency-Key já foi usada com um payload diferente. "
+                            "Use uma key nova por operação.",
+                })
+            from fastapi.responses import JSONResponse
+            status_url = f"/api/v1/pipelines/{pid}/jobs/{existing['id']}"
+            return JSONResponse(
+                _job_envelope(existing, status_url=status_url),
+                status_code=200,
+                headers={"Location": status_url, "Retry-After": str(_JOB_POLL_SECONDS)},
+            )
+
+    p, root, members, user_input = await _resolve_invoke_target(pid, data, request)
+    user_input, sealed_inputs, pipeline_attachments = await _finalize_invoke_inputs(
+        pid, p, root, data, request, user, user_input
+    )
+    # Contexto VALIDADO persistido como VALORES — nada de request sobrevive ao
+    # 202 (api_key_*/user vêm do request.state de AGORA; o contrato de args foi
+    # validado contra o selo VIGENTE e não é re-validado no worker).
+    request_payload = {
+        "root": root,
+        "members": sorted(members),
+        "user_input": user_input,
+        "sealed_inputs": sealed_inputs or None,
+        "attachments": pipeline_attachments or None,
+        "session_id": data.session_id,
+        "context_mode": data.context_mode or "auto",
+        "channel": data.channel or "api",
+        "api_key_id": getattr(request.state, "api_key_id", None),
+        "api_key_name": getattr(request.state, "api_key_name", None),
+        "arg_keys": (sorted(data.args.keys()) if isinstance(data.args, dict) else []),
+        "request_id": _current_request_id(),
+        "request_hash": fingerprint,
+    }
+
+    from app.core.invoke_jobs import create_job, dispatch
+    job, created = await create_job(
+        pipeline_id=pid,
+        owner_user_id=user.get("id"),
+        api_key_id=request_payload["api_key_id"],
+        idempotency_key=idempotency_key,
+        request_payload=request_payload,
+    )
+    if created:
+        dispatch(job["id"])
+    else:
+        # Replay da Idempotency-Key: mesmo corpo → devolve o job existente (200);
+        # corpo DIFERENTE → 409 (a key identifica UMA operação, não um slot).
+        try:
+            stored = json.loads(job.get("request_payload") or "{}")
+        except Exception:
+            stored = {}
+        if stored.get("request_hash") != fingerprint:
+            raise HTTPException(409, {
+                "error": "idempotency_key_reuse",
+                "job_id": job.get("id"),
+                "hint": "Esta Idempotency-Key já foi usada com um payload diferente. "
+                        "Use uma key nova por operação.",
+            })
+
+    status_url = f"/api/v1/pipelines/{pid}/jobs/{job['id']}"
+    return JSONResponse(
+        _job_envelope(job, status_url=status_url),
+        status_code=202 if created else 200,
+        headers={"Location": status_url, "Retry-After": str(_JOB_POLL_SECONDS)},
+    )
+
+
+@router.get("/{pid}/jobs/{job_id}")
+async def get_invoke_job(
+    pid: str,
+    job_id: str,
+    request: Request,
+    user: dict = Depends(require_user),
+    verbosity: Optional[str] = Query(
+        None, description="full | summary | minimal — projeção do result quando completed."
+    ),
+):
+    """Polling do job do invoke assíncrono. Posse no padrão IDOR do get_session:
+    404 IDÊNTICO para inexistente e para job alheio (anti-enumeração; bypass só
+    root). O result é armazenado FULL e PROJETADO aqui pela auth do CONSULTANTE
+    (cookie→full; X-API-Key→api_invoke_default_verbosity) — quem polla por key
+    nunca escala para full por acidente."""
+    from app.core.database import invoke_jobs_repo
+    job = await invoke_jobs_repo.find_by_id(job_id)
+    if not job or job.get("pipeline_id") != pid:
+        raise HTTPException(404, "Job não encontrado")
+    if job.get("owner_user_id") != user.get("id") and user.get("role") != "root":
+        logger.info("event=security.idor_blocked entity=invoke_job job_id=%s", job_id)
+        raise HTTPException(404, "Job não encontrado")
+
+    body = _job_envelope(job, status_url=f"/api/v1/pipelines/{pid}/jobs/{job_id}")
+    status = job.get("status")
+    if status == "completed" and job.get("result_payload"):
+        try:
+            payload = json.loads(job["result_payload"])
+        except Exception:
+            # NÃO fabricar sucesso vazio: sinaliza corrupção em vez de devolver
+            # um result "completed" com output "" (review adversarial).
+            body["error"] = {"error": "result_unavailable",
+                             "hint": "O resultado persistido está ilegível. "
+                                     "Re-submeta o invoke se ainda precisar."}
+            return body
+        api_key_id = getattr(request.state, "api_key_id", None)
+        api_default = "summary"
+        if api_key_id:
+            api_default = await settings_store.get("api_invoke_default_verbosity", "summary")
+        effective = resolve_verbosity(verbosity, is_api_key=bool(api_key_id), api_default=api_default)
+        body["result"] = project_pipeline_result(payload, effective)
+    elif status in ("failed", "lost"):
+        try:
+            body["error"] = json.loads(job.get("error") or "") or {"error": "unknown"}
+        except Exception:
+            body["error"] = {"error": "unknown"}
+    return body

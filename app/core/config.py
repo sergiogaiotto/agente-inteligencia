@@ -305,6 +305,20 @@ class Settings(BaseSettings):
     # pipelines.fast_routing). Default OFF (mudança de comportamento gated).
     fast_routing_enabled: bool = False
 
+    # ── Invoke assíncrono 202 (Onda 6, 34.0.0) ──
+    # Habilita POST /pipelines/{id}/invoke/async → 202 + job durável (invoke_jobs)
+    # + polling em GET /pipelines/{id}/jobs/{job_id}. Default OFF (superfície de
+    # contrato NOVA, gated como toda mudança de comportamento); quando OFF a rota
+    # responde 403 invoke_async_disabled. O caminho síncrono NUNCA muda.
+    invoke_async_enabled: bool = False
+    # Retenção de jobs TERMINAIS (completed/failed/lost) — o reaper apaga linhas
+    # mais velhas que isto (horas). Jobs queued/running nunca são apagados.
+    invoke_jobs_retention_hours: int = 72
+    # Execuções de invoke simultâneas neste processo. Excedente fica 'queued' e
+    # o reaper despacha quando abrir vaga (invoke é caro — cap baixo protege
+    # pool/LLM; o gate de orçamento por key continua valendo por job).
+    invoke_jobs_max_concurrent: int = 4
+
     # ── Circuit-breaker do egress LLM (cross-worker via Redis) — 33.1.0 ──
     # Contém o raio de um provider caído: após N falhas de ALCANCE consecutivas
     # (rede/timeout/URL ausente — via is_llm_unreachable), o circuito ABRE e as
@@ -535,6 +549,10 @@ _UI_TO_ENV_MAP = {
     # Tuning de performance (25.2.0)
     "query_topology_cache_enabled": "QUERY_TOPOLOGY_CACHE_ENABLED",
     "fast_routing_enabled": "FAST_ROUTING_ENABLED",
+    # Invoke assíncrono 202 (34.0.0) — comportamento, não-selado.
+    "invoke_async_enabled": "INVOKE_ASYNC_ENABLED",
+    "invoke_jobs_retention_hours": "INVOKE_JOBS_RETENTION_HOURS",
+    "invoke_jobs_max_concurrent": "INVOKE_JOBS_MAX_CONCURRENT",
     # Circuit-breaker do egress LLM (33.1.0) — comportamento, não-selado.
     "circuit_breaker_enabled": "CIRCUIT_BREAKER_ENABLED",
     "cb_failure_threshold": "CB_FAILURE_THRESHOLD",
@@ -571,6 +589,9 @@ PARAMETER_UI_KEYS = (
     "ragas_ground_truth_enabled",
     "query_topology_cache_enabled",
     "fast_routing_enabled",
+    "invoke_async_enabled",
+    "invoke_jobs_retention_hours",
+    "invoke_jobs_max_concurrent",
     "wizard_reasoning_effort",
 )
 

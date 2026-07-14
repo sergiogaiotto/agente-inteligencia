@@ -74,9 +74,35 @@ async def lifespan(app: FastAPI):
             logger.info(f"verifier_jobs: {resumed} job(s) do juiz re-despachado(s) no boot")
     except Exception as e:
         logger.warning(f"verifier resume_jobs falhou no startup: {e}")
+    # Invoke assíncrono 202 (Onda 6, 34.0.0): 'running' órfão → 'lost' (invoke
+    # NUNCA re-executa às cegas — custo LLM + efeitos colaterais), 'queued' →
+    # retoma; e sobe o reaper (retenção + despacho de fila — o 1º loop periódico
+    # do app; cancelado no shutdown ANTES do close_db). Nunca derruba o boot.
+    try:
+        from app.core.invoke_jobs import resume_invoke_jobs
+        rj = await resume_invoke_jobs()
+        if rj.get("lost") or rj.get("dispatched"):
+            logger.info(f"invoke_jobs no boot: {rj}")
+    except Exception as e:
+        logger.warning(f"invoke_jobs resume falhou no startup: {e}")
+    # Reaper em try PRÓPRIO (review): uma falha no resume não pode deixar o
+    # processo inteiro sem retenção/despacho até o próximo restart.
+    try:
+        from app.core.invoke_jobs import start_reaper
+        start_reaper()
+    except Exception as e:
+        logger.warning(f"invoke_jobs reaper falhou no startup: {e}")
     try:
         yield
     finally:
+        # Invoke async: cancela o reaper e marca jobs ainda ativos como 'lost'
+        # (o cliente não fica pollando um 'running' que nunca vai terminar).
+        # ANTES do close_db — o mark escreve no pool.
+        try:
+            from app.core.invoke_jobs import shutdown_invoke_jobs
+            await shutdown_invoke_jobs(timeout=5.0)
+        except Exception as e:
+            logger.warning(f"invoke_jobs shutdown falhou: {e}")
         # Drena tasks async do verifier antes de fechar o pool — evita
         # erros em INSERT contra pool já fechado quando shutdown pega
         # uma task de production sample no meio.
