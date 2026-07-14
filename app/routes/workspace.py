@@ -1596,6 +1596,7 @@ async def _persist_invoke_turn(
     agent_id: str,
     title_fallback: str,
     trace_data: dict | None = None,
+    owner_user_id: str | None = None,
 ) -> str | None:
     """Grava 1 turn (user + assistant) na sessão e devolve o interaction_id.
 
@@ -1664,6 +1665,12 @@ async def _persist_invoke_turn(
             await interactions_repo.update(
                 sid, {"trace_data": json.dumps(td, ensure_ascii=False, default=str)}
             )
+        # IDOR (35.2.0, fast-follow #581): carimba o dono da sessão criada pelo
+        # slash-invoke de binding — antes ficava órfã (reutilizável como
+        # session_id por terceiros). Idempotente (WHERE owner IS NULL).
+        if owner_user_id:
+            from app.core.interaction_access import stamp_interaction_owner
+            await stamp_interaction_owner(sid, owner_user_id)
         return sid
     except Exception as e:
         logger.warning(
@@ -1736,6 +1743,7 @@ async def invoke_binding_direct(
     if data.binding_kind in ("api", "tabular"):
         return await _invoke_api_binding_direct(
             data=data, agent=agent, skill=sk, parsed=parsed, raw_md=raw_md,
+            owner_user_id=user.get("id"),
         )
 
     # ──────────────────────────────────────────────────────
@@ -1744,6 +1752,7 @@ async def invoke_binding_direct(
     if data.binding_kind == "rag":
         return await _invoke_rag_binding_direct(
             data=data, agent=agent, skill=sk, parsed=parsed,
+            owner_user_id=user.get("id"),
         )
 
     # ──────────────────────────────────────────────────────
@@ -1956,6 +1965,7 @@ async def invoke_binding_direct(
         agent_id=data.agent_id,
         title_fallback=f"Invocação · {tool_name}",
         trace_data=trace_obj,
+        owner_user_id=user.get("id"),
     )
     trace_obj["interaction_id"] = interaction_id
 
@@ -1985,6 +1995,8 @@ async def _invoke_api_binding_direct(
     skill: dict,
     parsed,
     raw_md: str,
+
+    owner_user_id: str | None = None,
 ):
     """Invoca SKILL declarativa via execute_declarative (sem LLM).
 
@@ -2224,6 +2236,7 @@ async def _invoke_api_binding_direct(
         agent_id=data.agent_id,
         title_fallback=f"Invocação · {skill.get('name') or data.binding_kind}",
         trace_data=trace_obj,
+        owner_user_id=owner_user_id,
     )
     trace_obj["interaction_id"] = interaction_id
 
@@ -2257,6 +2270,8 @@ async def _invoke_rag_binding_direct(
     agent: dict,
     skill: dict,
     parsed,
+
+    owner_user_id: str | None = None,
 ):
     """Invoca busca RAG (Retriever.search) numa knowledge_source específica.
 
@@ -2433,6 +2448,7 @@ async def _invoke_rag_binding_direct(
         agent_id=data.agent_id,
         title_fallback=f"Busca RAG · {src_name}",
         trace_data=trace_obj,
+        owner_user_id=owner_user_id,
     )
     trace_obj["interaction_id"] = interaction_id
 

@@ -10,7 +10,7 @@ CORREÇÕES (2026-04):
   MCP Streamable HTTP (spec 2025-03-26) retornam HTTP 406 Not Acceptable.
 """
 import uuid, json, logging
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body, Request
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.models.schemas import ReleaseCreate, GoldCaseCreate, KnowledgeSourceCreate, ToolCreate, ToolUpdate, RunEvalRequest
@@ -1394,7 +1394,7 @@ async def put_llm_routing(data: LLMRoutingUpdate, user: dict = Depends(require_u
 
 
 @router.post("/eval-runs/execute")
-async def run_harness(data: RunEvalRequest):
+async def run_harness(data: RunEvalRequest, request: Request):
     """Executa harness de avaliação contra dataset gold §9.5.
 
     Alvo (Pacote C): exatamente UM de agent_id | pipeline_id. Modo pipeline
@@ -1419,9 +1419,12 @@ async def run_harness(data: RunEvalRequest):
             raise HTTPException(404, f"Pipeline '{pipeline_id}' não encontrado.")
     from app.harness.evaluator import run_evaluation
     try:
+        # IDOR (35.2.0): quem disparou o run vira o DONO das interactions dos
+        # casos (o middleware default-deny já autenticou; auth_user é o cache).
+        _caller = getattr(request.state, "auth_user", None) or {}
         result = await run_evaluation(
             data.release_id, agent_id, data.gold_version, data.run_type,
-            pipeline_id=pipeline_id,
+            pipeline_id=pipeline_id, owner_user_id=_caller.get("id"),
         )
         return result
     except Exception as e:

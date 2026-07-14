@@ -36,6 +36,8 @@ def assert_api_key_can_invoke(request: Request, pipeline_id: Optional[str] = Non
     """Barra o invoke conforme o escopo da API-key. No-op p/ cookie/UI (sem escopo).
 
     - read_only → 403 sempre.
+    - allowed_pipeline_ids não-vazio + invoke de AGENTE avulso (pipeline_id=None)
+      → 403 (35.2.0 — senão o invoke direto do especialista vira bypass do escopo).
     - allowed_pipeline_ids não-vazio + pipeline_id fora da lista → 403.
     """
     scope = getattr(request.state, "api_key_scope", None)
@@ -49,6 +51,18 @@ def assert_api_key_can_invoke(request: Request, pipeline_id: Optional[str] = Non
         )
         raise HTTPException(403, "Esta API key é somente-leitura (read_only) — invoke não permitido.")
     allowed = _parse_allowed(scope.get("allowed_pipeline_ids"))
+    if allowed and pipeline_id is None:
+        # Fast-follow do #585: key ESCOPADA a pipelines não invoca agente avulso —
+        # o escopo delimita a superfície inteira de execução (invocar direto um
+        # membro do pipeline driblaria a lista).
+        logger.info(
+            "apikey_scope.agent_invoke_blocked",
+            extra={"event": "security.apikey_agent_invoke_blocked",
+                   "api_key_id": getattr(request.state, "api_key_id", None)},
+        )
+        raise HTTPException(403, "Esta API key tem escopo de pipelines "
+                                 "(allowed_pipeline_ids) — invoque via "
+                                 "POST /api/v1/pipelines/{id}/invoke.")
     if allowed and pipeline_id is not None and pipeline_id not in allowed:
         logger.info(
             "apikey_scope.pipeline_blocked",

@@ -170,6 +170,19 @@ async def update_api_key_scope(key_id: str, data: APIKeyScopeUpdate, user: dict 
             "read_only": bool(data.read_only)}
 
 
+def _parse_scope_list(raw) -> list:
+    """allowed_pipeline_ids é TEXT com JSON (ou NULL=todos). Malformado → []."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    try:
+        v = json.loads(raw)
+        return [str(x) for x in v] if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
 @router.get("")
 async def list_api_keys(user: dict = Depends(require_user)):
     """Lista API keys do user atual. Não expõe plaintext nem hash.
@@ -211,6 +224,9 @@ async def list_api_keys(user: dict = Depends(require_user)):
             "cost_budget_usd": float(budget) if budget is not None else None,
             "cost_budget_window": window,
             "spent_usd": spent,
+            # Escopo (35.2.0): a UI mostra/edita o que o gate #585 aplica.
+            "read_only": bool(r.get("read_only")),
+            "allowed_pipeline_ids": _parse_scope_list(r.get("allowed_pipeline_ids")),
         })
     return {"keys": keys, "budget_enabled": budget_enabled}
 

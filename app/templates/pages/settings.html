@@ -1159,9 +1159,19 @@
                                     </span>
                                 </template>
                                 <span x-show="(k.cost_budget_usd === null || k.cost_budget_usd === undefined) && k.active" class="text-surface-300">sem teto de custo</span>
+                                <!-- Escopo (35.2.0): espelha o gate do invoke (#585) -->
+                                <span x-show="k.read_only" class="rounded bg-sky-100 text-sky-700 px-1.5 py-0.5 font-semibold" title="Só leitura/descoberta — invoke bloqueado (403)">👁 somente-leitura</span>
+                                <span x-show="!k.read_only && (k.allowed_pipeline_ids||[]).length" class="rounded bg-teal-100 text-teal-700 px-1.5 py-0.5 font-semibold"
+                                      :title="'Só invoca os pipelines autorizados (' + (k.allowed_pipeline_ids||[]).length + '); agente avulso bloqueado.'">
+                                    🔒 <span x-text="(k.allowed_pipeline_ids||[]).length"></span> pipeline(s)</span>
+                                <span x-show="k.active && !k.read_only && !(k.allowed_pipeline_ids||[]).length" class="text-surface-300">sem escopo (invoca tudo)</span>
                             </div>
                         </div>
                         <div x-show="k.active" class="flex items-center gap-1.5 shrink-0">
+                            <button @click="openScope(k)" data-testid="apikey-edit-scope"
+                                    class="rounded-md border border-teal-200 px-2.5 py-1 text-[10px] font-semibold text-teal-700 hover:bg-teal-50">
+                                Escopo
+                            </button>
                             <button @click="openBudget(k)" data-testid="apikey-edit-budget"
                                     class="rounded-md border border-amber-200 px-2.5 py-1 text-[10px] font-semibold text-amber-700 hover:bg-amber-50">
                                 Orçamento
@@ -1274,6 +1284,54 @@
                     <button @click="saveBudget()" :disabled="budgetModal.saving" data-testid="apikey-budget-save"
                             class="rounded-lg bg-brand-500 px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
                         <span x-text="budgetModal.saving ? 'Salvando...' : 'Salvar'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- ══ MODAL: Escopo da API key (35.2.0 — UI do gate #585) ══ -->
+    <template x-if="scopeModal.open">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
+            <div class="fixed inset-0 bg-black/40" @click="!scopeModal.saving && (scopeModal.open = false)"></div>
+            <div class="relative z-10 w-full max-w-md rounded-2xl bg-white shadow-2xl border border-surface-200 overflow-hidden">
+                <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3">
+                    <h3 class="text-[14px] font-bold text-brand-900">Escopo — <span x-text="scopeModal.name"></span></h3>
+                    <button @click="!scopeModal.saving && (scopeModal.open = false)" class="p-1 rounded hover:bg-surface-100 text-surface-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <div class="px-5 py-4 space-y-3">
+                    <label class="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" x-model="scopeModal.read_only" data-testid="apikey-scope-readonly" class="mt-0.5">
+                        <span class="text-[12px]">
+                            <span class="font-semibold text-brand-900">Somente-leitura</span>
+                            <span class="block text-[10px] text-surface-400">A key só lê/descobre (GET). Qualquer invoke responde 403 — vale mais que a lista abaixo.</span>
+                        </span>
+                    </label>
+                    <div :class="scopeModal.read_only ? 'opacity-40 pointer-events-none' : ''">
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Pipelines autorizados</label>
+                        <p class="text-[10px] text-surface-400 mb-2">Nenhum marcado = <strong>sem escopo</strong> (invoca qualquer pipeline e agentes avulsos). Com 1+ marcados, a key só invoca os listados — e o invoke direto de <strong>agente</strong> também é bloqueado (403).</p>
+                        <div class="max-h-48 overflow-y-auto rounded-lg border border-surface-200 divide-y divide-surface-100" data-testid="apikey-scope-pipelines">
+                            <template x-for="p in scopePipelines" :key="p.id">
+                                <label class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-surface-50">
+                                    <input type="checkbox" :value="p.id" x-model="scopeModal.allowed">
+                                    <span class="text-[11px] text-brand-900 truncate" x-text="p.name"></span>
+                                    <span class="text-[9px] text-surface-400 uppercase" x-text="p.status"></span>
+                                </label>
+                            </template>
+                            <div x-show="!scopePipelines.length" class="px-3 py-2 text-[11px] text-surface-400">Nenhum pipeline cadastrado.</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="border-t border-surface-100 px-5 py-3 flex items-center justify-end gap-2">
+                    <button @click="scopeModal.open = false" :disabled="scopeModal.saving"
+                            class="rounded-lg border border-surface-200 px-3 py-1.5 text-[12px] font-medium text-surface-500 hover:bg-surface-50">
+                        Cancelar
+                    </button>
+                    <button @click="saveScope()" :disabled="scopeModal.saving" data-testid="apikey-scope-save"
+                            class="rounded-lg bg-brand-500 px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+                        <span x-text="scopeModal.saving ? 'Salvando...' : 'Salvar'"></span>
                     </button>
                 </div>
             </div>
@@ -1419,6 +1477,9 @@ function settingsPage() {
         // F6 — quota de custo por key
         budgetEnabled: false,     // estado do toggle global (vem do GET /api-keys)
         budgetModal: { open:false, saving:false, keyId:null, name:'', cost_budget_usd:'', cost_budget_window:'month' },
+        // Escopo por-key (35.2.0): UI do gate #585 (read_only + allowed_pipeline_ids)
+        scopeModal: { open:false, saving:false, keyId:null, name:'', read_only:false, allowed:[] },
+        scopePipelines: [],
         exShell: 'bash',          // shell do exemplo de cURL na revelação da key
         CURL_AUTH_SHELLS: window.CURL_AUTH_SHELLS,  // de curl_auth.js
 
@@ -1505,6 +1566,41 @@ function settingsPage() {
                 cost_budget_usd: (k.cost_budget_usd === null || k.cost_budget_usd === undefined) ? '' : k.cost_budget_usd,
                 cost_budget_window: k.cost_budget_window || 'month',
             };
+        },
+
+        async openScope(k) {
+            // Escopo (35.2.0): pipelines carregados 1x (lazy) p/ o multi-select.
+            if (!this.scopePipelines.length) {
+                try {
+                    const d = await api.get('/api/v1/pipelines');
+                    const ps = Array.isArray(d) ? d : (d.pipelines || []);
+                    this.scopePipelines = ps
+                        .filter(p => p.status !== 'aposentado')
+                        .map(p => ({ id: p.id, name: p.name, status: p.status }));
+                } catch(e) { this.scopePipelines = []; }
+            }
+            this.scopeModal = {
+                open: true, saving: false, keyId: k.id, name: k.name,
+                read_only: !!k.read_only,
+                allowed: [...(k.allowed_pipeline_ids || [])],
+            };
+        },
+
+        async saveScope() {
+            this.scopeModal.saving = true;
+            try {
+                await api.patch('/api/v1/api-keys/' + this.scopeModal.keyId + '/scope', {
+                    read_only: !!this.scopeModal.read_only,
+                    // [] → null no backend = sem escopo (todos os pipelines)
+                    allowed_pipeline_ids: this.scopeModal.allowed,
+                });
+                showToast('Escopo atualizado — vale a partir do próximo invoke.');
+                this.scopeModal.open = false;
+                await this.loadAPIKeys();
+            } catch(e) {
+                showToast('Erro: ' + (e?.message || 'falha desconhecida'), 'error');
+            }
+            this.scopeModal.saving = false;
         },
 
         async saveBudget() {
