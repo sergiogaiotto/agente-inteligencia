@@ -75,7 +75,7 @@ async def find_existing_job(*, owner_user_id: Optional[str], api_key_id: Optiona
 
 async def create_job(*, pipeline_id: str, owner_user_id: Optional[str],
                      api_key_id: Optional[str], idempotency_key: Optional[str],
-                     request_payload: dict) -> tuple[dict, bool]:
+                     request_payload: dict, customer_hash: Optional[str] = None) -> tuple[dict, bool]:
     """INSERT do job. Retorna (job, created).
 
     Replay de Idempotency-Key (mesmo dono+key-criadora+pipeline+chave) NÃO cria
@@ -88,10 +88,11 @@ async def create_job(*, pipeline_id: str, owner_user_id: Optional[str],
     async with _pool().acquire() as con:
         row = await con.fetchrow(
             "INSERT INTO invoke_jobs (id, pipeline_id, owner_user_id, api_key_id, "
-            "idempotency_key, request_payload, status) "
-            "VALUES ($1, $2, $3, $4, $5, $6, 'queued') "
+            "idempotency_key, request_payload, status, customer_hash) "
+            "VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7) "
             "ON CONFLICT DO NOTHING RETURNING *",
             job_id, pipeline_id, owner_user_id, api_key_id, idempotency_key, payload_txt,
+            customer_hash,
         )
     if row:
         return dict(row), True
@@ -247,7 +248,7 @@ async def _run_job(job_id: str) -> None:
                 # aborto DETERMINÍSTICO pós-criação — sem isto, master/filhas
                 # ficavam órfãs SEM dono (listáveis/sequestráveis: IDOR).
                 owner_user_id=job.get("owner_user_id"),
-                customer_ref=req.get("customer_ref"),  # LGPD-2: pivô do esquecimento
+                customer_hash=job.get("customer_hash"),  # 35.14.2: hash (não ref cru)
             ),
             timeout=_timeout_min * 60.0,
         )

@@ -1209,6 +1209,11 @@ def _request_fingerprint(pid: str, data: PipelineInvokeRequest) -> str:
         "session_id": data.session_id, "context_mode": data.context_mode,
         "channel": data.channel,
         "attachments": [a.get("path") for a in (data.attachments or [])],
+        # 35.14.2 (achado de auditoria): customer_ref MUDA a atribuição do
+        # titular (customer_hash) e a semântica LGPD — omiti-lo do fingerprint
+        # fazia um replay da MESMA key com OUTRO cliente devolver o job do
+        # PRIMEIRO (vazamento cross-subject). Agora troca o titular → 409.
+        "customer_ref": data.customer_ref,
     }, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
@@ -1301,7 +1306,8 @@ async def invoke_pipeline_async(
         "request_id": _current_request_id(),
         "request_hash": fingerprint,
         **({"idempotency_key": idempotency_key} if idempotency_key else {}),
-        **({"customer_ref": data.customer_ref} if data.customer_ref else {}),  # LGPD-2
+        # 35.14.2: NÃO persistir o customer_ref CRU no job (era PII em claro que
+        # sobrevivia ao forget). Só o hash trafega — na COLUNA customer_hash.
     }
 
     # Webhook de conclusão (35.6.0, padrão FALLBACK): callback_url do request
@@ -1329,12 +1335,14 @@ async def invoke_pipeline_async(
         request_payload["webhook_url"] = webhook_url
 
     from app.core.invoke_jobs import create_job, dispatch
+    from app.core.retention import hash_customer_ref
     job, created = await create_job(
         pipeline_id=pid,
         owner_user_id=user.get("id"),
         api_key_id=request_payload["api_key_id"],
         idempotency_key=idempotency_key,
         request_payload=request_payload,
+        customer_hash=hash_customer_ref(data.customer_ref),  # 35.14.2: pivô do forget
     )
     if created:
         dispatch(job["id"])

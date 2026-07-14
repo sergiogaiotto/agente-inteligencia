@@ -61,6 +61,12 @@ def set_interaction_customer_for_creation(customer_ref: Optional[str]) -> None:
     _creation_customer.set(hash_customer_ref(customer_ref))
 
 
+def set_interaction_customer_hash_for_creation(customer_hash: Optional[str]) -> None:
+    """35.14.2: seta o HASH já pronto (o worker do 202 não tem o ref cru — ele
+    NÃO é mais persistido no job; só o hash trafega)."""
+    _creation_customer.set((customer_hash or "").strip() or None)
+
+
 def interaction_customer_hash_for_creation() -> Optional[str]:
     return _creation_customer.get()
 
