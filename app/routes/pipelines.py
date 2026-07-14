@@ -985,6 +985,7 @@ async def invoke_pipeline(
             allowed_agent_ids=members,  # SELA a execução ao subgrafo do pipeline
             sealed_inputs=sealed_inputs or None,  # envelope param (out-of-band)
             pipeline_id=pid,  # auditoria: dono do julgamento nas verifications
+            owner_user_id=user.get("id"),  # 35.4.0: interaction nasce com dono
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -1126,6 +1127,7 @@ async def invoke_pipeline_stream(
                 sealed_inputs=sealed_inputs or None,  # envelope param (out-of-band)
                 progress_callback=_cb,
                 pipeline_id=pid,  # auditoria: dono do julgamento nas verifications
+                owner_user_id=user.get("id"),  # 35.4.0: interaction nasce com dono
             )
             # IDOR (paridade c/ o sync, 34.0.0): carimba o dono na interaction —
             # posse é primitivo de segurança; sem isso a sessão criada via stream
@@ -1333,6 +1335,7 @@ async def invoke_pipeline_async(
 @router.get("/{pid}/jobs")
 async def list_invoke_jobs(
     pid: str,
+    request: Request,
     user: dict = Depends(require_user),
     status: Optional[str] = Query(None, description="queued | running | completed | failed | lost"),
     limit: int = Query(20, ge=1, le=100),
@@ -1344,6 +1347,10 @@ async def list_invoke_jobs(
     Escopo de POSSE: cada um vê SÓ os próprios jobs (root vê todos os do
     pipeline) — mesmo racional do 404 anti-enumeração do GET por id. Envelope
     LEVE (sem result/erro — o detalhe vem do GET /jobs/{job_id})."""
+    # Escopo de LEITURA por-key (35.4.0): key escopada a outros pipelines não
+    # lista jobs deste — o escopo contém o raio de uma key vazada (tema #583).
+    from app.core.apikey_scope import assert_api_key_can_read_pipeline
+    assert_api_key_can_read_pipeline(request, pipeline_id=pid)
     from app.core.database import invoke_jobs_repo
     filters = {"pipeline_id": pid}
     if (user.get("role") or "").strip().lower() != "root":
@@ -1372,6 +1379,10 @@ async def get_invoke_job(
     root). O result é armazenado FULL e PROJETADO aqui pela auth do CONSULTANTE
     (cookie→full; X-API-Key→api_invoke_default_verbosity) — quem polla por key
     nunca escala para full por acidente."""
+    # Escopo de LEITURA por-key (35.4.0) — ANTES da posse: mesmo o dono, se
+    # veio por uma key escopada a OUTROS pipelines, não lê o job por ELA.
+    from app.core.apikey_scope import assert_api_key_can_read_pipeline
+    assert_api_key_can_read_pipeline(request, pipeline_id=pid)
     from app.core.database import invoke_jobs_repo
     job = await invoke_jobs_repo.find_by_id(job_id)
     if not job or job.get("pipeline_id") != pid:

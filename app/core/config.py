@@ -318,6 +318,9 @@ class Settings(BaseSettings):
     # o reaper despacha quando abrir vaga (invoke é caro — cap baixo protege
     # pool/LLM; o gate de orçamento por key continua valendo por job).
     invoke_jobs_max_concurrent: int = 4
+    # Deadline por job (35.4.0): execute_pipeline cancelado no estouro — um job
+    # pendurado não ocupa vaga do cap p/ sempre (o reaper não mata task viva).
+    invoke_job_timeout_minutes: int = 30
 
     # ── Circuit-breaker do egress LLM (cross-worker via Redis) — 33.1.0 ──
     # Contém o raio de um provider caído: após N falhas de ALCANCE consecutivas
@@ -553,6 +556,7 @@ _UI_TO_ENV_MAP = {
     "invoke_async_enabled": "INVOKE_ASYNC_ENABLED",
     "invoke_jobs_retention_hours": "INVOKE_JOBS_RETENTION_HOURS",
     "invoke_jobs_max_concurrent": "INVOKE_JOBS_MAX_CONCURRENT",
+    "invoke_job_timeout_minutes": "INVOKE_JOB_TIMEOUT_MINUTES",
     # Circuit-breaker do egress LLM (33.1.0) — comportamento, não-selado.
     "circuit_breaker_enabled": "CIRCUIT_BREAKER_ENABLED",
     "cb_failure_threshold": "CB_FAILURE_THRESHOLD",
@@ -592,6 +596,7 @@ PARAMETER_UI_KEYS = (
     "invoke_async_enabled",
     "invoke_jobs_retention_hours",
     "invoke_jobs_max_concurrent",
+    "invoke_job_timeout_minutes",
     "wizard_reasoning_effort",
 )
 

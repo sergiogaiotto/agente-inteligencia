@@ -2796,6 +2796,7 @@ class SettingsSave(BaseModel):
     invoke_async_enabled: Optional[bool] = None
     invoke_jobs_retention_hours: Optional[int] = Field(default=None, ge=1, le=8760)
     invoke_jobs_max_concurrent: Optional[int] = Field(default=None, ge=1, le=64)
+    invoke_job_timeout_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     ragas_ground_truth_enabled: Optional[bool] = None
     # Esforço de raciocínio das gerações do Wizard (27.0.0): 'high'|'medium'|
     # 'low'|'' (desligado). Gate por modelo em get_provider. Default 'high'.
