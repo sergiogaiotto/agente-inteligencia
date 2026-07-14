@@ -157,3 +157,31 @@ async def stamp_interaction_owner(interaction_id: Optional[str], user_id: Option
     except Exception as e:
         logger.warning("interaction_access.stamp_failed id=%s: %s",
                        interaction_id, str(e)[:150])
+
+
+async def stamp_interaction_customer_hash(
+    interaction_id: Optional[str], customer_hash: Optional[str]) -> None:
+    """Carimba `customer_hash` (pivô LGPD-2) se a interaction ainda está SEM pivô.
+
+    Cobre o REUSO de sessão (achado de auditoria 35.14.6): a interaction nascida
+    sem `customer_ref` (hash NULL) ganha o pivô quando um turn POSTERIOR informa o
+    titular — senão `forget_customer` (que casa por customer_hash) nunca a
+    alcançaria e a conversa sobreviveria ao esquecimento.
+
+    `WHERE customer_hash IS NULL` = first-writer-wins: NÃO sobrescreve um titular
+    já gravado (uma sessão que serviu o titular A não passa a casar o forget de B).
+    Best-effort — nunca derruba a request (paridade com stamp_interaction_owner).
+    """
+    if not interaction_id or not customer_hash:
+        return
+    try:
+        from app.core.database import _get_pool
+        async with _get_pool().acquire() as con:
+            await con.execute(
+                "UPDATE interactions SET customer_hash = $1 "
+                "WHERE id = $2 AND customer_hash IS NULL",
+                customer_hash, interaction_id,
+            )
+    except Exception as e:
+        logger.warning("interaction_access.stamp_customer_failed id=%s: %s",
+                       interaction_id, str(e)[:150])

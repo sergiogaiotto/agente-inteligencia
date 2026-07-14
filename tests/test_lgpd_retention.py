@@ -38,6 +38,8 @@ class FakeCon:
             return f"DELETE {len(self._ids)}"
         if "UPDATE verifications" in sql:
             return f"UPDATE {len(self._ids)}"
+        if "DELETE FROM invoke_jobs" in sql:  # 35.14.6: purga por idade
+            return f"DELETE {len(self._ids)}"
         return "DELETE 0"
 
     def sql(self, frag):
@@ -84,7 +86,7 @@ class TestPurga:
     async def test_desligado_e_noop(self, monkeypatch):
         con = _wire(monkeypatch, days=0)
         out = await retention.purge_interactions_once()
-        assert out == {"deleted": 0, "scrubbed_verifications": 0}
+        assert out == {"deleted": 0, "scrubbed_verifications": 0, "purged_jobs": 0}
         assert con.calls == []  # nem toca o banco
 
     @pytest.mark.asyncio
@@ -110,10 +112,24 @@ class TestPurga:
         assert sel[2][0] == 90.0
 
     @pytest.mark.asyncio
+    async def test_purga_invoke_jobs_por_idade(self, monkeypatch):
+        # 35.14.6 (achado de auditoria): a retenção por idade também apaga os
+        # invoke_jobs velhos — o request_payload guarda a conversa CRUA e sem
+        # isto sobrevivia à janela prometida (até o reaper de jobs, dias além).
+        con = _wire(monkeypatch, days=90)
+        out = await retention.purge_interactions_once()
+        js = con.sql("DELETE FROM invoke_jobs")
+        assert js, "invoke_jobs deve ser purgado por idade"
+        assert js[0][2][0] == 90.0  # MESMA janela em dias do SELECT de interactions
+        assert out["purged_jobs"] == 2
+        # FinOps continua intocado (invocation_costs nunca joina/apaga)
+        assert not con.sql("invocation_costs")
+
+    @pytest.mark.asyncio
     async def test_lote_vazio_para_cedo(self, monkeypatch):
         con = _wire(monkeypatch, days=30, ids=())
         out = await retention.purge_interactions_once()
-        assert out == {"deleted": 0, "scrubbed_verifications": 0}
+        assert out == {"deleted": 0, "scrubbed_verifications": 0, "purged_jobs": 0}
         assert con.sql("SELECT id FROM interactions")  # consultou
         assert not con.sql("DELETE FROM interactions")  # mas nada a apagar
 
