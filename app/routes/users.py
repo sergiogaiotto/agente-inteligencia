@@ -22,6 +22,21 @@ router = APIRouter(prefix="/api/v1/users", tags=["users"])
 domains_router = APIRouter(prefix="/api/v1/domains", tags=["domains"])
 
 
+async def _audit_session_event(action: str, actor: str | None, detail: dict) -> None:
+    """Auditoria de login/logout (35.11.0) — best-effort: falha aqui NUNCA
+    derruba o auth. O IP entra sozinho pela AuditRepository (contextvar)."""
+    try:
+        import json as _json
+        from app.core.database import audit_repo
+        await audit_repo.create({
+            "entity_type": "session", "entity_id": actor or "anonymous",
+            "action": action, "actor": actor,
+            "details": _json.dumps(detail, ensure_ascii=False),
+        })
+    except Exception as e:
+        logger.warning("audit de sessão falhou (%s): %s", action, str(e)[:150])
+
+
 # ═══ Auth ═══
 @router.post("/login")
 async def login(data: UserLogin, response: Response):
@@ -33,8 +48,13 @@ async def login(data: UserLogin, response: Response):
         # Custo do verify_password de qualquer forma para mitigar timing
         if not user:
             verify_password(data.password, "$2b$12$" + "x" * 53)
+        # Auditoria (35.11.0): NÃO grava o username tentado nem distingue
+        # usuário-inexistente de senha-errada (anti-enumeração — o log de
+        # segurança não pode virar oráculo). IP entra via AuditRepository.
+        await _audit_session_event("login_failed", None, {"reason": "invalid_credentials"})
         raise HTTPException(401, "Credenciais inválidas")
     if user.get("status") != "active":
+        await _audit_session_event("login_failed", user["id"], {"reason": "inactive_user"})
         raise HTTPException(403, "Usuário inativo")
 
     # Migração transparente: se hash legado SHA256, regrava em bcrypt.
@@ -53,6 +73,7 @@ async def login(data: UserLogin, response: Response):
     # csrf_token NÃO é HttpOnly — front precisa ler para mandar no header
     response.set_cookie("csrf_token", csrf, **{**ck, "httponly": False})
 
+    await _audit_session_event("login_success", user["id"], {"username": user["username"]})
     return {
         "user": {k: v for k, v in dict(user).items() if k != "password_hash"},
         "csrf_token": csrf,
@@ -60,7 +81,15 @@ async def login(data: UserLogin, response: Response):
 
 
 @router.post("/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
+    # Auditoria (35.11.0): registra QUEM saiu (cookie assinado; None se já
+    # expirado — ainda auditamos o evento). IP entra via AuditRepository.
+    uid = None
+    try:
+        uid = read_session_uid(request)
+    except Exception:
+        pass
+    await _audit_session_event("logout", uid, {})
     response.delete_cookie("user_id")
     response.delete_cookie("csrf_token")
     return {"message": "Logout realizado"}

@@ -334,3 +334,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response.headers["X-RateLimit-Limit"] = str(limit)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         return response
+
+
+# Alias PÚBLICO (35.11.0): a auditoria (request_context → audit_log.ip) usa a
+# MESMA resolução anti-spoof do rate-limit (#560: XFF só de proxy confiável).
+# Exportado sem underscore p/ não acoplar módulos a um símbolo privado.
+resolve_client_ip = _resolve_client_ip

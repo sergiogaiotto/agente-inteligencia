@@ -29,6 +29,7 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.logging_setup import (
+    client_ip_var,
     _redact_dict,
     request_id_var,
     trace_id_var,
@@ -186,6 +187,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         rid_tok = request_id_var.set(rid)
         tid_tok = trace_id_var.set(tid)
         uid_tok = user_id_var.set(uid)
+        # IP com guarda anti-spoof (35.11.0) — alimenta audit_log.ip via
+        # AuditRepository sem tocar nenhum dos ~37 call sites de auditoria.
+        try:
+            from app.core.ratelimit import resolve_client_ip
+            ip_tok = client_ip_var.set(resolve_client_ip(request) or "")
+        except Exception:
+            ip_tok = client_ip_var.set("")
 
         method = request.method
         path = request.url.path
@@ -260,6 +268,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             request_id_var.reset(rid_tok)
             trace_id_var.reset(tid_tok)
             user_id_var.reset(uid_tok)
+            client_ip_var.reset(ip_tok)
 
 
 def install_request_context_middleware(app: FastAPI) -> None:
