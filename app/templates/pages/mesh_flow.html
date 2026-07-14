@@ -317,7 +317,7 @@
 
             <!-- nodes (lente: viewNodes filtra por pipeline selecionado) -->
             <template x-for="n in viewNodes" :key="n.id">
-                <div class="absolute transition-opacity" :data-nid="n.id" :style="`left:${n.x}px; top:${n.y}px; width:${n.w}px; cursor:${n.synthetic ? 'grab' : 'pointer'}; opacity:${nodeOpacity(n)}`"
+                <div class="absolute transition-opacity" :data-nid="n.id" data-testid="mesh-node" :style="`left:${n.x}px; top:${n.y}px; width:${n.w}px; cursor:${n.synthetic ? 'grab' : 'pointer'}; opacity:${nodeOpacity(n)}`"
                      @pointerdown.stop="onNodeDown($event, n)"
                      @pointerenter="hoverId = n.id" @pointerleave="onNodeLeave(n)"
                      @contextmenu="onNodeContext($event, n)"
@@ -1367,7 +1367,7 @@ function meshFlowPage() {
                 // hand-off entre pipelines: glow âmbar por baixo (destaque no Mesh completo).
                 if (e.handoff) s += `<path d="${e.d}" fill="none" stroke="#F59E0B" stroke-width="6" opacity="0.20" stroke-linecap="round" style="pointer-events:none"></path>`;
                 s += `<path d="${e.d}" fill="none" stroke="${e.color}" stroke-width="1.6"${dash} opacity="${e.op}" marker-end="url(#mf-arrow)" stroke-linecap="round" style="pointer-events:none"></path>`;
-                if (e.editable) s += `<path d="${e.d}" data-eid="${e.id}" fill="none" stroke="transparent" stroke-width="14" style="pointer-events:stroke;cursor:pointer"></path>`;
+                if (e.editable) s += `<path d="${e.d}" data-eid="${e.id}" data-testid="mesh-edge" fill="none" stroke="transparent" stroke-width="14" style="pointer-events:stroke;cursor:pointer"></path>`;
                 if (e.label && e.op > 0.5) {
                     const safe = String(e.label).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                     s += `<foreignObject x="${e.lx}" y="${e.ly}" width="150" height="22"><span xmlns="http://www.w3.org/1999/xhtml" style="display:inline-block;border:0.5px solid #e2e8f0;background:#fff;border-radius:6px;padding:2px 6px;font-size:10px;line-height:1;white-space:nowrap;color:${e.color}">${safe}</span></foreignObject>`;

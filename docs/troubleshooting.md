@@ -242,3 +242,23 @@ Atualizar a tabela `sintoma → query` apropriada deste arquivo com o novo event
 - **Context vars (request_id, trace_id, user_id)**: injetados pelo `RequestContextMiddleware`
 - **PII redaction**: `_SENSITIVE_KEYS` em `app/core/logging_setup.py`
 - **Loki + Grafana (prod)**: configurado em `infra/promtail/` + `infra/grafana/` (ver `docs/observability/LOGS.md`)
+
+## RAG devolve menos resultados que o esperado com KBs desautorizadas volumosas (recall HNSW)
+
+**Sintoma**: skill com Evidence Policy restrita a poucas fontes recupera menos evidências
+do que deveria (ou nenhuma), enquanto a MESMA query sem filtro devolve resultados —
+e a base tem MUITOS chunks de outras fontes (desautorizadas para aquela skill).
+
+**Causa**: o índice HNSW do pgvector percorre um nº fixo de candidatos (`hnsw.ef_search`,
+default 40) ANTES do filtro `authorized=1`/fonte. Se a vizinhança imediata da query é
+dominada por chunks de fontes desautorizadas, os candidatos morrem no filtro e sobram
+poucos (recall degradado) — não é bug do Evidence Policy.
+
+**Diagnóstico**: compare `SET LOCAL hnsw.ef_search = 400;` numa query manual — se o
+resultado filtrado volta, é recall do índice, não filtro errado.
+
+**Correções (em ordem de preferência)**:
+1. Subir `hnsw.ef_search` na sessão de busca (custo: latência da query cresce ~linear).
+2. `SET hnsw.iterative_scan = relaxed_order;` (pgvector ≥0.8): continua varrendo até
+   satisfazer o LIMIT pós-filtro.
+3. Bases multi-tenant grandes: particionar a tabela/índice por fonte.
