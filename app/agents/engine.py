@@ -1914,6 +1914,15 @@ async def execute_interaction(
     # customer_hash (35.14.2): o HASH já pronto — usado pelo worker do 202, que
     # NÃO recebe mais o ref cru (a PII não é persistida no job). Vence customer_ref.
     customer_hash: str | None = None,
+    # Passo ANINHADO de pipeline (35.14.5, achado de auditoria): quando
+    # execute_pipeline chama esta função para cada agente da cadeia, o dono/
+    # customer_hash-na-criação JÁ foram setados por execute_pipeline no ContextVar
+    # e devem FLUIR daqui pro run_intake — a filha não recebe owner/customer nos
+    # args (default None). O set incondicional (35.14.4) os zerava, órfãnando
+    # master+filhas (regressão do IDOR #595 e do LGPD-2 #601). Com True, a filha
+    # NÃO toca o ContextVar (herda o do pai); os 4 call sites TOP-LEVEL (rotas,
+    # workspace, catálogo, harness) usam False e mantêm o reset anti-herança.
+    inherit_creation_context: bool = False,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
 
@@ -1944,14 +1953,23 @@ async def execute_interaction(
     # evaluator, batch, A2A) herdar silenciosamente o owner/customer_hash da
     # operação ANTERIOR quando a atual os omitia. Setar sempre (None limpa) fecha
     # a herança. Os setters normalizam None → contexto limpo.
-    from app.core.interaction_access import (
-        set_interaction_owner_for_creation, set_interaction_customer_hash_for_creation,
-        set_interaction_customer_for_creation)
-    set_interaction_owner_for_creation(owner_user_id)
-    if customer_hash:  # 35.14.2: hash já pronto (worker do 202)
-        set_interaction_customer_hash_for_creation(customer_hash)
-    else:  # LGPD-2: hasheia o ref (ou limpa com None)
-        set_interaction_customer_for_creation(customer_ref)
+    #
+    # EXCEÇÃO (35.14.5, achado de auditoria de estado-integrado): num passo
+    # ANINHADO de pipeline (`inherit_creation_context=True`, só execute_pipeline
+    # o passa), o ContextVar JÁ foi setado pelo pai com o dono/customer_hash reais
+    # e a filha é chamada SEM esses args (None) — resetar aqui zerava master+filhas
+    # (owner=NULL, customer_hash=NULL): regressão do IDOR #595 e do LGPD-2 #601.
+    # Herdar (não tocar) preserva o pivô do pai; o reset anti-herança segue valendo
+    # em TODA chamada top-level (rotas/workspace/catálogo/harness → False).
+    if not inherit_creation_context:
+        from app.core.interaction_access import (
+            set_interaction_owner_for_creation, set_interaction_customer_hash_for_creation,
+            set_interaction_customer_for_creation)
+        set_interaction_owner_for_creation(owner_user_id)
+        if customer_hash:  # 35.14.2: hash já pronto (worker do 202)
+            set_interaction_customer_hash_for_creation(customer_hash)
+        else:  # LGPD-2: hasheia o ref (ou limpa com None)
+            set_interaction_customer_for_creation(customer_ref)
     agent = await _topo_agent(agent_id)
     if not agent:
         raise ValueError(f"Agente '{agent_id}' não encontrado.")
@@ -4468,6 +4486,10 @@ async def execute_pipeline(
                 master_interaction_id=master_interaction_id,
                 # Paridade harness (Pacote C): None = comportamento atual.
                 grounding_strict=grounding_strict,
+                # Passo aninhado (35.14.5): NÃO reseta o ContextVar de criação —
+                # herda o dono/customer_hash que execute_pipeline setou (3577),
+                # senão master+filhas nascem órfãs (IDOR #595) e sem pivô LGPD (#601).
+                inherit_creation_context=True,
             )
             iid = result.get("interaction_id")
             # Primeiro agente executado (não pass-through) vira o master
