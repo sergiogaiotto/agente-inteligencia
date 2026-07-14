@@ -176,6 +176,10 @@ def _schedule_partial_cost(job: dict, req: dict, done_steps: list, final_state: 
             actor_user_id=job.get("owner_user_id"),
             arg_keys=req.get("arg_keys") or [], channel=req.get("channel"),
             kind="invoke_async",
+            # RED já é contabilizado pelo _record_async_failure do MESMO branch de
+            # aborto — sem isto, o synthetic status='failed' contava um 2º erro
+            # (dupla-contagem só em aborto com steps parciais, 35.14.6).
+            emit_metrics=False,
         ))
     except Exception:
         logger.warning("event=invoke_job_partial_cost_failed job_id=%s", job.get("id"))

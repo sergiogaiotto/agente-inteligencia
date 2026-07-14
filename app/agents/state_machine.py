@@ -209,6 +209,16 @@ class InteractionStateMachine:
             await interactions_repo.update(self.ctx.interaction_id, {
                 "state": State.INTAKE.value,
             })
+            # LGPD-2 (achado de auditoria 35.14.6): a interaction reusada pode ter
+            # nascido SEM customer_hash (turn 1 sem customer_ref). Se este turn
+            # informa o titular, carimba o pivô AGORA (first-writer-wins) — senão
+            # forget_customer, que casa por customer_hash, nunca a alcançaria e a
+            # conversa (turns) sobreviveria ao esquecimento.
+            from app.core.interaction_access import (
+                interaction_customer_hash_for_creation, stamp_interaction_customer_hash)
+            _chash_reuse = interaction_customer_hash_for_creation()
+            if _chash_reuse:
+                await stamp_interaction_customer_hash(self.ctx.interaction_id, _chash_reuse)
         else:
             # Dono na CRIAÇÃO (35.4.0): nasce carimbado quando o caller setou o
             # contexto — um aborto (timeout do invoke-job, crash) não deixa mais

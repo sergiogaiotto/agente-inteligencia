@@ -62,7 +62,18 @@ class TestTurnsGrain:
     @pytest.mark.asyncio
     async def test_fsm_end_to_end_popula_grao(self, monkeypatch):
         """Comportamental: run_intake → run_log_and_close grava o turno de
-        saída com tokens do ctx.metadata e latência > 0."""
+        saída com tokens do ctx.metadata e latência > 0.
+
+        Relógio CONTROLADO (35.14.6): com repos mockados o intake→close roda
+        dentro de UM tick do time.monotonic() do Windows (resolução ~15ms) →
+        latência 0 e flake. O fake avança 10ms por leitura — determinístico."""
+        import time as _time
+        _clk = {"v": 1000.0}
+
+        def _fake_monotonic():
+            _clk["v"] += 0.010
+            return _clk["v"]
+        monkeypatch.setattr(_time, "monotonic", _fake_monotonic)
         from unittest.mock import AsyncMock
         from app.agents.state_machine import (
             InteractionStateMachine, InteractionContext, State)

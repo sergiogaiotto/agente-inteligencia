@@ -254,12 +254,18 @@ def _record_invoke_failure(kind: str, status: str) -> None:
 
 async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_id,
                                    api_key_name, actor_user_id, arg_keys, channel=None,
-                                   stream=False, kind=None) -> None:
+                                   stream=False, kind=None, emit_metrics=True) -> None:
     """Auditoria + atribuição + débito + ledger de custo de UMA invocação — DETACHED.
 
     `kind` sobrescreve o rótulo do caminho (source no ledger + kind no Prometheus)
     — o worker do invoke assíncrono (34.0.0) passa 'invoke_async' para as
-    invocações 202 não sumirem do RED/custo nem se misturarem às síncronas."""
+    invocações 202 não sumirem do RED/custo nem se misturarem às síncronas.
+
+    `emit_metrics=False` pula SÓ o bloco RED do Prometheus (mantém auditoria/
+    ledger/débito). Usado pelo custo PARCIAL de um aborto (35.14.6): aquele
+    caminho já chama `_record_async_failure` para a métrica RED — sem o flag, o
+    synthetic status='failed' aqui contava um SEGUNDO erro, inflando o error-rate
+    de invoke_async só em abortos com steps parciais (achado de auditoria)."""
     effective_kind = kind or ("invoke_stream" if stream else "invoke")
     interaction_id = (result or {}).get("interaction_id")
     try:
@@ -299,6 +305,10 @@ async def _record_invoke_analytics(*, pid, root, member_count, result, api_key_i
     # Métricas Prometheus (OBS-1) — RED + escalonamento. inc()/observe() são
     # in-memory (não-bloqueantes) e já rodamos DETACHED, então não tocam o
     # caminho de resposta. final_state de escalonamento (FSM) vira contador.
+    # emit_metrics=False: o caller já contabiliza RED por outra via (custo
+    # parcial de aborto → _record_async_failure) — não duplicar (35.14.6).
+    if not emit_metrics:
+        return
     try:
         from app.core.metrics import record_invocation
         r = result or {}

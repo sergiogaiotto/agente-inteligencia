@@ -63,7 +63,7 @@ async def purge_interactions_once() -> dict:
     Best-effort: exceção é logada, nunca propagada ao caller do loop."""
     days = _retention_days()
     if days <= 0:
-        return {"deleted": 0, "scrubbed_verifications": 0}  # DESLIGADO
+        return {"deleted": 0, "scrubbed_verifications": 0, "purged_jobs": 0}  # DESLIGADO
     async with _pool().acquire() as con:
         rows = await con.fetch(
             "SELECT id FROM interactions "
@@ -72,9 +72,28 @@ async def purge_interactions_once() -> dict:
             float(days), _PURGE_BATCH,
         )
         out = await _purge_ids(con, [r["id"] for r in rows])
-    if out["deleted"] or out["scrubbed_verifications"]:
-        logger.info("event=retention_purged deleted=%s scrubbed_verifications=%s days=%s",
-                    out["deleted"], out["scrubbed_verifications"], days)
+        # invoke_jobs guarda a conversa CRUA (request_payload.user_input) e tem
+        # ciclo de vida próprio (reaper por invoke_jobs_retention_hours, default
+        # 72h). Sem purgá-los AQUI, essa cópia sobrevivia à janela de retenção
+        # PROMETIDA por interactions_retention_days — dias além (achado de
+        # auditoria 35.14.6). Purga por IDADE, em lote (DELETE não tem LIMIT →
+        # subselect). O forget por titular já cobre invoke_jobs em _purge_ids.
+        jres = await con.execute(
+            "DELETE FROM invoke_jobs WHERE id IN ("
+            "  SELECT id FROM invoke_jobs "
+            "  WHERE created_at < now() - ($1 * interval '1 day') "
+            "  ORDER BY created_at LIMIT $2)",
+            float(days), _PURGE_BATCH,
+        )
+        try:
+            out["purged_jobs"] = int(str(jres).split()[-1])
+        except Exception:
+            out["purged_jobs"] = 0
+    if out["deleted"] or out["scrubbed_verifications"] or out.get("purged_jobs"):
+        logger.info("event=retention_purged deleted=%s scrubbed_verifications=%s "
+                    "purged_jobs=%s days=%s",
+                    out["deleted"], out["scrubbed_verifications"],
+                    out.get("purged_jobs", 0), days)
     return out
 
 
