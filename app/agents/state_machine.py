@@ -9,6 +9,7 @@ Invariantes:
 - Transições são atômicas e auditadas
 """
 
+import time
 import uuid
 import json
 import logging
