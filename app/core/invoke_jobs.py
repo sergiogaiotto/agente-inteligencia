@@ -247,6 +247,7 @@ async def _run_job(job_id: str) -> None:
                 # aborto DETERMINÍSTICO pós-criação — sem isto, master/filhas
                 # ficavam órfãs SEM dono (listáveis/sequestráveis: IDOR).
                 owner_user_id=job.get("owner_user_id"),
+                customer_ref=req.get("customer_ref"),  # LGPD-2: pivô do esquecimento
             ),
             timeout=_timeout_min * 60.0,
         )

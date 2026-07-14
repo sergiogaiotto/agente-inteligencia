@@ -986,6 +986,7 @@ async def invoke_pipeline(
             sealed_inputs=sealed_inputs or None,  # envelope param (out-of-band)
             pipeline_id=pid,  # auditoria: dono do julgamento nas verifications
             owner_user_id=user.get("id"),  # 35.4.0: interaction nasce com dono
+            customer_ref=data.customer_ref,  # 35.9.0 LGPD-2: pivô do esquecimento
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -1128,6 +1129,7 @@ async def invoke_pipeline_stream(
                 progress_callback=_cb,
                 pipeline_id=pid,  # auditoria: dono do julgamento nas verifications
                 owner_user_id=user.get("id"),  # 35.4.0: interaction nasce com dono
+                customer_ref=data.customer_ref,  # 35.9.0 LGPD-2: pivô do esquecimento
             )
             # IDOR (paridade c/ o sync, 34.0.0): carimba o dono na interaction —
             # posse é primitivo de segurança; sem isso a sessão criada via stream
@@ -1298,6 +1300,7 @@ async def invoke_pipeline_async(
         "request_id": _current_request_id(),
         "request_hash": fingerprint,
         **({"idempotency_key": idempotency_key} if idempotency_key else {}),
+        **({"customer_ref": data.customer_ref} if data.customer_ref else {}),  # LGPD-2
     }
 
     # Webhook de conclusão (35.6.0, padrão FALLBACK): callback_url do request

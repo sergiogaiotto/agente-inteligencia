@@ -47,6 +47,24 @@ def interaction_owner_for_creation() -> Optional[str]:
     return _creation_owner.get()
 
 
+# ── customer_hash na CRIAÇÃO (35.9.0, arco LGPD-2) ──
+# Pivô do direito ao esquecimento: quando o request informa `customer_ref` (o
+# identificador do cliente-final), guardamos só o HASH na interaction — dá o
+# alvo do DELETE por titular. Mesmo padrão ContextVar do owner-na-criação.
+_creation_customer: ContextVar[Optional[str]] = ContextVar(
+    "interaction_creation_customer_hash", default=None
+)
+
+
+def set_interaction_customer_for_creation(customer_ref: Optional[str]) -> None:
+    from app.core.retention import hash_customer_ref
+    _creation_customer.set(hash_customer_ref(customer_ref))
+
+
+def interaction_customer_hash_for_creation() -> Optional[str]:
+    return _creation_customer.get()
+
+
 def _can_bypass(user: Optional[dict]) -> bool:
     """Só `root` acessa interaction alheia (suporte/operação). `admin` NÃO lê
     conversa de terceiros por padrão — privacidade > conveniência."""
