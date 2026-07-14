@@ -136,6 +136,18 @@ def dispatch(job_id: str) -> bool:
     return True
 
 
+def _record_async_failure(status: str) -> None:
+    """RED (35.14.3): invoke_async que falhou conta nas métricas — o worker
+    só registrava no SUCESSO e no TIMEOUT; os demais error branches (aposentado,
+    session, key revogada, orçamento, ValueError, Exception, payload corrupt)
+    ficavam invisíveis ao dashboard/alerta."""
+    try:
+        from app.core.metrics import record_invocation
+        record_invocation(kind="invoke_async", status=status, duration_s=0.0, error=True)
+    except Exception:
+        logger.warning("event=invoke_async_failure_metric_failed status=%s", status)
+
+
 async def _run_job(job_id: str) -> None:
     """Worker de UM job: claim atômico → rechecks baratos → execute_pipeline →
     stamp de posse → persistência do resultado → analytics off-path."""
@@ -152,6 +164,7 @@ async def _run_job(job_id: str) -> None:
     try:
         req = json.loads(job.get("request_payload") or "{}")
     except Exception:
+        _record_async_failure("payload_corrupt")
         await _finish_failed(job_id, {"error": "job_payload_corrupt"})
         return
 
@@ -165,6 +178,7 @@ async def _run_job(job_id: str) -> None:
                 "error": "pipeline_not_invocable",
                 "hint": "O pipeline foi removido ou aposentado depois do aceite do job.",
             })
+            _record_async_failure("pipeline_not_invocable")
             _notify_finish(job_id, pid, req, "failed", "pipeline_not_invocable")
             return
         # TOCTOU do IDOR (review): a posse do session_id foi checada no aceite,
@@ -176,6 +190,7 @@ async def _run_job(job_id: str) -> None:
             sess_owner = await owner_of_interaction(sess)
             if sess_owner and sess_owner != job.get("owner_user_id"):
                 await _finish_failed(job_id, {"error": "session_not_accessible"})
+                _record_async_failure("session_not_accessible")
                 _notify_finish(job_id, pid, req, "failed", "session_not_accessible")
                 return
         api_key_id = req.get("api_key_id")
@@ -186,6 +201,7 @@ async def _run_job(job_id: str) -> None:
                     "SELECT revoked_at FROM api_keys WHERE id = $1", api_key_id)
             if krow is None or krow["revoked_at"] is not None:
                 await _finish_failed(job_id, {"error": "api_key_revoked"})
+                _record_async_failure("api_key_revoked")
                 _notify_finish(job_id, pid, req, "failed", "api_key_revoked")
                 return
             from fastapi import HTTPException
@@ -195,6 +211,7 @@ async def _run_job(job_id: str) -> None:
             except HTTPException as e:
                 detail = e.detail if isinstance(e.detail, dict) else {"error": "cost_budget_exceeded"}
                 await _finish_failed(job_id, detail)
+                _record_async_failure("cost_budget_exceeded")
                 _notify_finish(job_id, pid, req, "failed", "cost_budget_exceeded")
                 return
     except Exception:
@@ -288,12 +305,14 @@ async def _run_job(job_id: str) -> None:
             ))
         except Exception:
             logger.warning("event=invoke_job_timeout_analytics_failed job_id=%s", job_id)
+        _record_async_failure("timeout")
         _notify_finish(job_id, pid, req, "failed", "job_timeout")
         return
     except ValueError as e:
         # Paridade com o sync (409): mensagem do engine é controlada/exposta.
         await _finish_failed(job_id, {"error": "pipeline_execution_rejected",
                                       "detail": str(e)[:300]})
+        _record_async_failure("rejected")
         _notify_finish(job_id, pid, req, "failed", "pipeline_execution_rejected")
         return
     except Exception:
@@ -305,6 +324,7 @@ async def _run_job(job_id: str) -> None:
             "request_id": req.get("request_id"),
             "hint": "Falha ao executar o pipeline. Cite o request_id ao suporte.",
         })
+        _record_async_failure("error")
         _notify_finish(job_id, pid, req, "failed", "pipeline_execution_failed")
         return
 
