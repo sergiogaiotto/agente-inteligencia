@@ -987,6 +987,12 @@ async def execute_declarative(
         try:
             existing_itx = await interactions_repo.find_by_id(trace_id)
             if not existing_itx:
+                # Dono/titular na CRIAÇÃO (35.15.1): lê o ContextVar setado pelo
+                # caller (rota /agents/{id}/invoke branch declarativo) — nasce
+                # carimbada, sem janela órfã (IDOR/404-no-retry). None = legado.
+                from app.core.interaction_access import (
+                    interaction_owner_for_creation, turn_customer_hash_fragment)
+                _downer = interaction_owner_for_creation()
                 await interactions_repo.create({
                     "id": trace_id,
                     "title": ((agent.get("name") or "agent") + " (declarativo)")[:80],
@@ -994,6 +1000,8 @@ async def execute_declarative(
                     "channel": "api",
                     "journey_id": "",
                     "state": "Intake",
+                    **({"owner_user_id": _downer} if _downer else {}),
+                    **turn_customer_hash_fragment(),
                 })
         except Exception as e:
             logger.warning("Declarativo: falha ao persistir interaction %s: %s", trace_id, e)

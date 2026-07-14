@@ -661,6 +661,14 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
 
     if is_declarative:
         dry_run = bool(data.options and data.options.dry_run)
+        # Dono na CRIAÇÃO (35.15.1, achado da auditoria #4): o 3º branch da rota
+        # (declarativo) criava a interaction SEM dono — só o stamp pós-execução
+        # (:717) carimbava, e um crash/dry-run deixava a row órfã → com FF7 o
+        # criador tomava 404 no retry. Seta o ContextVar ANTES da criação (o
+        # execute_declarative o lê no interactions_repo.create). Paridade com os
+        # branches pipeline (:778) e LLM (:847), que passam owner_user_id direto.
+        from app.core.interaction_access import set_interaction_owner_for_creation
+        set_interaction_owner_for_creation(_caller.get("id"))
         try:
             result = await execute_declarative(
                 agent=agent,

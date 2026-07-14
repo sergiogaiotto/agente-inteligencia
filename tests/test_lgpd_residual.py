@@ -77,14 +77,11 @@ class _Pool:
 
 
 @pytest.mark.asyncio
-async def test_forget_apaga_turns_do_titular_em_sessao_mista(monkeypatch):
+async def test_forget_apaga_turns_do_titular(monkeypatch):
     from app.core import retention
-    con = _ForgetCon()
+    con = _ForgetCon()  # sem sessão mista (SELECT DISTINCT → [])
     monkeypatch.setattr("app.core.database._get_pool", lambda: _Pool(con))
     out = await retention.forget_customer("h-bob")
-    # scrub das verifications por turn_id DESTE titular + delete dos turns
-    scr = con.sql("WHERE turn_id IN (SELECT id FROM turns WHERE customer_hash")
-    assert scr, "verifications dos turns do titular são scrubadas"
     dt = con.sql("DELETE FROM turns WHERE customer_hash")
     assert dt and dt[0][1][0] == "h-bob"
     assert out["turns_deleted"] == 4
@@ -101,24 +98,61 @@ class _MixedCon(_ForgetCon):
 
 @pytest.mark.asyncio
 async def test_forget_sessao_mista_alcanca_pii_fora_de_turns(monkeypatch):
-    """Achado do review adversarial do arco: o invoke do titular na sessão mista
-    também gravou tool_calls/api_call_logs/binding_executions (PII crua, tabelas
-    SEM turn_id) e evidences (com turn_id). O caminho turn-level alcança todas."""
+    """Achados do review (#614) + auditoria #4: na sessão mista o titular deixou
+    PII em 5 tabelas por interaction_id (api_call_logs/tool_calls/binding_
+    executions/verifier_jobs/evidences — verifications.turn_id é NULL no runtime,
+    então scrub por interaction_id) + title/trace_data do master reusado."""
     from app.core import retention
     con = _MixedCon()
     monkeypatch.setattr("app.core.database._get_pool", lambda: _Pool(con))
     await retention.forget_customer("h-bob")
-    # evidences por turno (cirúrgico), ANTES do delete dos turns
-    assert con.sql("DELETE FROM evidences WHERE turn_id IN")
-    # PII sem turn_id → over-delete deliberado da interaction MISTA
-    for tbl in ("api_call_logs", "tool_calls", "binding_executions"):
-        hits = con.sql(f"DELETE FROM {tbl} WHERE interaction_id = ANY($1)")
+    # over-delete deliberado das 4 tabelas COM interaction_id da sessão mista
+    for tbl in ("api_call_logs", "tool_calls", "binding_executions", "verifier_jobs"):
+        hits = con.sql("DELETE FROM " + tbl + " WHERE interaction_id = ANY($1)")
         assert hits and hits[0][1][0] == ["int-de-alice"], f"{tbl} não alcançada"
-    # a ordem importa: evidences (subselect de turns) vem antes do DELETE de turns
-    idx_ev = next(i for i, c in enumerate(con.calls) if "DELETE FROM evidences" in c[0])
-    idx_tn = next(i for i, c in enumerate(con.calls)
-                  if "DELETE FROM turns WHERE customer_hash" in c[0])
-    assert idx_ev < idx_tn
+    # evidences NÃO tem interaction_id (auditoria #5, BLOCKER) → por turn_id
+    ev = con.sql("DELETE FROM evidences WHERE turn_id IN")
+    assert ev, "evidences deve ser apagada por turn_id, não interaction_id"
+    assert not con.sql("DELETE FROM evidences WHERE interaction_id")  # nunca
+    # verifications scrubadas por interaction_id (NÃO por turn_id, que é NULL)
+    uv = con.sql("UPDATE verifications SET")
+    assert uv and "interaction_id = ANY($1)" in uv[0][0]
+    # title (mensagem crua) + trace_data do master reusado scrubados
+    assert con.sql("UPDATE interactions SET title")
+
+
+class _DrainFileCon:
+    """1º fetch = lote CHEIO (continua) → 2º = parcial (para). Testa o loop."""
+    def __init__(self):
+        self.fetches = 0
+        self.deleted = []
+
+    async def fetch(self, sql, *a):
+        self.fetches += 1
+        from app.core import retention
+        if self.fetches == 1:
+            return [{"disk_name": f"f{i}.txt"} for i in range(retention._PURGE_BATCH)]
+        if self.fetches == 2:
+            return [{"disk_name": "last.txt"}]
+        return []
+
+    async def execute(self, sql, *a):
+        if "DELETE FROM uploaded_files" in sql:
+            self.deleted.append(a[0])
+        return "DELETE 0"
+
+
+@pytest.mark.asyncio
+async def test_forget_uploads_esgota_em_lotes(monkeypatch, tmp_path):
+    """Achado da auditoria #5 (major): o forget de uploads com LIMIT sem loop
+    deixava >500 arquivos do titular no disco. Agora ESGOTA em lotes."""
+    from app.core import retention
+    from app.routes import workspace
+    monkeypatch.setattr(workspace, "UPLOAD_DIR", tmp_path)
+    con = _DrainFileCon()
+    await retention._unlink_uploaded_files(con, customer_hash="h-grande")
+    assert con.fetches == 2         # 1º lote CHEIO → continua; 2º parcial → para
+    assert len(con.deleted) == 2    # um DELETE por lote (drenou tudo)
 
 
 @pytest.mark.asyncio
@@ -229,3 +263,39 @@ def test_upload_registra_e_invoke_associa():
     # forget (por titular) e purga por idade ambos chamam o unlink
     assert "_unlink_uploaded_files(con, customer_hash=" in ret
     assert "_unlink_uploaded_files(con, older_than_days=" in ret
+
+
+# ───────────────── Auditoria #4: fixes do estado integrado 35.15.1 ─────────────
+
+def test_declarativo_de_agente_nasce_com_dono():
+    """K (auditoria #4): o 3º branch (declarativo) de /agents/{id}/invoke seta o
+    ContextVar de dono ANTES de execute_declarative, que o lê na criação."""
+    ag = Path("app/routes/agents.py").read_text(encoding="utf-8")
+    assert "set_interaction_owner_for_creation(_caller.get(\"id\"))" in ag
+    de = Path("app/agents/declarative_engine.py").read_text(encoding="utf-8")
+    assert "interaction_owner_for_creation()" in de
+    assert '**({"owner_user_id": _downer} if _downer else {})' in de
+
+
+def test_worker_reherda_hash_em_runtime():
+    """M (auditoria #4): TOCTOU — o worker re-resolve o customer_hash da sessão
+    quando o job nasceu NULL (herança no aceite perdeu a corrida) e PERSISTE."""
+    src = Path("app/core/invoke_jobs.py").read_text(encoding="utf-8")
+    assert "customer_hash_of_interaction(req.get(\"session_id\"))" in src
+    assert "UPDATE invoke_jobs SET customer_hash = $1" in src
+    assert "customer_hash=_job_chash" in src  # passado ao engine
+
+
+def test_unlink_roda_em_thread_e_forget_tem_limit():
+    """L (auditoria #4): I/O de filesystem fora do event loop + LIMIT no forget."""
+    ret = Path("app/core/retention.py").read_text(encoding="utf-8")
+    assert "await asyncio.to_thread(_unlink_batch, names)" in ret
+    # ramo por titular (forget) tem LIMIT + LOOP de drenagem (auditoria #5)
+    assert "WHERE customer_hash = $1 " in ret and "LIMIT $2" in ret
+
+
+def test_endpoint_forget_expoe_contadores():
+    """N (auditoria #4): /privacy/forget devolve E audita turns/jobs/files."""
+    pv = Path("app/routes/privacy.py").read_text(encoding="utf-8")
+    for k in ("turns_deleted", "invoke_jobs_deleted", "files_deleted"):
+        assert pv.count(k) >= 2, f"{k} deve estar no audit E na resposta"

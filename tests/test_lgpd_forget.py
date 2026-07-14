@@ -205,8 +205,10 @@ class TestFiacao:
         assert "customer_hash=_effective_hash" in rotas
         assert '"customer_ref": data.customer_ref,' in rotas  # está no fingerprint
         jobs = Path("app/core/invoke_jobs.py").read_text(encoding="utf-8")
-        # 35.14.2: worker passa o HASH (job.customer_hash), não o ref cru
-        assert 'customer_hash=job.get("customer_hash")' in jobs
+        # 35.14.2: worker passa o HASH (não o ref cru). 35.15.1 (auditoria #4):
+        # re-herdado em runtime quando o aceite perdeu a corrida → _job_chash.
+        assert "customer_hash=_job_chash" in jobs
+        assert 'customer_hash_of_interaction(req.get("session_id"))' in jobs
 
     def test_router_registrado_e_indice(self):
         main = Path("app/main.py").read_text(encoding="utf-8")
