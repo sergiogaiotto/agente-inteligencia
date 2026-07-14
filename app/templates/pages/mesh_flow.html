@@ -681,6 +681,11 @@
                                                     <option value="all">todas</option>
                                                 </select>
                                             </div>
+                                            <!-- Normalização pt-BR (35.17.0): casa a palavra sem se importar com acento/maiúscula -->
+                                            <label class="flex items-center gap-1.5 text-[11px] text-surface-500 cursor-pointer" data-testid="kw-norm">
+                                                <input type="checkbox" x-model="editor.kwNorm" @change="syncExpr()" class="rounded border-surface-300 text-brand-500 focus:ring-brand-400">
+                                                <span>Ignorar acento e maiúscula <span class="text-surface-400">(recomendado — <span class="font-mono">nao reconheco</span> acha <span class="font-mono">não reconheço</span>)</span></span>
+                                            </label>
                                         </div>
                                     </template>
 
@@ -2016,7 +2021,7 @@ function meshFlowPage() {
             this.selected = null;
             this.sim = null; this.scopeSim = null; this.nlSuggest = null;
             this.editor = { mode: 'new', id: null, source: srcId, target: tgtId, type: 'sequential', expr: '', scopeMode: 'inherit', scopeTemplate: '', sampleOut: '', sampleInput: '', sampleFinalState: 'Recommend', sampleHasDoc: false, sampleHasImg: false,
-                ruleMode: 'gallery', intent: null, kwTerms: [], kwDraft: '', kwWhere: 'output_lower', kwMode: 'any', attKind: 'has_document', decision: 'is_recommend',
+                ruleMode: 'gallery', intent: null, kwTerms: [], kwDraft: '', kwWhere: 'output_lower', kwMode: 'any', kwNorm: true, attKind: 'has_document', decision: 'is_recommend',
                 clauses: [], join: 'and', contentKind: 'contains_url', sizeKind: 'empty', sizeN: 200, nlDesc: '',
                 paramField: '', paramOp: '==', paramValue: '' };
         },
@@ -2037,7 +2042,7 @@ function meshFlowPage() {
                 // a expr salva); regra nova começa na galeria. Re-hidratar expr→cards
                 // é da Fatia 4.
                 ruleMode: (cfg.expr || '').trim() ? 'manual' : 'gallery',
-                intent: null, kwTerms: [], kwDraft: '', kwWhere: 'output_lower', kwMode: 'any', attKind: 'has_document', decision: 'is_recommend',
+                intent: null, kwTerms: [], kwDraft: '', kwWhere: 'output_lower', kwMode: 'any', kwNorm: true, attKind: 'has_document', decision: 'is_recommend',
                 clauses: [], join: 'and', contentKind: 'contains_url', sizeKind: 'empty', sizeN: 200, nlDesc: '',
                 paramField: '', paramOp: '==', paramValue: '',
             };
@@ -2107,6 +2112,8 @@ function meshFlowPage() {
         // mudança de runtime). Escape hatch p/ Jinja cru sempre presente.
         selectIntent(kind) { this.editor.intent = (this.editor.intent === kind ? null : kind); this.syncExpr(); },
         _jinjaStr(s) { return "'" + String(s).toLowerCase().replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; },
+        // Remove acentos (35.17.0) — espelha o _strip_accents do engine (NFKD).
+        _stripAccents(s) { return String(s == null ? '' : s).normalize('NFKD').replace(/[̀-ͯ]/g, ''); },
         // EXATO (sem lowercase): `inputs.X == 'Gold'` compara o valor cru do arg, não uma busca de substring.
         _jinjaStrExact(s) { return "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; },
         // Validação do card 'param' (feedback inline — evita gerar Jinja quebrado em silêncio).
@@ -2137,7 +2144,13 @@ function meshFlowPage() {
                 const terms = (ed.kwTerms || []).filter(Boolean);
                 if (!terms.length) return '';
                 const op = ed.kwMode === 'all' ? ' and ' : ' or ';
-                return terms.map(t => `${this._jinjaStr(t)} in ${ed.kwWhere}`).join(op);
+                // 35.17.0: "ignorar acento/maiúscula" (default) roteia na variável
+                // NORMALIZADA e normaliza o TERMO junto — 'não reconheço' passa a
+                // casar 'nao reconheco' sem o autor digitar as duas grafias.
+                const normMap = { output_lower: 'output_norm', input_lower: 'input_norm', text_all: 'text_norm' };
+                const where = ed.kwNorm ? (normMap[ed.kwWhere] || ed.kwWhere) : ed.kwWhere;
+                const xf = ed.kwNorm ? (t => this._stripAccents(String(t).toLowerCase())) : (t => t);
+                return terms.map(t => `${this._jinjaStr(xf(t))} in ${where}`).join(op);
             }
             if (ed.intent === 'attachment') return ed.attKind;
             if (ed.intent === 'decision') return ed.decision;

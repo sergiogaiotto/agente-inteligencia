@@ -110,7 +110,7 @@ async def _topo_agent(agent_id: str) -> Optional[dict]:
 # depende do output, o draft do router é peso morto e pode ser pulado — a
 # rota é 100% decidida por args selados + pergunta. Espelha CONDITIONAL_VARS_META.
 _OUTPUT_CLASS_VARS = frozenset({
-    "output", "output_lower", "output_length", "has_output", "final_state",
+    "output", "output_lower", "output_norm", "output_length", "has_output", "final_state",
     "is_recommend", "is_refuse", "is_escalate",
     "contains_image", "contains_url", "contains_pdf", "lines_count",
 })
@@ -5056,6 +5056,14 @@ class _ArgsView(dict):
         return _MISSING_ARG
 
 
+def _strip_accents(s: str) -> str:
+    """Remove acentos via NFKD (mesmo racional de `_output_names_target`).
+    Módulo-level (35.17.0) para as vars normalizadas do gate condicional: casa
+    'nao reconheco' com 'não reconheço' sem o autor digitar as duas grafias."""
+    import unicodedata as _ud
+    return "".join(ch for ch in _ud.normalize("NFKD", s or "") if not _ud.combining(ch))
+
+
 def _build_conditional_context(
     output: str | None = None,
     final_state: str | None = None,
@@ -5149,6 +5157,15 @@ def _build_conditional_context(
         "has_document": "document" in _kinds,
         "has_image": "image" in _kinds,
         "text_all": text_all,
+        # ── Normalizadas pt-BR (35.17.0) ──────────────────────────────────
+        # Lowercase + SEM acento. Casam 'nao reconheco' com 'não reconheço' e
+        # 'e' com 'é' sem o autor precisar enumerar as duas grafias — a dor #1
+        # dos fluxos reais (a mesma palavra digitada 2x na expr). ADITIVAS: as
+        # exprs existentes (sobre *_lower) seguem byte-idênticas. O card de
+        # palavra-chave gera com estas por default em REGRAS NOVAS.
+        "input_norm": _strip_accents(inp_lower),
+        "output_norm": _strip_accents(out_lower),
+        "text_norm": _strip_accents(text_all),
         # Memória de conversa: perguntas recentes do usuário (já em text_all;
         # exposta isolada p/ exprs que queiram olhar só o histórico).
         "session_text": sess_text,
@@ -5180,6 +5197,9 @@ CONDITIONAL_VARS_META: list[dict] = [
     {"name": "input", "type": "str", "desc": "A pergunta original do usuário — útil para decidir qual agente responde conforme o que foi perguntado"},
     {"name": "input_lower", "type": "str", "desc": "A pergunta original em letras minúsculas (para buscar sem diferenciar maiúscula de minúscula)"},
     {"name": "text_all", "type": "str", "desc": "Tudo junto: a pergunta, os nomes/tipos dos arquivos enviados e as conversas recentes (em minúsculas) — para achar uma palavra em qualquer parte"},
+    {"name": "input_norm", "type": "str", "desc": "A pergunta em minúsculas E SEM ACENTO — 'nao reconheco' acha 'não reconheço'. Prefira esta a input_lower para não precisar escrever a palavra com e sem acento."},
+    {"name": "output_norm", "type": "str", "desc": "A resposta do agente anterior em minúsculas E sem acento — mesma ideia de input_norm, para casar palavra sem se preocupar com acento."},
+    {"name": "text_norm", "type": "str", "desc": "Tudo junto (pergunta + arquivos + histórico) em minúsculas E sem acento — a forma mais tolerante de achar uma palavra."},
     {"name": "session_text", "type": "str", "desc": "Perguntas anteriores da conversa — ajuda a entender pedidos curtos como 'fala mais sobre isso' procurando a palavra no que já foi perguntado"},
     {"name": "has_attachments", "type": "bool", "desc": "Verdadeiro se o usuário enviou algum arquivo"},
     {"name": "has_document", "type": "bool", "desc": "Verdadeiro se há um documento entre os arquivos (PDF, Word, PowerPoint, Excel, texto, etc.)"},
