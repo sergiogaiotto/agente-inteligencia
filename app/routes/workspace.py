@@ -589,6 +589,22 @@ async def upload_file(file: UploadFile = File(...)):
     if text_content and len(text_content) > 50000:
         text_content = text_content[:50000] + "\n\n[...truncado em 50.000 caracteres]"
 
+    # Registro p/ o ciclo de vida LGPD (35.15.0, G): sem isto o binário em
+    # data/uploads sobrevivia ao forget/retenção. O titular (customer_hash) é
+    # associado DEPOIS, no invoke que referencia o arquivo. Best-effort — a falha
+    # não quebra o upload (o purga por idade ainda pega o órfão pelo created_at...
+    # mas só se registrado; um upload nunca-invocado sem linha fica pro reconcile).
+    try:
+        from app.core.database import _get_pool
+        async with _get_pool().acquire() as con:
+            await con.execute(
+                "INSERT INTO uploaded_files (disk_name) VALUES ($1) "
+                "ON CONFLICT DO NOTHING", safe_name)
+    except Exception as reg_e:
+        import logging as _logging
+        _logging.getLogger("app.routes.workspace").warning(
+            "workspace.upload.register_failed name=%s: %s", safe_name, str(reg_e)[:150])
+
     return {
         "file_id": file_id,
         "filename": file.filename,

@@ -95,7 +95,12 @@ async def purge_interactions_once() -> dict:
             out["purged_jobs"] = int(str(jres).split()[-1])
         except Exception:
             out["purged_jobs"] = 0
-    if out["deleted"] or out["scrubbed_verifications"] or out.get("purged_jobs"):
+        # Arquivos de upload por IDADE (35.15.0, G): binários mais velhos que a
+        # janela — inclui os ÓRFÃOS (nunca associados a titular: upload abandonado
+        # sem invoke). Mesma janela em dias.
+        out["purged_files"] = await _unlink_uploaded_files(con, older_than_days=float(days))
+    if out["deleted"] or out["scrubbed_verifications"] or out.get("purged_jobs") \
+            or out.get("purged_files"):
         logger.info("event=retention_purged deleted=%s scrubbed_verifications=%s "
                     "purged_jobs=%s days=%s",
                     out["deleted"], out["scrubbed_verifications"],
@@ -154,6 +159,52 @@ def hash_customer_ref(customer_ref: Optional[str]) -> Optional[str]:
     return hashlib.sha256(ref.encode("utf-8")).hexdigest()
 
 
+async def _unlink_uploaded_files(con, *, customer_hash: Optional[str] = None,
+                                 older_than_days: Optional[float] = None) -> int:
+    """Apaga o BINÁRIO em data/uploads + a linha de uploaded_files — por TITULAR
+    (forget) OU por IDADE (retenção/órfãos). O banco não bastava: o arquivo cru
+    com PII sobrevivia no disco (35.15.0, decisão do dono G).
+
+    Best-effort no filesystem: falha de unlink loga mas NÃO impede a remoção da
+    linha. Anti path-traversal: só apaga dentro de UPLOAD_DIR. Retorna nº de
+    binários removidos do disco."""
+    import os
+    from app.routes.workspace import UPLOAD_DIR
+    if customer_hash:
+        rows = await con.fetch(
+            "SELECT disk_name FROM uploaded_files WHERE customer_hash = $1", customer_hash)
+    elif older_than_days is not None:
+        rows = await con.fetch(
+            "SELECT disk_name FROM uploaded_files "
+            "WHERE created_at < now() - ($1 * interval '1 day') "
+            "ORDER BY created_at LIMIT $2",
+            float(older_than_days), _PURGE_BATCH)
+    else:
+        return 0
+    names = [r["disk_name"] for r in rows]
+    if not names:
+        return 0
+    removed = 0
+    done: list = []  # linhas seguras de remover: binário apagado OU já ausente
+    base = str(UPLOAD_DIR.resolve())
+    for name in names:
+        try:
+            p = (UPLOAD_DIR / os.path.basename(name)).resolve()
+            if (str(p) == base or str(p).startswith(base + os.sep)) and p.exists():
+                p.unlink()
+                removed += 1
+            done.append(name)
+        except Exception as e:
+            # Achado do review: NÃO remover a linha de um unlink que FALHOU —
+            # ela é o único rastro do binário (sem PII: só hash+nome); mantê-la
+            # permite o retry no próximo ciclo. Deletar a linha órfãva o arquivo
+            # com PII no disco PARA SEMPRE.
+            logger.warning("event=retention_unlink_failed name=%s: %s", name, str(e)[:150])
+    if done:
+        await con.execute("DELETE FROM uploaded_files WHERE disk_name = ANY($1)", done)
+    return removed
+
+
 async def forget_customer(customer_hash: str) -> dict:
     """Direito ao esquecimento (LGPD Art.18): apaga TODAS as conversas do
     titular (pelo customer_hash pseudônimo). Mesmo delete+scrub da retenção,
@@ -187,9 +238,59 @@ async def forget_customer(customer_hash: str) -> dict:
             total["batches"] += 1
             if len(ids) < _PURGE_BATCH:
                 break
-    logger.info("event=customer_forgotten deleted=%s scrubbed=%s invoke_jobs=%s batches=%s",
+        # Turns de SESSÃO MISTA (35.15.0, decisão do dono D): uma sessão reusada
+        # por mais de um cliente-final tem a interaction carimbada só com o 1º
+        # titular (first-writer-wins) — os turns dos DEMAIS ficavam inalcançáveis
+        # pelo forget. Com o pivô por-turno, apaga os turns DESTE titular que
+        # sobrevivem em interactions de OUTRO (a interaction do outro FICA viva).
+        # Scrub das verifications desses turns antes (por turn_id). Transacional.
+        #
+        # PII FORA de turns (achado do review adversarial do arco): o invoke do
+        # titular na sessão mista também gravou tool_calls/api_call_logs/
+        # binding_executions (input/output crus) — tabelas SEM turn_id, só
+        # alcançáveis por interaction_id. Apagamos essas linhas das interactions
+        # MISTAS inteiras: over-delete DELIBERADO (leva telemetria do outro
+        # titular da MESMA sessão junto) — direção privacy-safe; a conversa
+        # (interaction+turns) do outro fica intacta. evidences tem turn_id →
+        # delete cirúrgico por turno, ANTES do delete dos turns (subselect).
+        async with con.transaction():
+            mixed = await con.fetch(
+                "SELECT DISTINCT interaction_id FROM turns WHERE customer_hash = $1",
+                customer_hash)
+            mids = [r["interaction_id"] for r in mixed]
+            vres = await con.execute(
+                "UPDATE verifications SET "
+                "question_redacted = $2, draft_redacted = $2, "
+                "factuality_reason = NULL, completeness_reason = NULL, "
+                "tone_reason = NULL, safety_reason = NULL, unsupported_claims = '[]' "
+                "WHERE turn_id IN (SELECT id FROM turns WHERE customer_hash = $1)",
+                customer_hash, _SCRUB,
+            )
+            await con.execute(
+                "DELETE FROM evidences WHERE turn_id IN "
+                "(SELECT id FROM turns WHERE customer_hash = $1)", customer_hash)
+            if mids:
+                await con.execute(
+                    "DELETE FROM api_call_logs WHERE interaction_id = ANY($1)", mids)
+                await con.execute(
+                    "DELETE FROM tool_calls WHERE interaction_id = ANY($1)", mids)
+                await con.execute(
+                    "DELETE FROM binding_executions WHERE interaction_id = ANY($1)", mids)
+            tres = await con.execute(
+                "DELETE FROM turns WHERE customer_hash = $1", customer_hash)
+        try:
+            total["scrubbed_verifications"] += int(str(vres).split()[-1])
+            total["turns_deleted"] = int(str(tres).split()[-1])
+        except Exception:
+            total["turns_deleted"] = 0
+        # Arquivos de upload do titular (35.15.0, decisão do dono G): apaga o
+        # BINÁRIO em data/uploads (o banco não bastava — a PII crua vivia no disco).
+        total["files_deleted"] = await _unlink_uploaded_files(con, customer_hash=customer_hash)
+    logger.info("event=customer_forgotten deleted=%s scrubbed=%s turns=%s invoke_jobs=%s "
+                "files=%s batches=%s",
                 total["deleted"], total["scrubbed_verifications"],
-                total.get("invoke_jobs_deleted", 0), total["batches"])
+                total.get("turns_deleted", 0), total.get("invoke_jobs_deleted", 0),
+                total.get("files_deleted", 0), total["batches"])
     return total
 
 

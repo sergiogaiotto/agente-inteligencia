@@ -39,6 +39,8 @@ class _Con:
 
     async def fetch(self, sql, *a):
         self.calls.append((sql, a))
+        if "uploaded_files" in sql:  # 35.15.0 G: sem arquivos neste fake
+            return []
         return [{"id": i} for i in self._ids]
 
     async def execute(self, sql, *a):
