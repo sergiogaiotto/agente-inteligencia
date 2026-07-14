@@ -1939,15 +1939,18 @@ async def execute_interaction(
     vetorial com o texto do upstream. Ver `execute_pipeline`.
     """
     start = time.time()
-    # Dono na CRIAÇÃO (35.4.0): interaction nasce carimbada quando informado.
-    if owner_user_id:
-        from app.core.interaction_access import set_interaction_owner_for_creation
-        set_interaction_owner_for_creation(owner_user_id)
+    # Dono/titular na CRIAÇÃO — set INCONDICIONAL (35.14.4, achado de auditoria):
+    # setar SÓ quando truthy deixava um loop sequencial na MESMA task (harness/
+    # evaluator, batch, A2A) herdar silenciosamente o owner/customer_hash da
+    # operação ANTERIOR quando a atual os omitia. Setar sempre (None limpa) fecha
+    # a herança. Os setters normalizam None → contexto limpo.
+    from app.core.interaction_access import (
+        set_interaction_owner_for_creation, set_interaction_customer_hash_for_creation,
+        set_interaction_customer_for_creation)
+    set_interaction_owner_for_creation(owner_user_id)
     if customer_hash:  # 35.14.2: hash já pronto (worker do 202)
-        from app.core.interaction_access import set_interaction_customer_hash_for_creation
         set_interaction_customer_hash_for_creation(customer_hash)
-    elif customer_ref:  # LGPD-2: pivô do esquecimento (hash na criação)
-        from app.core.interaction_access import set_interaction_customer_for_creation
+    else:  # LGPD-2: hasheia o ref (ou limpa com None)
         set_interaction_customer_for_creation(customer_ref)
     agent = await _topo_agent(agent_id)
     if not agent:
@@ -3565,15 +3568,16 @@ async def execute_pipeline(
     é absorvido — não afeta a execução do pipeline.
     """
     start = time.time()
-    # Dono na CRIAÇÃO (35.4.0): o contexto vale para master E filhas da cadeia.
-    if owner_user_id:
-        from app.core.interaction_access import set_interaction_owner_for_creation
-        set_interaction_owner_for_creation(owner_user_id)
+    # Dono/titular na CRIAÇÃO — set INCONDICIONAL (35.14.4): vale para master E
+    # filhas; setar sempre (None limpa) impede a herança entre operações da
+    # MESMA task (loop do harness/batch). Ver execute_interaction.
+    from app.core.interaction_access import (
+        set_interaction_owner_for_creation, set_interaction_customer_hash_for_creation,
+        set_interaction_customer_for_creation)
+    set_interaction_owner_for_creation(owner_user_id)
     if customer_hash:  # 35.14.2: hash já pronto (worker do 202)
-        from app.core.interaction_access import set_interaction_customer_hash_for_creation
         set_interaction_customer_hash_for_creation(customer_hash)
-    elif customer_ref:  # LGPD-2: pivô do esquecimento (hash na criação)
-        from app.core.interaction_access import set_interaction_customer_for_creation
+    else:
         set_interaction_customer_for_creation(customer_ref)
     # Cache de topologia por requisição (25.2.0): liga o memo de mesh/agents
     # do caminho quente quando o toggle permite. contextvar é request-scoped

@@ -156,7 +156,7 @@ class TestFiacao:
     def test_carona_no_reaper(self):
         src = Path("app/core/invoke_jobs.py").read_text(encoding="utf-8")
         assert "from app.core.retention import maybe_purge" in src
-        assert "await maybe_purge()" in src
+        assert "asyncio.wait_for(maybe_purge()" in src  # 35.14.4: com teto de latência
         # try/except próprio (não derruba o reaper)
         assert "event=retention_purge_failed" in src
 
