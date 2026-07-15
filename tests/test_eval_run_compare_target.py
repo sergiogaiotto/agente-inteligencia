@@ -126,3 +126,54 @@ def test_list_eval_runs_filter_pipeline(monkeypatch):
     monkeypatch.setattr(dash.eval_runs_repo, "find_all", _find_all)
     _client().get("/api/v1/eval-runs?pipeline_id=p1")
     assert captured == {"pipeline_id": "p1"}
+
+
+# ── Frases-Prova no compare (36.6.0): linha com guarda de HASH própria ──
+
+def _run_ph(rid, total=4, passed=4, ph_hash="h-frases", **over):
+    return _run(rid, routing_phrases_total=total, routing_phrases_passed=passed,
+                routing_phrases_hash=ph_hash, **over)
+
+
+def test_frases_mesmo_hash_comparavel_com_delta(monkeypatch):
+    r = _compare(monkeypatch, _run_ph("A"), _run_ph("B", passed=2))
+    body = r.json()
+    rp = body["routing_phrases"]
+    assert rp["comparable"] is True and rp["reason"] is None
+    assert rp["pass_rate"] == {
+        "a": 1.0, "b": 0.5, "delta": -0.5, "is_improvement": False,
+    }
+    # pass-rate derivado exposto no sumário de cada run
+    assert body["run_a"]["routing_phrase_pass_rate"] == 1.0
+    assert body["run_b"]["routing_phrase_pass_rate"] == 0.5
+
+
+def test_frases_hash_diferente_linha_incomparavel(monkeypatch):
+    """Conjunto de frases mudou entre os runs: a LINHA de frases é bloqueada
+    com reason, mas o resto do compare (mesmo gold/alvo) segue comparável."""
+    r = _compare(monkeypatch, _run_ph("A"), _run_ph("B", ph_hash="OUTRO"))
+    body = r.json()
+    assert body["comparable"] is True          # gold/status/alvo intactos
+    rp = body["routing_phrases"]
+    assert rp["comparable"] is False and rp["pass_rate"] is None
+    assert "MUDOU" in rp["reason"]
+
+
+def test_frases_na_em_um_dos_runs(monkeypatch):
+    r = _compare(
+        monkeypatch, _run_ph("A"),
+        _run("B", routing_phrases_total=None, routing_phrases_passed=None,
+             routing_phrases_hash=None),
+    )
+    rp = r.json()["routing_phrases"]
+    assert rp["comparable"] is False
+    assert "não avaliadas" in rp["reason"]
+
+
+def test_frases_nao_vazam_quando_compare_geral_bloqueado(monkeypatch):
+    """Compare bloqueado no nível geral (alvos diferentes) → seção de frases
+    nem é computada (None), coerente com deltas/divergent vazios."""
+    r = _compare(monkeypatch, _run_ph("A"), _run_ph("B", agent_id="ag2"))
+    body = r.json()
+    assert body["comparable"] is False
+    assert body["routing_phrases"] is None

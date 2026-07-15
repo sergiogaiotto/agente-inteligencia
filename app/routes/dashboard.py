@@ -1122,11 +1122,20 @@ def _fmt_target(t: tuple | None) -> str:
 
 def _summary_of_run(run: dict) -> dict:
     """Sumário leve de um eval_run para o response (sem details cruas)."""
+    # Frases-Prova (36.6.0): pass-rate derivado — fonte única no evaluator.
+    from app.harness.evaluator import _phrases_pass_rate
+    rp_rate = _phrases_pass_rate(
+        run.get("routing_phrases_total"), run.get("routing_phrases_passed"),
+    )
     return {
         "id": run.get("id"),
         "release_id": run.get("release_id"),
         "agent_id": run.get("agent_id"),
         "pipeline_id": run.get("pipeline_id"),
+        "routing_phrases_total": run.get("routing_phrases_total"),
+        "routing_phrases_passed": run.get("routing_phrases_passed"),
+        "routing_phrases_hash": run.get("routing_phrases_hash"),
+        "routing_phrase_pass_rate": round(rp_rate, 4) if rp_rate is not None else None,
         "run_type": run.get("run_type"),
         "gold_version": run.get("gold_version"),
         "status": run.get("status"),
@@ -1341,11 +1350,43 @@ async def compare_eval_runs(a: str, b: str):
         "deltas": {},
         "by_category_deltas": {},
         "divergent_cases": [],
+        "routing_phrases": None,
     }
     if comparable:
         response["deltas"] = _aggregate_deltas(run_a, run_b)
         response["by_category_deltas"] = _by_category_deltas(run_a, run_b)
         response["divergent_cases"] = _divergent_cases(run_a, run_b, limit=20)
+        # ── Frases-Prova (36.6.0): linha com guarda de HASH própria ──
+        # Fora de `deltas`/_METRIC_DIRECTIONS de propósito: o delta genérico
+        # não tem como exigir o MESMO conjunto de frases — pass-rates de
+        # conjuntos diferentes seriam ruído com cara de sinal. A linha só é
+        # comparável com routing_phrases_hash igual nos dois lados.
+        ra, rb = response["run_a"], response["run_b"]
+        rp_comparable = False
+        rp_reason = None
+        if (ra["routing_phrase_pass_rate"] is None
+                or rb["routing_phrase_pass_rate"] is None):
+            rp_reason = (
+                "frases-prova não avaliadas em um dos runs (modo agente, run "
+                "pré-36.5.0 ou pipeline sem frase selada)"
+            )
+        elif ra["routing_phrases_hash"] != rb["routing_phrases_hash"]:
+            rp_reason = (
+                "o CONJUNTO de frases-prova MUDOU entre os runs (hashes "
+                f"diferentes: a={ra['routing_phrases_hash']}, "
+                f"b={rb['routing_phrases_hash']}) — pass-rates não se comparam; "
+                "re-rode o baseline com as frases atuais."
+            )
+        else:
+            rp_comparable = True
+        response["routing_phrases"] = {
+            "comparable": rp_comparable,
+            "reason": rp_reason,
+            "pass_rate": _compute_delta(
+                ra["routing_phrase_pass_rate"],
+                rb["routing_phrase_pass_rate"], "up",
+            ) if rp_comparable else None,
+        }
     return response
 
 @router.get("/dashboard/verifier/async-stats")

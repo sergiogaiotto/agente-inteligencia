@@ -145,3 +145,77 @@ class TestDriftWriter:
         src = Path("app/harness/evaluator.py").read_text(encoding="utf-8")
         assert "await _write_drift_events(" in src
         assert "gold_hash=gold_hash" in src
+
+
+class TestDriftFrasesProva:
+    """36.6.0 — routing_phrase_pass_rate no drift, com guarda de HASH própria:
+    pass-rate só se compara quando o CONJUNTO de frases é o mesmo
+    (routing_phrases_hash igual nos dois lados). Métrica derivada
+    (passed/total), fora do loop genérico de _DRIFT_METRICS."""
+
+    _BASE = {
+        "routing_phrases_total": 4, "routing_phrases_passed": 4,
+        "routing_phrases_hash": "h-frases",
+    }
+    _CUR = {"routing_phrase_pass_rate": 0.5, "routing_phrases_hash": "h-frases"}
+
+    @pytest.mark.asyncio
+    async def test_mesmo_hash_queda_vira_critical(self, monkeypatch):
+        _, dr = _patch(monkeypatch, dict(self._BASE))
+        n = await evaluator._write_drift_events(
+            "rel-1", "h1", dict(self._CUR), regression_pct_threshold=10.0,
+            pipeline_id="p1",
+        )
+        assert n == 1
+        e = dr.created[0]
+        assert e["metric_name"] == "routing_phrase_pass_rate"
+        assert e["severity"] == "critical"       # 1.0 → 0.5 = queda 50% > 10%
+        assert e["baseline_value"] == 1.0 and e["current_value"] == 0.5
+        assert e["pipeline_id"] == "p1"
+
+    @pytest.mark.asyncio
+    async def test_hash_diferente_nao_compara(self, monkeypatch):
+        _, dr = _patch(monkeypatch, dict(self._BASE))
+        n = await evaluator._write_drift_events(
+            "rel-1", "h1",
+            dict(self._CUR, routing_phrases_hash="OUTRO-conjunto"),
+            regression_pct_threshold=10.0,
+        )
+        assert n == 0 and dr.created == []
+
+    @pytest.mark.asyncio
+    async def test_baseline_sem_frases_nao_compara(self, monkeypatch):
+        # baseline pré-36.5.0 (colunas NULL) ou modo agente → sem referência.
+        _, dr = _patch(monkeypatch, {"routing_phrases_hash": "h-frases"})
+        n = await evaluator._write_drift_events(
+            "rel-1", "h1", dict(self._CUR), regression_pct_threshold=10.0,
+        )
+        assert n == 0
+
+    @pytest.mark.asyncio
+    async def test_run_atual_sem_frases_nao_compara(self, monkeypatch):
+        _, dr = _patch(monkeypatch, dict(self._BASE))
+        n = await evaluator._write_drift_events(
+            "rel-1", "h1",
+            {"routing_phrase_pass_rate": None, "routing_phrases_hash": None},
+            regression_pct_threshold=10.0,
+        )
+        assert n == 0
+
+    @pytest.mark.asyncio
+    async def test_melhora_vira_info(self, monkeypatch):
+        _, dr = _patch(monkeypatch, dict(self._BASE, routing_phrases_passed=2))
+        await evaluator._write_drift_events(
+            "rel-1", "h1", dict(self._CUR, routing_phrase_pass_rate=1.0),
+            regression_pct_threshold=10.0,
+        )
+        assert dr.created[0]["severity"] == "info"  # 0.5 → 1.0
+
+
+class TestPhrasesPassRate:
+    def test_derivacao(self):
+        assert evaluator._phrases_pass_rate(4, 3) == 0.75
+        assert evaluator._phrases_pass_rate(0, 0) is None   # avaliou, sem frases
+        assert evaluator._phrases_pass_rate(None, None) is None  # N/A
+        assert evaluator._phrases_pass_rate("x", 1) is None  # lixo → None
+        assert evaluator._phrases_pass_rate(4, "x") is None  # lixo em passed idem
