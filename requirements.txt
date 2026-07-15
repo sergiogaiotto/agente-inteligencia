@@ -22,7 +22,7 @@ asyncpg==0.31.0
 # runtime segue usando asyncpg cru; alembic usa seu próprio engine sync (psycopg2)
 # só p/ aplicar migrações no boot (init_db, em thread). Traz SQLAlchemy como dep.
 alembic==1.13.3
-psycopg2-binary==2.9.10
+psycopg2-binary==2.9.12
 
 # === Cache / Memória de Contexto ===
 redis[hiredis]==8.0.1
