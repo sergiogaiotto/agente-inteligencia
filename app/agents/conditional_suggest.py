@@ -26,16 +26,20 @@ def build_suggest_messages(description: str, vars_meta: list[dict]) -> list[dict
         "REGRAS RÍGIDAS:\n"
         "1. Use SOMENTE estas variáveis (nada além delas):\n"
         f"{catalog}\n\n"
-        "2. Para casar palavra em texto use `'palavra' in output_lower` (ou "
-        "input_lower/text_all) — sempre minúsculas, NUNCA `==`.\n"
+        "2. Para casar palavra em texto PREFIRA as variáveis NORMALIZADAS: "
+        "`'termo' in input_norm` (ou output_norm/text_norm), com o termo em "
+        "minúsculas e SEM acento — 'nao reconheco', nunca 'não reconheço' — "
+        "elas casam as duas grafias de uma vez. As variantes `*_lower`/`text_all` "
+        "são legado (exigem o acento exato). NUNCA use `==` para buscar palavra.\n"
         "3. Combine com `and`/`or` e parênteses quando precisar.\n"
         "4. Responda APENAS com a expressão — sem markdown, sem aspas ao redor, "
         "sem explicação.\n\n"
         "Exemplos:\n"
-        "- \"se mencionar pix ou ted na resposta\" => 'pix' in output_lower or 'ted' in output_lower\n"
+        "- \"se mencionar pix ou ted na resposta\" => 'pix' in output_norm or 'ted' in output_norm\n"
+        "- \"quando o cliente disser que não reconhece a compra\" => 'nao reconhec' in input_norm\n"
         "- \"quando o usuário anexar um documento\" => has_document\n"
         "- \"se a decisão foi recusar\" => is_refuse\n"
-        "- \"se a pergunta fala de limite e a resposta tem link\" => 'limite' in input_lower and contains_url"
+        "- \"se a pergunta fala de limite e a resposta tem link\" => 'limite' in input_norm and contains_url"
     )
     return [
         {"role": "system", "content": system},
@@ -65,7 +69,12 @@ def extract_expression(text: str) -> str:
 import re as _re
 
 # Variáveis de TEXTO onde `<literal> in <var>` faz sentido (busca de substring).
-_TEXT_TARGETS = ("input_lower", "output_lower", "text_all", "session_text", "input", "output")
+# As `*_norm` entraram no review 2026-07-15: sem elas, `pix in input_norm` não
+# era reparado e virava o erro confuso "variáveis que não existem: pix".
+_TEXT_TARGETS = (
+    "input_lower", "output_lower", "text_all", "session_text", "input", "output",
+    "input_norm", "output_norm", "text_norm",
+)
 _JINJA_KEYWORDS = {"and", "or", "not", "in", "is", "true", "false", "none"}
 # `(?<![.\w])` — não casa palavra precedida por ponto: `inputs.tag in output_lower`
 # é acesso a membro legítimo (`inputs.tag`), NÃO um literal sem aspas a consertar.
@@ -90,6 +99,38 @@ def repair_unquoted_literals(expr: str, canonical: set[str]) -> str:
         return f"'{word}' in {tgt}"
 
     return _REPAIR_RE.sub(_sub, expr)
+
+
+_NORM_TARGETS = ("input_norm", "output_norm", "text_norm")
+_NORM_LITERAL_RE = _re.compile(r"'([^']*)'\s+in\s+(" + "|".join(_NORM_TARGETS) + r")\b")
+
+
+def _strip_accents_local(s: str) -> str:
+    """Twin do `_strip_accents` do engine (NFKD + drop de combining) — duplicado
+    de propósito: este módulo é stdlib-only (sem import de app/*, sem ciclos).
+    Mudou lá? Mude aqui."""
+    import unicodedata
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(ch)
+    )
+
+
+def normalize_norm_literals(expr: str) -> str:
+    """Repair determinístico do gêmeo esquecido do #617 (review 2026-07-15):
+    literal comparado a uma var `*_norm` vira casefold + SEM acento. As vars
+    são SEMPRE normalizadas no runtime, então `'não reconheço' in input_norm`
+    jamais casaria — regra sempre-falsa que passava por toda a validação (o
+    guardrail aprovava a sintaxe e o smoke avalia contra contexto vazio).
+    Idempotente; literais contra `*_lower`/`text_all` (legado, acento exato)
+    não são tocados."""
+    if not expr:
+        return expr
+
+    def _sub(m: "_re.Match") -> str:
+        lit, tgt = m.group(1), m.group(2)
+        return f"'{_strip_accents_local(lit.casefold())}' in {tgt}"
+
+    return _NORM_LITERAL_RE.sub(_sub, expr)
 
 
 def validate_conditional_expression(expr: str, canonical: set[str]) -> dict:

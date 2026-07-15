@@ -840,10 +840,15 @@
                                     </details>
                                     <template x-if="exprWarnings().length">
                                         <div class="mt-1.5 space-y-0.5">
-                                            <template x-for="w in exprWarnings()" :key="w.id">
+                                            <template x-for="w in exprWarnings()" :key="(w.kind || 'var') + ':' + w.id">
                                                 <p class="text-[10.5px] text-amber-700 flex items-start gap-1">
                                                     <svg class="w-3.5 h-3.5 flex-none mt-px" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9l-8 14A2 2 0 004 21h16a2 2 0 001.7-3.1l-8-14a2 2 0 00-3.4 0z"/></svg>
-                                                    <span>O campo <code class="font-mono" x-text="w.id"></code> não existe — você quis dizer <button type="button" @click="fixVar(w)" class="font-mono underline hover:text-amber-900"><span x-text="w.suggestion"></span></button>?</span>
+                                                    <template x-if="w.kind !== 'lit'">
+                                                        <span>O campo <code class="font-mono" x-text="w.id"></code> não existe — você quis dizer <button type="button" @click="fixVar(w)" class="font-mono underline hover:text-amber-900"><span x-text="w.suggestion"></span></button>?</span>
+                                                    </template>
+                                                    <template x-if="w.kind === 'lit'">
+                                                        <span><code class="font-mono" x-text="'\'' + w.id + '\''"></code> tem acento/maiúscula, mas <code class="font-mono" x-text="w.target"></code> é normalizada — a regra <strong>nunca casaria</strong>. Trocar por <button type="button" @click="fixLit(w)" class="font-mono underline hover:text-amber-900"><span x-text="'\'' + w.suggestion + '\''"></span></button>?</span>
+                                                    </template>
                                                 </p>
                                             </template>
                                         </div>
@@ -2280,7 +2285,10 @@ function meshFlowPage() {
         selectIntent(kind) { this.editor.intent = (this.editor.intent === kind ? null : kind); this.syncExpr(); },
         _jinjaStr(s) { return "'" + String(s).toLowerCase().replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; },
         // Remove acentos (35.17.0) — espelha o _strip_accents do engine (NFKD).
-        _stripAccents(s) { return String(s == null ? '' : s).normalize('NFKD').replace(/[̀-ͯ]/g, ''); },
+        // \p{M} (35.19.x, review do #617): a faixa U+0300–U+036F não cobria marcas
+        // de outros scripts — \p{M} espelha o unicodedata.combining do Python.
+        // ß→ss espelha o casefold do runtime (toLowerCase não converte ß).
+        _stripAccents(s) { return String(s == null ? '' : s).normalize('NFKD').replace(/\p{M}/gu, '').replace(/ß/g, 'ss'); },
         // EXATO (sem lowercase): `inputs.X == 'Gold'` compara o valor cru do arg, não uma busca de substring.
         _jinjaStrExact(s) { return "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; },
         // Validação do card 'param' (feedback inline — evita gerar Jinja quebrado em silêncio).
@@ -2441,7 +2449,25 @@ function meshFlowPage() {
                 for (const n of known) { const d = this._lev(id, n); if (d < bestD) { bestD = d; best = n; } }
                 if (best && bestD <= Math.max(2, Math.floor(id.length / 3))) warns.push({ id, suggestion: best });
             }
+            // Literal com acento/maiúscula comparado a var *_norm: a var é SEMPRE
+            // normalizada no runtime — o literal nunca casaria (regra sempre-falsa,
+            // major do review do #617). Mesmo espírito do did-you-mean: 1 clique.
+            const normRe = /'([^']*)'\s+in\s+(input_norm|output_norm|text_norm)\b/g;
+            let m;
+            while ((m = normRe.exec(ed.expr || '')) !== null) {
+                const fixed = this._stripAccents(String(m[1]).toLowerCase());
+                if (fixed !== m[1] && !seen.has('lit:' + m[1])) {
+                    seen.add('lit:' + m[1]);
+                    warns.push({ kind: 'lit', id: m[1], suggestion: fixed, target: m[2] });
+                }
+            }
             return warns;
+        },
+        fixLit(w) {
+            // troca o literal acentuado pela forma normalizada (todas as ocorrências)
+            this.editor.expr = (this.editor.expr || '').split("'" + w.id + "'").join("'" + w.suggestion + "'");
+            this.sim = null;
+            ((this.editor || {}).testPhrases || []).forEach(p => { p.pass = null; p.got = null; });   // veredito não mente
         },
         fixVar(w) {
             const re = new RegExp('\\b' + w.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g');

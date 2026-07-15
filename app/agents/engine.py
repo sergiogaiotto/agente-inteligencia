@@ -5244,9 +5244,13 @@ def _build_conditional_context(
         # dos fluxos reais (a mesma palavra digitada 2x na expr). ADITIVAS: as
         # exprs existentes (sobre *_lower) seguem byte-idênticas. O card de
         # palavra-chave gera com estas por default em REGRAS NOVAS.
-        "input_norm": _strip_accents(inp_lower),
-        "output_norm": _strip_accents(out_lower),
-        "text_norm": _strip_accents(text_all),
+        # casefold (35.19.x, review do #617): amplia o lower — 'ß' casa 'ss'
+        # etc. Só EXPANDE matches das _norm; *_lower seguem intocadas. Alinha
+        # com o `_norm` do decisions_schema (casefold) e com o repair do
+        # tradutor (`normalize_norm_literals`).
+        "input_norm": _strip_accents(inp_lower.casefold()),
+        "output_norm": _strip_accents(out_lower.casefold()),
+        "text_norm": _strip_accents(text_all.casefold()),
         # Memória de conversa: perguntas recentes do usuário (já em text_all;
         # exposta isolada p/ exprs que queiram olhar só o histórico).
         "session_text": sess_text,
