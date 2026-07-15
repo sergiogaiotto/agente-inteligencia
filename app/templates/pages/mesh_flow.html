@@ -817,7 +817,7 @@
                             <template x-if="editor.ruleMode==='manual'">
                                 <div>
                                     <label class="block text-[11px] font-semibold text-surface-500 mb-1">Regra (modo avançado)</label>
-                                    <textarea x-model="editor.expr" @input="sim=null; (editor.testPhrases||[]).forEach(p=>p.pass=null)" rows="2" placeholder="ex: 'pix' in output_lower  ·  has_document"
+                                    <textarea x-model="editor.expr" @input="exprTyped()" rows="2" placeholder="ex: 'pix' in output_lower  ·  has_document"
                                               class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] font-mono outline-none focus:border-brand-400 resize-none"></textarea>
                                     <!-- Detector do "senão" manual (Cond-A, 35.17.0) -->
                                     <template x-if="looksLikeManualElse()">
@@ -2408,8 +2408,7 @@ function meshFlowPage() {
             if (ed.ruleMode !== 'gallery') return;   // modo manual nunca é sobrescrito
             // regra = condições já adicionadas + rascunho do card atual (preview ao vivo)
             ed.expr = this._compose([...(ed.clauses || []).map(c => c.expr), this._draftExpr()]);
-            this.sim = null;
-            (ed.testPhrases || []).forEach(p => p.pass = null);   // veredito velho não mente
+            this._exprMutated();   // veredito velho não mente + re-testa (cliques de card são discretos)
         },
         addClause() {
             const ed = this.editor;
@@ -2430,6 +2429,20 @@ function meshFlowPage() {
         _exprMutated() {
             this.sim = null;
             ((this.editor || {}).testPhrases || []).forEach(p => { p.pass = null; p.got = null; });
+            // Re-testa JÁ (review pré-push: invalidar sem re-rodar deixava o
+            // painel em '·' até o autor adivinhar o workaround — e o rodapé
+            // prometia re-run). Mutação programática é evento discreto; a guarda
+            // de época do runPhrases mata respostas fora de ordem; sem expr ou
+            // sem frases ele early-returna de graça.
+            this.runPhrases();
+        },
+        exprTyped() {
+            // Digitação manual no textarea: invalida imediatamente (veredito não
+            // mente) e re-testa com DEBOUNCE — sem HTTP por tecla.
+            this.sim = null;
+            ((this.editor || {}).testPhrases || []).forEach(p => { p.pass = null; p.got = null; });
+            clearTimeout(this._phrasesDebounce);
+            this._phrasesDebounce = setTimeout(() => this.runPhrases(), 600);
         },
         backToGallery() {
             const ed = this.editor;

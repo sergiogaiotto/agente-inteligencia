@@ -48,10 +48,14 @@ def test_detector_do_senao_manual():
 
 
 def test_veredito_nao_mente_apos_editar_regra():
-    """Ao mudar a regra, os vereditos ✓/✗ antigos são invalidados (não mentem)."""
+    """Ao mudar a regra, os vereditos ✓/✗ antigos são invalidados (não mentem).
+    35.19.3: textarea delega a exprTyped (invalida + debounce de re-run) e o
+    syncExpr da galeria delega ao helper único _exprMutated."""
     src = PG.read_text(encoding="utf-8")
-    assert "(editor.testPhrases||[]).forEach(p=>p.pass=null)" in src  # textarea
-    assert "(ed.testPhrases || []).forEach(p => p.pass = null)" in src  # syncExpr galeria
+    assert '@input="exprTyped()"' in src                      # textarea manual
+    assert "this._phrasesDebounce = setTimeout" in src        # re-run com debounce, sem HTTP por tecla
+    body = src.split("syncExpr() {", 1)[1][:400]
+    assert "this._exprMutated()" in body                      # syncExpr galeria → helper único
 
 
 def test_runphrases_tem_guarda_de_epoca():
@@ -90,12 +94,17 @@ def test_expr_mutated_helper_nos_cinco_caminhos():
     ANTIGA na hora de selar. Helper único nos 5 caminhos + fixLit."""
     src = _src()
     assert "_exprMutated() {" in src
-    # insertVar, fixVar, useSuggestion, backToGallery, convertToElse + fixLit
-    assert src.count("this._exprMutated()") >= 6
-    # nenhum dos caminhos ficou com o reset RASO antigo (só sim=null) —
-    # âncora na DEFINIÇÃO (`fn {`), não no @click do botão
+    # insertVar, fixVar, useSuggestion, backToGallery, convertToElse + fixLit + syncExpr
+    assert src.count("this._exprMutated()") >= 7
+    # o helper re-TESTA além de invalidar (senão o painel fica em '·' até o
+    # autor adivinhar o workaround — review pré-push)
+    helper_body = src.split("_exprMutated() {", 1)[1][:600]
+    assert "this.runPhrases()" in helper_body
+    # nenhum dos caminhos ficou com o reset RASO antigo — âncora na DEFINIÇÃO
+    # (`fn {`), janela CURTA para não pegar carona no call da função seguinte
+    # (review pré-push: 900 chars deixavam backToGallery passar via insertVar)
     for fn in ("insertVar(name) {", "fixVar(w) {", "useSuggestion() {", "backToGallery() {", "convertToElse() {"):
-        body = src.split(fn, 1)[1][:900]
+        body = src.split(fn, 1)[1][:400]
         assert "this._exprMutated()" in body, f"{fn} sem _exprMutated"
 
 
