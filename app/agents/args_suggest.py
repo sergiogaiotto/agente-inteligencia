@@ -19,7 +19,6 @@ Módulo stdlib-only (sem import de app/*, sem ciclos) — mesma regra do irmão.
 from __future__ import annotations
 
 import json
-import unicodedata
 
 
 def _fmt_field(name: str, spec: dict, required: set) -> str:
