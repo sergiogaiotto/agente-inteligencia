@@ -936,8 +936,10 @@
                                 </div>
                                 <!-- 36.0.0: a promessa de regressão virou REAL — o publish do Catálogo
                                      roda todas as frases contra o avaliador do runtime e bloqueia se
-                                     reprovarem (evaluate_pipeline_test_phrases). -->
-                                <p x-show="(editor.testPhrases||[]).length" class="text-[10px] text-surface-400 mt-1.5">Estas frases ficam seladas com a aresta e rodam aqui no simulador sempre que a regra muda. Ao <strong>publicar o pipeline</strong> no Catálogo, elas rodam como teste de regressão do roteamento — reprovação bloqueia a publicação.</p>
+                                     reprovarem (evaluate_pipeline_test_phrases). 36.5.0–36.7.0: o ciclo
+                                     fechou — o harness também as roda a cada avaliação de pipeline, com
+                                     histórico (drift/compare) atrás do hash do conjunto. -->
+                                <p x-show="(editor.testPhrases||[]).length" class="text-[10px] text-surface-400 mt-1.5">Estas frases ficam seladas com a aresta e rodam aqui no simulador sempre que a regra muda. Ao <strong>publicar o pipeline</strong> no Catálogo, elas rodam como teste de regressão do roteamento — reprovação bloqueia a publicação. E em toda <strong>avaliação do pipeline no Harness</strong> elas rodam de novo, com histórico de regressão — o ciclo vigia para sempre.</p>
                             </div>
                         </div>
                     </template>
