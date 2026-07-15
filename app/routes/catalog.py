@@ -33,6 +33,7 @@ from app.catalog.models import (
     CapabilityDisclosure,
     CatalogEntryCreate,
     CatalogEntryUpdate,
+    EntryPublishRequest,
     ExternalAdapterUpdate,
     ExternalDiscoverRequest,
     ExternalPlatformMetadata,
@@ -554,8 +555,19 @@ async def decide_submission(
 
 
 @router.post("/entries/{entry_id}/publish")
-async def publish_entry(entry_id: str, user: dict = Depends(require_user)):
-    """Owner (ou root) publica entry aprovada. approved → published."""
+async def publish_entry(
+    entry_id: str,
+    data: Optional[EntryPublishRequest] = None,
+    user: dict = Depends(require_user),
+):
+    """Owner (ou root) publica entry aprovada. approved → published.
+
+    Gate de Frases-Prova (36.0.0): num pipeline, as frases seladas nas arestas
+    condicionais são o contrato de roteamento do AUTOR — publicá-lo com frases
+    reprovando é selar um contrato quebrado. O gate roda TODAS contra o
+    avaliador real do runtime e bloqueia com relatório por frase (override
+    explícito e auditado via `ignore_test_phrases`). Fecha a promessa do
+    editor de fluxo: frase-prova = teste de regressão do roteamento."""
     entry = await catalog_entries_repo.find_by_id(entry_id)
     if not entry:
         raise HTTPException(404, "Entry não encontrada")
@@ -563,13 +575,59 @@ async def publish_entry(entry_id: str, user: dict = Depends(require_user)):
         raise HTTPException(403, "Apenas owner ou root podem publicar")
     await _require_status_transition(entry, "published")
 
+    _phrases_ignored = bool(data and data.ignore_test_phrases)
+    _phrases_report = None
+    if entry.get("kind") == "pipeline" and entry.get("artifact_id"):
+        # Roda SEMPRE (mesmo com override — a auditoria registra QUANTAS frases
+        # o dono ignorou, não só que ignorou; review pré-push). Best-effort na
+        # INFRA (erro de subgrafo não derruba a publicação — mesmo regime do
+        # snapshot), fail-CLOSED nas FRASES (reprovação bloqueia sem override).
+        try:
+            from app.catalog.pipeline_defs import evaluate_pipeline_test_phrases
+            _phrases_report = await evaluate_pipeline_test_phrases(entry["artifact_id"])
+        except Exception:
+            logger.warning("publish.test_phrases_gate_failed", exc_info=True)
+            _phrases_report = None
+        if not _phrases_ignored and _phrases_report and _phrases_report["failing"]:
+            _lines = [
+                (
+                    f"• {f['source_name']} → {f['target_name']}: "
+                    f"\"{f['text'][:60]}\" ({'na resposta' if f['where'] == 'output' else 'na pergunta'}, "
+                    f"esperava {'rodar' if f['expect'] else 'pular'}"
+                    + (f", erro: {f['error']}" if f.get("error") else f", deu {'rodar' if f['got'] else 'pular'}")
+                    + ")"
+                )
+                for f in _phrases_report["failing"][:8]
+            ]
+            _extra = len(_phrases_report["failing"]) - 8
+            raise HTTPException(422, {
+                "message": (
+                    f"{len(_phrases_report['failing'])} frase(s)-prova reprovaram no teste de regressão do "
+                    f"roteamento ({_phrases_report['passed']}/{_phrases_report['evaluated']} passaram):\n"
+                    + "\n".join(_lines)
+                    + (f"\n… e mais {_extra}." if _extra > 0 else "")
+                    + "\nAjuste a regra ou as frases no Fluxograma (clique na conexão), ou publique com "
+                      "ignore_test_phrases=true (fica auditado)."
+                ),
+                "failing": _phrases_report["failing"][:50],
+                "fix_hint": "/mesh/flow",
+            })
+
     now = _naive_utc_now()
     updated = await catalog_entries_repo.update(entry_id, {
         "status": "published",
         "published_at": now,
         "updated_at": now,
     })
-    await _audit("published", entry_id, user["id"], {"urn": entry.get("urn")})
+    await _audit("published", entry_id, user["id"], {
+        "urn": entry.get("urn"),
+        # rastro do gate: quantas frases provaram o roteamento — e, no
+        # override, QUANTAS reprovações o dono publicou por cima (o gate roda
+        # mesmo ignorado; review pré-push: auditoria cega não é auditoria).
+        "test_phrases_ignored": _phrases_ignored,
+        "test_phrases_evaluated": (_phrases_report or {}).get("evaluated", 0),
+        "test_phrases_failing": len((_phrases_report or {}).get("failing", [])),
+    })
     # PR5: ao publicar um pipeline, congela o snapshot do subgrafo (display + raiz
     # p/ execução). Best-effort — não derruba a publicação se o snapshot falhar.
     if entry.get("kind") == "pipeline":

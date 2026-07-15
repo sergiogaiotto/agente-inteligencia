@@ -75,6 +75,16 @@ class CatalogEntryCreate(BaseModel):
                 )
 
 
+class EntryPublishRequest(BaseModel):
+    """Body OPCIONAL do publish de entry (36.0.0 — gate de Frases-Prova).
+
+    `ignore_test_phrases`: publica MESMO com frases-prova reprovando (override
+    explícito e AUDITADO — para frases sabidamente desatualizadas). Default
+    False: reprovação bloqueia a publicação com relatório por frase."""
+
+    ignore_test_phrases: bool = False
+
+
 class PipelinePublishRequest(BaseModel):
     """PR4 — publica um pipeline do Estúdio como entry kind='pipeline' (draft).
 

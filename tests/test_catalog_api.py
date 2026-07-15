@@ -2355,3 +2355,109 @@ class TestArchive:
         assert c.post(f"/api/v1/catalog/entries/{eid}/archive").status_code == 200
         assert c.delete(f"/api/v1/catalog/entries/{eid}").status_code == 200
         assert eid not in fake_storage["entries"]
+
+
+# ─── Gate de Frases-Prova no publish (36.0.0) ─────────────────────────────────
+
+
+class TestPublishPhraseGate:
+    """As frases seladas nas arestas condicionais são o contrato de roteamento
+    do autor — publicar com frases reprovando é selar um contrato quebrado.
+    Fail-CLOSED nas frases, best-effort na infra, override auditado."""
+
+    def _pipeline_entry(self, c, fake_storage, owner="u1"):
+        eid = _create_draft(c, fake_storage, owner)
+        fake_storage["entries"][eid].update(
+            {"status": "approved", "kind": "pipeline", "artifact_id": "pip-1"})
+        return eid
+
+    def test_frase_reprovada_bloqueia_publicacao(self, fake_storage, monkeypatch):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = self._pipeline_entry(c, fake_storage)
+
+        async def _report(_pid):
+            return {"evaluated": 2, "passed": 1, "failing": [{
+                "edge_id": "e1", "source_name": "Triagem", "target_name": "Fraude",
+                "expr": "'pix' in output_norm", "text": "fiz um pix", "where": "output",
+                "expect": True, "got": False, "passed": False, "error": "",
+            }]}
+        monkeypatch.setattr(
+            "app.catalog.pipeline_defs.evaluate_pipeline_test_phrases", _report)
+        r = c.post(f"/api/v1/catalog/entries/{eid}/publish")
+        assert r.status_code == 422
+        detail = r.json()["detail"]
+        assert "frase(s)-prova reprovaram" in detail["message"]
+        assert "Triagem → Fraude" in detail["message"]
+        assert detail["failing"][0]["edge_id"] == "e1"
+        # entry NÃO publicou
+        assert fake_storage["entries"][eid]["status"] == "approved"
+
+    def test_frases_verdes_publicam_e_auditam_contagem(self, fake_storage, monkeypatch):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = self._pipeline_entry(c, fake_storage)
+
+        async def _report(_pid):
+            return {"evaluated": 3, "passed": 3, "failing": []}
+        monkeypatch.setattr(
+            "app.catalog.pipeline_defs.evaluate_pipeline_test_phrases", _report)
+        r = c.post(f"/api/v1/catalog/entries/{eid}/publish")
+        assert r.status_code == 200
+        assert fake_storage["entries"][eid]["status"] == "published"
+        pub = [a for a in fake_storage["audit"] if a["action"] == "published"][-1]
+        details = pub["details"]
+        if not isinstance(details, dict):
+            details = json.loads(details)
+        assert details["test_phrases_evaluated"] == 3
+        assert details["test_phrases_ignored"] is False
+        assert details["test_phrases_failing"] == 0
+
+    def test_override_publica_por_cima_e_audita_o_que_ignorou(self, fake_storage, monkeypatch):
+        # o gate RODA mesmo com override (auditoria cega não é auditoria):
+        # o trail registra QUANTAS reprovações o dono publicou por cima.
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = self._pipeline_entry(c, fake_storage)
+
+        async def _report(_pid):
+            return {"evaluated": 2, "passed": 1, "failing": [{
+                "edge_id": "e1", "source_name": "A", "target_name": "B",
+                "expr": "x", "text": "t", "where": "input",
+                "expect": True, "got": False, "passed": False, "error": "",
+            }]}
+        monkeypatch.setattr(
+            "app.catalog.pipeline_defs.evaluate_pipeline_test_phrases", _report)
+        r = c.post(f"/api/v1/catalog/entries/{eid}/publish",
+                   json={"ignore_test_phrases": True})
+        assert r.status_code == 200
+        assert fake_storage["entries"][eid]["status"] == "published"
+        pub = [a for a in fake_storage["audit"] if a["action"] == "published"][-1]
+        details = pub["details"]
+        if not isinstance(details, dict):
+            details = json.loads(details)
+        assert details["test_phrases_ignored"] is True
+        assert details["test_phrases_evaluated"] == 2
+        assert details["test_phrases_failing"] == 1
+
+    def test_erro_de_infra_no_gate_nao_derruba_publicacao(self, fake_storage, monkeypatch):
+        # best-effort na INFRA (mesmo regime do snapshot): subgrafo quebrado
+        # loga warning e publica; só REPROVAÇÃO de frase bloqueia.
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = self._pipeline_entry(c, fake_storage)
+
+        async def _infra_err(_pid):
+            raise RuntimeError("db off")
+        monkeypatch.setattr(
+            "app.catalog.pipeline_defs.evaluate_pipeline_test_phrases", _infra_err)
+        r = c.post(f"/api/v1/catalog/entries/{eid}/publish")
+        assert r.status_code == 200
+        assert fake_storage["entries"][eid]["status"] == "published"
+
+    def test_entry_nao_pipeline_nao_roda_gate(self, fake_storage, monkeypatch):
+        c = make_client({"id": "u1", "role": "comum"})
+        eid = _create_draft(c, fake_storage, "u1")
+        fake_storage["entries"][eid]["status"] = "approved"  # kind=agent (default)
+
+        async def _boom(_pid):
+            raise AssertionError("gate só se aplica a pipelines")
+        monkeypatch.setattr(
+            "app.catalog.pipeline_defs.evaluate_pipeline_test_phrases", _boom)
+        assert c.post(f"/api/v1/catalog/entries/{eid}/publish").status_code == 200

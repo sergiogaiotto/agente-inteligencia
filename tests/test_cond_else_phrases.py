@@ -117,12 +117,15 @@ def test_hint_do_else_nao_aparece_com_irmao_default():
     assert "return false" in body
 
 
-def test_rodape_sem_promessa_falsa():
-    """Nada no backend lê test_phrases hoje — 'teste de regressão do roteamento'
-    era aspiracional (minor do review). O rodapé promete só o que existe."""
+def test_rodape_promete_so_o_que_existe():
+    """Lição do review do #619: o rodapé não pode prometer o que o backend não
+    faz. Em 35.19.3 removemos a promessa aspiracional; em 36.0.0 ela virou REAL
+    (gate de publicação roda as frases — evaluate_pipeline_test_phrases), então
+    a promessa volta ACOMPANHADA do lastro."""
     src = _src()
-    assert "teste de regressão do roteamento" not in src
     assert "rodam aqui no simulador sempre que a regra muda" in src
+    # a promessa de regressão existe E cita o comportamento real (bloqueio)
+    assert "teste de regressão do roteamento — reprovação bloqueia a publicação" in src
 
 
 def test_convert_to_else_avisa_descarte_das_frases():
