@@ -175,6 +175,23 @@ class TestRoutingPhrasesNoRun:
         assert updated["routing_phrases_total"] is None
 
     @pytest.mark.asyncio
+    async def test_metricas_de_frases_chegam_ao_drift(self, monkeypatch):
+        """36.6.0: run repassa pass-rate derivado + hash ao writer de drift
+        (que tem guarda própria de comparabilidade por hash)."""
+        _, updated, _ = _wire(monkeypatch)
+        seen = {}
+
+        async def _fake_drift(**kw):
+            seen.update(kw)
+            return 0
+
+        monkeypatch.setattr(evaluator, "_write_drift_events", _fake_drift)
+        await evaluator.run_evaluation("r1", pipeline_id="p1")
+        cm = seen["current_metrics"]
+        assert cm["routing_phrase_pass_rate"] == pytest.approx(2 / 3)
+        assert cm["routing_phrases_hash"] == "abc123def4567890"
+
+    @pytest.mark.asyncio
     async def test_failing_capado_e_clipado_na_fonte(self, monkeypatch):
         """failing entra no breakdown (teto 32KB) e no corpo do /execute —
         cap em PHRASES_FAILING_MAX + clip de 300 chars por campo string."""

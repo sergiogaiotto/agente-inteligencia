@@ -251,6 +251,59 @@ _DRIFT_METRICS: list[tuple[str, bool]] = [
 _DRIFT_NOISE_FLOOR_PCT = 1.0
 
 
+def _phrases_pass_rate(total, passed) -> float | None:
+    """Pass-rate das Frases-Prova derivado das colunas do run.
+    None quando não avaliado (total NULL/0) — não confundir com 0.0."""
+    try:
+        total = int(total or 0)
+        passed = int(passed or 0)
+    except (TypeError, ValueError):
+        return None
+    if total <= 0:
+        return None
+    return passed / total
+
+
+async def _emit_drift_event(
+    release_id: str, agent_id: str | None, pipeline_id: str | None,
+    metric: str, base: float, cur: float, higher_better: bool,
+    regression_pct_threshold: float,
+) -> bool:
+    """Emite UM drift_event se o movimento passa do ruído. Compartilhado pelo
+    loop genérico de _DRIFT_METRICS e pelo bloco de Frases-Prova (que tem
+    guarda de comparabilidade própria). Retorna True se inseriu."""
+    delta = cur - base
+    adverse = (base - cur) if higher_better else (cur - base)  # >0 = piorou
+    pct = (adverse / max(abs(base), 0.01)) * 100
+    if abs(pct) < _DRIFT_NOISE_FLOOR_PCT:
+        return False  # dentro do ruído — não registra
+    if pct >= regression_pct_threshold:
+        severity = "critical"
+    elif pct > 0:
+        severity = "warning"
+    else:
+        severity = "info"  # melhorou além do ruído
+    try:
+        await drift_repo.create({
+            "id": str(uuid.uuid4()),
+            "release_id": release_id,
+            # Alvo do run (35.1.0): o baseline já era filtrado por alvo —
+            # o EVENTO também declara de quem é o drift.
+            "agent_id": agent_id,
+            "pipeline_id": pipeline_id,
+            "metric_name": metric,
+            "baseline_value": round(base, 4),
+            "current_value": round(cur, 4),
+            "magnitude": round(delta, 4),
+            "detection_method": "harness_baseline_delta",
+            "severity": severity,
+        })
+        return True
+    except Exception as e:
+        logger.warning("drift: falha ao inserir evento %s: %s", metric, str(e)[:150])
+        return False
+
+
 async def _write_drift_events(
     release_id: str,
     gold_hash: str | None,
@@ -301,35 +354,33 @@ async def _write_drift_events(
         cur = _coerce_score(current_metrics.get(metric))
         if base is None or cur is None:
             continue  # métrica não avaliada num dos lados — incomparável
-        delta = cur - base
-        adverse = (base - cur) if higher_better else (cur - base)  # >0 = piorou
-        pct = (adverse / max(abs(base), 0.01)) * 100
-        if abs(pct) < _DRIFT_NOISE_FLOOR_PCT:
-            continue  # dentro do ruído do LLM — não registra
-        if pct >= regression_pct_threshold:
-            severity = "critical"
-        elif pct > 0:
-            severity = "warning"
-        else:
-            severity = "info"  # melhorou além do ruído
-        try:
-            await drift_repo.create({
-                "id": str(uuid.uuid4()),
-                "release_id": release_id,
-                # Alvo do run (35.1.0): o baseline já era filtrado por alvo —
-                # agora o EVENTO também declara de quem é o drift.
-                "agent_id": agent_id,
-                "pipeline_id": pipeline_id,
-                "metric_name": metric,
-                "baseline_value": round(base, 4),
-                "current_value": round(cur, 4),
-                "magnitude": round(delta, 4),
-                "detection_method": "harness_baseline_delta",
-                "severity": severity,
-            })
+        if await _emit_drift_event(
+            release_id, agent_id, pipeline_id, metric, base, cur,
+            higher_better, regression_pct_threshold,
+        ):
             written += 1
-        except Exception as e:
-            logger.warning("drift: falha ao inserir evento %s: %s", metric, str(e)[:150])
+
+    # ── Frases-Prova (36.6.0): fora de _DRIFT_METRICS de propósito ──
+    # A métrica é DERIVADA (passed/total, não uma coluna que b0.get acharia) e
+    # a comparabilidade tem guarda PRÓPRIA: pass-rate só se compara quando o
+    # CONJUNTO de frases é o mesmo (routing_phrases_hash igual nos dois lados)
+    # — as frases vivem no mesh vivo; comparar conjuntos diferentes é ruído
+    # com cara de sinal (convenção "sem falsa confiança").
+    cur_hash = current_metrics.get("routing_phrases_hash")
+    cur_rate = current_metrics.get("routing_phrase_pass_rate")
+    base_rate = _phrases_pass_rate(
+        b0.get("routing_phrases_total"), b0.get("routing_phrases_passed"),
+    )
+    if (
+        cur_hash and b0.get("routing_phrases_hash") == cur_hash
+        and base_rate is not None and cur_rate is not None
+    ):
+        if await _emit_drift_event(
+            release_id, agent_id, pipeline_id, "routing_phrase_pass_rate",
+            base_rate, float(cur_rate), True, regression_pct_threshold,
+        ):
+            written += 1
+
     if written:
         logger.info(
             "drift.events_written",
@@ -910,6 +961,13 @@ async def run_evaluation(
             "safety_violation_rate": safety_violation_rate,
             "hallucination_rate": hallucination_rate,
             "false_positive_rate": false_positive_rate,
+            # Frases-Prova (36.6.0): derivada + hash p/ a guarda própria do
+            # writer (só compara com baseline do MESMO conjunto de frases).
+            "routing_phrase_pass_rate": _phrases_pass_rate(
+                (routing_phrases or {}).get("evaluated"),
+                (routing_phrases or {}).get("passed"),
+            ),
+            "routing_phrases_hash": (routing_phrases or {}).get("phrases_hash"),
         },
         regression_pct_threshold=settings.harness_max_dim_regression_pct,
         agent_id=agent_id, pipeline_id=pipeline_id,
