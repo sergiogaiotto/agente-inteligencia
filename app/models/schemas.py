@@ -170,6 +170,10 @@ class AgentInvokeResponse(BaseModel):
     evidence_score: Optional[float] = None
     errors: list = Field(default_factory=list)
     rejected_attachments: list = Field(default_factory=list)  # anexos filtrados (mime não aceito, oversize)
+    # Contrato de Decisão estruturado (36.1.0, ADITIVO): {campo: valor} validado
+    # contra o ## Decisions do agente que respondeu (a linha DECISAO não vem
+    # mais no texto — este campo é a via de MÁQUINA). None = sem contrato/linha.
+    decision: Optional[dict[str, str]] = None
 
 class MeshConnectionCreate(BaseModel):
     source_agent_id: str; target_agent_id: str

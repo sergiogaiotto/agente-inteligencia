@@ -69,6 +69,9 @@ _FULL = {
     "final_state": "Recommend", "interaction_id": "int1",
     "total_agents": 1, "completed_agents": 1,
     "pipeline_steps": [_FULL_STEP], "duration_ms": 42,
+    # Cond-C (36.1.0): decisão estruturada vinda do execute_pipeline — prova
+    # que a ROTA (whitelist do payload) repassa o sinal de máquina.
+    "decision": {"escalar": "sim"},
 }
 
 
@@ -88,6 +91,9 @@ class TestProject:
             "pipeline_id": "p1", "interaction_id": "int1",
             "status": "completed", "output": "resposta final",
             "data": None, "output_is_json": False, "verbosity": "minimal",
+            # Cond-C (36.1.0, ADITIVO): decisão estruturada — sinal de máquina
+            # presente em todas as verbosidades.
+            "decision": {"escalar": "sim"},
         }
         assert "pipeline_steps" not in out and "steps" not in out
 

@@ -399,6 +399,10 @@ async def _run_job(job_id: str) -> None:
         "completed_agents": r.get("completed_agents", 0),
         "pipeline_steps": r.get("pipeline_steps", []),
         "duration_ms": r.get("duration_ms"),
+        # Cond-C (36.1.0): sem esta chave o dado se PERDIA na persistência do
+        # job — o polling do 202 é o único canal do consumidor async (o texto
+        # persistido já vem strippado do engine; major do review pré-push).
+        "decision": r.get("decision"),
     }
     await _finish_completed(job_id, payload_full)
     _notify_finish(job_id, pid, req, "completed")

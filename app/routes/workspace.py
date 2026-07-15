@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.auth import require_user, require_role
 from app.models.schemas import ChatMessage
-from app.agents.engine import execute_interaction, strip_decision_line_for_display
+from app.agents.engine import execute_interaction
 from app.core.database import interactions_repo, turns_repo, audit_repo
 
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "uploads"
@@ -494,6 +494,19 @@ async def get_session(session_id: str, user: dict = Depends(require_user)):
                 _sch = await _dec_schema(_author)
                 if _sch:
                     content = _strip_dec(content, _sch)
+                # Eco (36.1.0, borda do review): balão de agente SEM contrato
+                # pode espelhar a linha do upstream — tenta os schemas dos
+                # demais steps (cache por agente; só quando a linha resta).
+                if _has_dec(content) and pipeline_steps:
+                    for _st in pipeline_steps:
+                        _aid2 = _st.get("agent_id")
+                        if not _aid2 or _aid2 == _author:
+                            continue
+                        _sch2 = await _dec_schema(_aid2)
+                        if _sch2:
+                            content = _strip_dec(content, _sch2)
+                        if not _has_dec(content):
+                            break
             # Converter JSON legado de recusa/escalação
             if content.startswith("{") and '"type"' in content:
                 try:
@@ -1254,11 +1267,12 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                     attachments=attachments,
                     context_mode=data.context_mode or "auto",
                 )
-                # Cond-C (35.19.0): linha DECISAO sai da resposta apresentada no
-                # chat single-agent (pipeline já faz o strip na montagem final;
-                # trace preserva a linha para auditoria).
+                # Cond-C (35.19.0/36.1.0): a decisão ESTRUTURADA entra no payload
+                # e a linha DECISAO sai da resposta apresentada (trace preserva).
+                # Helper combinado = 1 resolução de schema (review).
                 if result.get("output"):
-                    result["output"] = await strip_decision_line_for_display(result["output"], data.agent_id)
+                    from app.agents.engine import decision_and_display_output
+                    result["decision"], result["output"] = await decision_and_display_output(result["output"], data.agent_id)
 
         # Persistir trace_data. Estabilizar defaults pra evitar campos
         # missing que viram "undefinedms" no frontend de sessão antiga.
@@ -1269,7 +1283,9 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
             # "verification" incluída (24.10.0): o painel Verifier do Workspace
             # agora RESTAURA a auditoria ao recarregar a sessão (antes ela só
             # existia no response vivo do /chat e sumia no reload).
-            trace_persist = {k: result.get(k) for k in ["interaction_id","agent_id","final_state","evidence_score","transitions","duration_ms","trace","pipeline_steps","mode","verification","output_agent"]}
+            # "decision" (36.1.0): sem ela o sinal estruturado existia só na
+            # resposta VIVA do /chat e sumia no reload da sessão (review).
+            trace_persist = {k: result.get(k) for k in ["interaction_id","agent_id","final_state","evidence_score","transitions","duration_ms","trace","pipeline_steps","mode","verification","output_agent","decision"]}
             # Defaults pra campos que o frontend espera sempre presentes
             trace_persist.setdefault("interaction_id", iid)
             trace_persist.setdefault("agent_id", data.agent_id)
