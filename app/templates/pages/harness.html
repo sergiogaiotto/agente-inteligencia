@@ -125,6 +125,10 @@
                             <div class="flex items-center justify-between mb-1">
                                 <span class="text-[12px] font-medium text-brand-900" x-text="r.run_type + ' — ' + (r.gate_result||r.status) + (targetLabel(r) ? ' · ' + targetLabel(r) : '')"></span>
                                 <div class="flex items-center gap-2">
+                                    <!-- guard de amostra pequena (item 5 — convenção sem-falsa-confiança) -->
+                                    <template x-if="r.status==='completed' && (r.total_cases||0) > 0 && (r.total_cases||0) < 5">
+                                        <span class="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700" title="menos de 5 casos no dataset — resultado provisório, não conclusivo">amostra pequena</span>
+                                    </template>
                                     <template x-if="!r.judge_used">
                                         <span class="rounded bg-surface-100 px-1.5 py-0.5 text-[9px] text-surface-500" title="rodado sem multi-dim verifier">no-judge</span>
                                     </template>
@@ -175,6 +179,30 @@
                                     </template>
                                 </div>
                             </template>
+                            <!-- Frases-Prova do roteamento (36.7.0) — run de pipeline -->
+                            <template x-if="r.dimension_breakdown?.routing_phrases">
+                                <div class="rounded border p-2 mb-2" data-testid="run-routing-phrases"
+                                     :class="(r.dimension_breakdown.routing_phrases.evaluated||0) === (r.dimension_breakdown.routing_phrases.passed||0) ? 'border-emerald-200 bg-emerald-50/40' : 'border-rose-200 bg-rose-50/40'">
+                                    <div class="text-[10px] font-bold mb-1"
+                                         :class="(r.dimension_breakdown.routing_phrases.evaluated||0) === (r.dimension_breakdown.routing_phrases.passed||0) ? 'text-emerald-700' : 'text-rose-700'">
+                                        Frases-Prova do roteamento —
+                                        <span x-text="(r.dimension_breakdown.routing_phrases.passed||0) + '/' + (r.dimension_breakdown.routing_phrases.evaluated||0) + ' passaram'"></span>
+                                        <span class="font-normal text-surface-400" x-show="(r.dimension_breakdown.routing_phrases.evaluated||0) === 0"> · pipeline sem frase selada (sele frases nas conexões condicionais do Fluxograma)</span>
+                                    </div>
+                                    <template x-if="r.dimension_breakdown.routing_phrases.failing_dropped">
+                                        <p class="text-[9px] text-surface-500 mb-1">detalhe das reprovadas omitido (relatório excedeu o teto de armazenamento) — contagens preservadas</p>
+                                    </template>
+                                    <template x-for="(f, fi) in (r.dimension_breakdown.routing_phrases.failing || [])" :key="fi">
+                                        <div class="text-[10px] text-rose-900 mb-0.5">
+                                            <span class="font-mono" x-text="'“' + (f.text||'') + '”'"></span>
+                                            <span class="text-surface-500" x-text="' · ' + (f.source_name||'?') + ' → ' + (f.target_name||'?') + ' · esperava ' + (f.expect ? 'executar' : 'pular') + ', deu ' + (f.error ? 'erro' : (f.got ? 'executar' : 'pular'))"></span>
+                                            <template x-if="f.error"><span class="text-rose-600" x-text="' — ' + f.error"></span></template>
+                                        </div>
+                                    </template>
+                                    <div class="text-[9px] text-surface-400 font-mono mt-1" x-show="r.dimension_breakdown.routing_phrases.phrases_hash"
+                                         x-text="'set ' + (r.dimension_breakdown.routing_phrases.phrases_hash||'').substring(0,8) + ' — prova a REGRA das arestas (determinístico), não o comportamento do LLM'"></div>
+                                </div>
+                            </template>
                             <template x-if="(r.dimension_breakdown?.top_unsupported_claims || []).length > 0">
                                 <div class="rounded border border-rose-200 bg-rose-50/50 p-2 mb-2">
                                     <div class="text-[10px] font-bold text-rose-700 mb-1">⚑ Top unsupported_claims (alucinação suspeita)</div>
@@ -188,7 +216,7 @@
                             <div class="text-[9px] text-surface-400 font-mono">
                                 judge_model=<span x-text="r.judge_model || '—'"></span>
                                 · skipped=<span x-text="r.dimension_breakdown?.skipped_cases ?? 0"></span>
-                                · refusal_rate=<span x-text="((r.correct_refusal_rate||0)*100).toFixed(0)+'%'"></span>
+                                · refusal_rate=<span :title="(r.correct_refusal_rate===1) ? '100% pode ser vácuo: com 0 casos adversariais no dataset a taxa default é 1.0 — confira o gold set' : ''" :class="(r.correct_refusal_rate===1) ? 'underline decoration-dotted cursor-help' : ''" x-text="((r.correct_refusal_rate||0)*100).toFixed(0)+'%'+(r.correct_refusal_rate===1 ? '*' : '')"></span>
                                 · fp_rate=<span x-text="((r.false_positive_rate||0)*100).toFixed(0)+'%'"></span>
                                 · created=<span x-text="tzDateTime(r.created_at) || '—'"></span>
                             </div>
@@ -208,6 +236,39 @@
         </div>
     </div>
 
+    <!-- ─── Baseline por alvo (item 5 — 36.7.0) ─────────────── -->
+    <div class="mt-6 rounded-xl border border-surface-200 bg-white" data-testid="baseline-by-target">
+        <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3.5">
+            <h2 class="text-[13px] font-semibold text-brand-900">Baseline por alvo</h2>
+            <span class="text-[10px] text-surface-400">critério: run 'baseline' concluído mais recente do alvo+dataset (recência — apagar um run muda o baseline)</span>
+        </div>
+        <template x-if="baselinesByTarget().length === 0">
+            <p class="px-5 py-6 text-center text-[12px] text-surface-400">Nenhum baseline concluído com alvo registrado nos últimos runs carregados.</p>
+        </template>
+        <div class="divide-y divide-surface-50">
+            <template x-for="b in baselinesByTarget()" :key="b.id">
+                <div class="px-5 py-2.5 flex items-center gap-3 text-[11px] flex-wrap">
+                    <span class="text-[12px] font-medium text-brand-900 min-w-[160px]" x-text="targetLabel(b)"></span>
+                    <span class="font-mono text-surface-400" x-text="b.gold_version || '—'"></span>
+                    <span x-text="'Acurácia: '+((b.accuracy||0)*100).toFixed(1)+'%'"></span>
+                    <span class="text-surface-400" x-text="(b.passed||0)+'/'+(b.total_cases||0)"></span>
+                    <template x-if="(b.total_cases||0) > 0 && (b.total_cases||0) < 5">
+                        <span class="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700" title="menos de 5 casos — provisório">amostra pequena</span>
+                    </template>
+                    <template x-if="b.routing_phrases_total != null">
+                        <span class="text-surface-500" :title="'Frases-Prova do roteamento (set '+(b.routing_phrases_hash||'').substring(0,8)+')'"
+                              x-text="'frases '+(b.routing_phrases_passed||0)+'/'+(b.routing_phrases_total||0)"></span>
+                    </template>
+                    <span class="rounded-full px-2 py-0.5 text-[10px] font-bold ml-auto"
+                          :class="b.gate_result==='approved'?'bg-emerald-50 text-emerald-700':'bg-rose-50 text-rose-700'"
+                          x-text="b.gate_result"></span>
+                    <span class="text-[10px] text-surface-400 font-mono" x-text="tzDateTime(b.created_at)"></span>
+                </div>
+            </template>
+        </div>
+        <p class="px-5 py-2 border-t border-surface-100 text-[10px] text-surface-400">Com base nos últimos <span x-text="evalRuns.length"></span> runs carregados. Runs legados sem alvo registrado (pré-33.20) ficam de fora.</p>
+    </div>
+
     <!-- ─── Comparar Execuções (Onda 5) ──────────────────────── -->
     <div class="mt-6 rounded-xl border border-surface-200 bg-white">
         <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3.5">
@@ -222,7 +283,9 @@
                     <select x-model="compareForm.a" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                         <option value="">— escolha um run —</option>
                         <template x-for="r in evalRuns" :key="r.id">
-                            <option :value="r.id" x-text="(r.run_type || '') + ' · ' + (r.gate_result || r.status || '?') + ' · ' + (r.id||'').substring(0,8)"></option>
+                            <!-- rótulo de ALVO no seletor (item 5): sem ele, comparar
+                                 agente×pipeline só era descoberto no banner de erro -->
+                            <option :value="r.id" x-text="(r.run_type || '') + ' · ' + (r.gate_result || r.status || '?') + ' · ' + (targetLabel(r) || 'sem alvo') + ' · ' + (r.id||'').substring(0,8)"></option>
                         </template>
                     </select>
                 </div>
@@ -231,7 +294,7 @@
                     <select x-model="compareForm.b" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                         <option value="">— escolha um run —</option>
                         <template x-for="r in evalRuns" :key="r.id">
-                            <option :value="r.id" x-text="(r.run_type || '') + ' · ' + (r.gate_result || r.status || '?') + ' · ' + (r.id||'').substring(0,8)"></option>
+                            <option :value="r.id" x-text="(r.run_type || '') + ' · ' + (r.gate_result || r.status || '?') + ' · ' + (targetLabel(r) || 'sem alvo') + ' · ' + (r.id||'').substring(0,8)"></option>
                         </template>
                     </select>
                 </div>
@@ -272,6 +335,7 @@
                                 </div>
                                 <div class="space-y-1 text-[11px]">
                                     <div class="flex justify-between"><span class="text-surface-400">id</span><span class="font-mono text-brand-900" x-text="(compareResult['run_'+side].id || '').substring(0,8)"></span></div>
+                                    <div class="flex justify-between"><span class="text-surface-400">alvo</span><span class="text-brand-900 truncate max-w-[60%]" x-text="targetLabel(compareResult['run_'+side]) || 'sem alvo (legado)'"></span></div>
                                     <div class="flex justify-between"><span class="text-surface-400">run_type</span><span class="text-brand-900" x-text="compareResult['run_'+side].run_type || '—'"></span></div>
                                     <div class="flex justify-between"><span class="text-surface-400">gold</span><span class="font-mono text-brand-900" x-text="compareResult['run_'+side].gold_version || '—'"></span></div>
                                     <div class="flex justify-between"><span class="text-surface-400">cases</span><span class="text-brand-900" x-text="(compareResult['run_'+side].passed||0)+'/'+(compareResult['run_'+side].total_cases||0)"></span></div>
@@ -307,6 +371,32 @@
                             </tbody>
                         </table>
                     </div>
+
+                    <!-- Frases-Prova do roteamento (36.7.0): linha com guarda de
+                         hash PRÓPRIA — o backend só manda pass_rate com o MESMO
+                         conjunto de frases nos dois runs; senão vem reason. -->
+                    <template x-if="compareResult.routing_phrases">
+                        <div class="rounded-lg border border-surface-200" data-testid="compare-routing-phrases">
+                            <div class="border-b border-surface-100 px-3 py-2 text-[11px] font-semibold text-brand-900">Frases-Prova do roteamento</div>
+                            <template x-if="compareResult.routing_phrases.comparable">
+                                <div class="px-3 py-2 flex items-center gap-4 text-[11px]">
+                                    <span class="text-surface-400">pass-rate</span>
+                                    <span class="font-mono" x-text="fmtMetric('accuracy', compareResult.routing_phrases.pass_rate?.a) + ' (' + (compareResult.run_a.routing_phrases_passed||0) + '/' + (compareResult.run_a.routing_phrases_total||0) + ')'"></span>
+                                    <span class="text-surface-300">→</span>
+                                    <span class="font-mono" x-text="fmtMetric('accuracy', compareResult.routing_phrases.pass_rate?.b) + ' (' + (compareResult.run_b.routing_phrases_passed||0) + '/' + (compareResult.run_b.routing_phrases_total||0) + ')'"></span>
+                                    <span class="font-mono font-bold" :class="deltaColor(compareResult.routing_phrases.pass_rate)"
+                                          x-text="fmtDelta('accuracy', compareResult.routing_phrases.pass_rate?.delta, compareResult.routing_phrases.pass_rate?.is_improvement)"></span>
+                                    <template x-if="(compareResult.run_a.routing_phrases_total||0) < 5">
+                                        <span class="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700" title="menos de 5 frases seladas — sinal fraco">amostra pequena</span>
+                                    </template>
+                                    <span class="text-[9px] text-surface-400 font-mono ml-auto" title="hash do conjunto de frases — igual nos dois runs (comparável)" x-text="'set ' + (compareResult.run_a.routing_phrases_hash||'').substring(0,8)"></span>
+                                </div>
+                            </template>
+                            <template x-if="!compareResult.routing_phrases.comparable">
+                                <p class="px-3 py-2 text-[11px] text-amber-800 bg-amber-50/60" x-text="'⚠ ' + (compareResult.routing_phrases.reason || 'não comparável')"></p>
+                            </template>
+                        </div>
+                    </template>
 
                     <!-- Breakdown por categoria (collapse) -->
                     <div class="rounded-lg border border-surface-200">
@@ -618,6 +708,21 @@ function harnessPage(){return{
         if (r.agent_id) { const a = this.agents.find(x => x.id === r.agent_id); return a ? a.name : r.agent_id.substring(0,8); }
         return '';
     },
+    // Baseline por alvo (item 5, 36.7.0): último baseline COMPLETED de cada
+    // (alvo, gold_version) dentro dos runs carregados. evalRuns já vem em
+    // ordem DESC por created_at → o primeiro de cada chave é o mais recente.
+    // Critério IMPLÍCITO por recência — dito na legenda do painel (apagar um
+    // run muda o baseline; não há pin). Legados sem alvo ficam de fora.
+    baselinesByTarget(){
+        const map = {};
+        for (const r of this.evalRuns) {
+            if (r.run_type !== 'baseline' || r.status !== 'completed') continue;
+            if (!r.pipeline_id && !r.agent_id) continue;
+            const key = (r.pipeline_id || r.agent_id) + '|' + (r.gold_version || '');
+            if (!map[key]) map[key] = r;
+        }
+        return Object.values(map);
+    },
     resetGoldForm(){
         this.goldForm = {
             input_text:'', expected_output:'',
@@ -638,7 +743,9 @@ function harnessPage(){return{
     async load(){
         try{this.goldCases=(await api.get('/api/v1/gold-cases')).cases||[]}catch{}
         try{
-            const runs = (await api.get('/api/v1/eval-runs')).runs||[];
+            // limit=50: o painel Baseline-por-alvo agrupa client-side — com o
+            // default (20), o baseline de um alvo pouco rodado sumiria.
+            const runs = (await api.get('/api/v1/eval-runs?limit=50')).runs||[];
             // Defensivo: backend ja parseia, mas tolera caso receba string crua.
             for (const r of runs) {
                 if (typeof r.dimension_breakdown === 'string') {
