@@ -2424,6 +2424,25 @@ async def _test_mcp_connection_impl(data: MCPTestRequest) -> dict:
         result.setdefault("recommendations", [])
         result.setdefault("discovered_tools", [])
         result.setdefault("server_name", result.get("server_name"))
+        # 39.1.0 (item 3 PR2): persistir a descoberta TAMBÉM no stdio — este
+        # retorno antecipado pulava o persist (que vivia só no happy-path
+        # HTTP), então conector stdio NUNCA entrava no modo per-tool, mesmo
+        # com o teste verde. Mesmo contrato best-effort do HTTP: falha de
+        # persist não quebra o teste (que segue devolvendo discovered_tools).
+        _tid = getattr(data, "tool_id", None)
+        if _tid and result.get("success") and result.get("discovered_tools"):
+            try:
+                from app.core.database import tools_repo
+                from app.mcp.runtime import serialize_discovered_tools
+                await tools_repo.update(_tid, {
+                    "discovered_tools": serialize_discovered_tools(result["discovered_tools"]),
+                })
+            except Exception as _persist_err:
+                logger.warning(
+                    "mcp.discovery.persist_failed",
+                    extra={"event": "mcp.discovery", "tool_id": _tid,
+                           "error_type": type(_persist_err).__name__},
+                )
         return result
 
     # ── OAuth2: buscar token se necessário ──
