@@ -494,6 +494,19 @@ async def get_session(session_id: str, user: dict = Depends(require_user)):
                 _sch = await _dec_schema(_author)
                 if _sch:
                     content = _strip_dec(content, _sch)
+                # Eco (36.1.0, borda do review): balão de agente SEM contrato
+                # pode espelhar a linha do upstream — tenta os schemas dos
+                # demais steps (cache por agente; só quando a linha resta).
+                if _has_dec(content) and pipeline_steps:
+                    for _st in pipeline_steps:
+                        _aid2 = _st.get("agent_id")
+                        if not _aid2 or _aid2 == _author:
+                            continue
+                        _sch2 = await _dec_schema(_aid2)
+                        if _sch2:
+                            content = _strip_dec(content, _sch2)
+                        if not _has_dec(content):
+                            break
             # Converter JSON legado de recusa/escalação
             if content.startswith("{") and '"type"' in content:
                 try:
@@ -1254,10 +1267,12 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                     attachments=attachments,
                     context_mode=data.context_mode or "auto",
                 )
-                # Cond-C (35.19.0): linha DECISAO sai da resposta apresentada no
-                # chat single-agent (pipeline já faz o strip na montagem final;
-                # trace preserva a linha para auditoria).
+                # Cond-C (35.19.0/36.1.0): a decisão ESTRUTURADA entra no payload
+                # (extraída ANTES do strip — paridade com o envelope do pipeline)
+                # e a linha DECISAO sai da resposta apresentada (trace preserva).
                 if result.get("output"):
+                    from app.agents.engine import extract_decision_for_agent
+                    result["decision"] = await extract_decision_for_agent(result["output"], data.agent_id)
                     result["output"] = await strip_decision_line_for_display(result["output"], data.agent_id)
 
         # Persistir trace_data. Estabilizar defaults pra evitar campos

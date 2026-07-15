@@ -460,3 +460,28 @@ class TestGetSessionDecisionLineStrip:
         assistant = [m for m in r.json()["messages"] if m["role"] == "assistant"]
         assert assistant[0]["content"] == "Roteado para triagem."
         assert assistant[1]["content"] == "Caso grave."
+
+    def test_eco_de_upstream_em_balao_sem_contrato_e_strippado(self, workspace_client, monkeypatch):
+        # 36.1.0 (borda do review): o agente final SEM contrato ecoou a linha do
+        # upstream — o strip do histórico tenta os schemas dos DEMAIS steps.
+        trace = {"pipeline_steps": [{"agent_id": "ag-B"}, {"agent_id": "ag-C"}]}
+        session = {
+            "id": self.SESSION_ID, "agent_id": "ag-B", "title": "t",
+            "state": "LogAndClose", "trace_data": json.dumps(trace),
+        }
+        turns = [
+            {"user_text_redacted": None,  # balão do agente C (sem contrato, ECOA a linha de B)
+             "output_text_redacted": "Resolvido conforme triagem.\nDECISAO: escalar=sim", "created_at": ""},
+            {"user_text_redacted": "u",
+             "output_text_redacted": "Caso grave.\nDECISAO: escalar=sim", "created_at": ""},
+        ]
+        _patch_session(monkeypatch, session_row=session, turns=turns)
+
+        async def _schema(aid):
+            return {"escalar": ["sim", "não"]} if aid == "ag-B" else None
+
+        monkeypatch.setattr("app.agents.engine._decisions_schema_for_agent", _schema)
+        r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        assistant = [m for m in r.json()["messages"] if m["role"] == "assistant"]
+        assert assistant[0]["content"] == "Caso grave."                      # autor B (contrato)
+        assert assistant[1]["content"] == "Resolvido conforme triagem."      # eco em C, strippado via schema de B

@@ -837,6 +837,9 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
             duration_ms=duration,
             evidence_score=pipe_result.get("evidence_score"),
             rejected_attachments=rejected_attachments,
+            # Cond-C (36.1.0): decisão estruturada do agente que respondeu —
+            # o execute_pipeline a extrai ANTES do strip da linha.
+            decision=pipe_result.get("decision"),
         )
 
     # Subagent standalone — execução de um único agente
@@ -862,10 +865,14 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
     # IDOR (33.13.0): carimba o dono na interaction (1º acesso, best-effort).
     await stamp_interaction_owner(result.get("interaction_id"), _caller.get("id"))
 
-    # Cond-C (35.19.0): a linha DECISAO é protocolo de máquina — sai da resposta
-    # apresentada pelo invoke standalone (trace preserva; o pipeline faz o strip
+    # Cond-C (35.19.0/36.1.0): a linha DECISAO é protocolo de máquina — a versão
+    # ESTRUTURADA entra no envelope (`decision`, extraída ANTES do strip) e a
+    # linha sai da resposta apresentada (trace preserva; o pipeline faz o
     # equivalente na montagem final do execute_pipeline).
+    _decision = None
     if result.get("output"):
+        from app.agents.engine import extract_decision_for_agent
+        _decision = await extract_decision_for_agent(result["output"], agent_id)
         result["output"] = await strip_decision_line_for_display(result["output"], agent_id)
 
     final_state = result.get("final_state") or ""
@@ -911,6 +918,7 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
         duration_ms=duration,
         evidence_score=result.get("evidence_score"),
         rejected_attachments=rejected_attachments,
+        decision=_decision,
     )
 
 
