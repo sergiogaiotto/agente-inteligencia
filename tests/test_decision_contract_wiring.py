@@ -11,16 +11,24 @@ Aqui testamos os 4 pontos de acoplamento no engine:
   4. `_build_system_prompt` injeta a diretiva selada quando a skill declara
      ## Decisions; `_preserve_decision_line` salva a linha do hard-truncate.
 """
+import json
+import logging
+
 import pytest
 
 from app.agents.engine import (
     CONDITIONAL_VARS_META,
     DeepAgentHarness,
     _build_conditional_context,
+    _build_response_language_closing,
+    _build_response_language_directive,
     _decision_vars_for_source,
+    _decisions_schema_for_agent,
     _eval_conditional,
     _expr_uses_output,
     _preserve_decision_line,
+    _should_skip_conditional,
+    strip_decision_line_for_display,
 )
 
 SCHEMA = {"escalar": ["sim", "não"], "severidade": ["baixa", "média", "alta"]}
@@ -157,6 +165,160 @@ class TestPromptInjectionAndTruncate:
         assert _preserve_decision_line(
             original="qualquer", truncated=ja_tem, schema=SCHEMA
         ) == ja_tem
+
+
+# ─── 4b. colisão idioma × contrato (review 2026-07-15) ───────────────────────
+
+class TestLanguageDirectiveDecisionException:
+    def test_sem_contrato_diretivas_byte_identicas(self):
+        # reprodutibilidade: sem ## Decisions o prompt não muda um byte — a
+        # exceção é APPEND-ONLY sobre o texto de sempre.
+        for lang in ("pt-BR", "en-US"):
+            base_d = _build_response_language_directive(lang)
+            base_c = _build_response_language_closing(lang)
+            assert "DECISAO" not in base_d and "DECISAO" not in base_c
+            assert _build_response_language_directive(
+                lang, preserve_decision_line=True).startswith(base_d)
+            assert _build_response_language_closing(
+                lang, preserve_decision_line=True).startswith(base_c)
+
+    def test_com_contrato_ambas_excepcionam_a_linha(self):
+        d = _build_response_language_directive("en-US", preserve_decision_line=True)
+        c = _build_response_language_closing("en-US", preserve_decision_line=True)
+        assert "DECISAO" in d and "SEM traduzi-los" in d
+        assert "DECISAO" in c and "NÃO" in c and "VERBATIM" in c
+
+    def _harness(self, skill_data: dict) -> DeepAgentHarness:
+        h = DeepAgentHarness.__new__(DeepAgentHarness)
+        h.config = {"system_prompt": "Você é a triagem.", "_parsed_skill": skill_data}
+        h.mcp_tools = []
+        return h
+
+    def test_system_prompt_com_contrato_tem_excecao_no_sanduiche(self):
+        # o LEMBRETE FINAL é a última instrução antes da geração — é ele que
+        # vence a atenção do modelo; a exceção precisa estar lá.
+        sp = self._harness({"_decisions_schema": SCHEMA})._build_system_prompt()
+        closing = sp.split("[LEMBRETE FINAL — IDIOMA]")[-1]
+        assert "DECISAO" in closing
+
+    def test_system_prompt_sem_contrato_sem_excecao(self):
+        sp = self._harness({"purpose": "Triagem."})._build_system_prompt()
+        assert "DECISAO" not in sp
+
+
+# ─── 4c. telemetria: linha presente mas nada validou (review 2026-07-15) ─────
+
+class TestDecisionLineInvalidTelemetry:
+    @pytest.mark.asyncio
+    async def test_valores_traduzidos_geram_warning(self, monkeypatch, caplog):
+        import app.agents.engine as eng
+
+        async def _agent(_id):
+            return {"id": _id, "skill_id": "sk-1"}
+
+        async def _skill(_id):
+            return {"id": _id, "raw_content": SKILL_MD}
+
+        monkeypatch.setattr(eng, "_topo_agent", _agent)
+        monkeypatch.setattr(eng.skills_repo, "find_by_id", _skill)
+        with caplog.at_level(logging.WARNING):
+            # agente en-US traduziu os valores: linha presente, enum rejeita tudo
+            got = await _decision_vars_for_source("src-1", "Done.\nDECISAO: escalar=yes")
+        assert got == {}
+        assert any("decision_line_invalid" in r.message for r in caplog.records)
+
+
+# ─── 4d. gate lexical + memoização do schema (review 2026-07-15) ─────────────
+
+class TestGateLexicalAndMemo:
+    @pytest.mark.asyncio
+    async def test_expr_sem_decision_nao_paga_extracao(self, monkeypatch):
+        import app.agents.engine as eng
+
+        async def _conns(_id, limit=20):
+            return [{
+                "target_agent_id": "tgt-1", "connection_type": "conditional",
+                "config": json.dumps({"expr": "'pix' in output_lower"}),
+            }]
+
+        async def _boom(*_a, **_k):
+            raise AssertionError("expr sem decision.* não deveria extrair a linha")
+
+        monkeypatch.setattr(eng, "_topo_mesh_out", _conns)
+        monkeypatch.setattr(eng, "_decision_vars_for_source", _boom)
+        # 'pix' não está no output → skip=True; e o boom prova que a extração
+        # (lookup de skill + parse) não foi paga para uma regra que não usa decision.
+        assert await _should_skip_conditional(
+            source_id="s", target_id="tgt-1",
+            last_output="Resposta.\nDECISAO: escalar=sim",  # linha presente, expr não usa
+            last_final_state="Recommend",
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_schema_memoizado_por_pipeline(self, monkeypatch):
+        import app.agents.engine as eng
+
+        calls = {"n": 0}
+
+        async def _agent(_id):
+            return {"id": _id, "skill_id": "sk-1"}
+
+        async def _skill(_id):
+            calls["n"] += 1
+            return {"id": _id, "raw_content": SKILL_MD}
+
+        monkeypatch.setattr(eng, "_topo_agent", _agent)
+        monkeypatch.setattr(eng.skills_repo, "find_by_id", _skill)
+        token = eng._pipeline_topo.set({"mesh": {}, "agents": {}})
+        try:
+            # fan-out de N arestas do mesmo source: find_by_id + parse UMA vez
+            assert await _decisions_schema_for_agent("src-1") == SCHEMA
+            assert await _decisions_schema_for_agent("src-1") == SCHEMA
+        finally:
+            eng._pipeline_topo.reset(token)
+        assert calls["n"] == 1
+
+
+# ─── 4e. strip da linha nas superfícies de apresentação ──────────────────────
+
+class TestStripForDisplay:
+    @pytest.mark.asyncio
+    async def test_remove_linha_quando_agente_tem_contrato(self, monkeypatch):
+        import app.agents.engine as eng
+
+        async def _agent(_id):
+            return {"id": _id, "skill_id": "sk-1"}
+
+        async def _skill(_id):
+            return {"id": _id, "raw_content": SKILL_MD}
+
+        monkeypatch.setattr(eng, "_topo_agent", _agent)
+        monkeypatch.setattr(eng.skills_repo, "find_by_id", _skill)
+        got = await strip_decision_line_for_display(
+            "Resposta ao cliente.\nDECISAO: escalar=sim; severidade=alta", "ag-1")
+        assert got == "Resposta ao cliente."
+
+    @pytest.mark.asyncio
+    async def test_sem_contrato_prosa_decisao_fica_intacta(self, monkeypatch):
+        import app.agents.engine as eng
+
+        async def _agent(_id):
+            return {"id": _id, "skill_id": ""}
+
+        monkeypatch.setattr(eng, "_topo_agent", _agent)
+        txt = "Análise.\nDecisão: aprovado o crédito"
+        assert await strip_decision_line_for_display(txt, "ag-legado") == txt
+
+    @pytest.mark.asyncio
+    async def test_fail_safe_erro_devolve_intacto(self, monkeypatch):
+        import app.agents.engine as eng
+
+        async def _boom(_id):
+            raise RuntimeError("db off")
+
+        monkeypatch.setattr(eng, "_topo_agent", _boom)
+        txt = "Resposta.\nDECISAO: escalar=sim"
+        assert await strip_decision_line_for_display(txt, "ag-1") == txt
 
 
 # ─── 5. API: /mesh/agents/{id}/decisions + decision no simulador ─────────────

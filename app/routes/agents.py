@@ -574,7 +574,7 @@ async def _resolve_agent(ref: str) -> dict | None:
 
 @router.post("/{agent_id}/invoke", response_model=AgentInvokeResponse)
 async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request) -> AgentInvokeResponse:
-    from app.agents.engine import execute_interaction
+    from app.agents.engine import execute_interaction, strip_decision_line_for_display
     from app.agents.declarative_engine import execute_declarative
     from app.routes.workspace import _filter_attachments_by_agent
     from app.skill_parser.parser import parse_skill_md
@@ -861,6 +861,12 @@ async def invoke_agent(agent_id: str, data: AgentInvokeRequest, request: Request
 
     # IDOR (33.13.0): carimba o dono na interaction (1º acesso, best-effort).
     await stamp_interaction_owner(result.get("interaction_id"), _caller.get("id"))
+
+    # Cond-C (35.19.0): a linha DECISAO é protocolo de máquina — sai da resposta
+    # apresentada pelo invoke standalone (trace preserva; o pipeline faz o strip
+    # equivalente na montagem final do execute_pipeline).
+    if result.get("output"):
+        result["output"] = await strip_decision_line_for_display(result["output"], agent_id)
 
     final_state = result.get("final_state") or ""
     if final_state == "Recommend":
