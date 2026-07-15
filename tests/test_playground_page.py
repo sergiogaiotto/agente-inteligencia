@@ -515,3 +515,18 @@ def test_nl_args_usar_preenche_o_form():
     assert "useSuggestedArgs()" in src
     assert "const v = s.args[f.name];" in src
     assert "if (s.valid && this.apiKey) this.previewArgs();" in src
+
+
+# ── Codegen com anexos (item 7 PR4, 38.2.0) ─────────────────────────
+
+def test_sdk_py_e_openapi_documentam_attachments():
+    """SDK Python: invoke(attachments=None) com as DUAS receitas na docstring;
+    OpenAPI: propriedade attachments com limites e a nota do async."""
+    src = PG.read_text(encoding="utf-8")
+    assert "args=None, attachments=None" in src
+    assert 'body["attachments"] = attachments' in src
+    assert "upload-ref (2 passos)" in src
+    assert "NAO aceita o formato base64" in src  # nota do async no SDK
+    # OpenAPI fragment
+    assert "attachments: { type: 'array'" in src
+    assert "NÃO aceito no /invoke/async" in src

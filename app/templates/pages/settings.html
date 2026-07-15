@@ -1393,7 +1393,7 @@
                             <pre class="mt-1 bg-white px-2 py-1.5 rounded font-mono text-[10px] overflow-x-auto" x-text="justCreatedCurl()"></pre>
                         </div>
                         <div>
-                            <strong>Com anexos (base64, máx 10MB/arquivo, 5 por chamada):</strong>
+                            <strong>Com anexos (base64, máx 10MB/arquivo, 5 por chamada — vale p/ agentes E pipelines; o /invoke/async ainda não aceita base64):</strong>
                             <pre class="mt-1 bg-white px-2 py-1.5 rounded font-mono text-[10px] overflow-x-auto">-d '{"message":"analise este doc","attachments":[
         {"filename":"x.pdf","content_base64":"..."}
      ]}'</pre>
