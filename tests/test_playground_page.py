@@ -473,3 +473,45 @@ def test_badge_balde_param_vs_llm():
 def test_layout_lado_a_lado():
     src = PG.read_text(encoding="utf-8")
     assert "lg:grid-cols-2" in src   # builder | resposta lado a lado
+
+
+# ── Tradutor NL→args no Playground (item 2 PR2, 38.1.0) ─────────────
+
+def test_nl_args_card_e_atalho():
+    """Input 'descreva em português' + card de sugestão (padrão visual do
+    tradutor do mesh) dentro do painel de inputs + atalho na linha de helpers."""
+    src = PG.read_text(encoding="utf-8")
+    assert 'data-testid="pg-nl-args"' in src
+    assert 'data-testid="pg-nl-args-input"' in src
+    assert 'data-testid="pg-nl-args-go"' in src
+    assert 'data-testid="pg-nl-args-use"' in src
+    assert 'data-testid="pg-nl-open"' in src
+    # card verde/âmbar espelha o selo da prova
+    assert "nlArgsSuggest.valid ? 'bg-emerald-50' : 'bg-amber-50'" in src
+    # issues nomeadas com did-you-mean visíveis no card
+    assert "iss.did_you_mean" in src
+
+
+def test_nl_args_usa_cookie_nao_api_key():
+    """suggest-args é superfície de UI (cookie) — api.post; a X-API-Key fica
+    só na pré-visualização dry (que simula o cliente externo)."""
+    src = PG.read_text(encoding="utf-8")
+    assert "api.post('/api/v1/pipelines/' + this.selectedId + '/suggest-args'" in src
+
+
+def test_nl_args_footguns_e_reset():
+    src = PG.read_text(encoding="utf-8")
+    # footgun Alpine: :disabled com undefined vira atributo PRESENTE — coagir
+    assert ':disabled="!!nlArgsLoading"' in src
+    # trocar de pipeline limpa a sugestão (provada contra o contrato ANTERIOR)
+    assert "this.nlArgsSuggest = null; this.nlArgsDesc = ''" in src
+
+
+def test_nl_args_usar_preenche_o_form():
+    """'Usar estes args' preenche argValues com o que a IA extraiu (s.args) —
+    defaults ficam no servidor (proveniência do dry continua verdadeira) — e
+    dispara a pré-visualização quando válido."""
+    src = PG.read_text(encoding="utf-8")
+    assert "useSuggestedArgs()" in src
+    assert "const v = s.args[f.name];" in src
+    assert "if (s.valid && this.apiKey) this.previewArgs();" in src
