@@ -614,7 +614,13 @@ async def _resolve_bindings_for_prompt(data: WizardSkillRequest) -> dict:
             pool = _get_pool()
             async with pool.acquire() as con:
                 rows = await con.fetch(
-                    "SELECT id, name, description FROM tools WHERE id = ANY($1::text[])",
+                    # 39.2.0 (item 3 PR3): operations/discovered_tools/per_tool_mode
+                    # entram no lookup — o prompt do gerador e o validador passam a
+                    # seguir o MODO efetivo de cada conector (e a orientação de
+                    # operations volta a ter a lista real, que este SELECT magro
+                    # havia deixado de trazer).
+                    "SELECT id, name, description, operations, discovered_tools, "
+                    "per_tool_mode FROM tools WHERE id = ANY($1::text[])",
                     data.mcp_tool_ids,
                 )
                 result["mcp_tools"] = [dict(r) for r in rows]
@@ -776,6 +782,22 @@ def _common_binding_rules_header() -> str:
     )
 
 
+def _split_tools_by_mode(mcp_tools: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(per_tool, legacy) — conector entra no grupo per-tool quando o modo
+    EFETIVO (per_tool_enabled_for: tri-state do conector compondo com o global)
+    está ON e há discovered_tools persistido. É o MESMO critério do gate de
+    build_openai_tools (39.0.0): o wizard ensina exatamente o que o runtime
+    vai expor."""
+    from app.mcp.runtime import _parse_discovered_tools, per_tool_enabled_for
+    per, legacy = [], []
+    for t in mcp_tools or []:
+        if per_tool_enabled_for(t) and _parse_discovered_tools(t.get("discovered_tools")):
+            per.append(t)
+        else:
+            legacy.append(t)
+    return per, legacy
+
+
 def _mcp_block(mcp_tools: list[dict]) -> str:
     """Sub-bloco específico de MCP. Cobre o caso original do bug Context7.
 
@@ -786,7 +808,39 @@ def _mcp_block(mcp_tools: list[dict]) -> str:
     operation por sonoridade, em vez de usar uma das operations declaradas
     no Registry. Fix: regra explícita listando operations + proibição de
     inventar names que não estão na lista.
+
+    39.2.0 (item 3 PR3): conector em modo PER-TOOL ganha orientação própria —
+    skills novas nascem chamando as funções pelos NOMES REAIS descobertos;
+    operation/query é orientação SÓ para conectores em modo legado. Sem o
+    gate, o wizard seguia gerando skills no paradigma velho mesmo com o
+    per-tool ativo (instrução contraditória com o function spec do runtime).
     """
+    per_tool, legacy = _split_tools_by_mode(mcp_tools)
+    parts: list[str] = []
+    if per_tool:
+        from app.mcp.runtime import _parse_discovered_tools
+        linhas = []
+        for t in per_tool:
+            names = [d["name"] for d in _parse_discovered_tools(t.get("discovered_tools"))]
+            shown = ", ".join(f"`{n}`" for n in names[:8])
+            if len(names) > 8:
+                shown += f" (+{len(names) - 8})"
+            linhas.append(f"    - `{t['name']}`: {shown}")
+        first_fn = _parse_discovered_tools(per_tool[0].get("discovered_tools"))[0]["name"]
+        parts.append(
+            "[MCP per-tool] **Conectores em modo per-tool** — cada tool "
+            "DESCOBERTA vira uma FUNÇÃO própria com o schema real do servidor:\n"
+            + "\n".join(linhas) + "\n"
+            "  - **REGRA CRÍTICA — nomes reais:** no Workflow e nos Examples, "
+            "chame a função pelo NOME REAL descoberto (lista acima), com os "
+            "parâmetros do schema dela. NÃO use `operation=`/`query=` para "
+            "estes conectores — esse par NÃO existe no modo per-tool.\n"
+            f"  - Exemplo no Workflow: \"Chame a função `{first_fn}` com os "
+            "parâmetros extraídos do pedido ANTES de gerar a resposta.\""
+        )
+    if not legacy:
+        return "\n".join(parts)
+    mcp_tools = legacy  # o bloco legado abaixo orienta SÓ os conectores legados
     tool_names = ", ".join(f"`{t['name']}`" for t in mcp_tools)
     first = mcp_tools[0]
     first_name = first["name"]
@@ -798,7 +852,7 @@ def _mcp_block(mcp_tools: list[dict]) -> str:
     # gerador. Pra skills com múltiplas tools, cada uma já aparece no
     # obligatory_sections de ## Tool Bindings com suas operations.
     ops_display = _ops_raw if _ops_raw else "(operations não declaradas no Registry)"
-    return (
+    parts.append(
         "[MCP] **Tools registradas:** " + tool_names + ". "
         "Use os NOMES EXATOS dessas tools em Workflow e Examples.\n"
         f"  - Verbo recomendado: **Chame** / **Invoque**.\n"
@@ -817,6 +871,7 @@ def _mcp_block(mcp_tools: list[dict]) -> str:
         "com MCP), a seção Evidence Policy deve dizer: \"_A única fonte "
         f"autorizada é o binding **{first_name}** declarado em ## Tool Bindings._\""
     )
+    return "\n".join(parts)
 
 
 def _canonical_mcp_inputs_block() -> str:
@@ -1094,6 +1149,21 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         # Fix: incluir operations EXPLICITAMENTE em cada linha do bloco.
         def _format_mcp_line(t):
             line = f"- `{t['id']}` ({t['name']}) — {(t.get('description') or '').strip()[:300]}"
+            # 39.2.0 (item 3 PR3): conector em modo per-tool anuncia as tools
+            # DESCOBERTAS (nomes reais que viram funções) — operations é
+            # conceito do legado e confundiria o gerador.
+            _per, _ = _split_tools_by_mode([t])
+            if _per:
+                from app.mcp.runtime import _parse_discovered_tools
+                names = ", ".join(
+                    f"`{d['name']}`" for d in
+                    _parse_discovered_tools(t.get("discovered_tools"))[:12]
+                )
+                line += (
+                    f"\n  **Tools descobertas (chame pelo NOME REAL; sem "
+                    f"operation/query):** {names}"
+                )
+                return line
             ops_raw = (t.get("operations") or "").strip()
             if ops_raw:
                 line += (

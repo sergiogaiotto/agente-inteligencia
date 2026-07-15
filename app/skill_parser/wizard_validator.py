@@ -425,9 +425,20 @@ def validate_generated_skill(
     # As 3 regras compartilham o mesmo cálculo de operations, então rodam
     # juntas.
     if bindings.get("mcp_tools") and workflow:
+        # 39.2.0 (item 3 PR3): operations é conceito do LEGADO — conector em
+        # modo per-tool efetivo (MESMO critério do gate de build: modo ON +
+        # discovered_tools) fica FORA da agregação. Skill só-per-tool → as 3
+        # regras operation.* não rodam (paridade com o linter F4a); os nomes
+        # reais das funções não são "operations" a validar.
+        from app.mcp.runtime import _parse_discovered_tools, per_tool_enabled_for
+        _legacy_mcp = [
+            t for t in bindings["mcp_tools"]
+            if not (per_tool_enabled_for(t)
+                    and _parse_discovered_tools(t.get("discovered_tools")))
+        ]
         cited_ops = set(_extract_operations_from_workflow(workflow))
         declared_ops = set()
-        for tool in bindings["mcp_tools"]:
+        for tool in _legacy_mcp:
             for op in _split_operations_csv(tool.get("operations") or ""):
                 declared_ops.add(op)
 

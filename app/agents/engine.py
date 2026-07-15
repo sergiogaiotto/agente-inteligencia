@@ -350,6 +350,90 @@ def _build_grounding_directive() -> str:
     )
 
 
+def _build_mcp_tools_prompt_section(mcp_tools: list, openai_tools: list | None) -> str:
+    """Seção '## Ferramentas Disponíveis (MCP)' do system prompt.
+
+    39.2.0 (item 3 PR3): a instrução SEGUE O MODO efetivo de cada conector —
+    antes ensinava operation/query SEMPRE, contradizendo as funções per-tool
+    expostas no function spec (o LLM via `github_create_issue` no spec e "use
+    operation/query" no prompt). O sinal é o que o BUILD realmente produziu
+    (`_schema_origin == 'discovered_per_tool'`), então a decisão per-conector
+    do 39.0.0 atravessa sozinha. Sem função per-tool → texto byte-idêntico ao
+    legado. Módulo-level: testável puro (sem construir o engine)."""
+    import re as _re
+    per_fns = [
+        f for f in (openai_tools or [])
+        if isinstance(f, dict) and f.get("_schema_origin") == "discovered_per_tool"
+    ]
+    per_servers = {f.get("_mcp_server_tool") for f in per_fns}
+    legacy_tools = [
+        t for t in mcp_tools
+        if (t.get("name", "tool") or "tool") not in per_servers
+    ]
+
+    tool_catalog_lines: list[str] = []
+    for t in legacy_tools:
+        raw_name = t.get("name", "tool") or "tool"
+        fn_name = _re.sub(r'[^a-zA-Z0-9_-]', '_', raw_name).strip('_')[:64]
+        ops = t.get("operations", []) or []
+        ops_str = ", ".join(ops) if ops else "(sem operações declaradas)"
+        desc = (t.get("description") or "").strip()
+        server = t.get("mcp_server", "")
+        line = f"- **{raw_name}** (function `{fn_name}`, operações: {ops_str})"
+        if desc:
+            line += f"\n  {desc[:300]}"
+        if server:
+            line += f"\n  servidor MCP: {server}"
+        tool_catalog_lines.append(line)
+    for f in per_fns:
+        fn = f.get("function") or {}
+        line = (f"- **{fn.get('name', '?')}** (função per-tool — chame pelo "
+                f"próprio nome; servidor: {f.get('_mcp_server_tool', '?')})")
+        desc = (fn.get("description") or "").strip()
+        if desc:
+            line += f"\n  {desc[:300]}"
+        tool_catalog_lines.append(line)
+    tool_catalog = "\n".join(tool_catalog_lines)
+
+    if per_fns and legacy_tools:
+        how = (
+            "**Como chamar**: as funções marcadas como per-tool são chamadas "
+            "pelo PRÓPRIO nome, com os parâmetros do schema de cada uma — NÃO "
+            "use `operation`/`query` nelas. Para as demais ferramentas, use o "
+            "function call com `operation` (uma das operações listadas acima) "
+            "e `query` (a consulta ou parâmetros em string). "
+            "Aguarde o retorno antes de gerar sua resposta final."
+        )
+    elif per_fns:
+        how = (
+            "**Como chamar**: cada função acima é chamada pelo PRÓPRIO nome, "
+            "com os parâmetros do schema dela — NÃO existe `operation`/`query` "
+            "neste modo. Aguarde o retorno antes de gerar sua resposta final."
+        )
+    else:
+        how = (
+            "**Como chamar**: use o function call com `operation` (uma das operações "
+            "listadas acima) e `query` (a consulta ou parâmetros em string). "
+            "Aguarde o retorno antes de gerar sua resposta final."
+        )
+
+    return (
+        "\n## Ferramentas Disponíveis (MCP)\n"
+        "Você TEM function calls registrados para as ferramentas abaixo. "
+        "**REGRA CRÍTICA**: se a solicitação do usuário puder ser atendida "
+        "por uma destas ferramentas (ex: busca na web, consulta de documentação, "
+        "extração de dados externos, pesquisa factual), **você DEVE chamar "
+        "a ferramenta apropriada ANTES de gerar qualquer resposta**.\n\n"
+        f"{tool_catalog}\n\n"
+        "**Nunca fabrique o conteúdo do Output Contract.** "
+        "Se o Output Contract pede um array `results`, esse array deve vir "
+        "do retorno real da ferramenta — jamais de um `results: []` vazio "
+        "inventado. Se nenhuma ferramenta se aplica, explique isso em texto "
+        "e NÃO monte o JSON do Output Contract.\n\n"
+        + how
+    )
+
+
 def _build_grounding_closing() -> str:
     """Reminder curto de fundamentação no fim do prompt (estratégia sanduíche)."""
     return (
@@ -1059,7 +1143,6 @@ class DeepAgentHarness:
         se não houver instrução explícita. Resolução em cascata:
         agent.response_language > settings.default_response_language > pt-BR.
         """
-        import re as _re
         from app.core.config import get_settings as _get_settings_lang
         skill = self.config.get("_parsed_skill", {})
         parts = []
@@ -1110,39 +1193,9 @@ class DeepAgentHarness:
         if _decisions:
             parts.append(build_decisions_directive(_decisions))
         if self.mcp_tools:
-            tool_catalog_lines: list[str] = []
-            for t in self.mcp_tools:
-                raw_name = t.get("name", "tool") or "tool"
-                fn_name = _re.sub(r'[^a-zA-Z0-9_-]', '_', raw_name).strip('_')[:64]
-                ops = t.get("operations", []) or []
-                ops_str = ", ".join(ops) if ops else "(sem operações declaradas)"
-                desc = (t.get("description") or "").strip()
-                server = t.get("mcp_server", "")
-                line = f"- **{raw_name}** (function `{fn_name}`, operações: {ops_str})"
-                if desc:
-                    line += f"\n  {desc[:300]}"
-                if server:
-                    line += f"\n  servidor MCP: {server}"
-                tool_catalog_lines.append(line)
-            tool_catalog = "\n".join(tool_catalog_lines)
-
-            parts.append(
-                "\n## Ferramentas Disponíveis (MCP)\n"
-                "Você TEM function calls registrados para as ferramentas abaixo. "
-                "**REGRA CRÍTICA**: se a solicitação do usuário puder ser atendida "
-                "por uma destas ferramentas (ex: busca na web, consulta de documentação, "
-                "extração de dados externos, pesquisa factual), **você DEVE chamar "
-                "a ferramenta apropriada ANTES de gerar qualquer resposta**.\n\n"
-                f"{tool_catalog}\n\n"
-                "**Nunca fabrique o conteúdo do Output Contract.** "
-                "Se o Output Contract pede um array `results`, esse array deve vir "
-                "do retorno real da ferramenta — jamais de um `results: []` vazio "
-                "inventado. Se nenhuma ferramenta se aplica, explique isso em texto "
-                "e NÃO monte o JSON do Output Contract.\n\n"
-                "**Como chamar**: use o function call com `operation` (uma das operações "
-                "listadas acima) e `query` (a consulta ou parâmetros em string). "
-                "Aguarde o retorno antes de gerar sua resposta final."
-            )
+            parts.append(_build_mcp_tools_prompt_section(
+                self.mcp_tools, getattr(self, "openai_tools", None),
+            ))
         if _inject_grounding:
             parts.append(_build_grounding_closing())
         parts.append(_build_response_language_closing(_lang, preserve_decision_line=bool(_decisions)))
