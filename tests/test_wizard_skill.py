@@ -1757,3 +1757,36 @@ class TestWizardDecisions:
 
     def test_decisions_vazio_vira_none(self):
         assert WizardSkillRequest(description="x", decisions={}).decisions is None
+
+    def test_validador_rejeita_borda_stripada_e_deduplica_por_norm(self):
+        import pytest as _pt
+        # borda que o runtime stripa ('aprovado.' nasceria morto — review)
+        with _pt.raises(Exception) as e1:
+            WizardSkillRequest(description="x", decisions={"parecer": ["aprovado."]})
+        assert "BORDAS" in str(e1.value)
+        # dedup pela MESMA norma do runtime (caixa/acento)
+        req = WizardSkillRequest(description="x", decisions={"sev": ["Alta", "alta", "álta"]})
+        assert req.decisions == {"sev": ["Alta"]}
+        # campos que colidem após strip
+        with _pt.raises(Exception) as e2:
+            WizardSkillRequest(description="x", decisions={"escalar": ["sim"], " escalar ": ["não"]})
+        assert "duplicado" in str(e2.value)
+
+    def test_pos_geracao_forca_contrato_selado(self):
+        from app.routes.wizard import _ensure_decisions_contract
+        from app.skill_parser.decisions_schema import extract_decisions_schema
+        contrato = {"escalar": ["sim", "não"]}
+        # drift do LLM (traduziu) → seção substituída pela canônica
+        drift = "# S\n## Purpose\np\n\n## Decisions\n```json\n{\"escalate\": [\"yes\"]}\n```\n\n## Guardrails\ng\n"
+        fixed = _ensure_decisions_contract(drift, contrato)
+        assert extract_decisions_schema(fixed) == contrato
+        assert "escalate" not in fixed
+        # omissão → seção inserida (antes de ## Guardrails)
+        omitiu = "# S\n## Purpose\np\n\n## Guardrails\ng\n"
+        fixed2 = _ensure_decisions_contract(omitiu, contrato)
+        assert extract_decisions_schema(fixed2) == contrato
+        assert fixed2.find("## Decisions") < fixed2.find("## Guardrails")
+        # já correto → intocado (idempotente)
+        assert _ensure_decisions_contract(fixed, contrato) == fixed
+        # sem contrato declarado → no-op
+        assert _ensure_decisions_contract(drift, None) == drift

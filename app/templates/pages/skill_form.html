@@ -2261,6 +2261,10 @@ ${outMap}`;
             if (this._DECISION_RESERVED.includes(c) || c.startsWith('__')) return `'${c}' é nome reservado — decision.${c} nunca casaria na regra`;
             const ruim = d.valores.find(v => /[;,=]/.test(v));
             if (ruim) return `valor '${ruim}': ';', ',' e '=' são separadores da linha DECISAO`;
+            // borda que o runtime STRIPA do valor emitido — valor 'aprovado.'
+            // nunca casaria (mesma regra do servidor/parser).
+            const borda = d.valores.find(v => /^["'`*_.]|["'`*_.]$/.test(v));
+            if (borda) return `valor '${borda}': aspas, crase, '*', '_' e '.' nas bordas são removidos no runtime — nunca casaria`;
             if (!d.valores.length) return 'adicione ao menos 1 valor (Enter adiciona)';
             return '';
         },
@@ -2277,18 +2281,34 @@ ${outMap}`;
         // ## Decisions p/ as linhas do editor…
         syncDecisionsFromContent() {
             const content = this.form.raw_content || '';
-            const sec = content.match(/##\s+Decisions[\s\S]*?```(?:json|JSON)?\s*\n([\s\S]*?)\n```/);
+            this._decisionsSyncFailed = false;
+            // Escopo LIMITADO à seção (até o próximo '## ') — sem isso o fence
+            // capturado podia ser de uma seção POSTERIOR (review pré-push),
+            // divergindo do extract_decisions_schema do servidor.
+            const sec = content.match(/##\s+Decisions([\s\S]*?)(?=\n## |$)/);
             if (!sec) { this.decisionRows = []; return; }
+            const fence = sec[1].match(/```(?:json|JSON)?\s*\n([\s\S]*?)\n```/);
+            if (!fence) { this.decisionRows = []; this._decisionsSyncFailed = true; return; }
             try {
-                const obj = JSON.parse(sec[1]);
+                const obj = JSON.parse(fence[1]);
                 this.decisionRows = Object.entries(obj || {}).map(([campo, valores]) => ({
                     campo, valores: Array.isArray(valores) ? valores.map(String) : [], draft: '',
                 }));
-            } catch (_) { this.decisionRows = []; }
+            } catch (_) {
+                // JSON quebrado: NÃO deixar o apply deletar a seção que o autor
+                // escreveu (perda de dados — review pré-push); ele conserta no raw.
+                this.decisionRows = [];
+                this._decisionsSyncFailed = true;
+            }
         },
         // …e reescreve a seção a partir das linhas. Sem linhas válidas, REMOVE
         // a seção (skill volta a não declarar contrato).
         applyDecisionsSection() {
+            // Guardas (review pré-push): (a) seção com JSON quebrado no raw —
+            // reescrever apagaria o que o autor digitou; (b) linha com problema
+            // de validação — o hint explica; não gravamos contrato inválido.
+            if (this._decisionsSyncFailed) return;
+            if (this.decisionRows.some(d => (d.campo || d.valores.length) && this.decisionProblema(d))) return;
             const content = this.form.raw_content || '';
             const sectionRegex = /\n*##\s+Decisions[\s\S]*?(?=\n## |\s*$)/;
             const hasSection = sectionRegex.test(content);

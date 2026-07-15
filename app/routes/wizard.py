@@ -431,7 +431,7 @@ class WizardSkillRequest(BaseModel):
             return None
         import re as _re
 
-        from app.skill_parser.decisions_schema import _RESERVED_FIELDS
+        from app.skill_parser.decisions_schema import _RESERVED_FIELDS, _norm
         problemas: list[str] = []
         limpo: dict = {}
         for campo, valores in v.items():
@@ -444,10 +444,14 @@ class WizardSkillRequest(BaseModel):
                 problemas.append(
                     f"campo '{campo_s}': nome reservado — `decision.{campo_s}` resolveria um método interno e a regra nunca casaria")
                 continue
+            if campo_s in limpo:
+                problemas.append(f"campo '{campo_s}' duplicado (após remover espaços)")
+                continue
             if not isinstance(valores, list):
                 problemas.append(f"campo '{campo_s}': valores devem ser uma lista")
                 continue
             vals: list[str] = []
+            vistos: set = set()
             for val in valores:
                 s = str(val).strip()
                 if not s:
@@ -456,8 +460,20 @@ class WizardSkillRequest(BaseModel):
                     problemas.append(
                         f"valor '{s}' (campo '{campo_s}'): ';', ',' e '=' são separadores da linha DECISAO e não podem aparecer no valor")
                     continue
-                if s not in vals:
-                    vals.append(s)
+                # borda que o extract_decision_line STRIPA do valor emitido —
+                # um canônico com esses chars na borda seria irrepresentável
+                # (major do review pré-push: 'aprovado.' nasceria morto).
+                if s != s.strip("\"'`*_."):
+                    problemas.append(
+                        f"valor '{s}' (campo '{campo_s}'): aspas, crase, '*', '_' e '.' nas BORDAS são removidos da linha no runtime — o valor nunca casaria")
+                    continue
+                # dedup pela MESMA norma do runtime (acento/caixa): 'Alta' e
+                # 'alta' seriam o mesmo valor no match do enum.
+                k = _norm(s)
+                if k in vistos:
+                    continue
+                vistos.add(k)
+                vals.append(s)
             if not vals:
                 problemas.append(f"campo '{campo_s}': informe ao menos 1 valor válido")
                 continue
@@ -852,6 +868,29 @@ def _inputs_has_operation(skill_md: str) -> bool:
         return '"operation"' in section
     props = d.get("properties", {}) if isinstance(d, dict) else {}
     return "operation" in props
+
+
+def _ensure_decisions_contract(skill_md: str, decisions: Optional[dict]) -> str:
+    """Força a seção ## Decisions CANÔNICA pós-geração (mesmo espírito do
+    `_ensure_mcp_inputs_contract` logo abaixo): o contrato veio SELADO do
+    formulário — drift/omissão/tradução do LLM gerador não pode alterá-lo
+    (major do review pré-push: o LLM podia emitir {"escalate": ["yes"]} ou
+    omitir a seção, e as arestas escritas contra os valores DECLARADOS nunca
+    casariam). Determinístico — sem retry de LLM."""
+    if not decisions:
+        return skill_md
+    from app.skill_parser.decisions_schema import extract_decisions_schema
+    if extract_decisions_schema(skill_md or "") == decisions:
+        return skill_md
+    block = "## Decisions\n```json\n" + json.dumps(decisions, ensure_ascii=False) + "\n```"
+    sec_re = re.compile(r"\n*##\s+Decisions[\s\S]*?(?=\n## |\s*$)")
+    if sec_re.search(skill_md or ""):
+        return sec_re.sub("\n\n" + block, skill_md, count=1)
+    for anchor in ("## Failure Modes", "## Guardrails"):
+        idx = (skill_md or "").find(anchor)
+        if idx > 0:
+            return skill_md[:idx] + block + "\n\n" + skill_md[idx:]
+    return (skill_md or "").rstrip() + "\n\n" + block + "\n"
 
 
 def _ensure_mcp_inputs_contract(skill_md: str, mcp_tools: list[dict]) -> str:
@@ -1314,6 +1353,12 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         "\"threshold definido em Evidence Policy\". Se o bloco obrigatório NÃO "
         "trouxer min_relevance, NÃO cite número nenhum (o engine aplicará o "
         "default da plataforma)."
+        + (
+            "\n7. Copie a seção ## Decisions (fence JSON) VERBATIM — não traduza "
+            "campos/valores, não adicione nem remova valores: é um CONTRATO "
+            "selado que o gate condicional valida em runtime."
+            if data.decisions else ""
+        )
         + threshold_rule
     )
 
@@ -1479,6 +1524,9 @@ async def wizard_skill(data: WizardSkillRequest):
         # `{operation, query}` quando há tool MCP e o LLM inventou inputs de
         # domínio. Antes de validar, pra o validador ver a versão corrigida.
         skill_md = _ensure_mcp_inputs_contract(skill_md, bindings.get("mcp_tools") or [])
+        # Cond-C.2: contrato de decisão SELADO — corrige drift/omissão do LLM
+        # gerador de forma determinística (major do review pré-push).
+        skill_md = _ensure_decisions_contract(skill_md, data.decisions)
 
         # ── Validação pós-geração + retry com instrução corretiva ──
         from app.skill_parser.parser import parse_skill_md
@@ -1520,6 +1568,7 @@ async def wizard_skill(data: WizardSkillRequest):
                     reasoning_effort=_wizard_reasoning_effort())
                 retry_skill_md = strip_code_fence(retry_skill_md)
                 retry_skill_md = _ensure_mcp_inputs_contract(retry_skill_md, bindings.get("mcp_tools") or [])
+                retry_skill_md = _ensure_decisions_contract(retry_skill_md, data.decisions)
                 # Re-valida o retry — se também violar, mantém o RETRY (geralmente
                 # melhor que o original) mas devolve warnings pro operador
                 try:
