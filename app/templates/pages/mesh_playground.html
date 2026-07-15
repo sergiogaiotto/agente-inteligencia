@@ -68,6 +68,8 @@
                     <div class="flex items-center gap-2 text-[10.5px]">
                         <button @click="verInputs()" type="button" :disabled="inputsLoading || !selectedId" data-testid="pg-inputs" class="text-brand-500 hover:text-brand-700 disabled:opacity-40">inputs esperados</button>
                         <span class="text-surface-300">·</span>
+                        <button @click="abrirNlArgs()" type="button" :disabled="inputsLoading || !selectedId" data-testid="pg-nl-open" class="text-brand-500 hover:text-brand-700 disabled:opacity-40" title="descreva o pedido em português e a IA monta os args — provados no servidor antes de usar">IA: descrever</button>
+                        <span class="text-surface-300">·</span>
                         <button @click="inserirTemplate()" type="button" :disabled="inputsLoading || !selectedId" data-testid="pg-template" class="text-brand-500 hover:text-brand-700 disabled:opacity-40">inserir template</button>
                         <span class="text-surface-300">·</span>
                         <button @click="previewArgs()" type="button" :disabled="!selectedId" data-testid="pg-preview-args" class="text-brand-500 hover:text-brand-700 disabled:opacity-40" title="resolve no servidor SEM executar (mostra defaults aplicados)">pré-visualizar</button>
@@ -77,6 +79,47 @@
                           class="w-full rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-[13px] text-brand-900 outline-none focus:border-brand-400 resize-y"></textarea>
                 <!-- painel de inputs esperados (toggle) -->
                 <div x-show="showInputs" class="mt-2 rounded-lg border border-surface-200 bg-surface-50 p-2.5" data-testid="pg-inputs-panel">
+                    <!-- Tradutor NL→args (item 2, 38.1.0): IA propõe, o servidor PROVA
+                         com o MESMO resolvedor do invoke (contra o selo quando publicado).
+                         Cookie-only (superfície de UI) → api.post, não a X-API-Key do preview. -->
+                    <div x-show="inputFields.length" class="mb-2 rounded-lg border border-surface-200 bg-white p-2.5" data-testid="pg-nl-args">
+                        <div class="flex items-center gap-1.5">
+                            <svg class="w-3.5 h-3.5 flex-none text-brand-500" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M5 3l1.5 4L11 8.5 6.5 10 5 14l-1.5-4L-1 8.5 3.5 7zM17 11l1 2.5 2.5 1-2.5 1L17 18l-1-2.5-2.5-1 2.5-1z"/></svg>
+                            <input x-model="nlArgsDesc" @keydown.enter.prevent="suggestArgs()"
+                                   placeholder="Descreva em português: consulte o cliente 1031 do segmento varejo"
+                                   data-testid="pg-nl-args-input"
+                                   class="flex-1 rounded border border-surface-200 px-2 py-1.5 text-[11px] outline-none focus:border-brand-400">
+                            <button type="button" @click="suggestArgs()" :disabled="!!nlArgsLoading"
+                                    data-testid="pg-nl-args-go"
+                                    class="rounded-lg bg-brand-500 text-white px-2.5 py-1.5 text-[11px] hover:bg-brand-600 disabled:opacity-50"
+                                    x-text="nlArgsLoading ? '…' : 'Gerar args'"></button>
+                        </div>
+                        <template x-if="nlArgsSuggest">
+                            <div class="mt-2 text-[11px]">
+                                <template x-if="nlArgsSuggest.error && !nlArgsSuggest.args">
+                                    <p class="rounded-lg bg-rose-50 text-rose-700 px-2 py-1.5" x-text="'Erro: ' + nlArgsSuggest.error"></p>
+                                </template>
+                                <template x-if="nlArgsSuggest.args">
+                                    <div class="rounded-lg px-2 py-1.5" :class="nlArgsSuggest.valid ? 'bg-emerald-50' : 'bg-amber-50'">
+                                        <code class="font-mono text-[11px] text-surface-700 break-all" x-text="JSON.stringify(nlArgsSuggest.args)"></code>
+                                        <template x-if="!nlArgsSuggest.valid">
+                                            <ul class="text-amber-700 mt-1 list-disc pl-4">
+                                                <template x-for="(iss, ix) in (nlArgsSuggest.issues || [])" :key="ix">
+                                                    <li x-text="iss.field + ': ' + iss.code + (iss.did_you_mean ? ' — quis dizer ' + iss.did_you_mean + '?' : '')"></li>
+                                                </template>
+                                            </ul>
+                                        </template>
+                                        <p x-show="nlArgsSuggest.valid && nlArgsSuggest.sealed" class="text-[9.5px] text-teal-700 mt-1">provado contra o contrato <strong>selado</strong><span x-show="nlArgsSuggest.contract_version" x-text="' v' + nlArgsSuggest.contract_version"></span></p>
+                                        <button type="button" @click="useSuggestedArgs()" data-testid="pg-nl-args-use"
+                                                class="mt-1.5 rounded border border-brand-300 text-brand-600 px-2 py-1 text-[11px] hover:bg-brand-50">
+                                            <span x-text="nlArgsSuggest.valid ? 'Usar estes args' : 'Usar e corrigir à mão'"></span>
+                                        </button>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                        <p class="text-[10px] text-surface-400 mt-1.5">A IA extrai os parâmetros; o servidor os <strong>prova</strong> contra o contrato antes de você usar. Nada é executado.</p>
+                    </div>
                     <!-- formulário tipado: 1 widget por campo do ## Inputs do agente-raiz.
                          Os valores viram o objeto `args` (validado/coagido no servidor antes
                          de executar) — sem JSON na mão. Texto livre segue na Mensagem acima. -->
@@ -983,6 +1026,8 @@ function playgroundPage() {
         // valores do formulário de args (1 por campo do ## Inputs do agente-raiz).
         // Viram o objeto `args` do invoke (pruned/coagido em argsPayload).
         argValues: {},
+        // Tradutor NL→args (item 2, 38.1.0)
+        nlArgsDesc: '', nlArgsLoading: false, nlArgsSuggest: null,
         // resultado da pré-visualização (modo dry): {resolved, provenance} | {error} | {loading}
         argsPreview: null,
         // comparar A/B (F2): 2 execuções REAIS lado a lado — 2 pipelines OU o mesmo
@@ -1147,7 +1192,9 @@ function playgroundPage() {
             } catch (e) { showToast('Erro ao carregar inputs: ' + e.message, 'error'); return null; }
             finally { this.inputsLoading = false; }
         },
-        _resetInputsHelper() { this.inputsSchema = null; this.showInputs = false; this._schemaCache = null; this.argValues = {}; this.argsPreview = null; },
+        // Reset TAMBÉM do tradutor NL→args: sugestão foi provada contra o contrato
+        // do pipeline ANTERIOR — deixá-la na tela ao trocar seria falsa confiança.
+        _resetInputsHelper() { this.inputsSchema = null; this.showInputs = false; this._schemaCache = null; this.argValues = {}; this.argsPreview = null; this.nlArgsSuggest = null; this.nlArgsDesc = ''; },
         // Guards defensivos: `## Inputs` é JSON do autor — `required`/`properties`
         // podem vir malformados (ex.: required como objeto). new Set(não-iterável) joga.
         get inputFields() {
@@ -1185,6 +1232,42 @@ function playgroundPage() {
             if (tpl) { try { this.argValues = JSON.parse(tpl); } catch (_) { this.argValues = {}; } this.showInputs = true; showToast('Campos preenchidos — ajuste os valores e Execute'); }
             else { this.showInputs = true; showToast('Este pipeline não declara inputs estruturados (mande texto livre)', 'info'); }
         },
+        // ── Tradutor NL→args (item 2, 38.1.0): IA propõe → servidor PROVA com o
+        // MESMO resolvedor do invoke (contra o selo quando publicado). Endpoint é
+        // cookie-only (superfície de UI) → api.post; a X-API-Key fica p/ o preview.
+        async abrirNlArgs() {
+            const d = await this._loadInputsSchema(); if (!d) return;
+            this.showInputs = true;
+            this.$nextTick(() => { const el = document.querySelector('[data-testid=pg-nl-args-input]'); if (el) el.focus(); });
+        },
+        async suggestArgs() {
+            const desc = (this.nlArgsDesc || '').trim();
+            if (!desc) { this.nlArgsSuggest = { error: 'Descreva o pedido primeiro.' }; return; }
+            if (!this.selectedId) return;
+            this.nlArgsLoading = true; this.nlArgsSuggest = null;
+            try { this.nlArgsSuggest = await api.post('/api/v1/pipelines/' + this.selectedId + '/suggest-args', { description: desc }); }
+            catch (e) { this.nlArgsSuggest = { error: e.message }; }
+            finally { this.nlArgsLoading = false; }
+        },
+        // "Usar estes args": preenche o form com o que a IA EXTRAIU (s.args, já
+        // reparado) — defaults ficam no servidor, onde a proveniência que o dry
+        // mostra ('default' vs 'você') continua verdadeira. Valores viram STRING
+        // (widgets são <input>/<select>, como no inserirTemplate); a coerção real
+        // é do servidor no envio. Sugestão inválida também aplica: os campos
+        // reprovados ficam visíveis no form com o hint de erro p/ corrigir à mão.
+        useSuggestedArgs() {
+            const s = this.nlArgsSuggest; if (!s || !s.args) return;
+            const vals = {};
+            for (const f of this.inputFields) {
+                const v = s.args[f.name];
+                if (v !== null && v !== undefined) vals[f.name] = String(v);
+            }
+            this.argValues = vals;
+            this.showInputs = true;
+            if (s.valid && this.apiKey) this.previewArgs();
+            showToast(s.valid ? 'Args aplicados ao formulário' : 'Args aplicados — corrija os campos apontados', s.valid ? undefined : 'info');
+        },
+
         // Pré-visualização (modo dry): pede ao servidor pra RESOLVER os args (coage +
         // aplica defaults + valida) e devolver a origem de cada campo, SEM executar
         // (não gasta LLM). Mostra os defaults que o servidor injeta — invisíveis no form.
