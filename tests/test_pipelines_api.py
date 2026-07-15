@@ -446,7 +446,10 @@ class TestBuildSubgraphEntry:
         from app.catalog import pipeline_defs as pd
         from app.core.database import pipelines_repo, pipeline_membership, mesh_repo, agents_repo
         async def agents_of(pid): return list(members)
-        async def find_all(limit=1000): return conns
+        # espelha a assinatura REAL do repo (aceita filtros como source_agent_id
+        # — o _build_subgraph busca por membro desde 36.0.0; dedup absorve a
+        # lista repetida do mock)
+        async def find_all(limit=200, **filters): return conns
         async def pl_find(pid): return {"id": pid, "entry_agent_id": entry}
         async def ag_find(aid): return {"id": aid, "name": aid, "kind": "subagent"}
         monkeypatch.setattr(pipeline_membership, "agents_of", agents_of)
