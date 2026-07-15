@@ -166,21 +166,23 @@ class TestDecodeAttachmentsExtractsBinary:
 
     def test_markitdown_failure_logs_warning_and_keeps_empty_content(self, caplog):
         """Conversor falha → mantém content="" (comportamento legado) mas
-        loga warning com filename para diagnóstico."""
+        loga warning com filename para diagnóstico. 37.0.0: o decoder (e o
+        logger/event) vivem em app/core/attachments — compartilhado com o
+        invoke de pipeline."""
         from app.routes.agents import _decode_attachments
         att = self._make_attachment(b"\x00\x01\xff\xfe\x80\x81 bad", "x.bin", "application/octet-stream")
 
         with patch("app.evidence.converters.convert_bytes") as mock_convert:
             mock_convert.side_effect = RuntimeError("conv crashou")
-            with caplog.at_level(logging.WARNING, logger="app.routes.agents"):
+            with caplog.at_level(logging.WARNING, logger="app.core.attachments"):
                 accepted, rejected = _decode_attachments([att])
 
         # Content vazio (engine descarta) — mas agora há log para o operador
         assert len(accepted) == 1
         assert accepted[0]["content"] == ""
         events = [getattr(r, "event", None) for r in caplog.records]
-        assert "agents.invoke_attachments" in events
-        rec = next(r for r in caplog.records if getattr(r, "event", None) == "agents.invoke_attachments")
+        assert "invoke.attachments" in events
+        rec = next(r for r in caplog.records if getattr(r, "event", None) == "invoke.attachments")
         assert rec.attachment_name == "x.bin"
         assert rec.error_type == "RuntimeError"
 

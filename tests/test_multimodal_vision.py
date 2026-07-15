@@ -162,8 +162,9 @@ class TestWiringSourceSmoke:
 
     def test_api_decoder_preserves_image_base64(self):
         """O decoder da API deve preservar o base64 da imagem (guarda a regressão
-        no nível do source, além do teste funcional acima)."""
-        src = (_ROOT / "app" / "routes" / "agents.py").read_text(encoding="utf-8")
+        no nível do source, além do teste funcional acima). 37.0.0: o decoder
+        vive em app/core/attachments (compartilhado agent+pipeline invoke)."""
+        src = (_ROOT / "app" / "core" / "attachments.py").read_text(encoding="utf-8")
         assert 'content_base64' in src and 'startswith("image/")' in src
 
     def test_api_invoke_prunes_by_chain_not_entry_only(self):
