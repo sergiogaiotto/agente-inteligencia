@@ -52,6 +52,8 @@ from app.skill_parser.decisions_schema import (
     extract_decision_line,
     extract_decisions_schema,
     has_decision_line,
+    preserve_decision_line,
+    strip_decision_line,
 )
 from app.skill_parser.parser import parse_skill_md
 from app.core.otel import get_tracer
@@ -240,7 +242,7 @@ def _resolve_response_language(agent: dict, settings) -> str:
     return "pt-BR"
 
 
-def _build_response_language_directive(lang_tag: str) -> str:
+def _build_response_language_directive(lang_tag: str, *, preserve_decision_line: bool = False) -> str:
     """Constrói bloco do system_prompt instruindo o LLM sobre idioma da resposta.
 
     Texto imperativo — modelos open-weight (gpt-oss-120b) tendem a espelhar
@@ -253,9 +255,15 @@ def _build_response_language_directive(lang_tag: str) -> str:
     em vez de traduzir (title, content, snippet, summary, description) —
     open-weight precisa do gatilho lexical pra atravessar o impulso de
     passthrough.
+
+    `preserve_decision_line` (Cond-C, 35.19.0): quando o agente declara
+    `## Decisions`, a diretiva ganha a exceção da linha `DECISAO:` — sem ela,
+    um agente en-US obedeceria "traduza TUDO" e emitiria `DECISION: yes`, que
+    o parser rejeita e vira falso-negativo silencioso no gate (review
+    2026-07-15). Sem contrato o texto é BYTE-IDÊNTICO ao de sempre.
     """
     label = _LANGUAGE_LABELS.get(lang_tag, lang_tag)
-    return (
+    base = (
         "[IDIOMA DA RESPOSTA]\n"
         f"Sempre responda em {label}, mesmo quando o contexto, evidências de "
         "RAG ou resultados de tools MCP estiverem em outros idiomas. Traduza "
@@ -268,9 +276,17 @@ def _build_response_language_directive(lang_tag: str) -> str:
         "(IDs, slugs, chaves), código-fonte, e nomes de marcas/produtos/"
         "pessoas (ex: 'Uber', 'GPT-4', 'João Silva')."
     )
+    if preserve_decision_line:
+        base += (
+            " EXCEÇÃO ADICIONAL: a linha final `DECISAO:` exigida pelo "
+            "Contrato de Decisão é um token de máquina — copie a palavra "
+            "DECISAO e os valores EXATAMENTE como declarados no contrato, "
+            "SEM traduzi-los."
+        )
+    return base
 
 
-def _build_response_language_closing(lang_tag: str) -> str:
+def _build_response_language_closing(lang_tag: str, *, preserve_decision_line: bool = False) -> str:
     """Reminder curto colado ao FIM do system prompt (estratégia sanduíche).
 
     Modelos open-weight grudam no que está mais próximo da geração — quando
@@ -280,15 +296,26 @@ def _build_response_language_closing(lang_tag: str) -> str:
 
     Mantém-se curto de propósito: o detalhe está na diretiva inicial; aqui
     só ancora a regra.
+
+    `preserve_decision_line`: este reminder é a ÚLTIMA instrução antes da
+    geração — justamente a que vence a atenção do modelo. Sem a exceção, o
+    "traduza TUDO" mataria a linha `DECISAO:` do Contrato de Decisão (ver
+    `_build_response_language_directive`). Sem contrato → byte-idêntico.
     """
     label = _LANGUAGE_LABELS.get(lang_tag, lang_tag)
-    return (
+    base = (
         "[LEMBRETE FINAL — IDIOMA]\n"
         f"Antes de gerar sua resposta: TODO texto que você produzir, "
         f"inclusive em campos JSON, deve estar em {label}. Traduza títulos "
         "e conteúdo do tool result; preserve apenas URLs, código e nomes "
         "próprios."
     )
+    if preserve_decision_line:
+        base += (
+            " EXCEÇÃO: a linha final `DECISAO:` do Contrato de Decisão NÃO "
+            "se traduz — palavra DECISAO e valores VERBATIM, como declarados."
+        )
+    return base
 
 
 # ═══════════════════════════════════════════════════
@@ -1036,10 +1063,15 @@ class DeepAgentHarness:
         from app.core.config import get_settings as _get_settings_lang
         skill = self.config.get("_parsed_skill", {})
         parts = []
+        # Contrato de Decisão lido ANTES das diretivas de idioma: com ## Decisions
+        # declarado, ambas ganham a exceção "linha DECISAO verbatim" (colisão
+        # idioma×contrato — review 2026-07-15). Sem contrato, as diretivas são
+        # byte-idênticas às de sempre (reprodutibilidade).
+        _decisions = skill.get("_decisions_schema")
         # Idioma — DIRETIVA prependida (antes do system_prompt do agent) pra
         # ter precedência forte na atenção do LLM.
         _lang = _resolve_response_language(self.config, _get_settings_lang())
-        parts.append(_build_response_language_directive(_lang))
+        parts.append(_build_response_language_directive(_lang, preserve_decision_line=bool(_decisions)))
         # Grounded-by-default — diretiva estrita de fundamentação. Gated por
         # settings.grounding_strict E pela ausência do escape hatch do agente
         # (allow_general_knowledge). Quando o agente PODE usar conhecimento geral,
@@ -1074,7 +1106,7 @@ class DeepAgentHarness:
         # a plataforma SELA a instrução da linha `DECISAO:` no prompt. O gate
         # condicional (`decision.<campo>`) só enxerga o que esta linha anuncia —
         # substitui o 'escalar=sim' in output_lower combinado por telepatia.
-        _decisions = skill.get("_decisions_schema")
+        # (`_decisions` foi lido no topo do método, antes das diretivas de idioma.)
         if _decisions:
             parts.append(build_decisions_directive(_decisions))
         if self.mcp_tools:
@@ -1113,7 +1145,7 @@ class DeepAgentHarness:
             )
         if _inject_grounding:
             parts.append(_build_grounding_closing())
-        parts.append(_build_response_language_closing(_lang))
+        parts.append(_build_response_language_closing(_lang, preserve_decision_line=bool(_decisions)))
         return "\n".join(parts)
 
     def _should_force_tool_call(self) -> bool:
@@ -4739,6 +4771,29 @@ async def execute_pipeline(
     # citou evidência). Fallback steps[-1]: cadeia sem nenhum produtor (tudo
     # skip/passthrough) preserva o comportamento antigo.
     _owner_step = owner_step if owner_step is not None else (steps[-1] if steps else None)
+    # Contrato de Decisão (35.19.0): a linha DECISAO é protocolo de máquina — o
+    # gate já a leu e steps/trace a preservam (auditoria). Sai APENAS da resposta
+    # final apresentada (decisão de design 2026-07-15). Gate duplo no helper
+    # (schema declarado + pares válidos): agente sem contrato → no-op, prosa
+    # legítima 'Decisão: ...' fica intacta. Fail-safe: erro → output intacto.
+    # Tenta o schema do DONO da resposta e depois os dos demais steps: o agente
+    # final sem contrato pode ECOAR a linha do upstream que veio no contexto
+    # (review pré-push 2026-07-15) — lookups memoizados por pipeline.
+    if final_output and owner_step is not None and has_decision_line(final_output):
+        try:
+            _strip_agents: list = []
+            for _s in [owner_step, *steps]:
+                _aid = (_s or {}).get("agent_id") or ""
+                if _aid and _aid not in _strip_agents:
+                    _strip_agents.append(_aid)
+            for _aid in _strip_agents:
+                _sch = await _decisions_schema_for_agent(_aid)
+                if _sch:
+                    final_output = strip_decision_line(final_output, _sch)
+                if not has_decision_line(final_output):
+                    break
+        except Exception:
+            logger.warning("pipeline.decision_line_strip_failed", exc_info=True)
     final_result = {
         "mode": "pipeline",
         "output": final_output,
@@ -5397,14 +5452,30 @@ def _extract_routed_target(output: str | None) -> str | None:
 def _preserve_decision_line(*, original: str, truncated: str, schema: dict | None) -> str:
     """Pós-truncate do Output Shape: a linha `DECISAO:` vive no FIM da resposta —
     o hard-cut a mataria e toda regra `decision.*` do gate viraria falso-negativo
-    silencioso. Re-anexa a forma CANÔNICA (validada contra o schema) extraída do
-    draft ORIGINAL. Sem schema / linha sobreviveu / nada válido → truncado intacto."""
-    if not schema or has_decision_line(truncated):
-        return truncated
-    dec = extract_decision_line(original, schema)
-    if not dec:
-        return truncated
-    return truncated + "\nDECISAO: " + "; ".join(f"{k}={v}" for k, v in dec.items())
+    silencioso. Delega ao helper canônico do parser, que compara a EXTRAÇÃO
+    validada do original vs truncado (o guard antigo `has_decision_line` falhava
+    no corte NO MEIO da linha — campos amputados em silêncio, review 2026-07-15)."""
+    return preserve_decision_line(original, truncated, schema)
+
+
+async def _decisions_schema_for_agent(agent_id: str) -> Optional[dict]:
+    """Schema `## Decisions` da skill do agente, memoizado por requisição de
+    pipeline (mesmo contextvar do `_topo_agent`): um fan-out de N arestas
+    condicionais paga o find_by_id + parse UMA vez, não N (review 2026-07-15).
+    Fora de pipeline (cache None) resolve direto. None = sem contrato."""
+    agent = await _topo_agent(agent_id)
+    skill_id = (agent or {}).get("skill_id")
+    if not skill_id:
+        return None
+    cache = _pipeline_topo.get()
+    memo = cache.setdefault("decisions_schema", {}) if cache is not None else None
+    if memo is not None and skill_id in memo:
+        return memo[skill_id]
+    row = await skills_repo.find_by_id(skill_id)
+    schema = extract_decisions_schema((row or {}).get("raw_content") or "")
+    if memo is not None:
+        memo[skill_id] = schema
+    return schema
 
 
 async def _decision_vars_for_source(source_id: str, last_output: str) -> dict:
@@ -5412,23 +5483,35 @@ async def _decision_vars_for_source(source_id: str, last_output: str) -> dict:
     contra o `## Decisions` da skill dele (Cond-C, 35.19.0). Grafia canônica.
 
     Barato por construção: sem linha `DECISAO:` no output (caso comum) retorna
-    {} SEM tocar o banco. Com linha, resolve agente (memoizado por pipeline via
-    `_topo_agent`) + skill e valida — campo/valor fora do contrato caem fora
-    (o contrato é selado; regra `decision.x` só vê o que a skill declarou).
+    {} SEM tocar o banco. Com linha, resolve agente + schema (ambos memoizados
+    por pipeline) e valida — campo/valor fora do contrato caem fora (o contrato
+    é selado; regra `decision.x` só vê o que a skill declarou).
     Fail-safe: qualquer erro → {} (a regra decision.* não casa; demais vars da
     expr seguem intactas)."""
     if not has_decision_line(last_output):
         return {}
     try:
-        agent = await _topo_agent(source_id)
-        skill_id = (agent or {}).get("skill_id")
-        if not skill_id:
-            return {}
-        row = await skills_repo.find_by_id(skill_id)
-        schema = extract_decisions_schema((row or {}).get("raw_content") or "")
+        schema = await _decisions_schema_for_agent(source_id)
         if not schema:
             return {}
-        return extract_decision_line(last_output, schema)
+        decision = extract_decision_line(last_output, schema)
+        if not decision:
+            # Linha PRESENTE mas nada validou — ex.: agente respondendo noutro
+            # idioma traduziu os valores ('escalar=yes') apesar da diretiva
+            # verbatim. Sem este log o falso-negativo do gate seria 100%
+            # silencioso e indiagnosticável em produção (review 2026-07-15).
+            # SEM trecho do output no log: o fim da resposta costuma citar dados
+            # do cliente e logs/ ficam FORA do forget LGPD (review pré-push).
+            logger.warning(
+                "mesh.conditional.decision_line_invalid",
+                extra={
+                    "event": "mesh.conditional",
+                    "source_id": source_id,
+                    "schema_fields": sorted(schema.keys()),
+                    "output_len": len(last_output or ""),
+                },
+            )
+        return decision
     except Exception as e:
         logger.warning(
             "mesh.conditional.decision_extract_failed",
@@ -5440,6 +5523,24 @@ async def _decision_vars_for_source(source_id: str, last_output: str) -> dict:
             },
         )
         return {}
+
+
+async def strip_decision_line_for_display(output: str, agent_id: str) -> str:
+    """`strip_decision_line` com resolução do contrato do agente (Cond-C).
+
+    Para as superfícies de apresentação SINGLE-AGENT (/agents/invoke, chat do
+    workspace) — o pipeline aplica o strip na montagem do resultado final em
+    `execute_pipeline`. NUNCA usar sobre o output que alimenta gate/contexto
+    downstream (a linha é o insumo do `decision.*`). Fail-safe: erro → intacto."""
+    if not output or not agent_id or not has_decision_line(output):
+        return output
+    try:
+        schema = await _decisions_schema_for_agent(agent_id)
+        if not schema:
+            return output
+        return strip_decision_line(output, schema)
+    except Exception:
+        return output
 
 
 async def _should_skip_conditional(
@@ -5610,8 +5711,15 @@ async def _should_skip_conditional(
                 session_text=session_text,
                 inputs=inputs,
                 # Contrato de Decisão (35.19.0): decisões anunciadas pelo source
-                # na linha DECISAO:, validadas contra a skill dele.
-                decision=await _decision_vars_for_source(source_id, last_output),
+                # na linha DECISAO:, validadas contra a skill dele. Gate lexical
+                # (review 2026-07-15): a extração paga lookup de skill + parse —
+                # só vale quando a expr USA decision.*. Substring é fail-safe:
+                # falso-positivo custa só o lookup; `decision.x` sempre contém
+                # "decision", então nunca há falso-negativo.
+                decision=(
+                    await _decision_vars_for_source(source_id, last_output)
+                    if "decision" in expr else {}
+                ),
             ),
         )
     except Exception as e:

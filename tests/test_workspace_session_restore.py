@@ -382,3 +382,81 @@ class TestEntryModeAutoDetectsPipeline:
         assert "const isPipelineRoot = (this.pipelineRoots || []).some(p => p.id === sessionAgentId);" in src
         # entrada ?agent= também consulta pipelineRoots
         assert "(this.pipelineRoots||[]).some(pr=>pr.id===aid)" in src
+
+
+# ─── Cond-C (35.19.0): linha DECISAO não volta no histórico ──────────────────
+
+
+class TestGetSessionDecisionLineStrip:
+    """O banco guarda o output CRU (auditoria); o balão do histórico é RESPOSTA
+    APRESENTADA — mesmo strip do /chat vivo, senão a linha DECISAO reaparece ao
+    recarregar a sessão (achado do review do plano Cond-C)."""
+
+    SESSION_ID = "sess-dec"
+
+    def _session(self):
+        return {
+            "id": self.SESSION_ID, "agent_id": "ag-contrato", "title": "t",
+            "state": "LogAndClose", "trace_data": None,
+        }
+
+    def _turns(self, output):
+        return [{
+            "user_text_redacted": "Meu cartão foi clonado.",
+            "output_text_redacted": output, "created_at": "",
+        }]
+
+    def test_balao_sem_linha_quando_agente_tem_contrato(self, workspace_client, monkeypatch):
+        _patch_session(
+            monkeypatch, session_row=self._session(),
+            turns=self._turns("Entendi o problema do cartão.\n\nDECISAO: escalar=sim"),
+        )
+
+        async def _schema(_id):
+            return {"escalar": ["sim", "não"]}
+
+        monkeypatch.setattr("app.agents.engine._decisions_schema_for_agent", _schema)
+        r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        assert r.status_code == 200
+        assistant = [m for m in r.json()["messages"] if m["role"] == "assistant"]
+        assert assistant[0]["content"] == "Entendi o problema do cartão."
+
+    def test_prosa_decisao_fica_quando_agente_sem_contrato(self, workspace_client, monkeypatch):
+        # gate duplo: sem schema o strip é no-op — prosa legítima não é amputada
+        raw = "Análise concluída.\nDecisão: aprovado o crédito"
+        _patch_session(monkeypatch, session_row=self._session(), turns=self._turns(raw))
+
+        async def _schema(_id):
+            return None
+
+        monkeypatch.setattr("app.agents.engine._decisions_schema_for_agent", _schema)
+        r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        assistant = [m for m in r.json()["messages"] if m["role"] == "assistant"]
+        assert assistant[0]["content"] == raw
+
+    def test_pipeline_strippa_por_autor_do_balao(self, workspace_client, monkeypatch):
+        # MAJOR do review pré-push: numa sessão de PIPELINE as turns são por
+        # step — o schema tem que ser o do AUTOR do balão (agente meio-de-cadeia
+        # com contrato), não o do agente de entrada.
+        trace = {"pipeline_steps": [{"agent_id": "ag-A"}, {"agent_id": "ag-B"}]}
+        session = {
+            "id": self.SESSION_ID, "agent_id": "ag-A", "title": "t",
+            "state": "LogAndClose", "trace_data": json.dumps(trace),
+        }
+        # repo devolve mais-recente-primeiro; o handler reverte p/ cronológica
+        turns = [
+            {"user_text_redacted": None,
+             "output_text_redacted": "Caso grave.\nDECISAO: escalar=sim", "created_at": ""},
+            {"user_text_redacted": "Meu cartão foi clonado.",
+             "output_text_redacted": "Roteado para triagem.", "created_at": ""},
+        ]
+        _patch_session(monkeypatch, session_row=session, turns=turns)
+
+        async def _schema(aid):
+            return {"escalar": ["sim", "não"]} if aid == "ag-B" else None
+
+        monkeypatch.setattr("app.agents.engine._decisions_schema_for_agent", _schema)
+        r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        assistant = [m for m in r.json()["messages"] if m["role"] == "assistant"]
+        assert assistant[0]["content"] == "Roteado para triagem."
+        assert assistant[1]["content"] == "Caso grave."

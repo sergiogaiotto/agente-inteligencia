@@ -701,14 +701,32 @@
                                     </template>
 
                                     <template x-if="editor.intent==='decision'">
-                                        <div class="rounded-lg border border-surface-200 p-2.5 flex items-center gap-1.5 text-[11px] text-surface-500 flex-wrap">
-                                            <span>A decisão do agente foi:</span>
-                                            <select x-model="editor.decision" @change="syncExpr()" class="rounded border border-surface-200 px-1.5 py-1 text-[11px]">
-                                                <option value="is_recommend">Recomendar</option>
-                                                <option value="is_refuse">Recusar</option>
-                                                <option value="is_escalate">Escalar</option>
-                                                <option value="final_state == 'LogAndClose'">Registrar e fechar</option>
-                                            </select>
+                                        <div class="rounded-lg border border-surface-200 p-2.5 space-y-1.5">
+                                            <div class="flex items-center gap-1.5 text-[11px] text-surface-500 flex-wrap">
+                                                <span>A decisão do agente foi:</span>
+                                                <!-- x-effect: o Alpine só re-aplica o value do select quando o MODEL muda;
+                                                     as options do contrato chegam DEPOIS (fetch) — sem isso, um value de
+                                                     contrato ficaria "em branco" no select até o próximo change. -->
+                                                <select x-model="editor.decision" @change="syncExpr()" data-testid="decision-select"
+                                                        x-effect="srcDecisions; editor.decision; $nextTick(() => { if ($el.value !== editor.decision) $el.value = editor.decision })"
+                                                        class="rounded border border-surface-200 px-1.5 py-1 text-[11px]">
+                                                    <!-- Contrato de Decisão (Cond-C, 35.19.0): campos/valores DECLARADOS
+                                                         no ## Decisions do agente de origem — o fim do 'escalar=sim'
+                                                         digitado de memória. value = fragmento de expr, igual às FSM. -->
+                                                    <template x-if="srcDecisionOptions().length">
+                                                        <optgroup label="Contrato do agente (## Decisions)">
+                                                            <template x-for="o in srcDecisionOptions()" :key="o.expr">
+                                                                <option :value="o.expr" x-text="o.label"></option>
+                                                            </template>
+                                                        </optgroup>
+                                                    </template>
+                                                    <option value="is_recommend">Recomendar</option>
+                                                    <option value="is_refuse">Recusar</option>
+                                                    <option value="is_escalate">Escalar</option>
+                                                    <option value="final_state == 'LogAndClose'">Registrar e fechar</option>
+                                                </select>
+                                            </div>
+                                            <p x-show="srcDecisionOptions().length" class="text-[10.5px] text-surface-400">Este agente declara um <strong>Contrato de Decisão</strong> — prefira as opções do contrato: a plataforma valida a linha <span class="font-mono">DECISAO:</span> no runtime.</p>
                                         </div>
                                     </template>
 
@@ -2105,6 +2123,37 @@ function meshFlowPage() {
             if (e.type === 'conditional' && (this.editor.testPhrases || []).length) this.runPhrases();
         },
 
+        // ── Contrato de Decisão (Cond-C, 35.19.0) ── `## Decisions` declarado
+        // pelo agente de ORIGEM da aresta em edição; alimenta o optgroup do card
+        // "decisão". Best-effort: falha ou ausência de contrato NUNCA impede o
+        // editor (srcDecisions fica {} e o card mostra só as opções FSM).
+        async loadSrcDecisions(srcId) {
+            this.srcDecisions = {};
+            if (!srcId) return;
+            // Guarda de época por GERAÇÃO (mesma máquina do _phrasesGen): duas
+            // buscas in-flight — inclusive do MESMO agente, reabrindo o editor
+            // rápido — não podem resolver fora de ordem e aplicar contrato stale.
+            const gen = (this._srcDecGen = (this._srcDecGen || 0) + 1);
+            try {
+                const r = await api.get('/api/v1/mesh/agents/' + srcId + '/decisions');
+                if (gen !== this._srcDecGen) return;                 // resposta velha
+                if (this.editor && this.editor.source === srcId) {   // editor trocou
+                    this.srcDecisions = (r && r.decisions) || {};
+                }
+            } catch (_) { /* sem contrato / rota indisponível → opções FSM */ }
+        },
+        // Opções planas {label, expr} do contrato — cada valor vira um fragmento
+        // de expr pronto (o value do <option> JÁ é expr, igual às opções FSM).
+        srcDecisionOptions() {
+            const out = [];
+            for (const f of Object.keys(this.srcDecisions || {})) {
+                for (const v of (this.srcDecisions[f] || [])) {
+                    out.push({ label: f + ' = ' + v, expr: 'decision.' + f + ' == ' + this._jinjaStrExact(v) });
+                }
+            }
+            return out;
+        },
+
         buildConfig() {
             const ed = this.editor, cfg = {};
             if (ed.type === 'conditional' && (ed.expr || '').trim()) cfg.expr = ed.expr.trim();
@@ -2144,7 +2193,7 @@ function meshFlowPage() {
             const gen = (this._phrasesGen = (this._phrasesGen || 0) + 1);
             for (const p of ed.testPhrases) {
                 try {
-                    const body = { expr, final_state: 'Recommend' };
+                    const body = { expr, final_state: 'Recommend', source_agent_id: ed.source || '' };
                     if (p.where === 'output') body.output = p.text; else body.input = p.text;
                     const r = await api.post('/api/v1/mesh/connections/test-conditional', body);
                     if (gen !== this._phrasesGen || (this.editor && (this.editor.expr || '').trim() !== expr)) return;  // regra mudou → aborta
@@ -2217,6 +2266,9 @@ function meshFlowPage() {
                     input: ed.sampleInput || '',
                     final_state: ed.sampleFinalState || '',
                     attachments,
+                    // Cond-C: o backend extrai a linha DECISAO do output simulado e
+                    // valida contra o contrato do source — simulador espelha o runtime.
+                    source_agent_id: ed.source || '',
                 });
             } catch (e) { this.sim = { error: e.message }; }
         },
@@ -2303,7 +2355,15 @@ function meshFlowPage() {
                 return `contém ${modo} de [${ed.kwTerms.join(', ')}] ${onde}`;
             }
             if (ed.intent === 'attachment') return { has_attachments: 'tem anexo', has_document: 'tem documento', has_image: 'tem imagem' }[ed.attKind] || '';
-            if (ed.intent === 'decision') return 'decisão: ' + ({ is_recommend: 'Recomendar', is_refuse: 'Recusar', is_escalate: 'Escalar', "final_state == 'LogAndClose'": 'Registrar e fechar' }[ed.decision] || '');
+            if (ed.intent === 'decision') {
+                const fsm = { is_recommend: 'Recomendar', is_refuse: 'Recusar', is_escalate: 'Escalar', "final_state == 'LogAndClose'": 'Registrar e fechar' }[ed.decision];
+                if (fsm) return 'decisão: ' + fsm;
+                // Opção vinda do Contrato de Decisão: deriva o rótulo do próprio
+                // fragmento `decision.<campo> == '<valor>'` (sem isso a cláusula
+                // entraria na lista com rótulo em branco — achado do review).
+                const m = /^decision\.([A-Za-z_]\w*)\s*==\s*'(.*)'$/.exec(ed.decision || '');
+                return 'decisão: ' + (m ? (m[1] + ' = ' + m[2]) : (ed.decision || ''));
+            }
             if (ed.intent === 'content') return { contains_url: 'resposta tem link', contains_pdf: 'resposta menciona PDF', contains_image: 'resposta menciona imagem' }[ed.contentKind] || '';
             if (ed.intent === 'size') {
                 if (ed.sizeKind === 'empty') return 'resposta vazia';
@@ -2394,7 +2454,7 @@ function meshFlowPage() {
             const desc = (this.editor.nlDesc || '').trim();
             if (!desc) { this.nlSuggest = { error: 'Descreva a regra primeiro.' }; return; }
             this.nlLoading = true; this.nlSuggest = null;
-            try { this.nlSuggest = await api.post('/api/v1/mesh/connections/suggest-conditional', { description: desc }); }
+            try { this.nlSuggest = await api.post('/api/v1/mesh/connections/suggest-conditional', { description: desc, source_agent_id: this.editor.source || '' }); }
             catch (e) { this.nlSuggest = { error: e.message }; }
             finally { this.nlLoading = false; }
         },
