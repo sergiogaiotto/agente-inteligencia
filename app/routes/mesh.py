@@ -1,6 +1,6 @@
 """Mesh + CAR — topologia e catálogo de roteadores §6."""
 import uuid, json, logging
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from app.models.schemas import MeshConnectionCreate, CAREntryCreate
 from app.core.database import mesh_repo, agents_repo, car_repo
 from app.core.auth import require_user
@@ -554,7 +554,8 @@ async def test_conditional(payload: dict):
 
 
 @router.post("/connections/suggest-conditional")
-async def suggest_conditional(payload: dict, user: dict = Depends(require_user)):
+async def suggest_conditional(payload: dict, request: Request,
+                              user: dict = Depends(require_user)):
     """Tradutor NL→Jinja (Fatia 4): descrição em pt-BR → regra condicional.
 
     Payload: {"description": str}
@@ -564,8 +565,20 @@ async def suggest_conditional(payload: dict, user: dict = Depends(require_user))
     variáveis canônicas e o backend RECONCILIA contra `CONDITIONAL_VARS_META`
     (envolvendo em `{{ }}` antes de parsear — senão o guardrail vira selo
     sempre-verde). NÃO persiste: o operador revisa e salva via /connections.
-    Auth obrigatória (custa chamada de LLM).
+
+    Auth: superfície de UI — principal via X-API-Key recebe 403 acionável
+    (gêmeo do guard do suggest-args, 38.0.0: require_user aceita keys; sem o
+    guard qualquer portador de key queimava LLM — rota instruct — sem limite
+    por aqui). Integração não precisa do tradutor: escreve `config.expr`
+    pronto via /connections.
     """
+    if getattr(request.state, "api_key_id", None):
+        raise HTTPException(403, {
+            "error": "suggest_conditional_ui_only",
+            "message": "Este endpoint é da superfície de UI (sessão). "
+                       "Integrações gravam a regra pronta em config.expr "
+                       "via POST/PUT /api/v1/mesh/connections.",
+        })
     description = (payload.get("description") or "").strip()
     if not description:
         return {"error": "Descreva a regra em português (ex.: 'se mencionar pix ou anexar documento')."}
