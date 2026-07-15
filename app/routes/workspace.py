@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.auth import require_user, require_role
 from app.models.schemas import ChatMessage
-from app.agents.engine import execute_interaction
+from app.agents.engine import execute_interaction, strip_decision_line_for_display
 from app.core.database import interactions_repo, turns_repo, audit_repo
 
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "uploads"
@@ -452,6 +452,20 @@ async def get_session(session_id: str, user: dict = Depends(require_user)):
     # Pipeline steps para enriquecer mensagens com metadata de agente
     pipeline_steps = trace_data.get("pipeline_steps", []) if trace_data else []
 
+    # Cond-C (35.19.0): o banco guarda o output CRU (auditoria), mas o balão do
+    # histórico é RESPOSTA APRESENTADA — mesmo strip do /chat vivo, senão a
+    # linha DECISAO "volta" ao recarregar a sessão (achado do review do plano).
+    # Schema resolvido UMA vez por sessão; gate duplo do helper preserva prosa.
+    _dec_schema = None
+    try:
+        from app.skill_parser.decisions_schema import has_decision_line as _has_dec
+        from app.skill_parser.decisions_schema import strip_decision_line as _strip_dec
+        if s.get("agent_id") and any(_has_dec(t.get("output_text_redacted") or "") for t in msgs):
+            from app.agents.engine import _decisions_schema_for_agent
+            _dec_schema = await _decisions_schema_for_agent(s["agent_id"])
+    except Exception:
+        _dec_schema = None
+
     messages = []
     assistant_idx = 0
     for t in reversed(msgs):
@@ -459,6 +473,8 @@ async def get_session(session_id: str, user: dict = Depends(require_user)):
             messages.append({"role": "user", "content": t["user_text_redacted"], "created_at": t.get("created_at", "")})
         if t.get("output_text_redacted"):
             content = t["output_text_redacted"]
+            if _dec_schema and _has_dec(content):
+                content = _strip_dec(content, _dec_schema)
             # Converter JSON legado de recusa/escalação
             if content.startswith("{") and '"type"' in content:
                 try:
@@ -1219,6 +1235,11 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                     attachments=attachments,
                     context_mode=data.context_mode or "auto",
                 )
+                # Cond-C (35.19.0): linha DECISAO sai da resposta apresentada no
+                # chat single-agent (pipeline já faz o strip na montagem final;
+                # trace preserva a linha para auditoria).
+                if result.get("output"):
+                    result["output"] = await strip_decision_line_for_display(result["output"], data.agent_id)
 
         # Persistir trace_data. Estabilizar defaults pra evitar campos
         # missing que viram "undefinedms" no frontend de sessão antiga.
