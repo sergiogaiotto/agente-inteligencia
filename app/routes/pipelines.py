@@ -410,8 +410,17 @@ def _validate_and_coerce_args(args: dict, schema: Optional[dict]) -> tuple:
         # comparação tolerante a tipo: enum [1,2] SEM `type` não é coagido, e o valor
         # pode chegar como string "1" (form/JSON) — compara também por str pra não dar
         # 422 falso (e casar com a validação do cliente, que compara por String()).
-        if isinstance(enum, list) and enum and val not in enum and str(val) not in [str(e) for e in enum]:
-            issues.append({"field": field, "code": "enum_mismatch", "allowed": enum})
+        # EXCEÇÃO (38.0.0, review): bool contra enum SEM bools é sempre mismatch —
+        # True == 1 em Python, então `true` passava batido num enum [1, 2] e o
+        # envelope selado carregava um booleano onde a integração espera inteiro.
+        if isinstance(enum, list) and enum:
+            _bool_vs_nonbool = (
+                isinstance(val, bool) and not any(isinstance(e, bool) for e in enum)
+            )
+            if _bool_vs_nonbool or (
+                val not in enum and str(val) not in [str(e) for e in enum]
+            ):
+                issues.append({"field": field, "code": "enum_mismatch", "allowed": enum})
     return coerced, issues
 
 
@@ -575,24 +584,25 @@ async def _seal_args_contract(pid: str) -> None:
     })
 
 
-async def _plan_args(pid: str, p: dict, root: str, args: dict) -> dict:
-    """Modo `dry`: resolve os args (coage/defaults/valida) contra o contrato (SELADO
-    se publicado) e devolve o payload resolvido + proveniência, SEM executar. 422 se
-    os args não conferem. Sinaliza se o contrato é selado e sua versão."""
-    schema, sealed = await _resolve_invoke_schema(p, root)
+async def _prove_args(pid: str, p: dict, root: str, args: dict,
+                      schema_sealed: tuple | None = None) -> dict:
+    """Núcleo NÃO-levantante da PROVA de args — fonte única dos campos do
+    contrato de pré-visualização (38.0.0, review): `_plan_args` (dry) levanta
+    422 quando há issues; o suggest-args devolve as issues no corpo. Os dois
+    espalham ESTE dict — o shape não pode divergir entre suggest e dry (o
+    fluxo documentado é suggest → operador confirma → invoke).
+
+    `schema_sealed`: (schema, sealed) já resolvidos — o suggest resolve antes
+    (monta o prompt do LLM com o schema) e repassa, evitando 2ª ida ao banco."""
+    schema, sealed = (
+        schema_sealed if schema_sealed is not None
+        else await _resolve_invoke_schema(p, root)
+    )
     res = _resolve_args(args or {}, schema)
-    if res["issues"]:
-        raise HTTPException(422, {
-            "error": "args_validation_failed",
-            "pipeline_id": pid,
-            "root_agent_id": root,
-            "issues": res["issues"],
-            "schema_url": f"/api/v1/pipelines/{pid}/inputs-schema",
-        })
     return {
-        "dry": True,
         "pipeline_id": pid,
         "root_agent_id": root,
+        "issues": res["issues"],
         "resolved_args": res["resolved"],
         "provenance": res["provenance"],
         "uso": res["uso"],  # campo→param|llm: qual vai no envelope selado vs prosa
@@ -600,6 +610,141 @@ async def _plan_args(pid: str, p: dict, root: str, args: dict) -> dict:
         "sealed": sealed,                                   # validou contra o contrato SELADO?
         "contract_version": p.get("contract_version"),      # versão do selo (None se rascunho)
     }
+
+
+async def _plan_args(pid: str, p: dict, root: str, args: dict) -> dict:
+    """Modo `dry`: resolve os args (coage/defaults/valida) contra o contrato (SELADO
+    se publicado) e devolve o payload resolvido + proveniência, SEM executar. 422 se
+    os args não conferem. Sinaliza se o contrato é selado e sua versão."""
+    proof = await _prove_args(pid, p, root, args)
+    if proof["issues"]:
+        raise HTTPException(422, {
+            "error": "args_validation_failed",
+            "pipeline_id": pid,
+            "root_agent_id": root,
+            "issues": proof["issues"],
+            "schema_url": f"/api/v1/pipelines/{pid}/inputs-schema",
+        })
+    return {"dry": True, **{k: v for k, v in proof.items() if k != "issues"}}
+
+
+def _suggest_envelope(**over) -> dict:
+    """Envelope ESTÁVEL do suggest-args (review 38.0.0): toda saída — inclusive
+    os ramos de erro — carrega o mesmo conjunto de chaves; consumidor lê
+    body.valid/body.issues sem undefined em nenhum ramo."""
+    base = {
+        "args": None, "valid": False, "issues": [],
+        "resolved_args": None, "provenance": None, "uso": None,
+        "has_schema": None, "sealed": None, "contract_version": None,
+        "error": "",
+    }
+    base.update(over)
+    return base
+
+
+@router.post("/{pid}/suggest-args")
+async def suggest_pipeline_args(pid: str, payload: dict, request: Request,
+                                user: dict = Depends(require_user)):
+    """Tradutor NL→args (item 2 do plano, 38.0.0): pedido em pt-BR → sugestão
+    de `args` PROVADA contra o contrato do invoke.
+
+    Payload: {"description": str, "partial_args": dict?}
+    Returns (envelope estável em TODOS os ramos): {args, valid, issues,
+    resolved_args, provenance, uso, has_schema, sealed, contract_version, error}
+
+    DNA "IA sugere → sistema PROVA" (mesmo do suggest-conditional do mesh): o
+    LLM propõe um JSON usando SÓ os campos do ## Inputs, repairs
+    determinísticos consertam grafia de enum e podam nulls (SÓ na sugestão do
+    LLM — partial_args humanos não são reescritos e VENCEM o merge), e a
+    PROVA é o MESMO `_prove_args` do dry — contra o schema SELADO quando o
+    pipeline está publicado: a sugestão que passa aqui passa no invoke.
+    NÃO persiste e NÃO executa — valores são abertos (a prova não pega valor
+    plausível-porém-inventado): humano confirma.
+
+    Auth: superfície de UI — principal via X-API-Key recebe 403 acionável
+    (review: require_user aceita keys; sem o guard o "cookie-only" da doc
+    era ficção, key queimava LLM sem limite e, com published_only=ON, lia o
+    ## Inputs de RASCUNHO que o toggle confina). Abrir a keys é decisão
+    futura de superfície. PII: descrição pode conter dados do cliente —
+    nada de valores em log."""
+    if getattr(request.state, "api_key_id", None):
+        raise HTTPException(403, {
+            "error": "suggest_args_ui_only",
+            "message": "Este endpoint é da superfície de UI (sessão). "
+                       "Integrações montam os args e validam via POST "
+                       "/invoke com dry=true.",
+        })
+    # str(): payload é dict cru — description não-string (int etc.) estouraria
+    # o .strip() com 500 (classe de bug pega na revisão do 37.0.0).
+    description = str(payload.get("description") or "").strip()
+    if not description:
+        return _suggest_envelope(
+            error="Descreva o pedido em português (ex.: 'consulte o limite "
+                  "do cliente 1031, segmento varejo').")
+    partial = payload.get("partial_args")
+    # não-None: form da UI manda toda chave com null nas vazias — null aqui
+    # clobbaria o valor extraído pelo LLM e a poda o deletaria (review).
+    partial = {k: v for k, v in partial.items() if v is not None} \
+        if isinstance(partial, dict) else {}
+
+    p = await _require(pid)
+    from app.catalog.pipeline_defs import _build_subgraph
+    sub = await _build_subgraph(pid)
+    root = sub.get("root_agent_id")
+    if not root:
+        raise HTTPException(422, "Pipeline sem agentes/raiz resolvível — nada a traduzir.")
+    schema, sealed = await _resolve_invoke_schema(p, root)
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict) or not props:
+        return _suggest_envelope(
+            has_schema=False, sealed=sealed,
+            contract_version=p.get("contract_version"),
+            error="O agente-raiz deste pipeline não declara ## Inputs — "
+                  "não há contrato de args para traduzir (use texto livre).")
+
+    from app.agents.args_suggest import (
+        build_args_messages, extract_args_json, repair_suggested_args,
+    )
+    from app.llm_routing import resolve_llm_for_task
+    from app.routes.wizard import _wizard_llm_complete
+
+    provider, model = await resolve_llm_for_task("instruct")
+    messages = build_args_messages(description, schema, partial)
+    try:
+        # Sem response_format: JSON-mode não é universal (gpt-oss ignora/recusa)
+        # — o prompt exige "APENAS JSON" e o extract é tolerante a cercas/prosa.
+        content, _, _ = await _wizard_llm_complete(
+            messages, provider, model, route="args_suggest", temperature=0,
+        )
+    except HTTPException:
+        raise  # 503 acionável (nenhum provider alcançável) propaga
+    except Exception as e:
+        logger.error("suggest-args falhou (pipeline_id=%s)", pid, exc_info=True)
+        raise HTTPException(500, f"Erro ao gerar os args: {e}")
+
+    base = dict(has_schema=True, sealed=sealed,
+                contract_version=p.get("contract_version"))
+    suggested, parse_error = extract_args_json(content)
+    if suggested is None:
+        # Sugestão-com-erro, nunca 500: o LLM divagou — operador reformula.
+        return _suggest_envelope(**base, error=parse_error)
+    # Repair SÓ na sugestão do LLM; DEPOIS o merge — partial_args do
+    # integrador vencem E não são reescritos pelo repair (review).
+    merged = {**repair_suggested_args(suggested, schema), **partial}
+    proof = await _prove_args(pid, p, root, merged,
+                              schema_sealed=(schema, sealed))
+    valid = not proof["issues"]
+    return _suggest_envelope(
+        **base,
+        args=merged,
+        valid=valid,
+        issues=proof["issues"],
+        resolved_args=proof["resolved_args"] if valid else None,
+        provenance=proof["provenance"] if valid else None,
+        uso=proof["uso"] if valid else None,
+        error="" if valid else ("A sugestão não passou na prova do contrato "
+                                "— revise os campos apontados em issues."),
+    )
 
 
 @router.get("")

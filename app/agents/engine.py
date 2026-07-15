@@ -5173,12 +5173,10 @@ class _ArgsView(dict):
         return _MISSING_ARG
 
 
-def _strip_accents(s: str) -> str:
-    """Remove acentos via NFKD (mesmo racional de `_output_names_target`).
-    Módulo-level (35.17.0) para as vars normalizadas do gate condicional: casa
-    'nao reconheco' com 'não reconheço' sem o autor digitar as duas grafias."""
-    import unicodedata as _ud
-    return "".join(ch for ch in _ud.normalize("NFKD", s or "") if not _ud.combining(ch))
+# 38.0.0 (review): régua ÚNICA no módulo-folha textnorm — as vars *_norm do
+# runtime e os repairs dos tradutores (NL→Jinja, NL→args) normalizam igual.
+# Alias mantido: testes e este módulo referenciam engine._strip_accents.
+from app.agents.textnorm import strip_accents as _strip_accents  # noqa: E402
 
 
 def _build_conditional_context(

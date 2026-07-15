@@ -50,15 +50,12 @@ def build_suggest_messages(description: str, vars_meta: list[dict]) -> list[dict
 def extract_expression(text: str) -> str:
     """Extrai a expressão da resposta do LLM, tolerante a cercas de código.
 
-    NÃO remove aspas simples (são literais Jinja: `'pix' in ...`). Só tira
-    cercas ``` e backticks de envoltório, e pega a 1ª linha significativa.
+    NÃO remove aspas simples (são literais Jinja: `'pix' in ...`). O strip de
+    cerca vem do textnorm (38.0.0 — cobre cerca de LINHA ÚNICA, que a versão
+    local perdia); depois pega a 1ª linha significativa.
     """
-    s = (text or "").strip()
-    if s.startswith("```"):
-        lines = s.splitlines()[1:]  # descarta ``` ou ```jinja
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        s = "\n".join(lines).strip()
+    from app.agents.textnorm import strip_code_fences
+    s = strip_code_fences(text)
     for line in s.splitlines():
         line = line.strip().strip("`").strip()
         if line:
@@ -112,13 +109,10 @@ _NORM_LITERAL_RE = _re.compile(
 
 
 def _strip_accents_local(s: str) -> str:
-    """Twin do `_strip_accents` do engine (NFKD + drop de combining) — duplicado
-    de propósito: este módulo é stdlib-only (sem import de app/*, sem ciclos).
-    Mudou lá? Mude aqui."""
-    import unicodedata
-    return "".join(
-        ch for ch in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(ch)
-    )
+    """38.0.0 (review): a régua vive no módulo-folha textnorm (stdlib-only
+    como este — importa sem ciclo). Nome/assinatura mantidos p/ os testes."""
+    from app.agents.textnorm import strip_accents
+    return strip_accents(s)
 
 
 def normalize_norm_literals(expr: str) -> str:
