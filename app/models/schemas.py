@@ -236,8 +236,17 @@ class PipelineInvokeRequest(BaseModel):
     # Detalhe da resposta: full | summary | minimal. Ausente → default por auth
     # (sessão→full; X-API-Key→platform_settings.api_invoke_default_verbosity).
     verbosity: Optional[str] = None
-    # Anexos (saída do POST /workspace/upload: {filename, content_type, size,
-    # text_content, path}). O engine roteia cada um aos agentes que aceitam
+    # Anexos — DOIS transportes aceitos por item (37.0.0), ramificados pelo
+    # campo content_base64:
+    #   upload-ref (fluxo UI/modal em 2 passos): saída do POST /workspace/upload
+    #     {filename, content_type, size, text_content, path};
+    #   base64 (single-call p/ API): {filename, content_type?, content_base64}
+    #     — mesmo decoder do invoke de agente; limites 5×10MB valem para o
+    #     RAMO base64 (upload-refs seguem sem cap — fluxo da UI; endurecer é
+    #     escopo da fatia de superfície/posse). Violação → 422 nomeado. No
+    #     /invoke/async o ramo base64 ainda não é aceito (422).
+    # Lista crua de propósito (união pydantic rejeitaria shapes parciais que a
+    # UI já envia hoje). O engine roteia cada anexo aos agentes que aceitam
     # doc/imagem (dispatcher) — agentes que não aceitam ignoram.
     attachments: Optional[list] = None
     # Webhook de conclusão (35.6.0, SÓ no /invoke/async): URL notificada quando

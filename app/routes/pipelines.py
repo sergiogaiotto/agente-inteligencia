@@ -925,9 +925,17 @@ async def _resolve_invoke_target(pid: str, data: PipelineInvokeRequest, request:
 
 async def _finalize_invoke_inputs(pid: str, p: dict, root: str,
                                   data: PipelineInvokeRequest, request: Request,
-                                  user: dict, user_input: str):
+                                  user: dict, user_input: str,
+                                  *, allow_base64: bool):
     """Gates 7–10 (pós-dry): orçamento 402 → args 422 → anexos → IDOR do
-    session_id 404. Retorna (user_input, sealed_inputs, pipeline_attachments)."""
+    session_id 404. Retorna (user_input, sealed_inputs, pipeline_attachments).
+
+    `allow_base64` é keyword-only SEM default (review): cada superfície
+    declara sua política de transporte no call site. False (invoke/async):
+    anexo base64 → 422 acionável — o conteúdo persistiria inteiro em
+    invoke_jobs.request_payload (imagem 10MB vira ~13MB de TEXT por job);
+    o suporte chega com a fatia de storage/LGPD. Uma superfície futura que
+    também persista NÃO herda o aceite por omissão."""
     # F6: teto de custo por API Key — DEPOIS do dry (que é grátis) e ANTES de
     # executar. 402 quando a janela corrente já atingiu o orçamento da key.
     await _guard_api_key_cost_budget(request)
@@ -940,21 +948,92 @@ async def _finalize_invoke_inputs(pid: str, p: dict, root: str,
     if data.args is not None:
         user_input, sealed_inputs = await _validate_and_fold_args(pid, p, root, user_input, data.args)
 
-    # Anexos: mapeia a saída do /workspace/upload pra forma que o engine consome.
-    # O dispatcher do execute_pipeline roteia cada anexo só aos agentes da cadeia
-    # que aceitam doc/imagem; os demais ignoram (sem poda cega aqui).
+    # Anexos (37.0.0 — dois transportes, ramificados POR ITEM):
+    #   upload-ref: saída do POST /workspace/upload ({filename, content_type,
+    #     size, text_content, path}) — o fluxo da UI/modal, intacto;
+    #   base64: {filename, content_type?, content_base64} — single-call p/
+    #     integradores via API, MESMO decoder e limites (5×10MB) do agent
+    #     invoke. Antes, content_base64 era DROPADO no mapeamento e a imagem
+    #     "aceita" nunca chegava ao modelo (mesmo bug já corrigido no agente).
+    # O dispatcher do execute_pipeline roteia cada anexo só aos agentes da
+    # cadeia que aceitam doc/imagem; os demais ignoram (sem poda cega aqui).
     from pathlib import Path
+    from app.core.attachments import ATTACHMENT_TEXT_TRUNCATE, decode_attachments
     from app.routes.workspace import UPLOAD_DIR
+
+    def _att_422(msg: str):
+        raise HTTPException(422, {
+            "error": "attachments_validation_failed", "message": msg,
+        })
+
+    # Normalização POR ITEM (review): a lista é crua de propósito (sem
+    # pydantic) — sem estas checagens, item malformado vira 500 em vez do
+    # 422 nomeado que o contrato fail-fast promete. A PRESENÇA da chave
+    # content_base64 (não-None) declara a intenção base64: '' e whitespace
+    # são 422 aqui, nunca escorregam pro ramo ref como anexo oco (seria o
+    # drop silencioso de novo — e furaria o guard do async).
+    ref_items, b64_items = [], []
+    for i, att in enumerate(data.attachments or []):
+        if not isinstance(att, dict):
+            _att_422(f"Anexo #{i} inválido: esperado objeto com content_base64 "
+                     "(ramo base64) ou o descriptor do POST /workspace/upload.")
+        b64_val = att.get("content_base64")
+        if b64_val is not None:
+            if not isinstance(b64_val, str):
+                _att_422(f"Anexo #{i}: content_base64 deve ser string base64.")
+            if not b64_val.strip():
+                _att_422(f"Anexo #{i}: content_base64 vazio — provável falha "
+                         "de leitura/serialização no cliente.")
+            b64_items.append(att)
+            continue
+        tc = att.get("text_content")
+        if tc is not None and not isinstance(tc, str):
+            _att_422(f"Anexo #{i}: text_content deve ser string.")
+        ref_items.append(att)
+
+    if b64_items and not allow_base64:
+        raise HTTPException(422, {
+            "error": "attachments_base64_not_supported_async",
+            "message": (
+                "Anexo base64 ainda não é aceito no invoke assíncrono (o "
+                "conteúdo persistiria inteiro no job). Use o fluxo em 2 passos: "
+                "POST /api/v1/workspace/upload e referencie o descriptor "
+                "retornado em `attachments`."
+            ),
+        })
+
+    def _ref_content(att: dict) -> str:
+        c = att.get("text_content", "") or ""
+        # Bound p/ texto injetado inline pela API — SEM cortar o payload
+        # legítimo do /workspace/upload (50k + marcador explícito ≈ 50.04k;
+        # review: o slice seco em 50k decapitava o marcador e o modelo
+        # respondia como se tivesse visto o documento inteiro).
+        if len(c) > ATTACHMENT_TEXT_TRUNCATE + 1000:
+            return c[:ATTACHMENT_TEXT_TRUNCATE] + "\n\n[...truncado em 50.000 caracteres]"
+        return c
+
     pipeline_attachments = [
         {
             "name": att.get("filename", ""),
             "type": att.get("content_type", ""),
             "size": att.get("size", 0),
-            "content": att.get("text_content", ""),
+            "content": _ref_content(att),
             "abs_path": str(UPLOAD_DIR / Path(att.get("path", "") or "").name) if att.get("path") else "",
         }
-        for att in (data.attachments or [])
+        for att in ref_items
     ]
+    if b64_items:
+        accepted, rejected_meta = decode_attachments(b64_items)
+        if rejected_meta:
+            # 422 estrito (≠ agent invoke, que devolve rejected_attachments na
+            # resposta 200): o contrato do pipeline já é fail-fast nomeado
+            # (args idem) — integrador descobre o anexo podre no aceite.
+            raise HTTPException(422, {
+                "error": "attachments_validation_failed",
+                "message": "Um ou mais anexos base64 foram rejeitados.",
+                "rejected": rejected_meta,
+            })
+        pipeline_attachments.extend(accepted)
 
     # IDOR (33.13.0): reusar um session_id exige ser DONO da interaction — senão
     # o context_mode='auto' reinjetaria a conversa alheia no LLM. ON-PATH, ANTES
@@ -1023,7 +1102,7 @@ async def invoke_pipeline(
         return await _plan_args(pid, p, root, data.args or {})
 
     user_input, sealed_inputs, pipeline_attachments = await _finalize_invoke_inputs(
-        pid, p, root, data, request, user, user_input
+        pid, p, root, data, request, user, user_input, allow_base64=True
     )
 
     from app.core.interaction_access import stamp_interaction_owner
@@ -1138,7 +1217,7 @@ async def invoke_pipeline_stream(
     # ANTES de abrir o stream (o 402/403/404 chega estruturado, sem SSE meia-boca).
     p, root, members, user_input = await _resolve_invoke_target(pid, data, request)
     user_input, sealed_inputs, pipeline_attachments = await _finalize_invoke_inputs(
-        pid, p, root, data, request, user, user_input
+        pid, p, root, data, request, user, user_input, allow_base64=True
     )
 
     # Verbosidade: o pipeline_done final é PROJETADO igual ao /invoke sync (sessão→full;
@@ -1260,6 +1339,21 @@ def _job_envelope(job: dict, *, status_url: str) -> dict:
     }
 
 
+def _attachment_identity(a) -> str:
+    """Identidade canônica de UM anexo p/ o fingerprint de idempotência.
+    upload-ref → path; base64 → digest do CONTEÚDO + filename (37.0.0 —
+    lição do 35.14.2: campo semanticamente relevante fora do hash = replay
+    devolvendo resposta de OUTRO documento quando o async aceitar base64).
+    Item malformado vira repr estável — o 422 nomeado sai no _finalize;
+    aqui só não podemos estourar (roda ANTES da validação no aceite async)."""
+    if not isinstance(a, dict):
+        return f"malformed:{a!r}"[:64]
+    if a.get("content_base64") is not None:
+        digest = hashlib.sha256(str(a.get("content_base64")).encode()).hexdigest()[:16]
+        return f"b64:{digest}:{a.get('filename') or ''}"
+    return f"ref:{a.get('path') or ''}"
+
+
 def _request_fingerprint(pid: str, data: PipelineInvokeRequest) -> str:
     """Hash canônico do corpo p/ detectar REUSO de Idempotency-Key com payload
     diferente (409, semântica padrão de idempotência inbound). Preserva a
@@ -1270,7 +1364,7 @@ def _request_fingerprint(pid: str, data: PipelineInvokeRequest) -> str:
         "args": data.args, "args_engaged": data.args is not None,
         "session_id": data.session_id, "context_mode": data.context_mode,
         "channel": data.channel,
-        "attachments": [a.get("path") for a in (data.attachments or [])],
+        "attachments": [_attachment_identity(a) for a in (data.attachments or [])],
         # 35.14.2 (achado de auditoria): customer_ref MUDA a atribuição do
         # titular (customer_hash) e a semântica LGPD — omiti-lo do fingerprint
         # fazia um replay da MESMA key com OUTRO cliente devolver o job do
@@ -1348,7 +1442,10 @@ async def invoke_pipeline_async(
 
     p, root, members, user_input = await _resolve_invoke_target(pid, data, request)
     user_input, sealed_inputs, pipeline_attachments = await _finalize_invoke_inputs(
-        pid, p, root, data, request, user, user_input
+        pid, p, root, data, request, user, user_input,
+        # base64 → 422 no aceite: o conteúdo persistiria inteiro no job
+        # (request_payload é TEXT); suporte vem com a fatia de storage/LGPD.
+        allow_base64=False,
     )
     # Contexto VALIDADO persistido como VALORES — nada de request sobrevive ao
     # 202 (api_key_*/user vêm do request.state de AGORA; o contrato de args foi
