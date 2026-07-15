@@ -153,6 +153,40 @@ def test_endpoint_empty_description(client):
     assert "error" in r.json()
 
 
+def test_api_key_recebe_403_acionavel(monkeypatch):
+    """require_user aceita X-API-Key — sem o guard, qualquer portador de key
+    queimava LLM (rota instruct) sem limite num endpoint que é superfície de
+    UI (gêmeo do fix do suggest-args, 38.0.0)."""
+    from app.routes.mesh import router
+    from app.core.auth import require_user
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _fake_key(request, call_next):
+        request.state.api_key_id = "k1"
+        return await call_next(request)
+
+    app.include_router(router)
+    app.dependency_overrides[require_user] = lambda: {"id": "u-key", "role": "comum"}
+
+    called = {"llm": False}
+
+    async def _fake_llm(*a, **k):
+        called["llm"] = True
+        return ("'pix' in output_lower", "p", "m")
+    monkeypatch.setattr("app.routes.wizard._wizard_llm_complete", _fake_llm)
+
+    r = TestClient(app, raise_server_exceptions=False).post(
+        "/api/v1/mesh/connections/suggest-conditional",
+        json={"description": "se falar de pix"},
+    )
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["error"] == "suggest_conditional_ui_only"
+    assert "config.expr" in r.json()["detail"]["message"]  # acionável
+    assert called["llm"] is False  # guard dispara ANTES de queimar LLM
+
+
 # ─── Template cabeado (tradutor na galeria) ──────────────────────────────────
 
 def test_template_wires_translator():
