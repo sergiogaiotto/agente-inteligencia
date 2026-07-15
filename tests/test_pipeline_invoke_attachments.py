@@ -293,7 +293,9 @@ def test_async_rejeita_base64_com_hint(monkeypatch):
     )
     req = SimpleNamespace(state=SimpleNamespace())
     with _pytest.raises(HTTPException) as exc:
-        asyncio.get_event_loop().run_until_complete(
+        # asyncio.run (não get_event_loop): no runner do CI não há loop
+        # corrente na MainThread — get_event_loop() levanta RuntimeError.
+        asyncio.run(
             pl_routes._finalize_invoke_inputs(
                 "p1", {"id": "p1"}, "r", data, req, {"id": "u"}, "x",
                 allow_base64=False,
