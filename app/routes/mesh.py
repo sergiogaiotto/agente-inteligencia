@@ -575,7 +575,7 @@ async def suggest_conditional(payload: dict, user: dict = Depends(require_user))
     )
     from app.agents.conditional_suggest import (
         build_suggest_messages, extract_expression, validate_conditional_expression,
-        repair_unquoted_literals,
+        repair_unquoted_literals, normalize_norm_literals,
     )
     from app.llm_routing import resolve_llm_for_task
     from app.routes.wizard import _wizard_llm_complete
@@ -631,6 +631,10 @@ async def suggest_conditional(payload: dict, user: dict = Depends(require_user))
     # (literal sem aspas). Sem isso o guardrail rejeitaria uma regra que o usuário
     # claramente quis. Idempotente; literais já com aspas não mudam.
     expr = repair_unquoted_literals(expr, canonical)
+    # Gêmeo do #617 (review 2026-07-15): literal acentuado contra var *_norm
+    # seria regra sempre-falsa (a var é normalizada no runtime) — normaliza o
+    # literal deterministicamente ANTES de validar/mostrar ao operador.
+    expr = normalize_norm_literals(expr)
     result = validate_conditional_expression(expr, canonical)
     # Smoke de runtime: a regra válida tem que AVALIAR sem crash (sandbox,
     # contexto vazio) — pega erro de tipo/método que o set-diff não vê.

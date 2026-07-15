@@ -38,8 +38,21 @@ def test_a_dor_real_uma_grafia_casa_ambas():
     """'nao reconheco' (sem acento) casa 'Não Reconheço' — o autor escreve UMA vez."""
     ctx = _build_conditional_context(user_input="quero avisar: Não Reconheço essa compra")
     assert _eval_conditional("'nao reconheco' in input_norm", ctx) is True
-    # e o inverso: mesmo digitando com acento, o strip do termo (na UI) casa
-    assert _eval_conditional("'nao reconheco' in input_norm", ctx) is True
+    # e o inverso DE VERDADE (o assert antigo era duplicado — review 2026-07-15):
+    # termo digitado COM acento, normalizado como a UI/tradutor fazem, casa igual.
+    termo_ui = _strip_accents("Não Reconheço".casefold())
+    assert termo_ui == "nao reconheco"
+    assert _eval_conditional(f"'{termo_ui}' in input_norm", ctx) is True
+
+
+def test_norm_usa_casefold_alem_de_lower():
+    """casefold (review do #617): 'ß' vira 'ss' nas vars _norm — o lower não
+    converte. Só EXPANDE matches; *_lower seguem intocadas."""
+    ctx = _build_conditional_context(user_input="endereço: Hauptstraße 10")
+    assert "strasse" in ctx["input_norm"]
+    assert _eval_conditional("'hauptstrasse' in input_norm", ctx) is True
+    # legado intacto: input_lower mantém o ß
+    assert "straße" in ctx["input_lower"]
 
 
 def test_legado_lower_intacto():

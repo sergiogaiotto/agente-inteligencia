@@ -5244,9 +5244,16 @@ def _build_conditional_context(
         # dos fluxos reais (a mesma palavra digitada 2x na expr). ADITIVAS: as
         # exprs existentes (sobre *_lower) seguem byte-idênticas. O card de
         # palavra-chave gera com estas por default em REGRAS NOVAS.
-        "input_norm": _strip_accents(inp_lower),
-        "output_norm": _strip_accents(out_lower),
-        "text_norm": _strip_accents(text_all),
+        # casefold (35.19.2, review do #617): 'ß' casa 'ss' etc. nas _norm;
+        # *_lower seguem intocadas. Alinha com o `_norm` do decisions_schema e
+        # com o repair do tradutor (`normalize_norm_literals`). Honestidade
+        # (review pré-push): NÃO é 100% aditivo — um literal contendo ß salvo
+        # pela UI na janela 35.17.0→35.19.1 deixa de casar (o detector do
+        # editor corrige em 1 clique ao reabrir a regra); ß em regra pt-BR é
+        # teórico e a janela foi de ~1 dia.
+        "input_norm": _strip_accents(inp_lower.casefold()),
+        "output_norm": _strip_accents(out_lower.casefold()),
+        "text_norm": _strip_accents(text_all.casefold()),
         # Memória de conversa: perguntas recentes do usuário (já em text_all;
         # exposta isolada p/ exprs que queiram olhar só o histórico).
         "session_text": sess_text,
