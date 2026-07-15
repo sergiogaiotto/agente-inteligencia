@@ -1113,16 +1113,22 @@ async def _discover_connector_tools(t: dict, timeout: float = 8.0) -> list[dict]
         return await _discover_server_tools(client, endpoint, headers)
 
 
-async def backfill_discovered_tools(tools_repo, timeout: float = 8.0, force: bool = False) -> dict:
+async def backfill_discovered_tools(tools_repo, timeout: float = 8.0, force: bool = False,
+                                     stdio_timeout: float = 90.0) -> dict:
     """F5 — backfill: descobre (``tools/list``) e persiste ``discovered_tools``
-    para conectores MCP HTTP que ainda não têm (predam a F1).
+    para conectores MCP que ainda não têm (predam a F1).
 
     - **Idempotente**: pula quem já tem (salvo ``force=True``).
     - **Best-effort por conector**: ``asyncio.gather`` + ``return_exceptions`` —
       falha de 1 não derruba os outros.
-    - **Pula** stdio (sem ``tools/list`` HTTP) e auth complexa (oauth2/mTLS).
+    - **Cobre stdio** (39.1.0, item 3 PR2): ``run_stdio_session(action='test')``
+      já devolvia ``discovered_tools`` — só faltava chamar daqui. É pré-requisito
+      duro da depreciação do legado {operation, query} (sem descoberta, remover
+      o fallback deixaria o conector SEM função nenhuma). ``stdio_timeout`` 90s:
+      1ª execução de ``npx -y`` baixa o pacote.
+    - **Pula** auth complexa (oauth2/mTLS) — descoberta autenticada é fatia futura.
     - **NÃO ativa nada**: só popula a coluna que o builder per-tool consome
-      quando ``MCP_PER_TOOL_ENABLED`` está ON. Flag OFF → coluna fica dormente.
+      quando o modo (global ou por conector) está ON.
 
     Retorna ``{backfilled, skipped, failed, total}``.
     """
@@ -1136,8 +1142,8 @@ async def backfill_discovered_tools(tools_repo, timeout: float = 8.0, force: boo
     candidates: list[dict] = []
     for t in registered or []:
         endpoint = (t.get("mcp_server") or "").strip()
-        if not endpoint.startswith("http"):
-            summary["skipped"] += 1            # stdio / não-MCP
+        if not endpoint:
+            summary["skipped"] += 1            # sem endpoint/comando
             continue
         if (t.get("auth_requirements") or "").lower() in ("oauth2", "mtls"):
             summary["skipped"] += 1            # auth complexa fora do escopo
@@ -1152,7 +1158,17 @@ async def backfill_discovered_tools(tools_repo, timeout: float = 8.0, force: boo
         return summary
 
     async def _one(t: dict):
-        server_tools = await _discover_connector_tools(t, timeout)
+        endpoint = (t.get("mcp_server") or "").strip()
+        if endpoint.startswith("http"):
+            server_tools = await _discover_connector_tools(t, timeout)
+        else:
+            res = await run_stdio_session(
+                command=endpoint, action="test", timeout=int(stdio_timeout),
+            )
+            server_tools = (
+                (res or {}).get("discovered_tools")
+                if (res or {}).get("success") else None
+            )
         if not server_tools:
             return ("empty", t.get("id"))
         await tools_repo.update(t.get("id"), {"discovered_tools": serialize_discovered_tools(server_tools)})
