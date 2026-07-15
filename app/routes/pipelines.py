@@ -827,6 +827,27 @@ async def get_pipeline(pid: str):
     return _serialize(p, agent_ids, resolved_entry=resolved)
 
 
+async def _chain_attachment_capabilities(member_ids: list) -> tuple:
+    """(accepts_images, accepts_documents) agregados por OR sobre os MEMBROS da
+    cadeia: o dispatcher roteia cada anexo aos agentes que aceitam — basta UM
+    aceitar para o anexo ter destino. Colunas são INTEGER 0/1 (não boolean —
+    lição de smoke em Postgres real). Best-effort: falha → (False, False)."""
+    if not member_ids:
+        return False, False
+    try:
+        from app.core.database import _get_pool
+        async with _get_pool().acquire() as con:
+            row = await con.fetchrow(
+                "SELECT MAX(COALESCE(accepts_images, 0)) AS ai, "
+                "MAX(COALESCE(accepts_documents, 0)) AS ad "
+                "FROM agents WHERE id = ANY($1)", list(member_ids))
+        return bool(row and row["ai"]), bool(row and row["ad"])
+    except Exception:
+        logger.warning("inputs-schema: falha ao ler accepts_* dos membros",
+                       exc_info=True)
+        return False, False
+
+
 @router.get("/{pid}/inputs-schema")
 async def get_pipeline_inputs_schema(pid: str):
     """Inputs ESPERADOS do pipeline = inputs do seu agente de ENTRADA (raiz).
@@ -870,6 +891,27 @@ async def get_pipeline_inputs_schema(pid: str):
         base["contract_hash"] = p.get("contract_hash")
         live_hash = _schema_hash(live.get("inputs_schema")) if live else None
         base["contract_drift"] = bool(live and live_hash != p.get("contract_hash"))
+
+    # 38.2.0 (item 7 PR4): capacidades de ANEXO da cadeia — accepts_* eram
+    # invisíveis fora da UI; a descoberta agora diz se anexar vale a pena (e
+    # como) ANTES do invoke. Transportes e limites do 37.0.0 declarados aqui
+    # p/ o integrador não descobrir o cap no 422.
+    from app.core.attachments import MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_INVOKE
+    accepts_images, accepts_documents = await _chain_attachment_capabilities(
+        [n.get("id") for n in sub.get("nodes", []) if n.get("id")]
+    )
+    base["attachments"] = {
+        "supported": accepts_images or accepts_documents,
+        "accepts_images": accepts_images,
+        "accepts_documents": accepts_documents,
+        "transports": {
+            "upload_ref": {"upload_url": "/api/v1/workspace/upload",
+                           "note": "2 passos: upload → referencie o descriptor"},
+            "base64": {"max_per_invoke": MAX_ATTACHMENTS_PER_INVOKE,
+                       "max_bytes_each": MAX_ATTACHMENT_BYTES,
+                       "async_supported": False},
+        },
+    }
     return base
 
 

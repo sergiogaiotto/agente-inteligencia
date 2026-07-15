@@ -74,3 +74,44 @@ def test_raiz_orfa_404_do_agente_vira_schema_vazio(monkeypatch):
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["root_agent_id"] == "ghost" and d["inputs_schema"] is None
+
+
+# ── Capacidades de anexo da cadeia (item 7 PR4, 38.2.0) ─────────────
+
+def _wire_min(monkeypatch, nodes=None):
+    monkeypatch.setattr(db.pipelines_repo, "find_by_id", _async({"id": "p1", "name": "P"}))
+    monkeypatch.setattr(pdefs, "_build_subgraph", _async(
+        {"root_agent_id": "root-1", "nodes": nodes or [], "edges": []}))
+    monkeypatch.setattr(agents_mod, "get_agent_inputs_schema", _async(
+        {"agent": {"id": "root-1"}, "inputs_schema": None,
+         "inputs_referenced": [], "api_bindings": []}))
+
+
+def test_attachments_declara_transportes_e_limites(monkeypatch):
+    """Descoberta completa: o integrador não pode descobrir o cap no 422."""
+    _wire_min(monkeypatch)  # sem membros → capabilities curto-circuita sem DB
+    d = _client().get("/api/v1/pipelines/p1/inputs-schema").json()
+    att = d["attachments"]
+    assert att["supported"] is False
+    t = att["transports"]
+    assert t["base64"]["max_per_invoke"] == 5
+    assert t["base64"]["max_bytes_each"] == 10 * 1024 * 1024
+    assert t["base64"]["async_supported"] is False
+    assert t["upload_ref"]["upload_url"] == "/api/v1/workspace/upload"
+
+
+def test_attachments_or_dos_membros(monkeypatch):
+    """OR sobre a cadeia: basta UM membro aceitar (o dispatcher roteia)."""
+    _wire_min(monkeypatch, nodes=[{"id": "a1"}, {"id": "a2"}])
+    seen = {}
+
+    async def _caps(member_ids):
+        seen["ids"] = member_ids
+        return False, True  # só documentos
+
+    monkeypatch.setattr(pl, "_chain_attachment_capabilities", _caps)
+    d = _client().get("/api/v1/pipelines/p1/inputs-schema").json()
+    att = d["attachments"]
+    assert seen["ids"] == ["a1", "a2"]
+    assert att["supported"] is True
+    assert att["accepts_documents"] is True and att["accepts_images"] is False
