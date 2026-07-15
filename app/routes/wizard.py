@@ -24,7 +24,7 @@ Defaults sensatos por wizard:
 import json
 import re
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from app.core.llm_providers import (
     canonical_provider,
@@ -415,6 +415,56 @@ class WizardSkillRequest(BaseModel):
         default=None,
         pattern=r"^(intent|summary|digest|analysis|report|unbounded)$",
     )
+    # Cond-C.2 (36.2.0): Contrato de Decisão declarado por FORMULÁRIO —
+    # {campo: [valores]} vira a seção ## Decisions (selada, copiada verbatim).
+    # None/vazio = wizard não emite a seção.
+    decisions: Optional[dict] = None
+
+    @field_validator("decisions")
+    @classmethod
+    def _decisions_validas(cls, v):
+        """Validação ACIONÁVEL (espelha extract_decisions_schema, que em runtime
+        DESCARTA campo inválido em silêncio — no formulário o autor precisa
+        saber exatamente o que consertar, não descobrir depois que o contrato
+        nasceu morto)."""
+        if not v:
+            return None
+        import re as _re
+
+        from app.skill_parser.decisions_schema import _RESERVED_FIELDS
+        problemas: list[str] = []
+        limpo: dict = {}
+        for campo, valores in v.items():
+            campo_s = str(campo).strip()
+            if not _re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", campo_s):
+                problemas.append(
+                    f"campo '{campo_s}': use um identificador ASCII (letras, números e _; sem acento/espaço)")
+                continue
+            if campo_s in _RESERVED_FIELDS:
+                problemas.append(
+                    f"campo '{campo_s}': nome reservado — `decision.{campo_s}` resolveria um método interno e a regra nunca casaria")
+                continue
+            if not isinstance(valores, list):
+                problemas.append(f"campo '{campo_s}': valores devem ser uma lista")
+                continue
+            vals: list[str] = []
+            for val in valores:
+                s = str(val).strip()
+                if not s:
+                    continue
+                if any(ch in s for ch in ";,="):
+                    problemas.append(
+                        f"valor '{s}' (campo '{campo_s}'): ';', ',' e '=' são separadores da linha DECISAO e não podem aparecer no valor")
+                    continue
+                if s not in vals:
+                    vals.append(s)
+            if not vals:
+                problemas.append(f"campo '{campo_s}': informe ao menos 1 valor válido")
+                continue
+            limpo[campo_s] = vals
+        if problemas:
+            raise ValueError("Contrato de Decisão inválido: " + " · ".join(problemas[:6]))
+        return limpo or None
 
 
 class WizardRefineRequest(BaseModel):
@@ -1208,6 +1258,16 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
             "## Output Shape\n```yaml\n"
             f"length_preset: {data.length_preset}\n"
             "```"
+        )
+
+    # Cond-C.2 (36.2.0): Contrato de Decisão declarado por formulário. Seção
+    # SELADA — o enum fechado é o contrato do gate condicional (`decision.*`);
+    # a plataforma injeta a diretiva da linha DECISAO no runtime a partir dela.
+    if data.decisions:
+        obligatory_sections.append(
+            "## Decisions\n```json\n"
+            + json.dumps(data.decisions, ensure_ascii=False)
+            + "\n```"
         )
 
     # Regras anti-hallucination: explícitas pra evitar que o LLM invente

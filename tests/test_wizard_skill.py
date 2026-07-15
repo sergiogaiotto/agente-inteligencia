@@ -1701,3 +1701,59 @@ class TestComboRegressions:
             f"ordem das seções no obligatory_block mudou — "
             f"esperado {order}, posições {positions}"
         )
+
+
+# ═════ Contrato de Decisão no wizard (Cond-C.2, 36.2.0) ═════
+
+
+class TestWizardDecisions:
+    """`decisions` no request vira a seção ## Decisions SELADA no prompt do
+    wizard. Validação ACIONÁVEL no formulário — o parser de runtime descartaria
+    campo inválido em silêncio e o contrato nasceria morto."""
+
+    def test_emite_secao_decisions_roundtrip_com_o_parser(self):
+        req = WizardSkillRequest(
+            description="triagem",
+            decisions={"escalar": ["sim", "não"], "severidade": ["baixa", "média", "alta"]},
+        )
+        bindings = {"mcp_tools": [], "rag_sources": [], "data_tables": [], "api_endpoints": []}
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        assert "## Decisions" in system
+        # roundtrip REAL: a seção emitida parseia para o MESMO contrato
+        from app.skill_parser.decisions_schema import extract_decisions_schema
+        sec = system[system.find("## Decisions"):]
+        assert extract_decisions_schema(sec) == {
+            "escalar": ["sim", "não"], "severidade": ["baixa", "média", "alta"]}
+
+    def test_sem_decisions_nao_emite_secao(self):
+        req = WizardSkillRequest(description="x")
+        bindings = {"mcp_tools": [], "rag_sources": [], "data_tables": [], "api_endpoints": []}
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        assert "## Decisions" not in system
+
+    def test_validador_rejeita_com_mensagem_acionavel(self):
+        import pytest as _pt
+        # campo acentuado
+        with _pt.raises(Exception) as e1:
+            WizardSkillRequest(description="x", decisions={"situação": ["a"]})
+        assert "identificador ASCII" in str(e1.value)
+        # nome reservado de dict (decision.items = método no Jinja)
+        with _pt.raises(Exception) as e2:
+            WizardSkillRequest(description="x", decisions={"items": ["a"]})
+        assert "reservado" in str(e2.value)
+        # separador da linha DECISAO no valor
+        with _pt.raises(Exception) as e3:
+            WizardSkillRequest(description="x", decisions={"parecer": ["sim, com ressalvas"]})
+        assert "separadores da linha DECISAO" in str(e3.value)
+        # campo sem valores
+        with _pt.raises(Exception) as e4:
+            WizardSkillRequest(description="x", decisions={"escalar": []})
+        assert "ao menos 1 valor" in str(e4.value)
+
+    def test_validador_normaliza_e_deduplica(self):
+        req = WizardSkillRequest(
+            description="x", decisions={" escalar ": ["  sim ", "sim", "não", ""]})
+        assert req.decisions == {"escalar": ["sim", "não"]}
+
+    def test_decisions_vazio_vira_none(self):
+        assert WizardSkillRequest(description="x", decisions={}).decisions is None

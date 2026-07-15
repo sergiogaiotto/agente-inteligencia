@@ -191,6 +191,43 @@
                 <p x-show="wizardLengthPreset" class="mt-1 text-[10px] text-red-600" x-text="'Gera ## Output Shape com length_preset: ' + wizardLengthPreset + '. Engine trunca resposta se LLM exceder.'"></p>
             </div>
 
+            <!-- ═════ Contrato de Decisão (Cond-C.2, 36.2.0) ═════
+                 Declara ## Decisions por FORMULÁRIO: campo + enum fechado. O gate
+                 condicional usa `decision.<campo>`; a plataforma injeta a diretiva
+                 da linha DECISAO no runtime. Validação server-side ACIONÁVEL no
+                 wizard (o parser de runtime descartaria campo inválido em silêncio). -->
+            <div class="rounded-lg border border-indigo-200 bg-indigo-50/40 px-3 py-2.5" data-testid="wizard-decisions">
+                <div class="flex items-center justify-between">
+                    <label class="block text-[11px] font-semibold text-indigo-800">Contrato de Decisão (## Decisions)</label>
+                    <span x-show="!wizardDecisions.length" class="rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5 text-[9px] font-medium">opcional · decisões que o agente ANUNCIA para rotear o fluxo</span>
+                </div>
+                <p class="mt-0.5 text-[10px] text-indigo-700/80">Cada campo tem um conjunto FECHADO de valores. A aresta condicional usa <code class="font-mono">decision.&lt;campo&gt; == '&lt;valor&gt;'</code> — o fim do <code class="font-mono">'escalar=sim' in output_lower</code> combinado por telepatia.</p>
+                <template x-for="(d, di) in wizardDecisions" :key="di">
+                    <div class="mt-2 rounded-lg border border-indigo-200 bg-white px-2.5 py-2">
+                        <div class="flex items-center gap-2">
+                            <input x-model="d.campo" placeholder="campo (ex: escalar)" data-testid="decision-campo"
+                                   class="w-40 rounded border border-indigo-200 px-2 py-1 text-[11px] font-mono outline-none focus:border-indigo-400">
+                            <span class="text-[10px] text-surface-400">valores:</span>
+                            <div class="flex flex-wrap gap-1 items-center flex-1">
+                                <template x-for="(v, vi) in d.valores" :key="vi">
+                                    <span class="inline-flex items-center gap-1 rounded-full bg-indigo-50 text-indigo-700 px-2 py-0.5 text-[10.5px] font-mono">
+                                        <span x-text="v"></span>
+                                        <button type="button" @click="d.valores.splice(vi, 1)" class="text-indigo-400 hover:text-indigo-600 leading-none">&times;</button>
+                                    </span>
+                                </template>
+                                <input x-model="d.draft" @keydown.enter.prevent="addDecisionValor(d)" @blur="addDecisionValor(d)"
+                                       placeholder="valor + Enter" class="flex-1 min-w-[90px] border-0 p-0 text-[11px] bg-transparent outline-none">
+                            </div>
+                            <button type="button" @click="wizardDecisions.splice(di, 1)" class="text-surface-300 hover:text-rose-500 text-[13px] leading-none" title="Remover campo">&times;</button>
+                        </div>
+                        <p x-show="decisionProblema(d)" class="mt-1 text-[10px] text-rose-600" x-text="decisionProblema(d)"></p>
+                    </div>
+                </template>
+                <button type="button" @click="wizardDecisions.push({campo: '', valores: [], draft: ''})"
+                        class="mt-2 rounded-lg border border-indigo-300 bg-white px-2.5 py-1 text-[10.5px] font-medium text-indigo-700 hover:bg-indigo-50">+ campo de decisão</button>
+                <p x-show="wizardDecisions.length" class="mt-1 text-[10px] text-indigo-600">Gera a seção <code class="font-mono">## Decisions</code> selada — o agente encerra as respostas com a linha <code class="font-mono">DECISAO:</code> validada contra este contrato.</p>
+            </div>
+
             <!-- Wave Wizard UX: Preview do que será gerado — atualiza em tempo real. -->
             <div class="rounded-lg border border-red-200 bg-red-50/40 px-3 py-2.5">
                 <div class="text-[10px] font-semibold uppercase tracking-wider text-red-600 mb-1.5">Vamos gerar</div>
@@ -436,6 +473,55 @@
                             <div class="border-t border-surface-100 px-3 py-2 text-[9px] text-surface-400">
                                 Sem nenhuma marcada = SEM filtro (skill consulta todas as fontes autorizadas).
                                 Marcar pelo menos 1 = restrito a essas fontes.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ═════ Contrato de Decisão (Cond-C.2, 36.2.0) ═════
+                         Roundtrip com ## Decisions do raw_content (padrão Evidence
+                         Policy): editar linhas reescreve a seção; ↻ re-lê do markdown. -->
+                    <div class="relative" x-data="{decDropdown:false}">
+                        <button @click="decDropdown = !decDropdown; if (decDropdown) syncDecisionsFromContent()"
+                                type="button" data-testid="decisions-dropdown"
+                                class="inline-flex items-center gap-1 rounded-lg bg-indigo-50 border border-indigo-200 px-2.5 py-1 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 transition-colors"
+                                :title="decisionRows.length ? decisionRows.length + ' campo(s) de decisão declarados' : 'Declarar decisões que o agente anuncia (roteiam o fluxo)'">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            Contrato de Decisão
+                            <span x-show="decisionRows.length > 0" class="rounded-full bg-indigo-200 px-1.5 text-[9px] font-bold" x-text="decisionRows.length"></span>
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        </button>
+                        <div x-show="decDropdown" @click.away="decDropdown=false" x-transition
+                             class="absolute right-0 top-full mt-1 w-96 rounded-xl bg-white border border-surface-200 shadow-lg z-50 py-1 max-h-96 overflow-y-auto">
+                            <div class="px-3 py-1.5 text-[9px] font-bold text-surface-400 uppercase tracking-wider border-b border-surface-100 flex items-center justify-between">
+                                <span>## Decisions — enum fechado por campo</span>
+                                <button @click="syncDecisionsFromContent()" type="button" class="text-indigo-600 hover:text-indigo-700 normal-case font-normal text-[10px]" title="Re-ler ## Decisions do markdown">↻ sync</button>
+                            </div>
+                            <div class="px-3 py-2 space-y-2">
+                                <template x-for="(d, di) in decisionRows" :key="di">
+                                    <div class="rounded-lg border border-indigo-100 px-2 py-1.5">
+                                        <div class="flex items-center gap-1.5">
+                                            <input x-model="d.campo" @change="applyDecisionsSection()" placeholder="campo"
+                                                   class="w-28 rounded border border-indigo-200 px-1.5 py-0.5 text-[10.5px] font-mono outline-none focus:border-indigo-400">
+                                            <div class="flex flex-wrap gap-1 items-center flex-1">
+                                                <template x-for="(v, vi) in d.valores" :key="vi">
+                                                    <span class="inline-flex items-center gap-1 rounded-full bg-indigo-50 text-indigo-700 px-1.5 py-0.5 text-[10px] font-mono">
+                                                        <span x-text="v"></span>
+                                                        <button type="button" @click="d.valores.splice(vi, 1); applyDecisionsSection()" class="text-indigo-400 hover:text-indigo-600 leading-none">&times;</button>
+                                                    </span>
+                                                </template>
+                                                <input x-model="d.draft" @keydown.enter.prevent="addDecisionValor(d); applyDecisionsSection()" @blur="addDecisionValor(d); applyDecisionsSection()"
+                                                       placeholder="valor + Enter" class="flex-1 min-w-[70px] border-0 p-0 text-[10.5px] bg-transparent outline-none">
+                                            </div>
+                                            <button type="button" @click="decisionRows.splice(di, 1); applyDecisionsSection()" class="text-surface-300 hover:text-rose-500 text-[13px] leading-none">&times;</button>
+                                        </div>
+                                        <p x-show="decisionProblema(d)" class="mt-1 text-[9.5px] text-rose-600" x-text="decisionProblema(d)"></p>
+                                    </div>
+                                </template>
+                                <button type="button" @click="decisionRows.push({campo: '', valores: [], draft: ''})"
+                                        class="rounded-lg border border-indigo-300 bg-white px-2 py-0.5 text-[10px] font-medium text-indigo-700 hover:bg-indigo-50">+ campo</button>
+                            </div>
+                            <div class="border-t border-surface-100 px-3 py-2 text-[9px] text-surface-400">
+                                A aresta condicional usa <code class="font-mono">decision.&lt;campo&gt; == '&lt;valor&gt;'</code>. Sem campos = skill não declara contrato (a seção é removida).
                             </div>
                         </div>
                     </div>
@@ -1134,6 +1220,15 @@ function skillForm(editId) {
         // Onda 1 Output Shape: preset de tamanho. Vazio = backend não emite
         // ## Output Shape; engine usa default 'digest' (1500 chars).
         wizardLengthPreset: '',
+        // Contrato de Decisão (Cond-C.2, 36.2.0): linhas do formulário do wizard
+        // ({campo, valores[], draft}) e do EDITOR (roundtrip com ## Decisions
+        // do raw_content, padrão Evidence Policy).
+        wizardDecisions: [],
+        decisionRows: [],
+        // Nomes que o Jinja resolveria como MÉTODO de dict — decision.<campo>
+        // nunca casaria (espelho client-side do _RESERVED_FIELDS; o servidor
+        // valida a lista COMPLETA no wizard).
+        _DECISION_RESERVED: ['clear','copy','fromkeys','get','items','keys','pop','popitem','setdefault','update','values'],
         parseResult: null,
         mcpTools: [],
         apiConnectors: [],  // lista de connectors registrados
@@ -1956,6 +2051,9 @@ ${outMap}`;
                     // Após carregar markdown da skill, popula os checkboxes do
                     // dropdown de Fontes RAG lendo o ## Evidence Policy.
                     this.syncBoundSourcesFromContent();
+                    // Cond-C.2: popula as linhas do Contrato de Decisão lendo
+                    // o ## Decisions (roundtrip — mesmo padrão acima).
+                    this.syncDecisionsFromContent();
                     // UX: normaliza o bloco YAML pra adicionar `# Nome humano`
                     // ao lado de cada UUID. Skills antigas (pré-PR) gravavam só
                     // UUID nu, hostil pra leitura. applyEvidencePolicy() regenera
@@ -2146,6 +2244,82 @@ ${outMap}`;
 
         // Lê ## Evidence Policy do raw_content e popula boundSourceIds.
         // Chamado: (1) ao abrir skill existente; (2) botão "↻ sync" do dropdown.
+        // ═════ Contrato de Decisão (Cond-C.2, 36.2.0) ═════
+        addDecisionValor(d) {
+            const s = (d.draft || '').trim();
+            d.draft = '';
+            if (!s) return;
+            if (!d.valores.includes(s)) d.valores.push(s);
+        },
+        // Hint client-side espelhando a validação do servidor (que é o SSOT e
+        // devolve o erro acionável no wizard; em runtime o parser descartaria
+        // o campo EM SILÊNCIO — por isso o aviso aqui, antes de gerar).
+        decisionProblema(d) {
+            const c = (d.campo || '').trim();
+            if (!c) return d.valores.length ? 'informe o nome do campo' : '';
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(c)) return 'campo: use identificador ASCII (letras, números e _; sem acento/espaço)';
+            if (this._DECISION_RESERVED.includes(c) || c.startsWith('__')) return `'${c}' é nome reservado — decision.${c} nunca casaria na regra`;
+            const ruim = d.valores.find(v => /[;,=]/.test(v));
+            if (ruim) return `valor '${ruim}': ';', ',' e '=' são separadores da linha DECISAO`;
+            if (!d.valores.length) return 'adicione ao menos 1 valor (Enter adiciona)';
+            return '';
+        },
+        _decisionsPayload(rows) {
+            const out = {};
+            for (const d of rows || []) {
+                const c = (d.campo || '').trim();
+                if (!c || !d.valores.length) continue;
+                out[c] = [...d.valores];
+            }
+            return Object.keys(out).length ? out : null;
+        },
+        // Roundtrip com o raw_content (padrão Evidence Policy): re-lê a seção
+        // ## Decisions p/ as linhas do editor…
+        syncDecisionsFromContent() {
+            const content = this.form.raw_content || '';
+            const sec = content.match(/##\s+Decisions[\s\S]*?```(?:json|JSON)?\s*\n([\s\S]*?)\n```/);
+            if (!sec) { this.decisionRows = []; return; }
+            try {
+                const obj = JSON.parse(sec[1]);
+                this.decisionRows = Object.entries(obj || {}).map(([campo, valores]) => ({
+                    campo, valores: Array.isArray(valores) ? valores.map(String) : [], draft: '',
+                }));
+            } catch (_) { this.decisionRows = []; }
+        },
+        // …e reescreve a seção a partir das linhas. Sem linhas válidas, REMOVE
+        // a seção (skill volta a não declarar contrato).
+        applyDecisionsSection() {
+            const content = this.form.raw_content || '';
+            const sectionRegex = /\n*##\s+Decisions[\s\S]*?(?=\n## |\s*$)/;
+            const hasSection = sectionRegex.test(content);
+            const payload = this._decisionsPayload(this.decisionRows);
+            if (!payload) {
+                if (hasSection) {
+                    this.form.raw_content = content.replace(sectionRegex, '').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+                }
+                return;
+            }
+            const block = '## Decisions\n```json\n' + JSON.stringify(payload) + '\n```';
+            if (hasSection) {
+                this.form.raw_content = content.replace(sectionRegex, '\n\n' + block);
+            } else {
+                // Antes de ## Failure Modes / ## Guardrails (as seções finais); senão no fim.
+                const anchors = ['## Failure Modes', '## Guardrails'];
+                let inserted = false;
+                for (const a of anchors) {
+                    const idx = content.indexOf(a);
+                    if (idx > 0) {
+                        this.form.raw_content = content.substring(0, idx) + block + '\n\n' + content.substring(idx);
+                        inserted = true;
+                        break;
+                    }
+                }
+                if (!inserted) {
+                    this.form.raw_content = content.trimEnd() + '\n\n' + block + '\n';
+                }
+            }
+        },
+
         syncBoundSourcesFromContent() {
             const content = this.form.raw_content || '';
             // Captura bloco fenced yaml dentro de ## Evidence Policy
@@ -2392,6 +2566,7 @@ ${outMap}`;
                     exec_mode: this.wizardExecMode,  // "" → backend infere
                     min_relevance: minRelevance,
                     length_preset: this.wizardLengthPreset || null,
+                    decisions: this._decisionsPayload(this.wizardDecisions),
                 });
                 this.form.raw_content = r.skill_md;
                 // Sync dos checkboxes do editor (Fontes RAG) com o que o

@@ -48,3 +48,32 @@ def test_source_agent_id_nas_tres_chamadas():
 def test_draft_label_deriva_rotulo_do_contrato():
     # sem o fallback, addClause gravava cláusula com rótulo em branco
     assert "/^decision\\.([A-Za-z_]\\w*)\\s*==\\s*'(.*)'$/" in SRC
+
+
+# ─── Cond-C.2 (36.2.0): formulário ## Decisions no editor de skill ────────────
+
+SKILL_SRC = (Path(__file__).parent.parent / "app" / "templates" / "pages" / "skill_form.html").read_text(encoding="utf-8")
+
+
+def test_wizard_tem_bloco_do_contrato():
+    assert 'data-testid="wizard-decisions"' in SKILL_SRC
+    assert "wizardDecisions" in SKILL_SRC
+    # payload do wizard envia o dict {campo: [valores]}
+    assert "decisions: this._decisionsPayload(this.wizardDecisions)" in SKILL_SRC
+
+
+def test_editor_faz_roundtrip_com_raw_content():
+    # padrão Evidence Policy: sync lê a seção; apply reescreve/remove
+    assert "syncDecisionsFromContent() {" in SKILL_SRC
+    assert "applyDecisionsSection() {" in SKILL_SRC
+    assert 'data-testid="decisions-dropdown"' in SKILL_SRC
+    # load() re-popula as linhas ao abrir skill existente
+    assert "this.syncDecisionsFromContent();" in SKILL_SRC
+
+
+def test_validacao_client_espelha_o_parser():
+    # hint com as MESMAS regras do servidor (identificador ASCII, reservados,
+    # separadores da linha) — o runtime descartaria em silêncio
+    assert "decisionProblema(d)" in SKILL_SRC
+    assert "_DECISION_RESERVED" in SKILL_SRC
+    assert "[;,=]" in SKILL_SRC
