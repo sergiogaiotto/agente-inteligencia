@@ -977,6 +977,45 @@ async def promote_release(release_id: str, target_env: str = "canary"):
     await audit_repo.create({"entity_type":"release","entity_id":release_id,"action":f"promoted_to_{target_env}"})
     return {"message": f"Release promovida para {target_env}"}
 
+
+@router.delete("/releases/{release_id}")
+async def delete_release(release_id: str):
+    """Remove uma release (housekeeping). Fecha o último gap do CRUD do
+    Registry §18 (backlog E2E): release de teste era irremovível.
+
+    Guard: release em canary/production → 409 — é o registro do que está
+    servindo. Para excluir, re-promova para staging antes
+    (PUT /releases/{id}/promote?target_env=staging).
+
+    Sem FKs no schema, o delete é hard e NÃO cascateia: eval_runs e
+    drift_events vinculados ficam com o release_id cru (DELETE
+    /eval-runs/{id} é a via de limpeza); a contagem vai pro audit.
+
+    Gating: mesmo nível dos irmãos ungated do módulo (ver delete_eval_run)."""
+    r = await releases_repo.find_by_id(release_id)
+    if not r:
+        raise HTTPException(404, "Release não encontrada")
+    if (r.get("environment") or "") in ("canary", "production"):
+        raise HTTPException(
+            409,
+            "Release em canary/production não pode ser excluída — re-promova "
+            "para staging antes (PUT /releases/{id}/promote?target_env=staging).",
+        )
+    if not await releases_repo.delete(release_id):
+        raise HTTPException(404, "Release não encontrada")
+    orphan_runs = await eval_runs_repo.count(release_id=release_id)
+    await audit_repo.create({
+        "entity_type": "release",
+        "entity_id": release_id,
+        "action": "deleted",
+        "details": json.dumps({
+            "name": r.get("name"),
+            "environment": r.get("environment"),
+            "eval_runs_orfaos": orphan_runs,
+        }),
+    })
+    return {"message": "Release removida"}
+
 # ═══ Gold Cases §9.4 ═══
 @router.get("/gold-cases")
 async def list_gold_cases(dataset_version: str = None, case_type: str = None, limit: int = 50):
