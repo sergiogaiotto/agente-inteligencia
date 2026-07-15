@@ -343,7 +343,7 @@
                         </div></template>
                         <button @click="addOp()" class="text-[11px] text-brand-500 font-medium hover:text-brand-700">+ Adicionar operação</button>
                     </div></div>
-                    <div class="grid grid-cols-3 gap-4">
+                    <div class="grid grid-cols-4 gap-4">
                         <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Classificação</label>
                         <select x-model="form.sensitivity" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[13px] outline-none">
                             <option value="public">Público</option><option value="internal">Interno</option><option value="confidential">Confidencial</option><option value="restricted">Restrito</option>
@@ -353,6 +353,11 @@
                         <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Auth</label>
                         <select x-model="form.auth_requirements" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[13px] outline-none">
                             <option value="">Nenhuma</option><option value="api_key">API Key</option><option value="oauth2">OAuth2</option><option value="mTLS">mTLS</option>
+                        </select></div>
+                        <!-- Per-conector (39.0.0): compõe com o toggle global de Configurações -->
+                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1" title="Modo per-tool: o LLM enxerga 1 função por tool DESCOBERTA (nomes/schemas reais) em vez do par genérico operation/query. 'Herdar' segue o toggle global em Configurações → Parâmetros.">Modo per-tool</label>
+                        <select x-model="form.per_tool_mode" data-testid="tool-per-tool-mode" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[13px] outline-none">
+                            <option value="inherit">Herdar global</option><option value="on">Ligado</option><option value="off">Desligado</option>
                         </select></div>
                     </div>
                     <!-- ══ AUTH CONFIG — campos condicionais por tipo ══ -->
@@ -608,7 +613,7 @@ function toolsPage() {
         authTokenFingerprint: '',
         authConfigFingerprints: { client_secret: '', client_key: '', ca_cert: '' },
         authConfig: { client_id: '', client_secret: '', token_url: '', scope: '', client_cert: '', client_key: '', ca_cert: '' },
-        form: { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'' },
+        form: { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'', per_tool_mode:'inherit' },
 
         get parsedOps() { try{const o=JSON.parse(this.form.operations||'[]');return Array.isArray(o)?o:[]}catch{return[]} },
         parseOps(ops) { try{const a=JSON.parse(ops||'[]');return Array.isArray(a)?a.join(', ')||'—':'—'}catch{return ops||'—'} },
@@ -1048,7 +1053,8 @@ function toolsPage() {
                     sensitivity: tool.sensitivity||'internal',
                     requires_trusted_context: !!tool.requires_trusted_context,
                     auth_requirements: tool.auth_requirements||'',
-                    auth_token: ''  // sempre vazio em edit — bandeira abaixo indica se há existente
+                    auth_token: '',  // sempre vazio em edit — bandeira abaixo indica se há existente
+                    per_tool_mode: tool.per_tool_mode||'inherit'
                 };
                 this.hasExistingAuthToken = !!tool.has_auth_token;
                 this.hasExistingAuthConfigSecrets = !!tool.has_auth_config_secrets;
