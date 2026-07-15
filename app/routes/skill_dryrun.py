@@ -220,6 +220,9 @@ async def _resolve_tool_from_registry(tool_id: str) -> Optional[dict]:
                 "name": r.get("name", ""),
                 "description": r.get("description", "") or "",
                 "operations": r.get("operations", "") or "",
+                # 39.3.0 (item 3 PR4): p/ o aviso de modo per-tool no dry-run
+                "discovered_tools": r.get("discovered_tools"),
+                "per_tool_mode": r.get("per_tool_mode"),
             }
     return None
 
@@ -428,6 +431,33 @@ async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
 
     declared_ops = _split_csv_or_json(tool.get("operations") or "")
 
+    # 39.3.0 (item 3 PR4): o dry-run simula o caminho LEGADO {operation,
+    # query}. Quando o conector está em modo per-tool EFETIVO, o runtime
+    # exporá N funções reais — o operador precisa saber que ESTE simulador
+    # não reflete esse modo (a simulação per-tool completa vem com o PR5).
+    _per_tool_issues: list[DryRunIssue] = []
+    try:
+        from app.mcp.runtime import _parse_discovered_tools, per_tool_enabled_for
+        _disc = _parse_discovered_tools(tool.get("discovered_tools"))
+        if per_tool_enabled_for(tool) and _disc:
+            _names = ", ".join(f"`{d['name']}`" for d in _disc[:8])
+            _per_tool_issues.append(DryRunIssue(
+                severity="info",
+                rule="per_tool.mode_active",
+                message=(
+                    f"Este conector está em modo PER-TOOL: em runtime o LLM "
+                    f"verá {len(_disc)} função(ões) real(is) ({_names}), não "
+                    "o par {operation, query} simulado abaixo."
+                ),
+                suggestion=(
+                    "Invoque a tool real pelo Workspace (forms per-tool) para "
+                    "testar o contrato descoberto; o Workflow da skill deve "
+                    "citar os NOMES REAIS, não operation=."
+                ),
+            ))
+    except Exception:
+        pass  # aviso é best-effort — nunca derruba o dry-run
+
     # 2. Decide operation final (override do user OU primeira do enum)
     override = (data.operation_override or "").strip()
     if override:
@@ -497,6 +527,7 @@ async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
         payload_that_would_be_sent=payload,
         function_spec=function_spec,
         function_spec_skill_declared=function_spec_skill_declared,
-        issues=issues,
+        # aviso de modo per-tool PRIMEIRO — muda a leitura de tudo abaixo
+        issues=_per_tool_issues + issues,
         operation_resolved=operation_chosen,
     )

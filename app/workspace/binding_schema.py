@@ -202,6 +202,43 @@ def normalize_mcp_binding(
     }
 
 
+def normalize_mcp_per_tool_bindings(tool: dict) -> list[dict]:
+    """CanonicalFormSchema POR TOOL DESCOBERTA (39.3.0, item 3 PR4) — para
+    conector em modo per-tool EFETIVO: 1 form por tool real do servidor, com
+    os campos do inputSchema que o SERVIDOR declarou. O operador invoca
+    exatamente o contrato real — sem o par {operation, query}, que não
+    existe neste modo.
+
+    binding_id composto `<db_id>::<real_name>` (UUID não contém ':') — o
+    invoke direto resolve o conector pelo prefixo e encaminha pelo nome real
+    via F3 (execute_tool_call com openai_tools per-tool)."""
+    from app.mcp.runtime import _parse_discovered_tools
+    base_id = str(tool.get("db_id") or tool.get("id") or "")
+    label = str(tool.get("name") or "(sem nome)")
+    out: list[dict] = []
+    for d in _parse_discovered_tools(tool.get("discovered_tools")):
+        schema = d.get("inputSchema") if isinstance(d.get("inputSchema"), dict) else {}
+        fields = (
+            _fields_from_json_schema(schema)
+            if isinstance(schema.get("properties"), dict) and schema.get("properties")
+            else []
+        )
+        out.append({
+            "binding_kind": "mcp",
+            "binding_id": f"{base_id}::{d['name']}",
+            "binding_label": f"{label} · {d['name']}",
+            "operations": [],
+            "fields": fields,
+            "schema_source": "discovered_per_tool",
+            "per_tool": {
+                "server": label,
+                "real_name": d["name"],
+                "description": (d.get("description") or "")[:300],
+            },
+        })
+    return out
+
+
 # ───────────────────────────────────────────────────────────────
 # Normalizador API — Onda A.2
 # ───────────────────────────────────────────────────────────────
