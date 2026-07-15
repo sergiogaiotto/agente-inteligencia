@@ -35,6 +35,11 @@ def _norm(s: str) -> str:
     return s.strip().casefold()
 
 
+# Campos proibidos no contrato: atributos/métodos de dict — `decision.<campo>`
+# no Jinja resolveria o MÉTODO em vez do valor anunciado (regra sempre-falsa).
+_RESERVED_FIELDS = frozenset(dir(dict))
+
+
 def extract_decisions_schema(skill_md: str) -> Optional[dict]:
     """Extrai o dict {campo: [valores]} da seção `## Decisions`, ou None.
 
@@ -64,6 +69,12 @@ def extract_decisions_schema(skill_md: str) -> Optional[dict]:
         # o lookup do parser é EXATO e a expr da aresta precisa digitar o campo —
         # um campo acentuado nasceria com falso-negativo garantido (review 2026-07-15).
         if not isinstance(field, str) or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", field):
+            continue
+        # Nomes de atributo/método de dict ('items', 'get', 'values'...): o gate
+        # expõe `decision` como dict e o Jinja resolve ATRIBUTO antes de item —
+        # `decision.items` devolveria o método, e a regra nunca casaria
+        # (review pré-push 2026-07-15).
+        if field in _RESERVED_FIELDS:
             continue
         if not isinstance(values, list):
             continue
@@ -210,10 +221,18 @@ def preserve_decision_line(original: str, truncated: str, schema: Optional[dict]
     provável: a linha é a ÚLTIMA por contrato, então um overflow pequeno corta
     NO MEIO dela — `has_decision_line` ainda casava e campos após o corte
     sumiam em silêncio ('severidade=al…' morre no enum) (review 2026-07-15).
-    Agora compara a EXTRAÇÃO validada do original vs truncado: se divergem,
-    remove do truncado toda linha DECISAO (inclusive parciais e o fragmento de
-    prefixo cortado) e re-anexa a forma canônica. O texto pode exceder o preset
-    em ~1 linha — deliberado: preservar o contrato vale mais que o limite exato.
+    Compara a EXTRAÇÃO validada do original vs truncado: se divergem, remove o
+    RABO de protocolo do truncado e re-anexa a forma canônica.
+
+    Remoção é TRAILING-only e com gate (review pré-push 2026-07-15 — a 1ª
+    versão removia por regex em qualquer posição e deletava prosa legítima
+    'Decision: Approve the refund...'): uma linha final só sai quando (a) é
+    protocolo com par VÁLIDO contra o schema, (b) é prefixo EXATO de uma linha
+    de protocolo do original (o truncate corta por posição — o rabo cortado é
+    sempre prefixo literal da linha original), ou (c) é o fragmento 'DECIS…'
+    cortado antes do ':'. Prosa e citações do formato no meio do texto ficam.
+    O texto pode exceder o preset em ~1 linha — deliberado: preservar o
+    contrato vale mais que o limite exato.
     """
     if not schema:
         return truncated
@@ -222,11 +241,24 @@ def preserve_decision_line(original: str, truncated: str, schema: Optional[dict]
         return truncated
     if extract_decision_line(truncated, schema) == orig:
         return truncated
+    # Linhas de protocolo CRUAS do original — reconhecem o rabo cortado por
+    # prefixo literal ('DECISAO: escalar=sim; severida' ⊂ linha original).
+    orig_proto = [ln.rstrip() for ln in original.splitlines() if _DECISION_LINE_RE.match(ln)]
     lines = truncated.splitlines()
-    kept = [ln for ln in lines if not _DECISION_LINE_RE.match(ln)]
-    if kept and _is_cut_decision_prefix(kept[-1]):
-        kept = kept[:-1]
-    base = "\n".join(kept).rstrip()
+    end = len(lines)
+    while end > 0:
+        ln = lines[end - 1]
+        if not ln.strip():
+            end -= 1
+            continue
+        tail = ln.rstrip().rstrip("…").rstrip()
+        is_valid_proto = bool(_DECISION_LINE_RE.match(ln)) and bool(extract_decision_line(ln, schema))
+        is_cut_body = bool(tail) and any(o.startswith(tail) for o in orig_proto)
+        if is_valid_proto or is_cut_body or _is_cut_decision_prefix(ln):
+            end -= 1
+            continue
+        break
+    base = "\n".join(lines[:end]).rstrip()
     return (base + "\n" if base else "") + build_decision_line(orig)
 
 

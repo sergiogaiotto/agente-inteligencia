@@ -4776,11 +4776,22 @@ async def execute_pipeline(
     # final apresentada (decisão de design 2026-07-15). Gate duplo no helper
     # (schema declarado + pares válidos): agente sem contrato → no-op, prosa
     # legítima 'Decisão: ...' fica intacta. Fail-safe: erro → output intacto.
+    # Tenta o schema do DONO da resposta e depois os dos demais steps: o agente
+    # final sem contrato pode ECOAR a linha do upstream que veio no contexto
+    # (review pré-push 2026-07-15) — lookups memoizados por pipeline.
     if final_output and owner_step is not None and has_decision_line(final_output):
         try:
-            _owner_schema = await _decisions_schema_for_agent(owner_step.get("agent_id") or "")
-            if _owner_schema:
-                final_output = strip_decision_line(final_output, _owner_schema)
+            _strip_agents: list = []
+            for _s in [owner_step, *steps]:
+                _aid = (_s or {}).get("agent_id") or ""
+                if _aid and _aid not in _strip_agents:
+                    _strip_agents.append(_aid)
+            for _aid in _strip_agents:
+                _sch = await _decisions_schema_for_agent(_aid)
+                if _sch:
+                    final_output = strip_decision_line(final_output, _sch)
+                if not has_decision_line(final_output):
+                    break
         except Exception:
             logger.warning("pipeline.decision_line_strip_failed", exc_info=True)
     final_result = {
@@ -5489,12 +5500,15 @@ async def _decision_vars_for_source(source_id: str, last_output: str) -> dict:
             # idioma traduziu os valores ('escalar=yes') apesar da diretiva
             # verbatim. Sem este log o falso-negativo do gate seria 100%
             # silencioso e indiagnosticável em produção (review 2026-07-15).
+            # SEM trecho do output no log: o fim da resposta costuma citar dados
+            # do cliente e logs/ ficam FORA do forget LGPD (review pré-push).
             logger.warning(
                 "mesh.conditional.decision_line_invalid",
                 extra={
                     "event": "mesh.conditional",
                     "source_id": source_id,
-                    "output_tail": (last_output or "")[-200:],
+                    "schema_fields": sorted(schema.keys()),
+                    "output_len": len(last_output or ""),
                 },
             )
         return decision
