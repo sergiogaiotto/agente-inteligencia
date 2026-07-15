@@ -71,6 +71,28 @@ def test_casefold_no_literal():
     assert normalize_norm_literals("'Hauptstraße' in text_norm") == "'hauptstrasse' in text_norm"
 
 
+def test_aspas_duplas_nao_bypassa_o_selo():
+    # MAJOR do review pré-push (repro real): Jinja aceita "..."— a forma natural
+    # p/ apóstrofo e a favorita de LLMs. Sem cobri-la, `"não reconheço" in
+    # input_norm` passava por TODO o selo e nunca casava.
+    got = normalize_norm_literals('"não reconheço" in input_norm')
+    assert got == "'nao reconheco' in input_norm"
+
+
+def test_aspas_duplas_com_apostrofo_vira_simples_escapado():
+    from app.agents.conditional_suggest import validate_conditional_expression
+    got = normalize_norm_literals('"Sant\'Ana" in input_norm')
+    assert got == r"'sant\'ana' in input_norm"
+    # o resultado precisa PARSEAR (o escape \' é o mesmo que o _jinjaStr gera)
+    assert validate_conditional_expression(got, {"input_norm"})["valid"] is True
+
+
+def test_aspa_escapada_normaliza_o_literal_inteiro():
+    # review pré-push: [^']* parava no \' e normalizava só o sufixo
+    got = normalize_norm_literals(r"'Sant\'Ana' in input_norm")
+    assert got == r"'sant\'ana' in input_norm"
+
+
 # ─── endpoint aplica o repair (LLM mockado, padrão do test_mesh_rule_translator) ──
 
 @pytest.fixture
@@ -115,6 +137,11 @@ def test_template_avisa_literal_acentuado_contra_norm():
     assert "kind: 'lit'" in src
     # fixLit não deixa veredito velho mentir (lição do #619)
     assert "fixLit(w) {" in src
+    # review pré-push: detector cobre "..." além de '...' (com escapes)…
+    assert "('(?:[^'\\\\]|\\\\.)*'|\"(?:[^\"\\\\]|\\\\.)*\")" in src
+    # …e o fixLit é ESCOPADO ao alvo _norm (split/join na expr inteira vazava
+    # para cláusulas *_lower, que são acento-exato por contrato)
+    assert "(?:input_norm|output_norm|text_norm)" in src
 
 
 def test_template_strip_accents_espelha_python():

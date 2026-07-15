@@ -102,7 +102,13 @@ def repair_unquoted_literals(expr: str, canonical: set[str]) -> str:
 
 
 _NORM_TARGETS = ("input_norm", "output_norm", "text_norm")
-_NORM_LITERAL_RE = _re.compile(r"'([^']*)'\s+in\s+(" + "|".join(_NORM_TARGETS) + r")\b")
+# Literal Jinja COMPLETO, com escapes: '...' OU "..." (review pré-push da fase:
+# aspas duplas são válidas no Jinja, a forma natural p/ termos com apóstrofo e
+# a favorita de LLMs — sem cobri-las o selo tinha bypass; e [^']* parava no \'
+# e normalizava só o sufixo do literal).
+_NORM_LITERAL_RE = _re.compile(
+    r"""(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")\s+in\s+(""" + "|".join(_NORM_TARGETS) + r")\b"
+)
 
 
 def _strip_accents_local(s: str) -> str:
@@ -127,8 +133,14 @@ def normalize_norm_literals(expr: str) -> str:
         return expr
 
     def _sub(m: "_re.Match") -> str:
-        lit, tgt = m.group(1), m.group(2)
-        return f"'{_strip_accents_local(lit.casefold())}' in {tgt}"
+        raw = m.group(1) if m.group(1) is not None else m.group(2)
+        tgt = m.group(3)
+        norm = _strip_accents_local(raw.casefold())
+        # Saída SEMPRE em aspas simples (forma canônica do card). Apóstrofo nu
+        # vindo de literal de aspas duplas ("Sant'Ana") ganha escape \' — o
+        # mesmo que o _jinjaStr do template gera.
+        norm = _re.sub(r"(?<!\\)'", r"\\'", norm)
+        return f"'{norm}' in {tgt}"
 
     return _NORM_LITERAL_RE.sub(_sub, expr)
 

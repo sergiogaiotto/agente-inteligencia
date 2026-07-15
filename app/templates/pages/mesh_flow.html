@@ -2451,21 +2451,29 @@ function meshFlowPage() {
             }
             // Literal com acento/maiúscula comparado a var *_norm: a var é SEMPRE
             // normalizada no runtime — o literal nunca casaria (regra sempre-falsa,
-            // major do review do #617). Mesmo espírito do did-you-mean: 1 clique.
-            const normRe = /'([^']*)'\s+in\s+(input_norm|output_norm|text_norm)\b/g;
+            // major do review do #617). Cobre '...' E "..." com escapes (aspas
+            // duplas são a forma natural p/ apóstrofo e a favorita de LLMs).
+            const normRe = /('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")\s+in\s+(input_norm|output_norm|text_norm)\b/g;
             let m;
             while ((m = normRe.exec(ed.expr || '')) !== null) {
-                const fixed = this._stripAccents(String(m[1]).toLowerCase());
-                if (fixed !== m[1] && !seen.has('lit:' + m[1])) {
-                    seen.add('lit:' + m[1]);
-                    warns.push({ kind: 'lit', id: m[1], suggestion: fixed, target: m[2] });
+                const quoted = m[1], inner = quoted.slice(1, -1);
+                const fixed = this._stripAccents(String(inner).toLowerCase());
+                if (fixed !== inner && !seen.has('lit:' + quoted)) {
+                    seen.add('lit:' + quoted);
+                    warns.push({ kind: 'lit', id: inner, quoted, suggestion: fixed, target: m[2] });
                 }
             }
             return warns;
         },
         fixLit(w) {
-            // troca o literal acentuado pela forma normalizada (todas as ocorrências)
-            this.editor.expr = (this.editor.expr || '').split("'" + w.id + "'").join("'" + w.suggestion + "'");
+            // Troca ESCOPADA ao alvo *_norm (review: split/join na expr inteira
+            // vazava para cláusulas *_lower, que são acento-exato por contrato).
+            // Mantém o estilo de aspas original — sem malabarismo de escape.
+            const q = (w.quoted && w.quoted[0]) || "'";
+            const orig = w.quoted || ("'" + w.id + "'");
+            const esc = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const re = new RegExp(esc + '(\\s+in\\s+(?:input_norm|output_norm|text_norm)\\b)', 'g');
+            this.editor.expr = (this.editor.expr || '').replace(re, (_mm, tail) => q + w.suggestion + q + tail);
             this.sim = null;
             ((this.editor || {}).testPhrases || []).forEach(p => { p.pass = null; p.got = null; });   // veredito não mente
         },
