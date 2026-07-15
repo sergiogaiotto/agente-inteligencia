@@ -2871,6 +2871,7 @@ class SettingsSave(BaseModel):
     harness_max_hallucination_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     harness_max_dim_regression_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     harness_max_regression_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    harness_phrases_gate: Optional[bool] = None
     # Tuning de performance do invoke (25.2.0)
     query_topology_cache_enabled: Optional[bool] = None
     fast_routing_enabled: Optional[bool] = None

@@ -92,20 +92,45 @@ async def _build_subgraph(pipeline_id: str) -> dict:
     return {"root_agent_id": root, "nodes": nodes, "edges": edges}
 
 
-async def evaluate_pipeline_test_phrases(pipeline_id: str) -> dict:
+# Cap compartilhado do failing[] detalhado (publish gate em catalog.py e
+# dimension_breakdown do harness): as duas superfícies persistem/respondem a
+# mesma lista e não podem crescer com o nº de frases do autor.
+PHRASES_FAILING_MAX = 50
+
+
+async def evaluate_pipeline_test_phrases(
+    pipeline_id: str, sub: dict | None = None,
+) -> dict:
     """Gate de publicação (36.0.0): roda as Frases-Prova de TODAS as arestas
     condicionais do subgrafo do pipeline contra o avaliador REAL do runtime.
 
     Fecha a promessa do editor de fluxo: as frases seladas na aresta viram
     teste de regressão do roteamento no ato de publicar. Retorna
     {evaluated, passed, failing: [{edge_id, source_name, target_name, expr,
-    text, where, expect, got, error}]}. Arestas sem frases não contam."""
+    text, where, expect, got, error}], phrases_hash}. Arestas sem frases não
+    contam.
+
+    `sub` (opcional): subgrafo já resolvido por _build_subgraph — o harness
+    repassa o seu para evitar re-fetch E a janela TOCTOU (mesh vivo mutável
+    entre as duas leituras); o publish gate chama sem arg.
+
+    `phrases_hash` (36.5.0, análogo ao gold_hash do harness) sela o CONTEÚDO
+    AVALIADO: edge_id + expr + (text, where, expect) canônicos ECOADOS pelo
+    avaliador — ordem-insensível (reordenar frases não muda o hash) e frases
+    de texto vazio (que o avaliador pula) ficam fora. As frases vivem no mesh
+    VIVO, sem versionamento — comparar pass-rates entre runs só faz sentido
+    com o MESMO hash. None quando nada foi avaliado (garante hash ⇔
+    evaluated > 0)."""
+    import hashlib
+
     from app.agents.engine import evaluate_test_phrases_for_edge
 
-    sub = await _build_subgraph(pipeline_id)
+    if sub is None:
+        sub = await _build_subgraph(pipeline_id)
     names = {n["id"]: (n.get("name") or n["id"]) for n in sub.get("nodes", [])}
     evaluated = passed = 0
     failing: list[dict] = []
+    hashed: list[tuple] = []
     for edge in sub.get("edges", []):
         if edge.get("type") != "conditional":
             continue
@@ -119,6 +144,16 @@ async def evaluate_pipeline_test_phrases(pipeline_id: str) -> dict:
         results = await evaluate_test_phrases_for_edge(
             source_id=edge["source"], expr=expr, phrases=phrases,
         )
+        if results:
+            # Hash do que FOI avaliado (não do config cru): sorted() dentro da
+            # aresta torna o hash insensível à ordem da lista, e itens que o
+            # avaliador pula (texto vazio) não contaminam a comparabilidade.
+            canon = sorted(
+                json.dumps([r.get("text"), r.get("where"), r.get("expect")],
+                           ensure_ascii=False)
+                for r in results
+            )
+            hashed.append((str(edge["id"]), expr, "\x1d".join(canon)))
         for r in results:
             evaluated += 1
             if r["passed"]:
@@ -131,7 +166,16 @@ async def evaluate_pipeline_test_phrases(pipeline_id: str) -> dict:
                     "expr": expr,
                     **r,
                 })
-    return {"evaluated": evaluated, "passed": passed, "failing": failing}
+    phrases_hash = None
+    if hashed:
+        h = hashlib.sha256()
+        for eid, expr_, canon_json in sorted(hashed):
+            h.update(f"{eid}\x1f{expr_}\x1f{canon_json}\x1e".encode("utf-8"))
+        phrases_hash = h.hexdigest()[:16]
+    return {
+        "evaluated": evaluated, "passed": passed, "failing": failing,
+        "phrases_hash": phrases_hash,
+    }
 
 
 async def snapshot_pipeline_def(entry: dict) -> Optional[dict]:

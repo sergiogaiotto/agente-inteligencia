@@ -583,7 +583,9 @@ async def publish_entry(
         # INFRA (erro de subgrafo não derruba a publicação — mesmo regime do
         # snapshot), fail-CLOSED nas FRASES (reprovação bloqueia sem override).
         try:
-            from app.catalog.pipeline_defs import evaluate_pipeline_test_phrases
+            from app.catalog.pipeline_defs import (
+                PHRASES_FAILING_MAX, evaluate_pipeline_test_phrases,
+            )
             _phrases_report = await evaluate_pipeline_test_phrases(entry["artifact_id"])
         except Exception:
             logger.warning("publish.test_phrases_gate_failed", exc_info=True)
@@ -609,7 +611,7 @@ async def publish_entry(
                     + "\nAjuste a regra ou as frases no Fluxograma (clique na conexão), ou publique com "
                       "ignore_test_phrases=true (fica auditado)."
                 ),
-                "failing": _phrases_report["failing"][:50],
+                "failing": _phrases_report["failing"][:PHRASES_FAILING_MAX],
                 "fix_hint": "/mesh/flow",
             })
 

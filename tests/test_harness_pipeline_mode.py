@@ -44,6 +44,7 @@ def _settings_stub(**over):
         harness_max_hallucination_rate=0.10,
         harness_max_dim_regression_pct=5.0,
         harness_max_regression_pct=5.0,
+        harness_phrases_gate=False,
     )
     base.update(over)
     return SimpleNamespace(**base)

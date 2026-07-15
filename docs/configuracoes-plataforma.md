@@ -151,6 +151,7 @@ Configurado por ambiente (alguns também na UI). Defaults pensados para zero-ris
 | `VERIFIER_PRODUCTION_ASYNC` / `_SAMPLE_RATE` / `_MAX_CONCURRENT_JOBS` | false / 0.10 / 20 | Julga em background sample% das interações (não bloqueia resposta). |
 | `HARNESS_USE_VERIFIER` | true | Harness re-julga casos via Verifier (gate combinado). |
 | `HARNESS_MIN_*` / `MAX_*` | vários | Thresholds multidimensionais do gate de qualidade. |
+| `HARNESS_PHRASES_GATE` | **false** | Em runs de PIPELINE, Frase-Prova de roteamento reprovada reprova o gate do run. OFF = reprovações viram nota informativa no `gate_reason`. As frases (seladas nas arestas condicionais) provam a REGRA de roteamento — avaliação determinística, sem custo LLM. |
 
 ### 3.5 Harness multi-agente (DeepAgent)
 | Variável | Default | Efeito |

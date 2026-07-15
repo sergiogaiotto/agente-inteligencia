@@ -437,6 +437,42 @@ async def run_evaluation(
                        f"(nenhum caso avaliado; accuracy não computada).",
         }
 
+    # ── Frases-Prova do roteamento (test_phrases → harness, 36.5.0) ──
+    # Reusa o avaliador do gate de publish (36.0.0): determinístico (Jinja
+    # sobre texto fixo), zero custo LLM. Prova a REGRA das arestas, não o
+    # comportamento do LLM em produção — por isso é métrica SEPARADA do
+    # accuracy (misturar distorceria a métrica LLM; convenção "sem falsa
+    # confiança"). Só em modo pipeline: frases pertencem a arestas — run de
+    # agente isolado não tem subgrafo (N/A, colunas ficam NULL). Best-effort:
+    # falha de infra não derruba o run (mesma postura do gate de publish).
+    routing_phrases: dict | None = None
+    if pipeline_id:
+        try:
+            from app.catalog.pipeline_defs import (
+                PHRASES_FAILING_MAX, evaluate_pipeline_test_phrases,
+            )
+            # Repassa o subgrafo já resolvido acima: evita re-fetch (2N+2
+            # queries) e a janela TOCTOU do mesh vivo entre as duas leituras —
+            # o hash deve selar a MESMA topologia que o run validou.
+            routing_phrases = await evaluate_pipeline_test_phrases(
+                pipeline_id, sub=sub,
+            )
+            # Cap na FONTE: failing entra no dimension_breakdown (teto 32KB)
+            # e no corpo de resposta do /eval-runs/execute — nenhum dos dois
+            # pode crescer com o nº de frases do autor. Campos string clipados
+            # (expr/error/text são ilimitados na origem).
+            routing_phrases["failing"] = [
+                {k: (v[:300] + "…" if isinstance(v, str) and len(v) > 300 else v)
+                 for k, v in f.items()}
+                for f in (routing_phrases.get("failing") or [])[:PHRASES_FAILING_MAX]
+            ]
+        except Exception:
+            logger.warning(
+                "event=harness.routing_phrases_failed pipeline_id=%s eval_id=%s",
+                pipeline_id, eval_id, exc_info=True,
+            )
+            routing_phrases = None
+
     total = len(cases)
     passed = 0
     failed = 0
@@ -757,6 +793,14 @@ async def run_evaluation(
         "avg_answer_correctness": _safe_round(_safe_mean(gold_answer_correctness)),
         "ragas_gold_cost_usd": round(gold_ragas_cost_usd, 6) if gold_ragas_cost_usd else None,
     }
+    if routing_phrases is not None:
+        dimension_breakdown["routing_phrases"] = {
+            "evaluated": routing_phrases.get("evaluated", 0),
+            "passed": routing_phrases.get("passed", 0),
+            # já capado/clipado na fonte (PHRASES_FAILING_MAX + clip de 300)
+            "failing": routing_phrases.get("failing") or [],
+            "phrases_hash": routing_phrases.get("phrases_hash"),
+        }
 
     # ─── Gate multi-dim ───
     gate_reasons: list[str] = []
@@ -777,6 +821,26 @@ async def run_evaluation(
         gate_reasons.append(f"contract_compliance_rate={contract_compliance_rate:.2%} < {settings.harness_min_contract_compliance:.0%}")
     if hallucination_rate > settings.harness_max_hallucination_rate:
         gate_reasons.append(f"hallucination_rate={hallucination_rate:.2%} > {settings.harness_max_hallucination_rate:.0%}")
+
+    # ─── Frases-Prova do roteamento: gate OPT-IN (36.5.0) ───
+    # Default OFF: frase reprovada é INFORMATIVA (nota no gate_reason), não
+    # reprova o run — ligar via harness_phrases_gate quando o time quiser que
+    # a regra de roteamento quebre o release.
+    phrases_note: str | None = None
+    if routing_phrases is not None:
+        _ph_evaluated = routing_phrases.get("evaluated", 0)
+        _ph_failed = _ph_evaluated - routing_phrases.get("passed", 0)
+        if _ph_failed > 0:
+            if settings.harness_phrases_gate:
+                gate_reasons.append(
+                    f"routing_phrases: {_ph_failed}/{_ph_evaluated} "
+                    "frase(s)-prova de roteamento reprovada(s)"
+                )
+            else:
+                phrases_note = (
+                    f"frases-prova de roteamento: {_ph_failed}/{_ph_evaluated} "
+                    "reprovada(s) — informativo (gate de frases desligado)"
+                )
 
     # ─── Regressão por dimensão (run_type=regression) ───
     if run_type == "regression":
@@ -826,6 +890,10 @@ async def run_evaluation(
         gate_reason_text = (
             f"{gate_reason_text}; {regression_note}" if gate_reason_text else regression_note
         )
+    if phrases_note:
+        gate_reason_text = (
+            f"{gate_reason_text}; {phrases_note}" if gate_reason_text else phrases_note
+        )
 
     # ─── Drift release-over-release (33.11.0): PRODUTOR que faltava para
     # drift_events. Compara com o baseline comparável (mesmo gold_hash) ANTES de
@@ -848,6 +916,17 @@ async def run_evaluation(
     )
 
     # ─── Persistência ───
+    # Slice cego [:32000] no JSON corrompe o campo inteiro quando estoura (o
+    # parse tolerante da UI descarta o breakdown TODO — by_category, RAGAS,
+    # tudo). Antes de recorrer a ele, degrada por partes: derruba o failing
+    # detalhado das frases (mantém contagens/hash) — pior caso volta ao
+    # payload pré-36.5.0, que nunca estourou o teto.
+    _breakdown_json = json.dumps(dimension_breakdown)
+    if len(_breakdown_json) > 32000 and dimension_breakdown.get("routing_phrases"):
+        dimension_breakdown["routing_phrases"]["failing"] = []
+        dimension_breakdown["routing_phrases"]["failing_dropped"] = True
+        _breakdown_json = json.dumps(dimension_breakdown)
+    _breakdown_json = _breakdown_json[:32000]
     await eval_runs_repo.update(eval_id, {
         "total_cases": total, "passed": passed, "failed": failed,
         "accuracy": round(accuracy, 4),
@@ -866,7 +945,12 @@ async def run_evaluation(
         "judge_used": judge_used,
         "judge_model": judge_model_observed,
         "gate_reason": gate_reason_text,
-        "dimension_breakdown": json.dumps(dimension_breakdown)[:32000],
+        # Frases-Prova (36.5.0): NULL = não aplicável (modo agente ou falha de
+        # infra); 0 = avaliou e o pipeline não tem frase selada.
+        "routing_phrases_total": (routing_phrases or {}).get("evaluated"),
+        "routing_phrases_passed": (routing_phrases or {}).get("passed"),
+        "routing_phrases_hash": (routing_phrases or {}).get("phrases_hash"),
+        "dimension_breakdown": _breakdown_json,
         "details": json.dumps(details[:100])[:32000],
         "status": "completed", "gate_result": gate,
     })
@@ -889,6 +973,7 @@ async def run_evaluation(
         "judge_model": judge_model_observed,
         "category_breakdown": category_breakdown,
         "dimension_breakdown": dimension_breakdown,
+        "routing_phrases": routing_phrases,
         "gate_result": gate, "gate_reason": gate_reason_text, "status": "completed",
     }
 
