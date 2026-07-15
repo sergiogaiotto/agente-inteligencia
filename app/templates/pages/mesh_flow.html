@@ -704,7 +704,12 @@
                                         <div class="rounded-lg border border-surface-200 p-2.5 space-y-1.5">
                                             <div class="flex items-center gap-1.5 text-[11px] text-surface-500 flex-wrap">
                                                 <span>A decisão do agente foi:</span>
-                                                <select x-model="editor.decision" @change="syncExpr()" data-testid="decision-select" class="rounded border border-surface-200 px-1.5 py-1 text-[11px]">
+                                                <!-- x-effect: o Alpine só re-aplica o value do select quando o MODEL muda;
+                                                     as options do contrato chegam DEPOIS (fetch) — sem isso, um value de
+                                                     contrato ficaria "em branco" no select até o próximo change. -->
+                                                <select x-model="editor.decision" @change="syncExpr()" data-testid="decision-select"
+                                                        x-effect="srcDecisions; editor.decision; $nextTick(() => { if ($el.value !== editor.decision) $el.value = editor.decision })"
+                                                        class="rounded border border-surface-200 px-1.5 py-1 text-[11px]">
                                                     <!-- Contrato de Decisão (Cond-C, 35.19.0): campos/valores DECLARADOS
                                                          no ## Decisions do agente de origem — o fim do 'escalar=sim'
                                                          digitado de memória. value = fragmento de expr, igual às FSM. -->
@@ -2125,12 +2130,14 @@ function meshFlowPage() {
         async loadSrcDecisions(srcId) {
             this.srcDecisions = {};
             if (!srcId) return;
+            // Guarda de época por GERAÇÃO (mesma máquina do _phrasesGen): duas
+            // buscas in-flight — inclusive do MESMO agente, reabrindo o editor
+            // rápido — não podem resolver fora de ordem e aplicar contrato stale.
+            const gen = (this._srcDecGen = (this._srcDecGen || 0) + 1);
             try {
                 const r = await api.get('/api/v1/mesh/agents/' + srcId + '/decisions');
-                // Guarda de época (mesma classe do _phrasesGen): a resposta
-                // ATRASADA de um editor anterior não pode contaminar o editor
-                // atual com o contrato de OUTRO agente.
-                if (this.editor && this.editor.source === srcId) {
+                if (gen !== this._srcDecGen) return;                 // resposta velha
+                if (this.editor && this.editor.source === srcId) {   // editor trocou
                     this.srcDecisions = (r && r.decisions) || {};
                 }
             } catch (_) { /* sem contrato / rota indisponível → opções FSM */ }

@@ -17,9 +17,18 @@ def test_load_src_decisions_definido_e_chamado():
 
 
 def test_guarda_de_epoca_do_contrato():
-    # resposta atrasada de um editor anterior não pode contaminar o editor
-    # atual com contrato de OUTRO agente (mesma classe do _phrasesGen).
+    # resposta atrasada não pode contaminar o editor atual: guarda por GERAÇÃO
+    # (mesmo agente, respostas fora de ordem) + por source (editor trocou) —
+    # mesma máquina do _phrasesGen.
+    assert "this._srcDecGen" in SRC
+    assert "gen !== this._srcDecGen" in SRC
     assert "this.editor.source === srcId" in SRC
+
+
+def test_select_reaplica_value_quando_contrato_chega():
+    # Alpine só re-aplica o value do select quando o MODEL muda; as options do
+    # contrato chegam DEPOIS (fetch) — o x-effect re-aplica (review pré-push).
+    assert 'x-effect="srcDecisions; editor.decision;' in SRC
 
 
 def test_optgroup_do_contrato_no_card_decisao():

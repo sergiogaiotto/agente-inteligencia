@@ -433,3 +433,30 @@ class TestGetSessionDecisionLineStrip:
         r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
         assistant = [m for m in r.json()["messages"] if m["role"] == "assistant"]
         assert assistant[0]["content"] == raw
+
+    def test_pipeline_strippa_por_autor_do_balao(self, workspace_client, monkeypatch):
+        # MAJOR do review pré-push: numa sessão de PIPELINE as turns são por
+        # step — o schema tem que ser o do AUTOR do balão (agente meio-de-cadeia
+        # com contrato), não o do agente de entrada.
+        trace = {"pipeline_steps": [{"agent_id": "ag-A"}, {"agent_id": "ag-B"}]}
+        session = {
+            "id": self.SESSION_ID, "agent_id": "ag-A", "title": "t",
+            "state": "LogAndClose", "trace_data": json.dumps(trace),
+        }
+        # repo devolve mais-recente-primeiro; o handler reverte p/ cronológica
+        turns = [
+            {"user_text_redacted": None,
+             "output_text_redacted": "Caso grave.\nDECISAO: escalar=sim", "created_at": ""},
+            {"user_text_redacted": "Meu cartão foi clonado.",
+             "output_text_redacted": "Roteado para triagem.", "created_at": ""},
+        ]
+        _patch_session(monkeypatch, session_row=session, turns=turns)
+
+        async def _schema(aid):
+            return {"escalar": ["sim", "não"]} if aid == "ag-B" else None
+
+        monkeypatch.setattr("app.agents.engine._decisions_schema_for_agent", _schema)
+        r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        assistant = [m for m in r.json()["messages"] if m["role"] == "assistant"]
+        assert assistant[0]["content"] == "Roteado para triagem."
+        assert assistant[1]["content"] == "Caso grave."

@@ -455,16 +455,28 @@ async def get_session(session_id: str, user: dict = Depends(require_user)):
     # Cond-C (35.19.0): o banco guarda o output CRU (auditoria), mas o balão do
     # histórico é RESPOSTA APRESENTADA — mesmo strip do /chat vivo, senão a
     # linha DECISAO "volta" ao recarregar a sessão (achado do review do plano).
-    # Schema resolvido UMA vez por sessão; gate duplo do helper preserva prosa.
-    _dec_schema = None
+    # Schema resolvido por AUTOR do balão (numa sessão de pipeline as turns são
+    # por step — usar só o agente de entrada deixava a linha do agente
+    # meio-de-cadeia reaparecer; review pré-push 2026-07-15), com cache por
+    # agente. Gate duplo do helper preserva prosa de agente sem contrato.
+    _has_dec = _strip_dec = _dec_schema_for = None
+    _dec_schemas: dict = {}
     try:
         from app.skill_parser.decisions_schema import has_decision_line as _has_dec
         from app.skill_parser.decisions_schema import strip_decision_line as _strip_dec
-        if s.get("agent_id") and any(_has_dec(t.get("output_text_redacted") or "") for t in msgs):
-            from app.agents.engine import _decisions_schema_for_agent
-            _dec_schema = await _decisions_schema_for_agent(s["agent_id"])
+        from app.agents.engine import _decisions_schema_for_agent as _dec_schema_for
     except Exception:
-        _dec_schema = None
+        _has_dec = None
+
+    async def _dec_schema(aid):
+        if not aid or _dec_schema_for is None:
+            return None
+        if aid not in _dec_schemas:
+            try:
+                _dec_schemas[aid] = await _dec_schema_for(aid)
+            except Exception:
+                _dec_schemas[aid] = None
+        return _dec_schemas[aid]
 
     messages = []
     assistant_idx = 0
@@ -473,8 +485,15 @@ async def get_session(session_id: str, user: dict = Depends(require_user)):
             messages.append({"role": "user", "content": t["user_text_redacted"], "created_at": t.get("created_at", "")})
         if t.get("output_text_redacted"):
             content = t["output_text_redacted"]
-            if _dec_schema and _has_dec(content):
-                content = _strip_dec(content, _dec_schema)
+            if _has_dec and _has_dec(content):
+                _author = (
+                    pipeline_steps[assistant_idx].get("agent_id")
+                    if pipeline_steps and assistant_idx < len(pipeline_steps)
+                    else s.get("agent_id")
+                )
+                _sch = await _dec_schema(_author)
+                if _sch:
+                    content = _strip_dec(content, _sch)
             # Converter JSON legado de recusa/escalação
             if content.startswith("{") and '"type"' in content:
                 try:

@@ -151,6 +151,14 @@ def test_campo_acentuado_e_rejeitado():
     assert s == {"ok": ["y"]}
 
 
+def test_campo_com_nome_de_metodo_de_dict_e_rejeitado():
+    # `decision.items` no Jinja resolve o MÉTODO do dict, não o valor anunciado
+    # — a regra nunca casaria (review pré-push 2026-07-15).
+    s = extract_decisions_schema(
+        '## Decisions\n```json\n{"items": ["poucos", "muitos"], "get": ["a"], "ok": ["y"]}\n```')
+    assert s == {"ok": ["y"]}
+
+
 # ── aliases de idioma no prefixo (review 2026-07-15) ─────────────────────────
 
 def test_alias_decision_e_decision_es_casam():
@@ -212,6 +220,34 @@ def test_preserve_prosa_nao_e_confundida_com_prefixo():
     truncated = "As Decisões…"
     got = preserve_decision_line(ORIGINAL, truncated, SCHEMA)
     assert got.startswith("As Decisões…")
+    assert got.endswith("\nDECISAO: escalar=sim; severidade=alta")
+
+
+def test_preserve_nao_deleta_heading_de_prosa_decision():
+    # MAJOR do review pré-push (repro real): heading 'Decision: ...' é prosa
+    # comum em respostas en-US — casa a regex (alias) mas NÃO valida par algum;
+    # a remoção precisa do gate, senão o conteúdo some em silêncio.
+    original = (
+        "Analysis done.\nDecision: Approve the refund and notify billing.\n"
+        "More details here.\nDECISAO: escalar=sim; severidade=alta"
+    )
+    truncated = (
+        "Analysis done.\nDecision: Approve the refund and notify billing.\n"
+        "More details here.\nDECISAO: escalar=sim; severida…"
+    )
+    got = preserve_decision_line(original, truncated, SCHEMA)
+    assert "Decision: Approve the refund and notify billing." in got
+    assert got.endswith("\nDECISAO: escalar=sim; severidade=alta")
+    assert got.count("DECISAO:") == 1
+
+
+def test_preserve_nao_remove_citacao_no_meio():
+    # eco do formato no MEIO do texto (linha que casa a regex mas não é o rabo)
+    # fica — remoção é trailing-only, simétrica ao strip de display.
+    original = "DECISAO: escalar=<sim|não>\nAnálise do caso.\nDECISAO: escalar=sim; severidade=alta"
+    truncated = "DECISAO: escalar=<sim|não>\nAnálise do caso.\nDECISAO: escalar=sim; severida…"
+    got = preserve_decision_line(original, truncated, SCHEMA)
+    assert got.startswith("DECISAO: escalar=<sim|não>\nAnálise do caso.")
     assert got.endswith("\nDECISAO: escalar=sim; severidade=alta")
 
 
