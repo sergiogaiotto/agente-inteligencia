@@ -1055,9 +1055,15 @@ def _parse_json_field(row: dict, field: str, default):
 
 
 @router.get("/eval-runs")
-async def list_eval_runs(release_id: str = None, limit: int = 20):
+async def list_eval_runs(release_id: str = None, agent_id: str = None,
+                         pipeline_id: str = None, limit: int = 20):
+    """Execuções de avaliação. Filtros opcionais por release e por ALVO
+    (mesmo contrato do GET /drift-events): com múltiplos alvos por release,
+    `agent_id`/`pipeline_id` isolam o histórico/baseline de cada um."""
     f = {}
     if release_id: f["release_id"] = release_id
+    if agent_id: f["agent_id"] = agent_id
+    if pipeline_id: f["pipeline_id"] = pipeline_id
     runs = await eval_runs_repo.find_all(limit=limit, **f)
     # dimension_breakdown e details vêm como TEXT JSON; UI precisa de objeto.
     for r in runs:
@@ -1100,11 +1106,27 @@ _METRIC_DIRECTIONS = {
 }
 
 
+def _target_of(run: dict) -> tuple | None:
+    """Alvo do run: ('agente'|'pipeline', id). None em run legado pré-33.20,
+    que não carimbava o alvo (agent_id/pipeline_id NULL)."""
+    if run.get("agent_id"):
+        return ("agente", run["agent_id"])
+    if run.get("pipeline_id"):
+        return ("pipeline", run["pipeline_id"])
+    return None
+
+
+def _fmt_target(t: tuple | None) -> str:
+    return f"{t[0]} {t[1]}" if t else "sem alvo (run legado)"
+
+
 def _summary_of_run(run: dict) -> dict:
     """Sumário leve de um eval_run para o response (sem details cruas)."""
     return {
         "id": run.get("id"),
         "release_id": run.get("release_id"),
+        "agent_id": run.get("agent_id"),
+        "pipeline_id": run.get("pipeline_id"),
         "run_type": run.get("run_type"),
         "gold_version": run.get("gold_version"),
         "status": run.get("status"),
@@ -1241,11 +1263,18 @@ def _divergent_cases(run_a: dict, run_b: dict, limit: int = 20) -> list:
 
 @router.get("/eval-runs/compare")
 async def compare_eval_runs(a: str, b: str):
-    """Compara dois eval_runs side-by-side. Valida gold_version + status.
+    """Compara dois eval_runs side-by-side. Valida ALVO + status +
+    gold_version + gold_hash.
 
     Retorna {run_a, run_b, comparable, comparable_reason, deltas,
     by_category_deltas, divergent_cases}. Quando comparable=false, os
     três últimos vêm vazios — UI mostra banner com reason.
+
+    Guarda de alvo (item 5 do plano): comparar agente A vs pipeline B (ou
+    dois agentes diferentes) passava silenciosamente como comparable —
+    delta sem significado. Runs legados pré-33.20 (alvo NULL) são
+    explicitamente não-comparáveis, não silenciosamente (convenção
+    "métricas sem falsa confiança").
     """
     if a == b:
         raise HTTPException(400, "Os dois IDs precisam ser diferentes")
@@ -1260,9 +1289,23 @@ async def compare_eval_runs(a: str, b: str):
         _parse_json_field(r, "dimension_breakdown", {})
         _parse_json_field(r, "details", [])
 
+    tgt_a, tgt_b = _target_of(run_a), _target_of(run_b)
     comparable = True
     reason = None
-    if run_a.get("status") != "completed" or run_b.get("status") != "completed":
+    if tgt_a is None or tgt_b is None:
+        comparable = False
+        reason = (
+            f"run sem alvo registrado (legado pré-33.20): a={_fmt_target(tgt_a)}, "
+            f"b={_fmt_target(tgt_b)}. Re-rode a avaliação para carimbar o alvo "
+            "antes de comparar."
+        )
+    elif tgt_a != tgt_b:
+        comparable = False
+        reason = (
+            f"alvos diferentes: a={_fmt_target(tgt_a)}, b={_fmt_target(tgt_b)}. "
+            "Comparar runs de alvos diferentes não mede regressão de nenhum deles."
+        )
+    elif run_a.get("status") != "completed" or run_b.get("status") != "completed":
         comparable = False
         reason = (
             f"runs precisam estar completed: "
