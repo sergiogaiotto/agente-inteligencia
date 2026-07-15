@@ -459,6 +459,29 @@ async def conditional_vars():
     return {"vars": CONDITIONAL_VARS_META}
 
 
+@router.get("/agents/{agent_id}/decisions")
+async def agent_decisions(agent_id: str):
+    """Contrato de Decisão declarado pela skill do agente (Cond-C, 35.19.0).
+
+    Retorna `{campo: [valores]}` da seção `## Decisions` da SKILL.md vinculada,
+    ou `{}` quando o agente não declara contrato (sem skill / sem seção /
+    malformada). Consumido pelo card "Decisão do agente" do editor de conexão:
+    a UI oferece os campos/valores DECLARADOS do agente de ORIGEM da aresta em
+    vez de o operador digitar de memória (o fim do 'escalar=sim' por telepatia).
+    """
+    from app.core.database import skills_repo
+    from app.skill_parser.decisions_schema import extract_decisions_schema
+
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        raise HTTPException(404, "Agente não encontrado")
+    schema = None
+    if agent.get("skill_id"):
+        row = await skills_repo.find_by_id(agent["skill_id"])
+        schema = extract_decisions_schema((row or {}).get("raw_content") or "")
+    return {"agent_id": agent_id, "decisions": schema or {}}
+
+
 @router.post("/connections/test-conditional")
 async def test_conditional(payload: dict):
     """Avalia uma expressão Jinja boolean contra um contexto de exemplo.
@@ -471,7 +494,12 @@ async def test_conditional(payload: dict):
         "input": str (opcional)           — pergunta original simulada do usuário,
         "attachments": list (opcional)    — [{"name","type"}] de anexos simulados,
         "session_text": str (opcional)    — perguntas recentes (memória de sessão),
-        "inputs": dict (opcional)         — args selados (x-uso:param) p/ regras inputs.X
+        "inputs": dict (opcional)         — args selados (x-uso:param) p/ regras inputs.X,
+        "decision": dict (opcional)       — decisões anunciadas simuladas p/ regras decision.X,
+        "source_agent_id": str (opcional) — agente de ORIGEM da aresta: sem `decision`
+                                            explícito, extrai a linha DECISAO do `output`
+                                            simulado e valida contra o contrato da skill
+                                            dele (espelha o runtime)
     }
     Returns: {"result": bool, "context": dict} OU {"error": str}
 
@@ -495,6 +523,16 @@ async def test_conditional(payload: dict):
 
     atts = payload.get("attachments")
     _inputs = payload.get("inputs")
+    # Contrato de Decisão (Cond-C, 35.19.0): decision explícito simula direto;
+    # sem ele, com source_agent_id, espelha o runtime — extrai a linha DECISAO
+    # do output simulado e valida contra o ## Decisions da skill do source.
+    _decision = payload.get("decision")
+    if not isinstance(_decision, dict):
+        _decision = None
+    _src = str(payload.get("source_agent_id") or "").strip()
+    if _decision is None and _src:
+        from app.agents.engine import _decision_vars_for_source
+        _decision = await _decision_vars_for_source(_src, payload.get("output", "") or "")
     ctx = _build_conditional_context(
         output=payload.get("output", ""),
         final_state=payload.get("final_state", ""),
@@ -503,6 +541,7 @@ async def test_conditional(payload: dict):
         session_text=payload.get("session_text", ""),
         # Postura B: permite simular regras sobre `inputs.<campo>` (args selados).
         inputs=_inputs if isinstance(_inputs, dict) else {},
+        decision=_decision or {},
     )
     try:
         result = _eval_conditional(expr, ctx)
@@ -541,8 +580,41 @@ async def suggest_conditional(payload: dict, user: dict = Depends(require_user))
     from app.llm_routing import resolve_llm_for_task
     from app.routes.wizard import _wizard_llm_complete
 
+    # Contrato de Decisão (Cond-C, 35.19.0): com source_agent_id no payload e
+    # contrato declarado na skill do source, o tradutor passa a CONHECER os
+    # campos/valores reais — "quando escalar for sim" vira
+    # `decision.escalar == 'sim'` em vez de um chute sobre output_lower.
+    vars_meta = CONDITIONAL_VARS_META
+    _src = str(payload.get("source_agent_id") or "").strip()
+    if _src:
+        try:
+            from app.core.database import skills_repo
+            from app.skill_parser.decisions_schema import extract_decisions_schema
+            _agent = await agents_repo.find_by_id(_src)
+            _row = (
+                await skills_repo.find_by_id(_agent["skill_id"])
+                if _agent and _agent.get("skill_id") else None
+            )
+            _schema = extract_decisions_schema((_row or {}).get("raw_content") or "")
+            if _schema:
+                vars_meta = [dict(v) for v in CONDITIONAL_VARS_META]
+                _pairs = "; ".join(
+                    f"decision.{k} aceita: " + " | ".join(vals)
+                    for k, vals in _schema.items()
+                )
+                _k0, _v0 = next(iter(_schema.items()))
+                for v in vars_meta:
+                    if v["name"] == "decision":
+                        v["desc"] += (
+                            f" CONTRATO DECLARADO pelo agente de origem DESTA conexão: {_pairs}. "
+                            f"Prefira decision.<campo> == '<valor>' quando a descrição "
+                            f"citar um desses campos — ex.: decision.{_k0} == '{_v0[0]}'."
+                        )
+        except Exception:
+            logger.warning("suggest-conditional: contrato do source ilegível", exc_info=True)
+
     provider, model = await resolve_llm_for_task("instruct")
-    messages = build_suggest_messages(description, CONDITIONAL_VARS_META)
+    messages = build_suggest_messages(description, vars_meta)
     try:
         content, _, _ = await _wizard_llm_complete(
             messages, provider, model, route="conditional_suggest", temperature=0,
