@@ -4615,9 +4615,17 @@ async def execute_pipeline(
                 "status": "completed",
                 "duration_ms": result.get("duration_ms", 0),
                 "final_state": result.get("final_state", ""),
-                # Preview SEM a linha DECISAO (36.2.1): o evento vai direto p/ a
-                # UI ao vivo — mesmo regime de apresentação do resultado final.
-                "output_preview": await _display_preview(result.get("output", ""), agent_id),
+                # Preview SEM a linha DECISAO (36.2.1): mesmo regime de
+                # apresentação do resultado final, com fallback de eco pelos
+                # agentes ANTERIORES da cadeia. Só computa quando há consumidor
+                # (sem callback, _emit descartaria — e sem o cache de topologia
+                # o lookup por step seria pago à toa; review pré-push).
+                "output_preview": (
+                    await _display_preview(
+                        result.get("output", ""), agent_id,
+                        fallback_agent_ids=[s.get("agent_id") or "" for s in steps],
+                    ) if progress_callback is not None else ""
+                ),
                 # 35.4.0 (aditivo): custo/tokens REAIS do step + iid — o worker
                 # do invoke-job acumula via callback p/ que um TIMEOUT não suma
                 # com o gasto dos steps já concluídos (ledger/orçamento por key).
@@ -4790,17 +4798,10 @@ async def execute_pipeline(
         _final_decision = await extract_decision_for_agent(
             final_output, owner_step.get("agent_id") or "")
         try:
-            _strip_agents: list = []
-            for _s in [owner_step, *steps]:
-                _aid = (_s or {}).get("agent_id") or ""
-                if _aid and _aid not in _strip_agents:
-                    _strip_agents.append(_aid)
-            for _aid in _strip_agents:
-                _sch = await _decisions_schema_for_agent(_aid)
-                if _sch:
-                    final_output = strip_decision_line(final_output, _sch)
-                if not has_decision_line(final_output):
-                    break
+            final_output = await _strip_for_display_multi(
+                final_output,
+                [(owner_step or {}).get("agent_id") or "", *[(s or {}).get("agent_id") or "" for s in steps]],
+            )
         except Exception:
             logger.warning("pipeline.decision_line_strip_failed", exc_info=True)
     if _final_decision is None:
@@ -4808,6 +4809,24 @@ async def execute_pipeline(
             _final_decision = await _decision_from_steps(steps)
         except Exception:
             _final_decision = None
+    # Apresentação POR STEP (Backlog 4, review pré-push 36.2.1): os balões do
+    # chat AO VIVO renderizam `pipeline_steps[].output` — sem isto a linha
+    # DECISAO do agente intermediário aparecia durante a execução e SUMIA no F5
+    # (o reload de sessão stripa por autor). `output` segue CRU (trace/gate/
+    # auditoria); `output_display` só existe quando difere (payload ~0 no caso
+    # comum). A trilha "Como cheguei aqui" do modal do fluxograma segue CRUA
+    # de propósito (trilha≈trace, decisão da Fase 1).
+    try:
+        _chain_ids = [(s or {}).get("agent_id") or "" for s in steps]
+        for _s in steps:
+            _out_s = _s.get("output") or ""
+            if _out_s and has_decision_line(_out_s):
+                _disp = await _strip_for_display_multi(
+                    _out_s, [(_s.get("agent_id") or ""), *_chain_ids])
+                if _disp != _out_s:
+                    _s["output_display"] = _disp
+    except Exception:
+        logger.warning("pipeline.step_display_failed", exc_info=True)
     final_result = {
         "mode": "pipeline",
         "output": final_output,
@@ -5656,20 +5675,38 @@ async def decision_and_display_output(output: str, agent_id: str) -> tuple:
         return None, output
 
 
-async def _display_preview(output: str, agent_id: str, limit: int = 300) -> str:
-    """Preview do output para EVENTOS de stream (`agent_done`): a linha DECISAO
-    é protocolo de máquina e não aparece na UI ao vivo (Backlog 4 do arco
-    condicional, 36.2.1) — uma resposta curta de agente-classificador cabe
-    inteira nos 300 chars, linha inclusa. steps/trace seguem CRUS; o gate lê o
-    output completo. Fail-safe: erro → preview cru."""
+async def _strip_for_display_multi(output: str, agent_ids: list) -> str:
+    """Regime de APRESENTAÇÃO com fallback de ECO: tenta o schema de cada
+    agente (autor primeiro, depois os demais da cadeia) até a linha DECISAO
+    sumir — um agente SEM contrato pode ecoar a linha do upstream que veio no
+    contexto (review pré-push 36.2.1: a assimetria vazava a linha no step).
+    Lookups memoizados por pipeline; fail-safe: erro → segue tentando/cru."""
     out = output or ""
-    if has_decision_line(out):
+    if not has_decision_line(out):
+        return out
+    seen: set = set()
+    for aid in agent_ids or []:
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
         try:
-            sch = await _decisions_schema_for_agent(agent_id)
+            sch = await _decisions_schema_for_agent(aid)
             if sch:
                 out = strip_decision_line(out, sch)
         except Exception:
-            pass
+            continue
+        if not has_decision_line(out):
+            break
+    return out
+
+
+async def _display_preview(output: str, agent_id: str, limit: int = 300, fallback_agent_ids: list | None = None) -> str:
+    """Preview do output para EVENTOS de stream (`agent_done`): a linha DECISAO
+    é protocolo de máquina e não aparece ao vivo (Backlog 4, 36.2.1) — uma
+    resposta curta de classificador cabe inteira nos 300 chars, linha inclusa.
+    steps/trace seguem CRUS; o gate lê o output completo. Eco coberto via
+    `fallback_agent_ids` (agentes anteriores da cadeia)."""
+    out = await _strip_for_display_multi(output or "", [agent_id, *(fallback_agent_ids or [])])
     return out[:limit]
 
 

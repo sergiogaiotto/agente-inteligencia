@@ -2292,7 +2292,10 @@ function workspacePage() {
                     }
                     for(const step of result.pipeline_steps){
                         if(step.status==='completed'||step.status==='error'){
-                            this.messages.push({role:'assistant',content:step.output||step.error||'',created_at:new Date().toISOString(),_agentName:step.agent_name,_agentKind:step.agent_kind,_duration:step.duration_ms,_trace:{interaction_id:step.interaction_id,agent_id:step.agent_id,final_state:step.final_state,evidence_score:step.evidence_score||0,transitions:step.transitions||[],duration_ms:step.duration_ms||0,trace:step.trace||{},mode:'agent',pipeline_steps:result.pipeline_steps}});
+                            // Cond-C (36.2.1): balão usa output_display quando o engine
+                            // strippou a linha DECISAO (vivo consistente com o F5, que
+                            // stripa no reload). `output` cru segue no trace.
+                            this.messages.push({role:'assistant',content:(step.output_display!==undefined?step.output_display:step.output)||step.error||'',created_at:new Date().toISOString(),_agentName:step.agent_name,_agentKind:step.agent_kind,_duration:step.duration_ms,_trace:{interaction_id:step.interaction_id,agent_id:step.agent_id,final_state:step.final_state,evidence_score:step.evidence_score||0,transitions:step.transitions||[],duration_ms:step.duration_ms||0,trace:step.trace||{},mode:'agent',pipeline_steps:result.pipeline_steps}});
                         }
                     }
                     this.lastTrace=result;
