@@ -282,6 +282,11 @@ class Settings(BaseSettings):
     # Pacote C3 (33.20.0): regressão de ACURÁCIA vs baseline — era o último
     # gate hardcoded (GATE_THRESHOLDS) enquanto os irmãos já eram settings.
     harness_max_regression_pct: float = 5.0
+    # test_phrases → harness (36.5.0): quando True, Frase-Prova reprovada em
+    # run de PIPELINE reprova o gate do run. Default OFF: informativo apenas
+    # (nota no gate_reason) — as frases provam a REGRA de roteamento
+    # (determinístico), não o comportamento do LLM.
+    harness_phrases_gate: bool = False
 
     # ── RAGAS com gabarito (ground truth) — 33.12.0 ──
     # context_recall + answer_correctness exigem a resposta-padrão do gold E uma
@@ -562,6 +567,7 @@ _UI_TO_ENV_MAP = {
     "harness_max_hallucination_rate": "HARNESS_MAX_HALLUCINATION_RATE",
     "harness_max_dim_regression_pct": "HARNESS_MAX_DIM_REGRESSION_PCT",
     "harness_max_regression_pct": "HARNESS_MAX_REGRESSION_PCT",
+    "harness_phrases_gate": "HARNESS_PHRASES_GATE",
     "ragas_ground_truth_enabled": "RAGAS_GROUND_TRUTH_ENABLED",
     # Tuning de performance (25.2.0)
     "query_topology_cache_enabled": "QUERY_TOPOLOGY_CACHE_ENABLED",
@@ -606,6 +612,7 @@ PARAMETER_UI_KEYS = (
     "harness_max_hallucination_rate",
     "harness_max_dim_regression_pct",
     "harness_max_regression_pct",
+    "harness_phrases_gate",
     "ragas_ground_truth_enabled",
     "query_topology_cache_enabled",
     "fast_routing_enabled",

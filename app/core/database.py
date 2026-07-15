@@ -1401,6 +1401,15 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE turns ADD COLUMN IF NOT EXISTS customer_hash TEXT",
     "CREATE INDEX IF NOT EXISTS idx_turns_customer ON turns (customer_hash) WHERE customer_hash IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_uploaded_files_customer ON uploaded_files (customer_hash) WHERE customer_hash IS NOT NULL",
+    # ── Frases-Prova no harness (test_phrases → harness, 36.5.0) ──
+    # Run em modo pipeline registra o resultado agregado das Frases-Prova das
+    # arestas condicionais (avaliador do gate de publish, determinístico).
+    # NULL = não aplicável (modo agente/legado); 0 = avaliou, sem frases.
+    # O hash (análogo ao gold_hash) sela o CONTEÚDO do conjunto de frases —
+    # comparabilidade entre runs (as frases vivem no mesh VIVO, mutável).
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS routing_phrases_total INTEGER",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS routing_phrases_passed INTEGER",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS routing_phrases_hash TEXT",
 ]
 
 

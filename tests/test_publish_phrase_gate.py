@@ -117,7 +117,9 @@ class TestEvaluatePipelinePhrases:
             return {"root_agent_id": "a1", "nodes": [], "edges": []}
         monkeypatch.setattr(pipeline_defs, "_build_subgraph", _sub)
         rep = await pipeline_defs.evaluate_pipeline_test_phrases("pip-1")
-        assert rep == {"evaluated": 0, "passed": 0, "failing": []}
+        assert rep == {
+            "evaluated": 0, "passed": 0, "failing": [], "phrases_hash": None,
+        }
 
 
 # ─── rodapé do editor promete o que agora EXISTE ──────────────────────────────
