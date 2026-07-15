@@ -687,6 +687,9 @@ async def match_with_registry(parsed_tools: list[dict], tools_repo) -> list[dict
             # conector já descoberto. (Era o elo faltante entre F1/F2 e o fluxo
             # real engine→match_with_registry→build_openai_tools.)
             pt['discovered_tools'] = matched.get('discovered_tools')
+            # Per-conector (39.0.0): o modo tri-state viaja junto — sem isto,
+            # per_tool_enabled_for nunca veria o override e cairia no global.
+            pt['per_tool_mode'] = matched.get('per_tool_mode')
             pt['auth_requirements'] = matched.get('auth_requirements', '')
             # Credenciais precisam ser propagadas para execute_tool_call
             # poder montar o header Authorization. Antes só auth_requirements
@@ -715,6 +718,23 @@ def per_tool_enabled() -> bool:
 
 # Alias retrocompatível (uso interno anterior a F4).
 _per_tool_enabled = per_tool_enabled
+
+
+def per_tool_enabled_for(tool: dict | None) -> bool:
+    """Modo per-tool EFETIVO de UM conector (per-conector, 39.0.0).
+
+    `tools.per_tool_mode` tri-state: 'on' força per-tool neste conector,
+    'off' o mantém no legado {operation, query}, 'inherit'/ausente herda o
+    toggle GLOBAL (per_tool_enabled). COMPOSIÇÃO com o F6, não substituição:
+    o global segue como default de frota; o override é por conector — piloto
+    de per-tool num conector só, ou opt-out de um conector problemático sem
+    desligar a frota. Valor desconhecido → inherit (fail-safe)."""
+    mode = str((tool or {}).get("per_tool_mode") or "").strip().lower()
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    return per_tool_enabled()
 
 
 def _parse_discovered_tools(raw) -> list[dict]:
@@ -804,10 +824,11 @@ def build_openai_tools(
 
     openai_tools = []
     for tool in mcp_tools:
-        # F2 (per-tool, gated): expande em N funções (1/tool) quando o flag está
-        # ON E há `discovered_tools` persistido (F1). Flag OFF → pula → caminho
-        # legado byte-idêntico. É a prova de "nada quebra".
-        if _per_tool_enabled():
+        # F2 (per-tool, gated): expande em N funções (1/tool) quando o modo está
+        # ON E há `discovered_tools` persistido (F1). Modo OFF → pula → caminho
+        # legado byte-idêntico. 39.0.0: a decisão virou POR CONECTOR
+        # (per_tool_enabled_for compõe tools.per_tool_mode com o global).
+        if per_tool_enabled_for(tool):
             _disc = _parse_discovered_tools(tool.get("discovered_tools"))
             if _disc:
                 openai_tools.extend(build_per_tool_openai_functions(tool, _disc))

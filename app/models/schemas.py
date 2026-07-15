@@ -303,6 +303,9 @@ class ToolCreate(BaseModel):
     auth_token: Optional[str] = None
     auth_config: Optional[str] = "{}"
     sla: Optional[str] = "{}"
+    # Per-conector (39.0.0): 'inherit' | 'on' | 'off' — compõe com o toggle
+    # global MCP_PER_TOOL_ENABLED (ver per_tool_enabled_for no runtime).
+    per_tool_mode: Optional[str] = "inherit"
 
 class ToolUpdate(BaseModel):
     name: Optional[str] = None
@@ -319,6 +322,7 @@ class ToolUpdate(BaseModel):
     auth_token: Optional[str] = None
     auth_config: Optional[str] = None
     sla: Optional[str] = None
+    per_tool_mode: Optional[str] = None
 
 class GoldCaseCreate(BaseModel):
     """Caso do Golden Dataset.

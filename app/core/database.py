@@ -1401,6 +1401,11 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE turns ADD COLUMN IF NOT EXISTS customer_hash TEXT",
     "CREATE INDEX IF NOT EXISTS idx_turns_customer ON turns (customer_hash) WHERE customer_hash IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_uploaded_files_customer ON uploaded_files (customer_hash) WHERE customer_hash IS NOT NULL",
+    # ── MCP per-tool POR CONECTOR (39.0.0) ──
+    # Tri-state: 'on' força per-tool neste conector; 'off' mantém o legado
+    # {operation, query}; 'inherit' (default) herda MCP_PER_TOOL_ENABLED.
+    # Compõe com o toggle global (F6) — piloto/opt-out por conector.
+    "ALTER TABLE tools ADD COLUMN IF NOT EXISTS per_tool_mode TEXT DEFAULT 'inherit'",
     # ── Frases-Prova no harness (test_phrases → harness, 36.5.0) ──
     # Run em modo pipeline registra o resultado agregado das Frases-Prova das
     # arestas condicionais (avaliador do gate de publish, determinístico).
