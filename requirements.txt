@@ -39,7 +39,7 @@ openai==2.45.0
 httpx==0.28.1
 
 # === Observabilidade ===
-langfuse==4.13.2
+langfuse==4.14.0
 
 # === Observabilidade self-hosted (Onda 2 — OTel + Tempo + Loki + Grafana) ===
 # Habilitada em runtime apenas quando OTEL_ENABLED=true. Caso contrário,
