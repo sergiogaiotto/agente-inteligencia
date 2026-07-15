@@ -1415,7 +1415,16 @@ async def get_agent_skills_context(agent_id: str, user: dict = Depends(require_u
             # Registry — sem isso não temos id/auth/server pra invocar.
             if not tool.get("db_id") and not tool.get("id"):
                 continue
-            bindings_out.append(normalize_mcp_binding(tool, skill_md=raw_md))
+            # 39.3.0 (item 3 PR4): conector em modo per-tool EFETIVO lista 1
+            # form POR TOOL DESCOBERTA (campos do inputSchema real) — expor o
+            # form legado {operation, query} aqui recriaria o paradigma que o
+            # modo aposenta. Critério idêntico ao gate de build.
+            from app.mcp.runtime import _parse_discovered_tools, per_tool_enabled_for
+            if per_tool_enabled_for(tool) and _parse_discovered_tools(tool.get("discovered_tools")):
+                from app.workspace.binding_schema import normalize_mcp_per_tool_bindings
+                bindings_out.extend(normalize_mcp_per_tool_bindings(tool))
+            else:
+                bindings_out.append(normalize_mcp_binding(tool, skill_md=raw_md))
 
         # ── Onda A.2+A.3: SKILL declarativa (api_bindings + data_tables) ──
         # Pq não 1 por binding? Porque ambos os tipos compartilham ## Inputs
@@ -1889,12 +1898,15 @@ async def invoke_binding_direct(
     # ──────────────────────────────────────────────────────
     # Branch: binding_kind == "mcp" — Onda A.1 (path original abaixo)
     # ──────────────────────────────────────────────────────
-    # 2. Resolve binding (MCP tool) pelo binding_id (= db_id no Registry)
+    # 2. Resolve binding (MCP tool) pelo binding_id (= db_id no Registry).
+    # 39.3.0 (item 3 PR4): binding_id pode ser COMPOSTO `<db_id>::<real_name>`
+    # — form per-tool de uma tool DESCOBERTA (ver normalize_mcp_per_tool_bindings).
+    base_binding_id, _, per_tool_real = (data.binding_id or "").partition("::")
     bindings_text = (parsed.tool_bindings if parsed else "") or ""
     parsed_tools = parse_tool_bindings(bindings_text)
     enriched = await match_with_registry(parsed_tools, tools_repo)
     tool = next(
-        (t for t in enriched if str(t.get("db_id") or t.get("id") or "") == data.binding_id),
+        (t for t in enriched if str(t.get("db_id") or t.get("id") or "") == base_binding_id),
         None,
     )
     if not tool:
@@ -1904,43 +1916,76 @@ async def invoke_binding_direct(
             f"'{data.skill_id}'. Conferi ID no /tools e em ## Tool Bindings.",
         )
 
-    # 3. Gera schema canônico e valida params
-    schema = normalize_mcp_binding(tool, skill_md=raw_md)
-    ok, errors = validate_params_against_schema(schema, data.params or {})
-    if not ok:
-        raise HTTPException(422, {"errors": errors, "schema": schema})
+    openai_tools = None
+    if per_tool_real:
+        # ── Per-tool direto (39.3.0): valida contra o schema DESCOBERTO e
+        # encaminha pelo nome real via F3 (args crus; sem operation/query e
+        # sem round-trip de re-descoberta). build_per_tool_openai_functions
+        # direto (não o gate): o operador clicou num form per-tool explícito —
+        # se o modo mudou no meio, a chamada continua correta e honesta.
+        from app.mcp.runtime import _parse_discovered_tools, build_per_tool_openai_functions
+        from app.workspace.binding_schema import normalize_mcp_per_tool_bindings
+        disc = _parse_discovered_tools(tool.get("discovered_tools"))
+        d = next((x for x in disc if x.get("name") == per_tool_real), None)
+        if d is None:
+            raise HTTPException(
+                404,
+                f"Tool '{per_tool_real}' não está descoberta no conector "
+                f"'{tool.get('name')}' — re-teste a conexão em /mcp para "
+                "atualizar a descoberta.",
+            )
+        schema = next(
+            (s for s in normalize_mcp_per_tool_bindings(tool)
+             if s["per_tool"]["real_name"] == per_tool_real),
+            None,
+        ) or {"fields": []}
+        ok, errors = validate_params_against_schema(schema, data.params or {})
+        if not ok:
+            raise HTTPException(422, {"errors": errors, "schema": schema})
+        openai_tools = build_per_tool_openai_functions(tool, [d])
+        tool_name = (openai_tools[0].get("function") or {}).get("name") or per_tool_real
+        arguments: dict = dict(data.params or {})
+    else:
+        # 3. Gera schema canônico e valida params
+        schema = normalize_mcp_binding(tool, skill_md=raw_md)
+        ok, errors = validate_params_against_schema(schema, data.params or {})
+        if not ok:
+            raise HTTPException(422, {"errors": errors, "schema": schema})
 
-    # 4. Monta arguments pro execute_tool_call. Critical: passa os params
-    # do user direto — _build_call_arguments do runtime mapeia pro
-    # inputSchema REAL do servidor MCP. Sem LLM compressing nada.
-    arguments: dict = {}
-    if data.operation:
-        arguments["operation"] = data.operation
-    elif schema.get("operations"):
-        arguments["operation"] = schema["operations"][0]
-    # Heurística pra preencher 'query' quando o user mandou só um campo
-    # textual — runtime espera 'query' como fallback. Se houver field
-    # explícito 'query', já vai.
-    arguments.update(data.params or {})
-    if "query" not in arguments:
-        # Pega o primeiro field string preenchido como query default —
-        # melhora compat com servidores MCP que esperam 'query' obrigatório
-        for f in schema.get("fields", []):
-            if f["name"] != "operation" and f["type"] in ("string", "enum"):
-                val = (data.params or {}).get(f["name"])
-                if isinstance(val, str) and val.strip():
-                    arguments["query"] = val
-                    break
+        # 4. Monta arguments pro execute_tool_call. Critical: passa os params
+        # do user direto — _build_call_arguments do runtime mapeia pro
+        # inputSchema REAL do servidor MCP. Sem LLM compressing nada.
+        arguments = {}
+        if data.operation:
+            arguments["operation"] = data.operation
+        elif schema.get("operations"):
+            arguments["operation"] = schema["operations"][0]
+        # Heurística pra preencher 'query' quando o user mandou só um campo
+        # textual — runtime espera 'query' como fallback. Se houver field
+        # explícito 'query', já vai.
+        arguments.update(data.params or {})
+        if "query" not in arguments:
+            # Pega o primeiro field string preenchido como query default —
+            # melhora compat com servidores MCP que esperam 'query' obrigatório
+            for f in schema.get("fields", []):
+                if f["name"] != "operation" and f["type"] in ("string", "enum"):
+                    val = (data.params or {}).get(f["name"])
+                    if isinstance(val, str) and val.strip():
+                        arguments["query"] = val
+                        break
+        tool_name = tool.get("name") or "tool"
 
     # 5. Executa + mede latência
     t0 = time.monotonic()
-    tool_name = tool.get("name") or "tool"
     try:
         result_raw = await execute_tool_call(
             tool_name=tool_name,
             arguments=arguments,
             mcp_tools=enriched,
             timeout=int(data.timeout or 60),
+            # kwarg SÓ no caminho per-tool: o legado fica byte-idêntico
+            # (fakes/wrappers existentes não conhecem o parâmetro novo).
+            **({"openai_tools": openai_tools} if openai_tools else {}),
         )
         latency_ms = int((time.monotonic() - t0) * 1000)
     except Exception as e:
