@@ -1088,6 +1088,10 @@ async def invoke_pipeline(
         "completed_agents": result.get("completed_agents", 0),
         "pipeline_steps": result.get("pipeline_steps", []),
         "duration_ms": result.get("duration_ms"),
+        # Cond-C (36.1.0): decisão ESTRUTURADA do agente que respondeu — o
+        # texto já vem strippado do engine; SEM esta chave na whitelist o
+        # consumidor máquina perdia o sinal (major do review pré-push).
+        "decision": result.get("decision"),
     }
     # Verbosidade da resposta (projeção server-side; NÃO muda execução/custo).
     # Precedência: query > body > default por auth. Sessão→full; X-API-Key→
@@ -1165,6 +1169,9 @@ async def invoke_pipeline_stream(
                 "completed_agents": res.get("completed_agents", 0),
                 "pipeline_steps": res.get("pipeline_steps", []),
                 "duration_ms": res.get("duration_ms"),
+                # Cond-C (36.1.0): sinal de máquina no evento final do SSE
+                # (mesma whitelist do sync — major do review pré-push).
+                "decision": res.get("decision"),
             }
             event = {**event, "result": project_pipeline_result(payload, effective)}
         await queue.put(event)

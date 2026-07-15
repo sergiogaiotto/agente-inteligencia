@@ -132,4 +132,4 @@ class TestOutputAgentNoTrace:
         eng = Path("app/agents/engine.py").read_text(encoding="utf-8")
         assert '"output_agent": final_result.get("output_agent")' in eng
         ws = Path("app/routes/workspace.py").read_text(encoding="utf-8")
-        assert '"output_agent"]}' in ws  # último item do allowlist do trace_persist
+        assert '"output_agent","decision"]}' in ws  # cauda do allowlist do trace_persist (decision: 36.1.0)

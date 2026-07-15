@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.auth import require_user, require_role
 from app.models.schemas import ChatMessage
-from app.agents.engine import execute_interaction, strip_decision_line_for_display
+from app.agents.engine import execute_interaction
 from app.core.database import interactions_repo, turns_repo, audit_repo
 
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "uploads"
@@ -1268,12 +1268,11 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                     context_mode=data.context_mode or "auto",
                 )
                 # Cond-C (35.19.0/36.1.0): a decisão ESTRUTURADA entra no payload
-                # (extraída ANTES do strip — paridade com o envelope do pipeline)
                 # e a linha DECISAO sai da resposta apresentada (trace preserva).
+                # Helper combinado = 1 resolução de schema (review).
                 if result.get("output"):
-                    from app.agents.engine import extract_decision_for_agent
-                    result["decision"] = await extract_decision_for_agent(result["output"], data.agent_id)
-                    result["output"] = await strip_decision_line_for_display(result["output"], data.agent_id)
+                    from app.agents.engine import decision_and_display_output
+                    result["decision"], result["output"] = await decision_and_display_output(result["output"], data.agent_id)
 
         # Persistir trace_data. Estabilizar defaults pra evitar campos
         # missing que viram "undefinedms" no frontend de sessão antiga.
@@ -1284,7 +1283,9 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
             # "verification" incluída (24.10.0): o painel Verifier do Workspace
             # agora RESTAURA a auditoria ao recarregar a sessão (antes ela só
             # existia no response vivo do /chat e sumia no reload).
-            trace_persist = {k: result.get(k) for k in ["interaction_id","agent_id","final_state","evidence_score","transitions","duration_ms","trace","pipeline_steps","mode","verification","output_agent"]}
+            # "decision" (36.1.0): sem ela o sinal estruturado existia só na
+            # resposta VIVA do /chat e sumia no reload da sessão (review).
+            trace_persist = {k: result.get(k) for k in ["interaction_id","agent_id","final_state","evidence_score","transitions","duration_ms","trace","pipeline_steps","mode","verification","output_agent","decision"]}
             # Defaults pra campos que o frontend espera sempre presentes
             trace_persist.setdefault("interaction_id", iid)
             trace_persist.setdefault("agent_id", data.agent_id)

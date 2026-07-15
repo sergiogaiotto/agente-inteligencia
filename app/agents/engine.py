@@ -4779,8 +4779,10 @@ async def execute_pipeline(
     # Tenta o schema do DONO da resposta e depois os dos demais steps: o agente
     # final sem contrato pode ECOAR a linha do upstream que veio no contexto
     # (review pré-push 2026-07-15) — lookups memoizados por pipeline.
-    # 36.1.0: a decisão ESTRUTURADA do dono da resposta entra no envelope
-    # (`decision`) ANTES do strip — o consumidor máquina não parseia texto.
+    # 36.1.0: a decisão ESTRUTURADA entra no envelope (`decision`) ANTES do
+    # strip — o consumidor máquina não parseia texto. Semântica: o DONO da
+    # resposta tem prioridade; sem contrato nele, vale a decisão mais recente
+    # anunciada na cadeia (o caso comum: triagem decide, especialista responde).
     _final_decision = None
     if final_output and owner_step is not None and has_decision_line(final_output):
         _final_decision = await extract_decision_for_agent(
@@ -4799,6 +4801,11 @@ async def execute_pipeline(
                     break
         except Exception:
             logger.warning("pipeline.decision_line_strip_failed", exc_info=True)
+    if _final_decision is None:
+        try:
+            _final_decision = await _decision_from_steps(steps)
+        except Exception:
+            _final_decision = None
     final_result = {
         "mode": "pipeline",
         "output": final_output,
@@ -5595,6 +5602,24 @@ async def evaluate_test_phrases_for_edge(*, source_id: str, expr: str, phrases: 
     return results
 
 
+async def _decision_from_steps(steps: list) -> Optional[dict]:
+    """Fallback do envelope (36.1.0): a decisão mais RECENTE anunciada na
+    cadeia. Na topologia mais comum (triagem COM contrato decide → especialista
+    SEM contrato responde) o dono da resposta não anuncia nada — mas o sinal
+    útil ao consumidor é a decisão que ROTEOU. Os steps guardam o output CRU
+    (com a linha); schemas memoizados por pipeline tornam a varredura barata."""
+    for s in reversed(steps or []):
+        if (s or {}).get("status") != "completed":
+            continue
+        out = s.get("output") or ""
+        if not has_decision_line(out):
+            continue
+        dec = await extract_decision_for_agent(out, s.get("agent_id") or "")
+        if dec:
+            return dec
+    return None
+
+
 async def extract_decision_for_agent(output: str, agent_id: str) -> Optional[dict]:
     """Decisão ESTRUTURADA anunciada em `output` pelo agente, validada contra o
     `## Decisions` da skill dele — para o ENVELOPE do invoke (36.1.0, backlog
@@ -5611,6 +5636,22 @@ async def extract_decision_for_agent(output: str, agent_id: str) -> Optional[dic
         return extract_decision_line(output, schema) or None
     except Exception:
         return None
+
+
+async def decision_and_display_output(output: str, agent_id: str) -> tuple:
+    """(decision, output_para_exibição) com UMA resolução de schema — fora de
+    pipeline o contextvar de memoização é None, então extract+strip separados
+    pagavam 4 lookups por invoke com linha (review 36.1.0). Fail-safe:
+    (None, output intacto)."""
+    if not output or not agent_id or not has_decision_line(output):
+        return None, output
+    try:
+        schema = await _decisions_schema_for_agent(agent_id)
+        if not schema:
+            return None, output
+        return (extract_decision_line(output, schema) or None), strip_decision_line(output, schema)
+    except Exception:
+        return None, output
 
 
 async def strip_decision_line_for_display(output: str, agent_id: str) -> str:

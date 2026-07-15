@@ -115,6 +115,10 @@ def project_pipeline_result(result: dict, verbosity: str) -> dict:
 
     ``result`` é o dict JÁ montado pela rota no formato ``full``. ``full`` é
     devolvido VERBATIM (retrocompatível). ``summary``/``minimal`` recortam.
+
+    Histórico de chaves ADITIVAS sob schema_version '1' (aditivo NÃO bumpa a
+    versão — clientes pinados em '1' não quebram com chave nova):
+    - 36.1.0: ``decision`` (Contrato de Decisão estruturado; None sem contrato)
     """
     v = normalize_verbosity(verbosity)
     data, output_is_json = _output_data(result.get("output"))
