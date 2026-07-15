@@ -4615,7 +4615,9 @@ async def execute_pipeline(
                 "status": "completed",
                 "duration_ms": result.get("duration_ms", 0),
                 "final_state": result.get("final_state", ""),
-                "output_preview": (result.get("output", "") or "")[:300],
+                # Preview SEM a linha DECISAO (36.2.1): o evento vai direto p/ a
+                # UI ao vivo — mesmo regime de apresentação do resultado final.
+                "output_preview": await _display_preview(result.get("output", ""), agent_id),
                 # 35.4.0 (aditivo): custo/tokens REAIS do step + iid — o worker
                 # do invoke-job acumula via callback p/ que um TIMEOUT não suma
                 # com o gasto dos steps já concluídos (ledger/orçamento por key).
@@ -5652,6 +5654,23 @@ async def decision_and_display_output(output: str, agent_id: str) -> tuple:
         return (extract_decision_line(output, schema) or None), strip_decision_line(output, schema)
     except Exception:
         return None, output
+
+
+async def _display_preview(output: str, agent_id: str, limit: int = 300) -> str:
+    """Preview do output para EVENTOS de stream (`agent_done`): a linha DECISAO
+    é protocolo de máquina e não aparece na UI ao vivo (Backlog 4 do arco
+    condicional, 36.2.1) — uma resposta curta de agente-classificador cabe
+    inteira nos 300 chars, linha inclusa. steps/trace seguem CRUS; o gate lê o
+    output completo. Fail-safe: erro → preview cru."""
+    out = output or ""
+    if has_decision_line(out):
+        try:
+            sch = await _decisions_schema_for_agent(agent_id)
+            if sch:
+                out = strip_decision_line(out, sch)
+        except Exception:
+            pass
+    return out[:limit]
 
 
 async def strip_decision_line_for_display(output: str, agent_id: str) -> str:
