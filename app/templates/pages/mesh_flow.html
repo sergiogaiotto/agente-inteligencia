@@ -1239,6 +1239,7 @@ function meshFlowPage() {
         selected: null, loaded: false,
         hoverId: null, linking: null, linkTargetId: null, editor: null, sim: null, scopeSim: null, saving: false, fsm: null, agentDetail: null, replay: null, snap: false, groups: [], runModal: null, startMenu: null,
         condVars: [],   // Galeria de Intenções (Fatia 2): vars condicionais do /conditional-vars (antes órfão)
+        srcDecisions: {},   // Contrato de Decisão (Cond-C, 35.19.0): {campo: [valores]} declarado pelo agente de ORIGEM da aresta em edição
         nlSuggest: null, nlLoading: false,   // Tradutor NL→Jinja (Fatia 4)
         _drag: null, _pan: null, _saveTimer: null, _suppressClick: false,
 
@@ -2066,6 +2067,7 @@ function meshFlowPage() {
             if (this.edges.some(e => e.source === srcId && e.target === tgtId && e.type !== 'start')) { showToast('Já existe uma conexão entre esses agentes', 'info'); return; }
             this.selected = null;
             this.sim = null; this.scopeSim = null; this.nlSuggest = null;
+            this.loadSrcDecisions(srcId);
             this.editor = { mode: 'new', id: null, source: srcId, target: tgtId, type: 'sequential', expr: '', scopeMode: 'inherit', scopeTemplate: '', sampleOut: '', sampleInput: '', sampleFinalState: 'Recommend', sampleHasDoc: false, sampleHasImg: false,
                 ruleMode: 'gallery', intent: null, kwTerms: [], kwDraft: '', kwWhere: 'output_lower', kwMode: 'any', kwNorm: true, attKind: 'has_document', decision: 'is_recommend',
                 clauses: [], join: 'and', contentKind: 'contains_url', sizeKind: 'empty', sizeN: 200, nlDesc: '',
@@ -2081,6 +2083,7 @@ function meshFlowPage() {
             const sc = cfg.context_scope || {};
             this.selected = null;
             this.sim = null; this.scopeSim = null; this.nlSuggest = null;
+            this.loadSrcDecisions(e.source);
             this.editor = {
                 mode: 'edit', id, source: e.source, target: e.target, type: e.type,
                 expr: cfg.expr || '', scopeMode: sc.mode || 'inherit', scopeTemplate: sc.template || '', sampleOut: '',

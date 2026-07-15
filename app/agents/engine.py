@@ -47,6 +47,12 @@ from app.agents.state_machine import (
     InteractionStateMachine, InteractionContext, State,
 )
 from app.evidence.runtime import retriever, reranker, evidence_checker
+from app.skill_parser.decisions_schema import (
+    build_decisions_directive,
+    extract_decision_line,
+    extract_decisions_schema,
+    has_decision_line,
+)
 from app.skill_parser.parser import parse_skill_md
 from app.core.otel import get_tracer
 
@@ -113,6 +119,10 @@ _OUTPUT_CLASS_VARS = frozenset({
     "output", "output_lower", "output_norm", "output_length", "has_output", "final_state",
     "is_recommend", "is_refuse", "is_escalate",
     "contains_image", "contains_url", "contains_pdf", "lines_count",
+    # Contrato de Decisão (35.19.0): `decision.<campo>` é extraído da linha
+    # DECISAO: no OUTPUT do agente anterior — pular o LLM do router mataria a
+    # linha e toda regra decision.* viraria falso-negativo silencioso.
+    "decision",
 })
 
 
@@ -1060,6 +1070,13 @@ class DeepAgentHarness:
             parts.append(f"\n## Output Contract\n{skill['output_contract']}")
         if skill.get("guardrails"):
             parts.append(f"\n## Guardrails\n{skill['guardrails']}")
+        # Contrato de Decisão (Cond-C, 35.19.0): skill declara ## Decisions →
+        # a plataforma SELA a instrução da linha `DECISAO:` no prompt. O gate
+        # condicional (`decision.<campo>`) só enxerga o que esta linha anuncia —
+        # substitui o 'escalar=sim' in output_lower combinado por telepatia.
+        _decisions = skill.get("_decisions_schema")
+        if _decisions:
+            parts.append(build_decisions_directive(_decisions))
         if self.mcp_tools:
             tool_catalog_lines: list[str] = []
             for t in self.mcp_tools:
@@ -2069,6 +2086,10 @@ async def execute_interaction(
                 # Onda 1 Output Shape: length_preset + max_chars (engine usa
                 # pra injetar diretiva no system_prompt + truncate hard).
                 "_output_shape_parsed": getattr(parsed, "output_shape_parsed", {}) or {},
+                # Contrato de Decisão (Cond-C, 35.19.0): {campo: [valores]} da
+                # seção ## Decisions — o engine injeta a diretiva selada no
+                # system_prompt e o gate condicional lê `decision.<campo>`.
+                "_decisions_schema": extract_decisions_schema(skill_row["raw_content"]),
             }
 
     agent["_parsed_skill"] = skill_data
@@ -2568,7 +2589,11 @@ async def execute_interaction(
         from app.skill_parser.output_shape import enforce_truncate as _enforce_truncate
         new_draft, was_truncated = _enforce_truncate(draft, _preset_for_truncate)
         if was_truncated:
-            draft = new_draft
+            draft = _preserve_decision_line(
+                original=draft,
+                truncated=new_draft,
+                schema=(skill_data or {}).get("_decisions_schema"),
+            )
             _truncated_by_preset = True
             _preset_applied = _preset_for_truncate
             logger.warning(
@@ -5071,6 +5096,7 @@ def _build_conditional_context(
     attachments: list | None = None,
     session_text: str | None = None,
     inputs: dict | None = None,
+    decision: dict | None = None,
 ) -> dict:
     """Monta o dict de variáveis disponíveis para expressões condicionais.
 
@@ -5175,6 +5201,12 @@ def _build_conditional_context(
         # roteador LLM. Campo ausente → sentinel comparação-seguro (não casa em NENHUM
         # operador, inclusive `>`/`<`). dict-view → acesso `inputs.tier`.
         "inputs": _ArgsView(inputs or {}),
+        # Contrato de Decisão (Cond-C, 35.19.0): decisões ANUNCIADAS pelo agente
+        # anterior via linha `DECISAO:` — já validadas contra o ## Decisions da
+        # skill dele (grafia CANÔNICA do schema). Campo ausente/linha ausente →
+        # sentinel comparação-seguro (regra não casa, nunca estoura). Acesso
+        # `decision.escalar == 'sim'`.
+        "decision": _ArgsView(decision or {}),
     }
 
 
@@ -5209,6 +5241,7 @@ CONDITIONAL_VARS_META: list[dict] = [
     {"name": "attachment_types", "type": "str", "desc": "O tipo técnico de cada arquivo, em minúsculas — ex.: 'application/pdf image/png'"},
     {"name": "attachment_count", "type": "int", "desc": "Quantos arquivos o usuário enviou"},
     {"name": "inputs", "type": "dict", "desc": "Os parâmetros EXATOS enviados na chamada (campos marcados como 'exato' no formulário). Use como inputs.<campo> — ex.: inputs.tier == 'gold'. Chega intacto (sem passar pela IA), então a regra decide o caminho por VALOR, sem depender de um agente de IA para rotear."},
+    {"name": "decision", "type": "dict", "desc": "As decisões que o agente anterior ANUNCIOU na linha 'DECISAO:' da resposta, já conferidas contra o contrato (## Decisions) da skill dele. Use como decision.<campo> — ex.: decision.escalar == 'sim'. Só existe se a skill do agente anterior declarar o Contrato de Decisão; campo ausente simplesmente não casa."},
 ]
 
 
@@ -5359,6 +5392,54 @@ def _extract_routed_target(output: str | None) -> str | None:
             if isinstance(tgt, str) and tgt.strip():
                 return tgt.strip()
     return None
+
+
+def _preserve_decision_line(*, original: str, truncated: str, schema: dict | None) -> str:
+    """Pós-truncate do Output Shape: a linha `DECISAO:` vive no FIM da resposta —
+    o hard-cut a mataria e toda regra `decision.*` do gate viraria falso-negativo
+    silencioso. Re-anexa a forma CANÔNICA (validada contra o schema) extraída do
+    draft ORIGINAL. Sem schema / linha sobreviveu / nada válido → truncado intacto."""
+    if not schema or has_decision_line(truncated):
+        return truncated
+    dec = extract_decision_line(original, schema)
+    if not dec:
+        return truncated
+    return truncated + "\nDECISAO: " + "; ".join(f"{k}={v}" for k, v in dec.items())
+
+
+async def _decision_vars_for_source(source_id: str, last_output: str) -> dict:
+    """Decisões ANUNCIADAS pelo agente `source_id` em `last_output`, validadas
+    contra o `## Decisions` da skill dele (Cond-C, 35.19.0). Grafia canônica.
+
+    Barato por construção: sem linha `DECISAO:` no output (caso comum) retorna
+    {} SEM tocar o banco. Com linha, resolve agente (memoizado por pipeline via
+    `_topo_agent`) + skill e valida — campo/valor fora do contrato caem fora
+    (o contrato é selado; regra `decision.x` só vê o que a skill declarou).
+    Fail-safe: qualquer erro → {} (a regra decision.* não casa; demais vars da
+    expr seguem intactas)."""
+    if not has_decision_line(last_output):
+        return {}
+    try:
+        agent = await _topo_agent(source_id)
+        skill_id = (agent or {}).get("skill_id")
+        if not skill_id:
+            return {}
+        row = await skills_repo.find_by_id(skill_id)
+        schema = extract_decisions_schema((row or {}).get("raw_content") or "")
+        if not schema:
+            return {}
+        return extract_decision_line(last_output, schema)
+    except Exception as e:
+        logger.warning(
+            "mesh.conditional.decision_extract_failed",
+            extra={
+                "event": "mesh.conditional",
+                "source_id": source_id,
+                "error_type": type(e).__name__,
+                "error_msg": str(e)[:200],
+            },
+        )
+        return {}
 
 
 async def _should_skip_conditional(
@@ -5528,6 +5609,9 @@ async def _should_skip_conditional(
                 attachments=attachments,
                 session_text=session_text,
                 inputs=inputs,
+                # Contrato de Decisão (35.19.0): decisões anunciadas pelo source
+                # na linha DECISAO:, validadas contra a skill dele.
+                decision=await _decision_vars_for_source(source_id, last_output),
             ),
         )
     except Exception as e:
