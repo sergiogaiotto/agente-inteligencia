@@ -5533,34 +5533,51 @@ async def _decision_vars_for_source(source_id: str, last_output: str) -> dict:
 
 
 async def evaluate_test_phrases_for_edge(*, source_id: str, expr: str, phrases: list) -> list[dict]:
-    """Avalia as Frases-Prova de uma aresta condicional EXATAMENTE como o
-    runtime avaliaria (mesmo `_build_conditional_context` + `_eval_conditional`
-    do gate; `decision.*` extraída do output simulado do source quando a frase
-    é de resposta). Insumo do gate de publicação — Frases-Prova como teste de
-    regressão REAL do roteamento (backlog do arco condicional, 36.0.0).
+    """Avalia as Frases-Prova de uma aresta condicional com o MESMO avaliador
+    do runtime (`_build_conditional_context` + `_eval_conditional`; `decision.*`
+    extraída do output simulado do source quando a frase é de resposta) — o
+    mesmo escopo do simulador do editor, então o veredito do publish nunca
+    diverge do badge que o autor viu. Insumo do gate de publicação (36.0.0).
+
+    ESCOPO (review pré-push): a frase prova a REGRA da aresta, não a decisão
+    de skip completa — os overrides do runtime ("o roteador nomeou o alvo",
+    "o anexo manda") rodam ANTES da expr e podem executar uma aresta cuja
+    frase expect=pular passou aqui. É o mesmo ponto cego do simulador.
 
     Retorna [{text, where, expect, got, passed, error}] por frase. Política
-    fail-CLOSED por frase: erro de avaliação (expr quebrada etc.) conta como
-    reprovada com o erro anexado — na publicação é melhor bloquear e mostrar
-    do que selar um contrato que o runtime não consegue avaliar."""
+    fail-CLOSED por frase: erro de avaliação — e frase MALFORMADA (item
+    não-dict vindo de config gravada via API crua) — conta como reprovada
+    com o erro anexado; um item podre não pode desligar o gate inteiro."""
     results: list[dict] = []
     expr = (expr or "").strip()
     for p in phrases or []:
-        text = str((p or {}).get("text") or "").strip()
+        if not isinstance(p, dict):
+            results.append({
+                "text": str(p)[:80], "where": "input", "expect": True,
+                "got": None, "passed": False,
+                "error": "frase malformada no config da aresta (esperado objeto {text, where, expect})",
+            })
+            continue
+        text = str(p.get("text") or "").strip()
         if not text:
             continue
-        where = "output" if (p or {}).get("where") == "output" else "input"
-        expect = (p or {}).get("expect") is not False
+        where = "output" if p.get("where") == "output" else "input"
+        expect = p.get("expect") is not False
         row = {"text": text, "where": where, "expect": expect, "got": None, "passed": False, "error": ""}
         try:
-            decision = await _decision_vars_for_source(source_id, text) if where == "output" else {}
-            ctx = _build_conditional_context(
-                output=text if where == "output" else "",
-                final_state="Recommend",
-                user_input=text if where == "input" else "",
-                decision=decision,
-            )
-            got = bool(_eval_conditional(expr, ctx))
+            if not expr:
+                # Condicional SEM expr nunca skipa no runtime (equivale a
+                # sequencial) — a frase é provada contra essa semântica.
+                got = True
+            else:
+                decision = await _decision_vars_for_source(source_id, text) if where == "output" else {}
+                ctx = _build_conditional_context(
+                    output=text if where == "output" else "",
+                    final_state="Recommend",
+                    user_input=text if where == "input" else "",
+                    decision=decision,
+                )
+                got = bool(_eval_conditional(expr, ctx))
             row["got"] = got
             row["passed"] = got == expect
         except Exception as e:

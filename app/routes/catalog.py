@@ -577,16 +577,18 @@ async def publish_entry(
 
     _phrases_ignored = bool(data and data.ignore_test_phrases)
     _phrases_report = None
-    if entry.get("kind") == "pipeline" and entry.get("artifact_id") and not _phrases_ignored:
-        # Best-effort na INFRA (erro de subgrafo não derruba a publicação —
-        # mesmo regime do snapshot), fail-CLOSED nas FRASES (reprovação bloqueia).
+    if entry.get("kind") == "pipeline" and entry.get("artifact_id"):
+        # Roda SEMPRE (mesmo com override — a auditoria registra QUANTAS frases
+        # o dono ignorou, não só que ignorou; review pré-push). Best-effort na
+        # INFRA (erro de subgrafo não derruba a publicação — mesmo regime do
+        # snapshot), fail-CLOSED nas FRASES (reprovação bloqueia sem override).
         try:
             from app.catalog.pipeline_defs import evaluate_pipeline_test_phrases
             _phrases_report = await evaluate_pipeline_test_phrases(entry["artifact_id"])
         except Exception:
             logger.warning("publish.test_phrases_gate_failed", exc_info=True)
             _phrases_report = None
-        if _phrases_report and _phrases_report["failing"]:
+        if not _phrases_ignored and _phrases_report and _phrases_report["failing"]:
             _lines = [
                 (
                     f"• {f['source_name']} → {f['target_name']}: "
@@ -607,7 +609,7 @@ async def publish_entry(
                     + "\nAjuste a regra ou as frases no Fluxograma (clique na conexão), ou publique com "
                       "ignore_test_phrases=true (fica auditado)."
                 ),
-                "failing": _phrases_report["failing"],
+                "failing": _phrases_report["failing"][:50],
                 "fix_hint": "/mesh/flow",
             })
 
@@ -619,10 +621,12 @@ async def publish_entry(
     })
     await _audit("published", entry_id, user["id"], {
         "urn": entry.get("urn"),
-        # rastro do gate: quantas frases provaram o roteamento — ou que o
-        # dono publicou por cima de reprovação (override consciente).
+        # rastro do gate: quantas frases provaram o roteamento — e, no
+        # override, QUANTAS reprovações o dono publicou por cima (o gate roda
+        # mesmo ignorado; review pré-push: auditoria cega não é auditoria).
         "test_phrases_ignored": _phrases_ignored,
         "test_phrases_evaluated": (_phrases_report or {}).get("evaluated", 0),
+        "test_phrases_failing": len((_phrases_report or {}).get("failing", [])),
     })
     # PR5: ao publicar um pipeline, congela o snapshot do subgrafo (display + raiz
     # p/ execução). Best-effort — não derruba a publicação se o snapshot falhar.

@@ -33,7 +33,19 @@ async def _build_subgraph(pipeline_id: str) -> dict:
     members = await pipeline_membership.agents_of(pipeline_id)
     member_set = set(members)
 
-    conns = await mesh_repo.find_all(limit=1000)
+    # Por MEMBRO (36.0.0, review do gate de publicação): o fetch global com
+    # limit=1000 truncava o subgrafo em silêncio numa instalação grande — e o
+    # gate de Frases-Prova passaria avaliando parcial. Por source é bounded e
+    # completo (agente real tem poucas arestas de saída).
+    seen_conn_ids: set = set()
+    conns: list = []
+    for m in members:
+        for c in await mesh_repo.find_all(source_agent_id=m, limit=200):
+            cid = c.get("id")
+            if cid in seen_conn_ids:
+                continue
+            seen_conn_ids.add(cid)
+            conns.append(c)
     edges = []
     for c in conns:
         s, t = c.get("source_agent_id"), c.get("target_agent_id")
@@ -100,7 +112,9 @@ async def evaluate_pipeline_test_phrases(pipeline_id: str) -> dict:
         cfg = edge.get("config") or {}
         phrases = cfg.get("test_phrases") or []
         expr = (cfg.get("expr") or "").strip()
-        if not phrases or not expr:
+        # Expr VAZIA não pula a avaliação (review): condicional sem expr nunca
+        # skipa no runtime — uma frase expect=pular DEVE reprovar aqui.
+        if not phrases:
             continue
         results = await evaluate_test_phrases_for_edge(
             source_id=edge["source"], expr=expr, phrases=phrases,

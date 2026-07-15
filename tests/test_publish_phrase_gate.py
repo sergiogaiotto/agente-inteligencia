@@ -57,12 +57,30 @@ class TestEvaluateEdgePhrases:
         assert res[0]["error"]
 
     @pytest.mark.asyncio
-    async def test_frase_vazia_e_ignorada(self):
+    async def test_frase_vazia_e_ignorada_e_malformada_reprova(self):
+        # texto vazio some; item NÃO-dict (config gravada via API crua) conta
+        # como REPROVADA com erro — um item podre não desliga o gate inteiro
+        # pela rota de infra (review pré-push: fail-closed de verdade).
         res = await evaluate_test_phrases_for_edge(
             source_id="s1", expr="has_output",
-            phrases=[{"text": "   ", "where": "input", "expect": True}, None],
+            phrases=[{"text": "   ", "where": "input", "expect": True}, "fiz um pix"],
         )
-        assert res == []
+        assert len(res) == 1
+        assert res[0]["passed"] is False and "malformada" in res[0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_expr_vazia_usa_semantica_do_runtime(self):
+        # condicional SEM expr nunca skipa no runtime → frase expect=rodar
+        # passa; expect=pular reprova (antes essas arestas nem eram avaliadas).
+        res = await evaluate_test_phrases_for_edge(
+            source_id="s1", expr="",
+            phrases=[
+                {"text": "qualquer coisa", "where": "input", "expect": True},
+                {"text": "outra coisa", "where": "input", "expect": False},
+            ],
+        )
+        assert [r["passed"] for r in res] == [True, False]
+        assert all(r["got"] is True for r in res)
 
 
 # ─── evaluate_pipeline_test_phrases (varredura do subgrafo) ───────────────────
@@ -108,3 +126,18 @@ def test_rodape_promete_regressao_real():
     from pathlib import Path
     src = Path("app/templates/pages/mesh_flow.html").read_text(encoding="utf-8")
     assert "teste de regressão do roteamento — reprovação bloqueia a publicação" in src
+
+
+# ─── UI do publish renderiza o relatório e oferece o override ─────────────────
+
+def test_catalog_detail_renderiza_relatorio_e_oferece_override():
+    """MAJOR do review pré-push: o único caller de UI fazia `new Error(detail)`
+    com detail OBJETO → toast 'Erro: [object Object]' — o relatório nunca
+    chegava ao usuário e não havia saída de override na interface."""
+    from pathlib import Path
+    src = Path("app/templates/pages/catalog_detail.html").read_text(encoding="utf-8")
+    assert "detail.failing" in src                      # reconhece o 422 do gate
+    assert "showToast(detail.message, 'error')" in src  # relatório legível
+    assert "ignore_test_phrases: true" in src           # override via uiConfirm
+    assert "Publicar MESMO ASSIM" in src
+    assert "this.publish(true)" in src

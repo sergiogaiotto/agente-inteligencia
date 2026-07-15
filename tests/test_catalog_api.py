@@ -2409,23 +2409,33 @@ class TestPublishPhraseGate:
             details = json.loads(details)
         assert details["test_phrases_evaluated"] == 3
         assert details["test_phrases_ignored"] is False
+        assert details["test_phrases_failing"] == 0
 
-    def test_override_publica_por_cima_e_fica_auditado(self, fake_storage, monkeypatch):
+    def test_override_publica_por_cima_e_audita_o_que_ignorou(self, fake_storage, monkeypatch):
+        # o gate RODA mesmo com override (auditoria cega não é auditoria):
+        # o trail registra QUANTAS reprovações o dono publicou por cima.
         c = make_client({"id": "u1", "role": "comum"})
         eid = self._pipeline_entry(c, fake_storage)
 
-        async def _boom(_pid):
-            raise AssertionError("gate não deveria rodar com ignore_test_phrases")
+        async def _report(_pid):
+            return {"evaluated": 2, "passed": 1, "failing": [{
+                "edge_id": "e1", "source_name": "A", "target_name": "B",
+                "expr": "x", "text": "t", "where": "input",
+                "expect": True, "got": False, "passed": False, "error": "",
+            }]}
         monkeypatch.setattr(
-            "app.catalog.pipeline_defs.evaluate_pipeline_test_phrases", _boom)
+            "app.catalog.pipeline_defs.evaluate_pipeline_test_phrases", _report)
         r = c.post(f"/api/v1/catalog/entries/{eid}/publish",
                    json={"ignore_test_phrases": True})
         assert r.status_code == 200
+        assert fake_storage["entries"][eid]["status"] == "published"
         pub = [a for a in fake_storage["audit"] if a["action"] == "published"][-1]
         details = pub["details"]
         if not isinstance(details, dict):
             details = json.loads(details)
         assert details["test_phrases_ignored"] is True
+        assert details["test_phrases_evaluated"] == 2
+        assert details["test_phrases_failing"] == 1
 
     def test_erro_de_infra_no_gate_nao_derruba_publicacao(self, fake_storage, monkeypatch):
         # best-effort na INFRA (mesmo regime do snapshot): subgrafo quebrado
