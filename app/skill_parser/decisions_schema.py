@@ -93,6 +93,11 @@ def extract_decisions_schema(skill_md: str) -> Optional[dict]:
             # e o contrato nasceria morto sem aviso (review 2026-07-15).
             if any(ch in vs for ch in ";,="):
                 continue
+            # Idem p/ bordas que `extract_decision_line` STRIPA do valor emitido
+            # ("'`*_.): o LLM emite verbatim, a extração remove o char, o match
+            # contra o enum falha para sempre (review pré-push do Cond-C.2).
+            if vs != vs.strip("\"'`*_."):
+                continue
             k = _norm(vs)
             if k in seen:
                 continue

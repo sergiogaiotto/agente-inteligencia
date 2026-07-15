@@ -297,3 +297,12 @@ def test_strip_output_contract_json_volta_a_parsear():
     txt = '{"resultado": "ok"}\nDECISAO: escalar=sim'
     got = strip_decision_line(txt, SCHEMA)
     assert _json.loads(got) == {"resultado": "ok"}
+
+
+def test_valor_com_borda_stripavel_e_rejeitado():
+    # extract_decision_line stripa "'`*_. da BORDA do valor emitido — um
+    # canônico com esses chars nunca casaria (review pré-push do Cond-C.2).
+    s = extract_decisions_schema(
+        '## Decisions\n```json\n{"parecer": ["aprovado.", "*negado*", "ok"], "v": ["v1.2"]}\n```')
+    # 'v1.2' fica (ponto INTERNO); os de borda caem
+    assert s == {"parecer": ["ok"], "v": ["v1.2"]}

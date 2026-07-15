@@ -1701,3 +1701,92 @@ class TestComboRegressions:
             f"ordem das seções no obligatory_block mudou — "
             f"esperado {order}, posições {positions}"
         )
+
+
+# ═════ Contrato de Decisão no wizard (Cond-C.2, 36.2.0) ═════
+
+
+class TestWizardDecisions:
+    """`decisions` no request vira a seção ## Decisions SELADA no prompt do
+    wizard. Validação ACIONÁVEL no formulário — o parser de runtime descartaria
+    campo inválido em silêncio e o contrato nasceria morto."""
+
+    def test_emite_secao_decisions_roundtrip_com_o_parser(self):
+        req = WizardSkillRequest(
+            description="triagem",
+            decisions={"escalar": ["sim", "não"], "severidade": ["baixa", "média", "alta"]},
+        )
+        bindings = {"mcp_tools": [], "rag_sources": [], "data_tables": [], "api_endpoints": []}
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        assert "## Decisions" in system
+        # roundtrip REAL: a seção emitida parseia para o MESMO contrato
+        from app.skill_parser.decisions_schema import extract_decisions_schema
+        sec = system[system.find("## Decisions"):]
+        assert extract_decisions_schema(sec) == {
+            "escalar": ["sim", "não"], "severidade": ["baixa", "média", "alta"]}
+
+    def test_sem_decisions_nao_emite_secao(self):
+        req = WizardSkillRequest(description="x")
+        bindings = {"mcp_tools": [], "rag_sources": [], "data_tables": [], "api_endpoints": []}
+        system, _ = _build_wizard_prompt(req, bindings, "standard")
+        assert "## Decisions" not in system
+
+    def test_validador_rejeita_com_mensagem_acionavel(self):
+        import pytest as _pt
+        # campo acentuado
+        with _pt.raises(Exception) as e1:
+            WizardSkillRequest(description="x", decisions={"situação": ["a"]})
+        assert "identificador ASCII" in str(e1.value)
+        # nome reservado de dict (decision.items = método no Jinja)
+        with _pt.raises(Exception) as e2:
+            WizardSkillRequest(description="x", decisions={"items": ["a"]})
+        assert "reservado" in str(e2.value)
+        # separador da linha DECISAO no valor
+        with _pt.raises(Exception) as e3:
+            WizardSkillRequest(description="x", decisions={"parecer": ["sim, com ressalvas"]})
+        assert "separadores da linha DECISAO" in str(e3.value)
+        # campo sem valores
+        with _pt.raises(Exception) as e4:
+            WizardSkillRequest(description="x", decisions={"escalar": []})
+        assert "ao menos 1 valor" in str(e4.value)
+
+    def test_validador_normaliza_e_deduplica(self):
+        req = WizardSkillRequest(
+            description="x", decisions={" escalar ": ["  sim ", "sim", "não", ""]})
+        assert req.decisions == {"escalar": ["sim", "não"]}
+
+    def test_decisions_vazio_vira_none(self):
+        assert WizardSkillRequest(description="x", decisions={}).decisions is None
+
+    def test_validador_rejeita_borda_stripada_e_deduplica_por_norm(self):
+        import pytest as _pt
+        # borda que o runtime stripa ('aprovado.' nasceria morto — review)
+        with _pt.raises(Exception) as e1:
+            WizardSkillRequest(description="x", decisions={"parecer": ["aprovado."]})
+        assert "BORDAS" in str(e1.value)
+        # dedup pela MESMA norma do runtime (caixa/acento)
+        req = WizardSkillRequest(description="x", decisions={"sev": ["Alta", "alta", "álta"]})
+        assert req.decisions == {"sev": ["Alta"]}
+        # campos que colidem após strip
+        with _pt.raises(Exception) as e2:
+            WizardSkillRequest(description="x", decisions={"escalar": ["sim"], " escalar ": ["não"]})
+        assert "duplicado" in str(e2.value)
+
+    def test_pos_geracao_forca_contrato_selado(self):
+        from app.routes.wizard import _ensure_decisions_contract
+        from app.skill_parser.decisions_schema import extract_decisions_schema
+        contrato = {"escalar": ["sim", "não"]}
+        # drift do LLM (traduziu) → seção substituída pela canônica
+        drift = "# S\n## Purpose\np\n\n## Decisions\n```json\n{\"escalate\": [\"yes\"]}\n```\n\n## Guardrails\ng\n"
+        fixed = _ensure_decisions_contract(drift, contrato)
+        assert extract_decisions_schema(fixed) == contrato
+        assert "escalate" not in fixed
+        # omissão → seção inserida (antes de ## Guardrails)
+        omitiu = "# S\n## Purpose\np\n\n## Guardrails\ng\n"
+        fixed2 = _ensure_decisions_contract(omitiu, contrato)
+        assert extract_decisions_schema(fixed2) == contrato
+        assert fixed2.find("## Decisions") < fixed2.find("## Guardrails")
+        # já correto → intocado (idempotente)
+        assert _ensure_decisions_contract(fixed, contrato) == fixed
+        # sem contrato declarado → no-op
+        assert _ensure_decisions_contract(drift, None) == drift
