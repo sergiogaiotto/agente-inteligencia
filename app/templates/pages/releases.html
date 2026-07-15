@@ -36,6 +36,7 @@
                     <div class="flex gap-1">
                         <button @click="promote(r.id,'canary')" x-show="r.environment==='staging'" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-100">→ Canary</button>
                         <button @click="promote(r.id,'production')" x-show="r.environment==='canary'" class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100">→ Production</button>
+                        <button @click="deleteRelease(r)" x-show="r.environment!=='canary' && r.environment!=='production'" data-testid="release-delete" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-100">Excluir</button>
                     </div>
                 </div>
                 <div class="text-[11px] text-surface-400" x-text="'Criada: ' + tzDateTime(r.created_at)"></div>
@@ -54,6 +55,8 @@ function releasesPage(){return{
     async createRelease(){if(!this.form.name.trim()){showToast('Nome obrigatório','error');return}
     try{await api.post('/api/v1/releases',this.form);showToast('Release criada');this.showForm=false;await this.load()}catch(e){showToast(e.message,'error')}},
     async promote(id,env){try{await api.put(`/api/v1/releases/${id}/promote?target_env=${env}`);showToast(`Promovida para ${env}`);await this.load()}catch(e){showToast(e.message,'error')}},
+    async deleteRelease(r){if(!await uiConfirm({message:`Excluir a release "${r.name||r.id.substring(0,12)}" permanentemente?`,danger:true}))return;
+    try{await api.del(`/api/v1/releases/${r.id}`);this.releases=this.releases.filter(x=>x.id!==r.id);showToast('Release removida')}catch(e){showToast(e.message,'error')}},
 }}
 </script>
 {% endblock %}
