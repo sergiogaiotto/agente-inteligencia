@@ -80,6 +80,46 @@ async def _build_subgraph(pipeline_id: str) -> dict:
     return {"root_agent_id": root, "nodes": nodes, "edges": edges}
 
 
+async def evaluate_pipeline_test_phrases(pipeline_id: str) -> dict:
+    """Gate de publicação (36.0.0): roda as Frases-Prova de TODAS as arestas
+    condicionais do subgrafo do pipeline contra o avaliador REAL do runtime.
+
+    Fecha a promessa do editor de fluxo: as frases seladas na aresta viram
+    teste de regressão do roteamento no ato de publicar. Retorna
+    {evaluated, passed, failing: [{edge_id, source_name, target_name, expr,
+    text, where, expect, got, error}]}. Arestas sem frases não contam."""
+    from app.agents.engine import evaluate_test_phrases_for_edge
+
+    sub = await _build_subgraph(pipeline_id)
+    names = {n["id"]: (n.get("name") or n["id"]) for n in sub.get("nodes", [])}
+    evaluated = passed = 0
+    failing: list[dict] = []
+    for edge in sub.get("edges", []):
+        if edge.get("type") != "conditional":
+            continue
+        cfg = edge.get("config") or {}
+        phrases = cfg.get("test_phrases") or []
+        expr = (cfg.get("expr") or "").strip()
+        if not phrases or not expr:
+            continue
+        results = await evaluate_test_phrases_for_edge(
+            source_id=edge["source"], expr=expr, phrases=phrases,
+        )
+        for r in results:
+            evaluated += 1
+            if r["passed"]:
+                passed += 1
+            else:
+                failing.append({
+                    "edge_id": edge["id"],
+                    "source_name": names.get(edge["source"], edge["source"]),
+                    "target_name": names.get(edge["target"], edge["target"]),
+                    "expr": expr,
+                    **r,
+                })
+    return {"evaluated": evaluated, "passed": passed, "failing": failing}
+
+
 async def snapshot_pipeline_def(entry: dict) -> Optional[dict]:
     """Congela o subgrafo do pipeline (entry.artifact_id) em catalog_pipeline_defs
     (upsert por entry_id). Retorna a def ou None se o pipeline não tem agentes."""
