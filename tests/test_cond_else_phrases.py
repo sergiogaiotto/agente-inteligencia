@@ -75,3 +75,51 @@ def test_runtime_ignora_test_phrases_no_config():
     assert _eval_conditional(parsed["expr"], ctx) is True
     # a chave extra não afeta nem quebra nada
     assert "test_phrases" in parsed and parsed["expr"] == "'pix' in output_lower"
+
+
+# ─── "veredito não mente" COMPLETO (major do review do #619, 2026-07-15) ─────
+
+def _src():
+    from pathlib import Path
+    return Path("app/templates/pages/mesh_flow.html").read_text(encoding="utf-8")
+
+
+def test_expr_mutated_helper_nos_cinco_caminhos():
+    """Mutação programática de editor.expr (x-model não dispara @input) tem que
+    invalidar os ✓/✗ das Frases-Prova — senão o badge verde prova a regra
+    ANTIGA na hora de selar. Helper único nos 5 caminhos + fixLit."""
+    src = _src()
+    assert "_exprMutated() {" in src
+    # insertVar, fixVar, useSuggestion, backToGallery, convertToElse + fixLit
+    assert src.count("this._exprMutated()") >= 6
+    # nenhum dos caminhos ficou com o reset RASO antigo (só sim=null) —
+    # âncora na DEFINIÇÃO (`fn {`), não no @click do botão
+    for fn in ("insertVar(name) {", "fixVar(w) {", "useSuggestion() {", "backToGallery() {", "convertToElse() {"):
+        body = src.split(fn, 1)[1][:900]
+        assert "this._exprMutated()" in body, f"{fn} sem _exprMutated"
+
+
+def test_hint_do_else_nao_aparece_com_irmao_default():
+    """Dois defaults no mesmo nó RODAM ambos quando nada casa (gate por-conexão)
+    — o hint 'Virar Tudo o mais' não pode aparecer se o nó já tem default."""
+    src = _src()
+    body = src.split("looksLikeManualElse() {", 1)[1][:800]
+    assert "e.type === 'default'" in body
+    assert "return false" in body
+
+
+def test_rodape_sem_promessa_falsa():
+    """Nada no backend lê test_phrases hoje — 'teste de regressão do roteamento'
+    era aspiracional (minor do review). O rodapé promete só o que existe."""
+    src = _src()
+    assert "teste de regressão do roteamento" not in src
+    assert "rodam aqui no simulador sempre que a regra muda" in src
+
+
+def test_convert_to_else_avisa_descarte_das_frases():
+    """buildConfig só sela test_phrases em conditional — virar 'Tudo o mais'
+    descartava as frases em silêncio ao salvar (minor do review)."""
+    src = _src()
+    body = src.split("convertToElse() {", 1)[1][:900]
+    assert "serão descartadas ao salvar" in body
+    assert "nPhrases" in body
