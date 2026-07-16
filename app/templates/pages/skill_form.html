@@ -954,6 +954,68 @@
          contra uma data_table. Preview executa query real; "Inserir"
          gera bloco YAML em ## Data Tables.
          ════════════════════════════════════════════════════════════ -->
+    <!-- ════════════════════════════════════════════════════════════
+         Modal de progresso — geração do SKILL.md pelo wizard "IA, me ajude".
+         QA E2E: o usuário ficava olhando a tela sem saber se estava
+         funcionando (a chamada de LLM leva 10–40s e o único feedback era o
+         botão desabilitado). z-[70]: acima do Query Builder e da sidebar.
+         Narração HONESTA: só etapas com sinal real (payload pronto / await
+         em curso com cronômetro / resposta chegou) — sem % inventada.
+         ════════════════════════════════════════════════════════════ -->
+    <div x-show="wizardLoading" x-transition.opacity x-cloak
+         data-testid="wizard-progress-modal"
+         class="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <!-- Header -->
+            <div class="flex items-center gap-3 px-6 py-4 border-b border-surface-100">
+                <svg class="w-5 h-5 animate-spin text-brand-500 shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                <div class="flex-1 min-w-0">
+                    <h3 class="text-[14px] font-bold text-brand-900">Gerando SKILL.md com IA</h3>
+                    <p class="text-[11px] text-surface-400">A tela responde de novo assim que terminar — não recarregue.</p>
+                </div>
+                <span class="rounded-full bg-surface-100 px-2.5 py-1 text-[11px] font-mono font-semibold text-surface-600 tabular-nums"
+                      data-testid="wizard-progress-elapsed" x-text="wizardElapsed + 's'"></span>
+            </div>
+            <!-- Etapas (estado dirigido por wizardStage: 2=aguardando LLM, 3=aplicando) -->
+            <div class="px-6 py-4 space-y-3">
+                <div class="flex items-start gap-2.5">
+                    <svg class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
+                    <div class="min-w-0">
+                        <p class="text-[12px] font-semibold text-brand-900">Contexto montado</p>
+                        <p class="text-[10.5px] text-surface-400"
+                           x-text="wizardKind + (wizardDomain ? ' · domínio ' + wizardDomain : '') + ' · ' + wizardMcpIds.length + ' MCP · ' + wizardSourceIds.length + ' RAG · ' + wizardTableIds.length + ' tabela(s) · ' + wizardApiKeys.length + ' API(s)'"></p>
+                    </div>
+                </div>
+                <div class="flex items-start gap-2.5">
+                    <svg x-show="wizardStage <= 2" class="w-4 h-4 animate-spin text-brand-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <svg x-show="wizardStage >= 3" x-cloak class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd"/></svg>
+                    <div class="min-w-0">
+                        <p class="text-[12px] font-semibold" :class="wizardStage <= 2 ? 'text-brand-900' : 'text-brand-900'">O modelo está escrevendo o SKILL.md</p>
+                        <p class="text-[10.5px] text-surface-400">
+                            <span class="font-mono" x-text="wizardLLMInfo.model || wizardLLMInfo.provider || 'modelo do roteamento'"></span>
+                            <span x-text="' · task ' + (wizardLLMInfo.task_type || 'reasoning')"></span>
+                        </p>
+                    </div>
+                </div>
+                <div class="flex items-start gap-2.5" :class="wizardStage < 3 ? 'opacity-40' : ''">
+                    <svg x-show="wizardStage < 3" class="w-4 h-4 text-surface-300 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>
+                    <svg x-show="wizardStage >= 3" x-cloak class="w-4 h-4 animate-spin text-brand-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <div class="min-w-0">
+                        <p class="text-[12px] font-semibold text-brand-900">Validar e aplicar ao editor</p>
+                        <p class="text-[10.5px] text-surface-400">Seções obrigatórias conferidas e conteúdo carregado para revisão.</p>
+                    </div>
+                </div>
+            </div>
+            <!-- Rodapé: expectativa honesta -->
+            <div class="px-6 py-3 border-t border-surface-100 bg-surface-50 rounded-b-2xl">
+                <p class="text-[10.5px] text-surface-500">
+                    Chamada única ao modelo — costuma levar <strong>de 10 a 40s</strong> conforme o Execution Profile.
+                    <span x-show="wizardElapsed > 60" x-cloak class="text-amber-600 font-medium">Está demorando mais que o normal; se falhar, um aviso aparece aqui.</span>
+                </p>
+            </div>
+        </div>
+    </div>
+
     <div x-show="tableBuilderOpen" x-transition.opacity
          x-cloak
          @keydown.escape.window="if (tableBuilderOpen) closeTableBuilder()"
@@ -1203,6 +1265,12 @@ function skillForm(editId) {
         isEdit: !!editId,
         saving: false, tab: 'editor',
         showWizard: false, wizardPrompt: '', wizardLoading: false,
+        // Modal de progresso da geração (QA E2E: "o usuário fica olhando para a
+        // tela sem saber se está funcionando"). A geração é UM POST sem streaming,
+        // então narramos só o que tem SINAL REAL: 1=contexto montado (payload
+        // pronto), 2=modelo escrevendo (durante o await, com cronômetro vivo),
+        // 3=validando/aplicando (resposta chegou). Nada de % inventada.
+        wizardStage: 0, wizardElapsed: 0, _wizardTimer: null,
         wizardKind: 'subagent', wizardDomain: '', wizardDomains: [],
         // Wave Wizard Routing: removido wizardProvider/wizardModel.
         // task_type='reasoning' fixo pra esta rota; provider+model vêm
@@ -2565,6 +2633,11 @@ ${outMap}`;
         async runWizardSkill() {
             if (!this.wizardPrompt.trim()) return;
             this.wizardLoading = true;
+            // Modal de progresso: etapa 1 (contexto) conclui já — o payload é
+            // montado aqui mesmo; etapa 2 é a espera real do LLM (cronômetro).
+            this.wizardStage = 2;
+            this.wizardElapsed = 0;
+            this._wizardTimer = setInterval(() => { this.wizardElapsed++; }, 1000);
 
             // Wave Wizard UX: envia IDs estruturados. Backend resolve nomes
             // humanos via lookup, monta o prompt enriquecido e infere
@@ -2592,6 +2665,7 @@ ${outMap}`;
                     length_preset: this.wizardLengthPreset || null,
                     decisions: this._decisionsPayload(this.wizardDecisions),
                 });
+                this.wizardStage = 3;   // resposta chegou: validando/aplicando
                 this.form.raw_content = r.skill_md;
                 // Sync dos checkboxes do editor (Fontes RAG) com o que o
                 // wizard usou — UX consistente entre wizard → editor.
@@ -2603,7 +2677,9 @@ ${outMap}`;
                 const summary = r.resolved ? this._formatResolvedSummary(r.resolved) : '';
                 showToast(`SKILL.md gerado pela IA${summary} — revise e ajuste`);
             } catch(e) { showToast('Erro: ' + e.message, 'error'); }
+            if (this._wizardTimer) { clearInterval(this._wizardTimer); this._wizardTimer = null; }
             this.wizardLoading = false;
+            this.wizardStage = 0;
         },
 
         _formatResolvedSummary(resolved) {
