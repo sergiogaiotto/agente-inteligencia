@@ -371,8 +371,12 @@
                             <span x-show="apiEndpointsFlat.length > 0" class="rounded-full bg-red-200 px-1.5 py-0.5 text-[9px] font-bold" x-text="apiEndpointsFlat.filter(i => isInsertedInRaw(i.ep_id)).length + '/' + apiEndpointsFlat.length"></span>
                             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
                         </button>
+                        <!-- left-0 (abre para a DIREITA): este é o botão mais à
+                             esquerda da barra; com right-0 o painel de 384px abria
+                             para a esquerda e o canto esquerdo sumia SOB a sidebar
+                             (que pinta por cima). Abrindo à direita fica no conteúdo. -->
                         <div x-show="apiDropdown" @click.away="apiDropdown=false" x-transition
-                             class="absolute right-0 top-full mt-1 w-96 rounded-xl bg-white border border-red-200 shadow-lg z-50 py-1 max-h-80 overflow-y-auto">
+                             class="absolute left-0 top-full mt-1 w-96 max-w-[calc(100vw-2rem)] rounded-xl bg-white border border-red-200 shadow-lg z-50 py-1 max-h-80 overflow-y-auto">
                             <div class="px-3 py-1.5 text-[9px] font-bold text-red-400 uppercase tracking-wider">Selecione um endpoint</div>
                             <div class="px-3 py-1 text-[10px] text-surface-500 border-b border-surface-100 bg-red-50">
                                 Adiciona <code class="text-red-700">## API Bindings</code> + define <code class="text-red-700">execution_mode: declarative</code>
