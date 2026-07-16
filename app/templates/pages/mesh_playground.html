@@ -521,6 +521,12 @@
                 <div x-show="recipe==='conversa'" class="rounded-lg border border-brand-100 bg-brand-50/40 px-3 py-2 text-[10px] text-surface-500 leading-snug" data-testid="pg-recipe-note">
                     <strong class="text-brand-700">Conversa (multi-turn):</strong> a resposta traz <code class="font-mono">interaction_id</code> — reenvie-o como <code class="font-mono">session_id</code> no próximo turno e o servidor reconstrói o histórico. Usa <strong>sync</strong> (o streaming não devolve o id de forma limpa). A memória vive no roteador e no maestro; <strong>os especialistas não lembram</strong>.
                 </div>
+                <!-- Aviso de anexo (QA E2E): o snippet usa <BASE64_DO_ARQUIVO>
+                     como placeholder — este bloco explica o contrato real. -->
+                <div x-show="recipe==='single' && attachments.length" x-cloak data-testid="pg-code-attach-note"
+                     class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 mb-1.5 text-[10px] text-amber-800 leading-snug">
+                    📎 <span x-text="codeAttachmentNote()"></span>
+                </div>
                 <pre class="rounded-lg bg-brand-900 text-surface-50 p-3 text-[11.5px] overflow-x-auto whitespace-pre" data-testid="pg-code" x-text="snippet()"></pre>
                 <p class="text-[10px] text-surface-400">
                     <span x-show="recipe==='single'">Reflete a requisição atual (<span x-text="codeMode==='streaming' ? 'streaming · SSE' : 'sync'"></span>).</span>
@@ -1097,9 +1103,32 @@ function playgroundPage() {
         get verbLabel() { const v = this.VERB.find(x => x.v === this.verbosity); return v ? v.l.toLowerCase() : this.verbosity; },
         get bodyObj() {
             const a = this.argsPayload;
-            return Object.keys(a).length
+            const base = Object.keys(a).length
                 ? { message: this.message, args: a, verbosity: this.verbosity }
                 : { message: this.message, verbosity: this.verbosity };
+            // QA E2E: o codegen ignorava os anexos — a UI mandava o arquivo mas
+            // o curl/Python copiado não ensinava a API de anexo. Agora o bloco
+            // `attachments` entra no corpo de TODA linguagem (base64 é o
+            // contrato real da API; content_base64 aqui é um PLACEHOLDER curto
+            // — o snippet não cola o blob de MBs, ver codeAttachmentNote()).
+            if (this.attachments.length) {
+                base.attachments = this.attachments.map(at => ({
+                    filename: at.filename || at.name || 'arquivo',
+                    content_type: at.content_type || at.type || 'application/octet-stream',
+                    content_base64: '<BASE64_DO_ARQUIVO>',
+                }));
+            }
+            return base;
+        },
+        // Aviso acima do snippet quando há anexos: explica o placeholder e o
+        // contrato (base64, 5×10MB). Vazio quando não há anexo.
+        codeAttachmentNote() {
+            if (!this.attachments.length) return '';
+            const ex = this.lang === 'py' || this.lang === 'py-httpx'
+                ? "content_base64 = base64.b64encode(open('arquivo','rb').read()).decode()"
+                : "content_base64 = base64(bytes do arquivo)";
+            return 'Anexos: troque <BASE64_DO_ARQUIVO> pelo arquivo em base64 — ' + ex
+                 + ' (até 5 arquivos × 10 MB; documento vira texto, imagem vai ao modelo multimodal).';
         },
         // args ENVIADOS: só campos preenchidos, coagidos minimamente no cliente
         // (número→Number, boolean→bool). O servidor revalida/coage contra o schema.
