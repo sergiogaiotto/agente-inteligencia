@@ -45,16 +45,21 @@
                 <p class="text-[11px] font-semibold uppercase tracking-wider text-surface-400 mb-2">Filtros (tristate — vazio = não filtra)</p>
 
                 <!-- Capability flags -->
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
+                <!-- Par label+select COLADO (QA E2E): o label tinha flex-1 e
+                     esticava a célula inteira, empurrando o select para a outra
+                     ponta — em monitor largo o campo ficava mais perto do label
+                     da coluna VIZINHA que do próprio. <label> de propósito:
+                     clicar no texto foca o select (alvo maior + a11y). -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-2 mb-3">
                     <template x-for="f in flagFilters" :key="f.key">
-                        <div class="flex items-center gap-2 text-[11px]">
-                            <span class="text-surface-600 flex-1" x-text="f.label"></span>
+                        <label class="flex items-center gap-2 text-[11px] w-fit cursor-pointer" :data-testid="'flag-filter-' + f.key">
+                            <span class="text-surface-600" x-text="f.label"></span>
                             <select x-model="filters[f.key]" @change="load()" class="rounded border border-surface-200 px-2 py-1 text-[11px] outline-none">
                                 <option value="">—</option>
                                 <option value="true">Sim</option>
                                 <option value="false">Não</option>
                             </select>
-                        </div>
+                        </label>
                     </template>
                 </div>
 
