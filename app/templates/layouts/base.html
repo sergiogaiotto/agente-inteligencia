@@ -1398,11 +1398,31 @@
             };
         }
     }
+    // Anti "tela em branco" sob rajada: quando o usuário clica em vários menus
+    // rápido, os muitos fetches por página podiam estourar o rate-limit (429) e,
+    // como o `catch{}` das páginas engolia o erro, a tela ficava vazia sem
+    // explicação. Aqui, no ÚNICO ponto de fetch, tratamos o 429: um 429 é
+    // RECUSADO antes de rodar no servidor, então re-tentar é seguro até para
+    // POST/PUT. Fazemos um backoff curto e limitado (absorve a rajada) e, se
+    // persistir, avisamos com um toast claro e devolvemos o 429 ao caller —
+    // nunca mais um branco silencioso.
+    let _rl429ToastAt = 0;
     async function _fetchWithTrace(url, init = {}) {
         const cliTrace = _genClientTraceId();
         const headers = new Headers(init.headers || {});
         headers.set('X-Client-Trace-Id', cliTrace);
-        const resp = await fetch(url, { ...init, headers });
+        const MAX_429_RETRIES = 2;
+        let resp;
+        for (let attempt = 0; ; attempt++) {
+            resp = await fetch(url, { ...init, headers });
+            if (resp.status !== 429 || attempt >= MAX_429_RETRIES) break;
+            const now = Date.now();
+            if (typeof showToast === 'function' && now - _rl429ToastAt > 4000) {
+                _rl429ToastAt = now;
+                showToast('Muitas requisições em pouco tempo — aguarde um instante…', 'error');
+            }
+            await new Promise(r => setTimeout(r, 400 + attempt * 600));  // 400ms, 1000ms
+        }
         resp.__cliTrace = cliTrace;
         _saveTraceFromResp(resp, url);
         return resp;

@@ -161,7 +161,15 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_window_seconds: int = 60
     # Limites por janela. *_per_min é interpretado como "por janela".
-    rate_limit_default_per_min: int = 60       # rotas API genéricas
+    # 60 era baixo demais: TODA leitura da UI (lista/detalhe/topologia) cai neste
+    # balde e cada página dispara vários fetches (o Fluxo de agentes faz ~7:
+    # topology+layout+groups+conditional-vars+pipelines+llm-health…). Navegar
+    # rápido por ~10 menus estourava os 60/60s → 429 → a tela ficava EM BRANCO
+    # (o fetch de dados falhava e o front engolia o erro). Leituras são baratas;
+    # a proteção anti-DoS real está nos baldes de LLM (workspace) e login, que
+    # seguem apertados. 300/60s = 5 req/s por usuário: absorve navegação humana
+    # intensa e ainda limita abuso automatizado.
+    rate_limit_default_per_min: int = 300      # rotas API genéricas (leituras baratas)
     rate_limit_workspace_per_min: int = 20     # rotas que disparam LLM
     rate_limit_auth_per_min: int = 10          # /login (anti-brute-force)
     # Cap de tokens por interação — proteção LLM04 contra runaway loops
