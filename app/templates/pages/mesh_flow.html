@@ -1366,6 +1366,10 @@
                         class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900 font-medium">
                     <span class="w-4 text-center">💬</span> Conversar com o agente
                 </button>
+                <button x-show="hasRoutableEdges(ctxMenu.node.id)" @click="openRouteSim(ctxMenu.node)" data-testid="ctx-route-sim"
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900">
+                    <span class="w-4 text-center">🧭</span> Simular roteamento
+                </button>
                 <button x-show="selectedPipeline" @click="setEntry(ctxMenu.node.id); ctxMenu=null"
                         class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900">
                     <span class="w-4 text-center">🎯</span> Definir como Início
@@ -1395,6 +1399,11 @@
             <div>
                 <div class="px-3 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-surface-400"
                      x-text="'Conexão · ' + ((ctxEdge() || {}).type || '')"></div>
+                <button x-show="edgePhraseCount(ctxMenu.edgeId) > 0" @click="runEdgePhrases(ctxMenu.edgeId)" data-testid="ctx-run-phrases"
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900 font-medium">
+                    <span class="w-4 text-center">✅</span>
+                    <span x-text="'Rodar Frases-Prova (' + edgePhraseCount(ctxMenu.edgeId) + ')'"></span>
+                </button>
                 <button @click="editEdge(ctxMenu.edgeId); ctxMenu=null"
                         class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900">
                     <span class="w-4 text-center">✏️</span> Editar regra
@@ -1406,6 +1415,64 @@
             </div>
         </template>
     </div>
+
+    <!-- ════════════════════════════════════════════════════════════
+         Fase 3 — Simulador de roteamento no canvas (QA E2E). Digite uma frase
+         de cliente e as ARESTAS ACENDEM: determinístico, via o MESMO endpoint
+         do editor de regra (test-conditional) — custo zero de tokens. Cada
+         linha pode virar Frase-Prova da aresta com um clique (o veredito
+         observado vira o expect). Painel flutuante (z-40, abaixo dos menus);
+         fechar limpa o highlight.
+         ════════════════════════════════════════════════════════════ -->
+    <template x-if="routeSim">
+        <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-[560px] max-w-[92vw] rounded-2xl bg-white border border-surface-200 shadow-2xl"
+             data-testid="mesh-route-sim" @keydown.escape.window="closeRouteSim()">
+            <div class="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-surface-100">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span class="text-[14px]">🧭</span>
+                    <div class="min-w-0">
+                        <p class="text-[12px] font-bold text-brand-900 truncate"
+                           x-text="routeSim.mode === 'phrases' ? ('Frases-Prova · ' + routeSim.node.name) : ('Simular roteamento · ' + routeSim.node.name)"></p>
+                        <p class="text-[9.5px] text-surface-400">Determinístico (sem LLM, custo zero) — o mesmo motor do publish e do harness.</p>
+                    </div>
+                </div>
+                <button @click="closeRouteSim()" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 cursor-pointer shrink-0" aria-label="Fechar">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div x-show="routeSim.mode !== 'phrases'" class="px-4 pt-3">
+                <div class="flex gap-2">
+                    <input x-model="routeSim.input" data-testid="route-sim-input"
+                           @keydown.enter.prevent="runRouteSim()"
+                           placeholder="Escreva como um cliente escreveria… ex.: minha internet caiu"
+                           class="flex-1 rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400">
+                    <button @click="runRouteSim()" :disabled="!!routeSim.running || !(routeSim.input || '').trim()" data-testid="route-sim-run"
+                            class="rounded-lg bg-brand-500 px-3.5 py-2 text-[11.5px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 cursor-pointer shrink-0"
+                            x-text="routeSim.running ? 'Simulando…' : 'Simular'"></button>
+                </div>
+            </div>
+            <div class="px-4 py-3 max-h-56 overflow-y-auto scrollbar-thin space-y-1.5">
+                <template x-if="!routeSim.results">
+                    <p class="text-[10.5px] text-surface-400 text-center py-2">As arestas que casarem <b>acendem no canvas</b>; as demais esmaecem.</p>
+                </template>
+                <template x-for="r in (routeSim.results || [])" :key="r.key">
+                    <div class="flex items-center gap-2 rounded-lg border px-2.5 py-1.5"
+                         :class="r.hit ? 'border-emerald-200 bg-emerald-50/60' : 'border-surface-200 bg-surface-50/40'">
+                        <span class="text-[12px] shrink-0" x-text="r.hit ? '✓' : '✗'" :class="r.hit ? 'text-emerald-600 font-bold' : 'text-surface-300'"></span>
+                        <span class="flex-1 min-w-0 text-[11px] text-brand-900 truncate" x-text="r.label"></span>
+                        <span class="text-[9px] px-1.5 py-0.5 rounded bg-surface-100 text-surface-500 shrink-0" x-text="r.type"></span>
+                        <button x-show="routeSim.mode !== 'phrases' && r.type === 'conditional' && routeSim.ranInput"
+                                @click="addSimPhrase(r)" data-testid="route-sim-add-phrase"
+                                :title="'Salvar \'' + routeSim.ranInput + '\' como Frase-Prova desta aresta (expect=' + (r.hit ? 'executa' : 'pula') + ')'"
+                                class="text-[9.5px] px-1.5 py-0.5 rounded border border-surface-200 text-surface-500 hover:text-brand-600 hover:border-brand-300 cursor-pointer shrink-0">+ frase</button>
+                    </div>
+                </template>
+                <template x-if="routeSim.results && !routeSim.results.length">
+                    <p class="text-[10.5px] text-surface-400 text-center py-2">Este nó não tem saídas condicionais/default para simular.</p>
+                </template>
+            </div>
+        </div>
+    </template>
 
     <!-- ── Leitor expandido (Fase 1): SKILL.md / Prompt em tela cheia legível.
          z-[60] acima dos menus (z-50); markdown SÓ via _md (DOMPurify). ── -->
@@ -1582,6 +1649,9 @@ function meshFlowPage() {
         chat: null,           // Fase 2: {agent, msgs:[{role,text,state,ms}], sending, session, input}
         helpTip: null,        // popover "?" aberto: 'fast' | 'audit' | 'seal' | null
         sealInfo: null,       // {sealed, contract_version} do pipeline selecionado
+        // ── Fase 3 (QA E2E): simulador de roteamento no canvas ──
+        routeSim: null,       // {node, input, running, ranInput, results:[{edgeId,targetName,type,hit,detail}], mode:'route'|'phrases'}
+        simEdges: null,       // {edgeId: 'hit'|'miss'} — pinta as arestas no canvas
 
         // Estúdio de Pipelines (PR1)
         pipelines: [], selectedPipeline: null, membership: {}, pipePanel: true,
@@ -1732,6 +1802,13 @@ function meshFlowPage() {
                 // 🔦 Isolar vizinhança: aresta só acesa se AMBAS as pontas estão
                 // no Set (labels somem de graça — o render exige op > 0.5).
                 if (this.dimSet && !(this.dimSet.has(e.source) && this.dimSet.has(e.target))) op = Math.min(op, 0.12);
+                // Fase 3: simulador de roteamento — a aresta que casou ACENDE,
+                // as demais saídas do nó simulado esmaecem; o resto do grafo
+                // mantém a opacidade normal (contexto preservado).
+                if (this.simEdges) {
+                    if (this.simEdges[e.id] === 'hit') op = 1;
+                    else if (this.simEdges[e.id] === 'miss') op = Math.min(op, 0.12);
+                }
                 out.push({
                     id: e.id,
                     d: `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`,
@@ -2151,10 +2228,11 @@ function meshFlowPage() {
         },
         isOutOfChain(id) { return !!this.selectedPipeline && this.unreachableInLens.has(id); },
 
-        selectMesh() { this.selectedPipeline = null; this.selected = null; this.ctxMenu = null; this.clearIsolate(); this.$nextTick(() => this.fit()); },
+        selectMesh() { this.selectedPipeline = null; this.selected = null; this.ctxMenu = null; this.clearIsolate(); this.closeRouteSim(); this.$nextTick(() => this.fit()); },
         selectPipeline(p) {
             this.selectedPipeline = p; this.selected = null;
             this.ctxMenu = null; this.clearIsolate();   // menu fixed e isolamento não sobrevivem à troca de lente
+            this.closeRouteSim();                        // sim/highlight idem — a lente muda as arestas visíveis
             this.pipeFilter = { domain: '', kind: '', q: '' };
             this.helpTip = null;
             this.loadSealInfo(p);
@@ -3105,6 +3183,131 @@ function meshFlowPage() {
             if (s === 'Escalate') return 'bg-amber-50 text-amber-700';
             if (s === 'Erro') return 'bg-rose-100 text-rose-800';
             return 'bg-surface-100 text-surface-500';
+        },
+
+        // ── Fase 3: simulador de roteamento + Frases-Prova pela aresta ──
+        // Mesmo endpoint determinístico do editor de regra e do gate de
+        // publicação (test-conditional): custo zero de tokens, sem LLM.
+        _routableEdgesOf(nodeId) {
+            return this.viewEdges.filter(e => e.source === nodeId && e.type !== 'start');
+        },
+        hasRoutableEdges(nodeId) { return this._routableEdgesOf(nodeId).length > 0; },
+        _edgeCfg(edgeId) {
+            const e = this.edges.find(x => x.id === edgeId);
+            if (!e) return {};
+            try { return JSON.parse(e.config || '{}'); } catch { return {}; }
+        },
+        edgePhraseCount(edgeId) {
+            const ph = this._edgeCfg(edgeId).test_phrases;
+            return Array.isArray(ph) ? ph.length : 0;
+        },
+        _targetName(id) {
+            const n = this.nodes.find(x => x.id === id);
+            return n ? n.name : (id || '').slice(0, 8);
+        },
+        openRouteSim(node) {
+            this.ctxMenu = null;
+            this.routeSim = { node: node, input: '', running: false, ranInput: '', results: null, mode: 'route' };
+            this.simEdges = null;
+            this.$nextTick(() => document.querySelector('[data-testid="route-sim-input"]')?.focus());
+        },
+        closeRouteSim() { this.routeSim = null; this.simEdges = null; },
+        async _testExpr(expr, body) {
+            try {
+                const r = await api.post('/api/v1/mesh/connections/test-conditional', { expr: expr, ...body });
+                return r && r.result === true;
+            } catch { return false; }
+        },
+        async runRouteSim() {
+            const rs = this.routeSim;
+            if (!rs || rs.running) return;
+            const input = (rs.input || '').trim();
+            if (!input) return;
+            rs.running = true;
+            const outs = this._routableEdgesOf(rs.node.id);
+            const results = [];
+            const marks = {};
+            let anyConditionalHit = false;
+            // 1º passo: condicionais (o default depende do resultado delas)
+            for (const e of outs) {
+                if (e.type !== 'conditional') continue;
+                const cfg = (() => { try { return JSON.parse(e.config || '{}'); } catch { return {}; } })();
+                const hit = cfg.expr ? await this._testExpr(cfg.expr, { input: input }) : false;
+                anyConditionalHit = anyConditionalHit || hit;
+                marks[e.id] = hit ? 'hit' : 'miss';
+                results.push({ key: e.id, edgeId: e.id, label: '→ ' + this._targetName(e.target), type: 'conditional', hit: hit });
+            }
+            // 2º passo: default dispara SÓ se nenhuma condicional casou; os
+            // demais tipos (sequencial/sempre dispara) disparam sempre.
+            for (const e of outs) {
+                if (e.type === 'conditional') continue;
+                const hit = (e.type === 'default') ? !anyConditionalHit : true;
+                marks[e.id] = hit ? 'hit' : 'miss';
+                results.push({ key: e.id, edgeId: e.id, label: '→ ' + this._targetName(e.target), type: e.type, hit: hit });
+            }
+            // guard: usuário fechou o painel durante os awaits
+            if (this.routeSim !== rs) return;
+            rs.results = results;
+            rs.ranInput = input;
+            rs.running = false;
+            this.simEdges = marks;   // edgesSvg recompõe reativamente
+        },
+        // Salva a última simulação como Frase-Prova da aresta: o veredito
+        // OBSERVADO vira o expect — o operador confirma o comportamento de
+        // hoje como contrato de amanhã (publish gate + harness).
+        async addSimPhrase(r) {
+            const rs = this.routeSim;
+            if (!rs || !rs.ranInput) return;
+            const e = this.edges.find(x => x.id === r.edgeId);
+            if (!e) { showToast('Aresta não encontrada', 'error'); return; }
+            let cfg = {};
+            try { cfg = JSON.parse(e.config || '{}'); } catch {}
+            cfg.test_phrases = Array.isArray(cfg.test_phrases) ? cfg.test_phrases : [];
+            if (cfg.test_phrases.some(p => (p.text || '') === rs.ranInput)) {
+                showToast('Esta frase já é uma Frase-Prova desta aresta'); return;
+            }
+            cfg.test_phrases.push({ text: rs.ranInput, where: 'input', expect: !!r.hit });
+            try {
+                await api.put('/api/v1/mesh/connections/' + e.id, {
+                    source_agent_id: e.source, target_agent_id: e.target,
+                    connection_type: e.type, config: JSON.stringify(cfg),
+                });
+                e.config = JSON.stringify(cfg);   // reflete sem reload completo
+                showToast('Frase-Prova salva (' + (r.hit ? 'executa' : 'pula') + ') — vale no publish e no harness');
+            } catch (err) { showToast(err.message, 'error'); }
+        },
+        // Roda as Frases-Prova da aresta AGORA (menu do botão direito) — o
+        // mesmo veredito do gate de publicação, sem precisar abrir o editor.
+        async runEdgePhrases(edgeId) {
+            this.ctxMenu = null;
+            const e = this.edges.find(x => x.id === edgeId);
+            if (!e) return;
+            const cfg = this._edgeCfg(edgeId);
+            const phrases = Array.isArray(cfg.test_phrases) ? cfg.test_phrases : [];
+            if (!phrases.length) return;
+            const srcNode = this.nodes.find(n => n.id === e.source) || { id: e.source, name: this._targetName(e.source) };
+            // Ler de volta o PROXY reativo que o Alpine cria na atribuição: o
+            // objeto cru nunca é === ao proxy, então o guard `this.routeSim !==
+            // rs` abaixo dispararia cedo e descartaria os resultados.
+            this.routeSim = { node: srcNode, input: '', running: true, ranInput: '', results: null, mode: 'phrases' };
+            const rs = this.routeSim;
+            const results = [];
+            let pass = 0;
+            for (let i = 0; i < phrases.length; i++) {
+                const p = phrases[i];
+                const body = (p.where === 'output') ? { output: p.text } : { input: p.text };
+                const matched = cfg.expr ? await this._testExpr(cfg.expr, body) : false;
+                const expected = p.expect !== false;
+                const ok = matched === expected;
+                if (ok) pass++;
+                results.push({ key: edgeId + ':' + i, edgeId: edgeId, type: (expected ? 'deve executar' : 'deve pular'),
+                               label: '“' + p.text + '”', hit: ok });
+            }
+            if (this.routeSim !== rs) return;
+            rs.results = results;
+            rs.running = false;
+            this.simEdges = { [edgeId]: (pass === phrases.length) ? 'hit' : 'miss' };
+            showToast('Frases-Prova: ' + pass + '/' + phrases.length + (pass === phrases.length ? ' ✓' : ' — há reprovas'), pass === phrases.length ? undefined : 'error');
         },
     };
 }

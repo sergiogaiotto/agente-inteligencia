@@ -45,7 +45,7 @@ class TestTextoViraPopover:
 
     def test_troca_de_pipeline_fecha_popover(self, html):
         i = html.index("selectPipeline(p) {")
-        assert "this.helpTip = null" in html[i: i + 400]
+        assert "this.helpTip = null" in html[i: i + 700]
 
 
 class TestSeloDoContrato:
