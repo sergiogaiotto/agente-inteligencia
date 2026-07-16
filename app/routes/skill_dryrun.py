@@ -51,6 +51,11 @@ class DryRunRequest(BaseModel):
     operation_override: Optional[str] = ""
     sample_query: Optional[str] = "exemplo de consulta"
     extra_params: Optional[dict] = None
+    tool_name: Optional[str] = None
+    """39.x (item 3 PR5). Nome da tool DESCOBERTA a simular quando o conector
+    está em modo per-tool efetivo. Aceita o nome REAL (`discovered_tools[].name`)
+    ou o sanitizado (`function.name`). Vazio → primeira descoberta. Ignorado
+    fora do modo per-tool (o legado não tem tools nomeadas)."""
 
 
 class DryRunIssue(BaseModel):
@@ -86,7 +91,20 @@ class DryRunResult(BaseModel):
     """Diagnóstico estruturado. UI mostra com cores/agrupado por severidade."""
 
     operation_resolved: str
-    """Operation efetivamente usada (após override do user OU primeira do enum)."""
+    """Operation efetivamente usada (após override do user OU primeira do enum).
+    VAZIA no modo per-tool — lá não existe operation, existe nome de função."""
+
+    per_tool_active: bool = False
+    """39.x (item 3 PR5). True quando a simulação é do caminho PER-TOOL (modo
+    efetivo + descoberta). Nesse caso `function_spec` é a função REAL e o
+    payload são os args CRUS — não há {operation, query}. Default False =
+    back-compat: nenhum caller antigo quebra."""
+
+    tool_name_resolved: str = ""
+    """Nome real da tool descoberta que foi simulada (per-tool)."""
+
+    per_tool_available: list[str] = []
+    """Nomes reais disponíveis no conector — alimenta o seletor da UI."""
 
 
 # ───────────────────────────────────────────────────────────────
@@ -300,12 +318,21 @@ def _diagnose(
     declared_ops: list[str],
     engine_spec: dict,
     skill_spec: Optional[dict] = None,
+    per_tool_active: bool = False,
 ) -> list[DryRunIssue]:
     """Coleta issues do validador estático + checagens específicas de dry-run.
 
     PR #197 (Fase 2): nova regra schema.mismatch quando ## Inputs da SKILL
     declara campos diferentes do schema que o engine envia (causa raiz
     dos bugs Context7 #1-#5).
+
+    39.x (item 3 PR5): `per_tool_active` gateia APENAS as checagens que são do
+    caminho legado (enum de operations, operations no Registry, mismatch contra
+    o par {operation, query}) — elas viram ruído contra um conector per-tool,
+    que não usa `operations` e cujo schema vem do `inputSchema` descoberto.
+    O validador estático (G1-G4, guardrails, seções) continua rodando: a
+    qualidade da SKILL é ortogonal ao transporte, e é por aqui que o aviso de
+    citação legada chega à UI.
     """
     issues: list[DryRunIssue] = []
 
@@ -320,7 +347,13 @@ def _diagnose(
             "data_tables": [],
             "api_endpoints": [],
         }
-        result = validate_generated_skill(parsed, bindings_for_validator, raw_md=skill_md)
+        # bindings_complete=False: aqui só UM conector é passado. Regras que
+        # concluem algo sobre o CONJUNTO ficariam cegas ao resto da skill e
+        # dariam conselho que quebra o conector vizinho.
+        result = validate_generated_skill(
+            parsed, bindings_for_validator, raw_md=skill_md,
+            bindings_complete=False,
+        )
         for v in result.violations:
             issues.append(DryRunIssue(
                 severity=v.severity, rule=v.rule,
@@ -333,6 +366,10 @@ def _diagnose(
             message=f"Validador estático falhou: {type(e).__name__}",
             suggestion="Verifique se SKILL.md tem frontmatter YAML válido.",
         ))
+
+    # ── Daqui pra baixo: checagens do caminho LEGADO {operation, query} ──
+    if per_tool_active:
+        return issues
 
     # ── Checagem específica de dry-run: operation escolhida bate com enum ──
     if declared_ops:
@@ -400,6 +437,47 @@ def _diagnose(
     return issues
 
 
+def _select_per_tool_spec(
+    tool: dict, requested: str,
+) -> tuple[dict | None, str, list[str], "DryRunIssue | None"]:
+    """39.x (item 3 PR5). Escolhe QUAL função per-tool simular.
+
+    Reusa `build_per_tool_openai_functions` — o MESMO builder do runtime, para
+    que o spec exibido seja byte-idêntico ao que o LLM receberá (um builder
+    paralelo aqui seria uma segunda verdade divergindo em silêncio).
+
+    Casa por nome REAL ou por `function.name` (sanitizado) — o front pode ter
+    só o sanitizado. Vazio → primeira. Não-casa → issue CRITICAL: cair calado
+    no legado mostraria um contrato que o runtime não pratica.
+
+    Returns: (spec, nome_real, disponíveis, issue_ou_None).
+    """
+    from app.mcp.runtime import (
+        _parse_discovered_tools, build_per_tool_openai_functions,
+    )
+    discovered = _parse_discovered_tools(tool.get("discovered_tools"))
+    funcs = build_per_tool_openai_functions(tool, discovered) or []
+    names = [str(f.get("_mcp_real_name") or "") for f in funcs]
+    if not funcs:
+        return None, "", [], None          # sem descoberta → caller usa legado
+
+    req = (requested or "").strip()
+    if not req:
+        return funcs[0], names[0], names, None
+    for f in funcs:
+        if req in (f.get("_mcp_real_name"), (f.get("function") or {}).get("name")):
+            return f, str(f.get("_mcp_real_name") or ""), names, None
+    return None, "", names, DryRunIssue(
+        severity="critical",
+        rule="per_tool.tool_not_found",
+        message=(
+            f"Ferramenta '{req}' não está entre as descobertas deste conector "
+            f"({len(names)} disponível(is))."
+        ),
+        suggestion="Use uma destas: " + ", ".join(f"`{n}`" for n in names[:12]) + ".",
+    )
+
+
 @router.post("/dry-run-tool")
 async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
     """Dry-run de uma tool MCP declarada na SKILL.md, SEM chamar servidor.
@@ -431,32 +509,45 @@ async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
 
     declared_ops = _split_csv_or_json(tool.get("operations") or "")
 
-    # 39.3.0 (item 3 PR4): o dry-run simula o caminho LEGADO {operation,
-    # query}. Quando o conector está em modo per-tool EFETIVO, o runtime
-    # exporá N funções reais — o operador precisa saber que ESTE simulador
-    # não reflete esse modo (a simulação per-tool completa vem com o PR5).
+    # 39.x (item 3 PR5): o dry-run agora SIMULA o caminho per-tool de verdade
+    # (no PR4 ele só avisava que não simulava). Quando o conector está em modo
+    # per-tool efetivo, o que o LLM verá é a FUNÇÃO REAL descoberta e os args
+    # CRUS — não o par {operation, query}. Simular o legado aqui seria mostrar
+    # ao operador um contrato que o runtime não pratica.
     _per_tool_issues: list[DryRunIssue] = []
+    _per_tool_spec: dict | None = None
+    _per_tool_name = ""
+    _per_tool_names: list[str] = []
+    _per_tool_active = False
     try:
-        from app.mcp.runtime import _parse_discovered_tools, per_tool_enabled_for
-        _disc = _parse_discovered_tools(tool.get("discovered_tools"))
-        if per_tool_enabled_for(tool) and _disc:
-            _names = ", ".join(f"`{d['name']}`" for d in _disc[:8])
-            _per_tool_issues.append(DryRunIssue(
-                severity="info",
-                rule="per_tool.mode_active",
-                message=(
-                    f"Este conector está em modo PER-TOOL: em runtime o LLM "
-                    f"verá {len(_disc)} função(ões) real(is) ({_names}), não "
-                    "o par {operation, query} simulado abaixo."
-                ),
-                suggestion=(
-                    "Invoque a tool real pelo Workspace (forms per-tool) para "
-                    "testar o contrato descoberto; o Workflow da skill deve "
-                    "citar os NOMES REAIS, não operation=."
-                ),
-            ))
+        from app.mcp.runtime import per_tool_covered
+        if per_tool_covered(tool):
+            _per_tool_spec, _per_tool_name, _per_tool_names, _sel_issue = \
+                _select_per_tool_spec(tool, data.tool_name or "")
+            # A flag segue o spec REALMENTE selecionado, não a intenção: sem
+            # spec (tool inexistente / builder vazio) a simulação exibida é a
+            # legada, e anunciar per_tool_active=True seria mentir no envelope.
+            _per_tool_active = _sel_issue is None and _per_tool_spec is not None
+            if _sel_issue is not None:
+                _per_tool_issues.append(_sel_issue)
+            elif _per_tool_spec is not None:
+                _per_tool_issues.append(DryRunIssue(
+                    severity="info",
+                    rule="per_tool.simulated",
+                    message=(
+                        f"Conector em modo PER-TOOL: simulando a função REAL "
+                        f"`{_per_tool_name}` (de {len(_per_tool_names)} descoberta(s)). "
+                        "Não há {operation, query} neste caminho — o LLM chama a "
+                        "função pelo nome e os args vão crus."
+                    ),
+                    suggestion=(
+                        "Para simular outra, envie `tool_name`. Disponíveis: "
+                        + ", ".join(f"`{n}`" for n in _per_tool_names[:8]) + "."
+                    ),
+                ))
     except Exception:
-        pass  # aviso é best-effort — nunca derruba o dry-run
+        logger.exception("skill.dry_run.per_tool_select_failed")
+        _per_tool_active = False   # fail-safe: cai no legado (comportamento PR4)
 
     # 2. Decide operation final (override do user OU primeira do enum)
     override = (data.operation_override or "").strip()
@@ -467,45 +558,71 @@ async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
     else:
         operation_chosen = ""  # sem default — issue será sinalizada
 
-    # 3. Function spec que o ENGINE criaria HOJE.
-    # Onda B: agora schema-aware — usa ## Inputs da SKILL quando presente.
-    # Antes (PR #195-#197): sempre {operation, query} fixo.
-    function_spec = _build_function_spec(tool, skill_md=data.skill_md)
+    if _per_tool_active and _per_tool_spec is not None:
+        # ── Caminho PER-TOOL (39.x, item 3 PR5) ────────────────────────────
+        # 3'. O spec é a função REAL descoberta (mesmo builder do runtime).
+        function_spec = _per_tool_spec
 
-    # 4. PR #197 (Fase 2): Function spec que a SKILL DECLARA em ## Inputs.
-    # Após Onda B, function_spec == function_spec_skill_declared quando
-    # ## Inputs presente — mantemos os 2 campos pra back-compat de UI/tests
-    # e pra detectar drift defensivo.
-    inputs_schema = _extract_inputs_schema(data.skill_md)
-    function_spec_skill_declared = (
-        _build_function_spec_from_skill_inputs(tool, inputs_schema)
-        if inputs_schema else None
-    )
+        # 4'. `function_spec_skill_declared` fica None DE PROPÓSITO: o JS do
+        # skill_form usa `skillSpec || engineSpec`, então devolvê-lo faria o
+        # form ser dirigido pelo ## Inputs da SKILL e IGNORAR o schema real
+        # descoberto — exatamente o contrário do que este modo prova.
+        function_spec_skill_declared = None
 
-    # 5. Payload simulado.
-    # Fase 1: payload era SEMPRE {operation, query}. Fase 2: quando o user
-    # mandou extra_params, refletimos eles — operador vê o que SERIA
-    # enviado SE o engine respeitasse o schema da SKILL.
-    if data.extra_params:
-        payload = dict(data.extra_params)
-        # Garante operation_resolved no payload pra observability
-        if "operation" not in payload and operation_chosen:
-            payload["operation"] = operation_chosen
+        # 5'. Payload CRU: sem injeção de operation, sem fallback {op, query}.
+        payload = dict(data.extra_params or {})
+
+        # 6'. Validador estático SIM (qualidade da SKILL é ortogonal ao
+        # transporte — e é por aqui que o aviso de citação legada aparece);
+        # checagens do legado NÃO (viram ruído contra contrato correto).
+        issues = _diagnose(
+            data.skill_md, tool, "", declared_ops,
+            engine_spec=function_spec, skill_spec=None, per_tool_active=True,
+        )
+        operation_chosen = ""
     else:
-        payload = {
-            "operation": operation_chosen,
-            "query": data.sample_query or "exemplo de consulta",
-        }
+        # ── Caminho LEGADO {operation, query} — inalterado ─────────────────
+        # 3. Function spec que o ENGINE criaria HOJE.
+        # Onda B: agora schema-aware — usa ## Inputs da SKILL quando presente.
+        # Antes (PR #195-#197): sempre {operation, query} fixo.
+        function_spec = _build_function_spec(tool, skill_md=data.skill_md)
 
-    # 6. Coleta issues (inclui schema.mismatch quando há SKILL spec)
-    issues = _diagnose(
-        data.skill_md, tool, operation_chosen, declared_ops,
-        engine_spec=function_spec,
-        skill_spec=function_spec_skill_declared,
-    )
+        # 4. PR #197 (Fase 2): Function spec que a SKILL DECLARA em ## Inputs.
+        # Após Onda B, function_spec == function_spec_skill_declared quando
+        # ## Inputs presente — mantemos os 2 campos pra back-compat de UI/tests
+        # e pra detectar drift defensivo.
+        inputs_schema = _extract_inputs_schema(data.skill_md)
+        function_spec_skill_declared = (
+            _build_function_spec_from_skill_inputs(tool, inputs_schema)
+            if inputs_schema else None
+        )
 
-    # 7. ok = sem criticals
-    ok = all(i.severity != "critical" for i in issues)
+        # 5. Payload simulado.
+        # Fase 1: payload era SEMPRE {operation, query}. Fase 2: quando o user
+        # mandou extra_params, refletimos eles — operador vê o que SERIA
+        # enviado SE o engine respeitasse o schema da SKILL.
+        if data.extra_params:
+            payload = dict(data.extra_params)
+            # Garante operation_resolved no payload pra observability
+            if "operation" not in payload and operation_chosen:
+                payload["operation"] = operation_chosen
+        else:
+            payload = {
+                "operation": operation_chosen,
+                "query": data.sample_query or "exemplo de consulta",
+            }
+
+        # 6. Coleta issues (inclui schema.mismatch quando há SKILL spec)
+        issues = _diagnose(
+            data.skill_md, tool, operation_chosen, declared_ops,
+            engine_spec=function_spec,
+            skill_spec=function_spec_skill_declared,
+        )
+
+    # 7. ok = sem criticals. Conta TAMBÉM as issues per-tool: `tool_not_found`
+    # é critical e, antes do PR5, ficava fora desta conta (o concat só
+    # acontecia no return) — um dry-run reprovado se anunciaria aprovado.
+    ok = all(i.severity != "critical" for i in _per_tool_issues + issues)
 
     logger.info(
         "skill.dry_run.completed",
@@ -519,6 +636,8 @@ async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
             "warning_count": sum(1 for i in issues if i.severity == "warning"),
             "has_skill_declared_schema": function_spec_skill_declared is not None,
             "has_extra_params": data.extra_params is not None,
+            "per_tool_active": _per_tool_active,
+            "tool_name_resolved": _per_tool_name,
         },
     )
 
@@ -530,4 +649,7 @@ async def dry_run_tool(data: DryRunRequest) -> DryRunResult:
         # aviso de modo per-tool PRIMEIRO — muda a leitura de tudo abaixo
         issues=_per_tool_issues + issues,
         operation_resolved=operation_chosen,
+        per_tool_active=_per_tool_active,
+        tool_name_resolved=_per_tool_name,
+        per_tool_available=_per_tool_names,
     )

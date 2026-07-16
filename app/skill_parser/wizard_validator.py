@@ -246,6 +246,7 @@ def validate_generated_skill(
     parsed_skill,
     bindings: dict,
     raw_md: Optional[str] = None,
+    bindings_complete: bool = True,
 ) -> ValidationResult:
     """Valida a SKILL.md gerada contra as regras do Wizard.
 
@@ -264,6 +265,14 @@ def validate_generated_skill(
             checagens estruturais que o ParsedSkill perde (ex: detectar
             seções duplicadas que o parser merge ou ignora). Quando None,
             essas checagens são puladas (back-compat).
+
+        bindings_complete: `bindings["mcp_tools"]` contém TODOS os conectores
+            da skill (wizard) ou só um subconjunto (dry-run de UMA tool)?
+            Regras que concluem algo sobre "o conjunto" — hoje só
+            per_tool.legacy_operation_citation — não podem rodar sobre um
+            subconjunto: o Workflow é texto ÚNICO e citações de `operation=`
+            de um conector legado apareceriam ao validar o conector per-tool
+            vizinho, com sugestão que QUEBRARIA o legado se seguida.
 
     Returns:
         ValidationResult com .ok=True quando nenhuma violação CRITICAL,
@@ -430,17 +439,48 @@ def validate_generated_skill(
         # discovered_tools) fica FORA da agregação. Skill só-per-tool → as 3
         # regras operation.* não rodam (paridade com o linter F4a); os nomes
         # reais das funções não são "operations" a validar.
-        from app.mcp.runtime import _parse_discovered_tools, per_tool_enabled_for
-        _legacy_mcp = [
-            t for t in bindings["mcp_tools"]
-            if not (per_tool_enabled_for(t)
-                    and _parse_discovered_tools(t.get("discovered_tools")))
-        ]
+        from app.mcp.runtime import per_tool_covered
+        _legacy_mcp = [t for t in bindings["mcp_tools"] if not per_tool_covered(t)]
         cited_ops = set(_extract_operations_from_workflow(workflow))
         declared_ops = set()
         for tool in _legacy_mcp:
             for op in _split_operations_csv(tool.get("operations") or ""):
                 declared_ops.add(op)
+
+        # ── per_tool.legacy_operation_citation (WARNING) ──
+        # 39.x (item 3 PR5): depreciação VISÍVEL. Nenhum conector legado na
+        # skill, mas o Workflow ainda fala a língua do legado. Em per-tool o LLM
+        # vê a função real e nunca um par {operation, query} — a citação vira
+        # instrução morta que só confunde o modelo.
+        # WARNING, não critical: não derruba `ok` nem dispara retry do wizard —
+        # é orientação de migração, não defeito.
+        # `bindings_complete` é DURO aqui: o Workflow é um texto só, e
+        # `_extract_operations_from_workflow` varre o texto inteiro sem escopo
+        # por conector. Numa skill mista (A per-tool + B legado), validar só A
+        # veria as citações legítimas de B e mandaria removê-las — sugestão que
+        # QUEBRARIA B. Melhor calar no dry-run (que já mostra a função real via
+        # per_tool.simulated) e falar no wizard, onde a skill inteira é vista.
+        # Nome no namespace `per_tool.*`, NÃO em `operation.*`: a família
+        # operation.* significa "regras do contrato legado de operations" e é
+        # justamente a que NÃO roda em skill per-tool (39.2.0). Esta regra é o
+        # oposto — só existe no per-tool.
+        if cited_ops and not _legacy_mcp and bindings_complete:
+            violations.append(Violation(
+                rule="per_tool.legacy_operation_citation",
+                severity="warning",
+                section="Workflow",
+                message=(
+                    "Todos os conectores desta skill estão em modo per-tool "
+                    f"efetivo, mas o Workflow cita operation= ({', '.join(sorted(cited_ops))}). "
+                    "`operation` é o vocabulário do caminho LEGADO — em per-tool "
+                    "o LLM chama a função real pelo nome descoberto."
+                ),
+                suggestion=(
+                    "Troque as citações `operation=X` pelos NOMES REAIS das "
+                    "ferramentas descobertas (veja-os no dry-run da tool ou em /mcp)."
+                ),
+                evidence=", ".join(sorted(cited_ops)[:5]),
+            ))
 
         if declared_ops:
             # ── operation.invented (CRITICAL) ──

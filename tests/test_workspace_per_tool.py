@@ -154,6 +154,11 @@ class TestListaEInvokeDoWorkspace:
 class TestDryRunAvisaModoPerTool:
     @pytest.mark.asyncio
     async def test_info_quando_per_tool_efetivo(self, monkeypatch):
+        """39.x (item 3 PR5): o aviso `per_tool.mode_active` do PR4 dizia que a
+        simulação per-tool viria depois. Veio: agora o dry-run SIMULA a função
+        real e o aviso virou `per_tool.simulated`, nomeando a tool escolhida.
+        O contrato preservado é o que importa: aviso `info`, PRIMEIRO na lista
+        (muda a leitura de tudo abaixo) e citando a ferramenta real."""
         import app.routes.skill_dryrun as dr
 
         async def _resolve(tool_id):
@@ -170,9 +175,10 @@ class TestDryRunAvisaModoPerTool:
             skill_md=skill_md, tool_id="11111111-1111-1111-1111-111111111111",
         ))
         rules = [i.rule for i in result.issues]
-        assert rules[0] == "per_tool.mode_active"  # PRIMEIRO — muda a leitura
+        assert rules[0] == "per_tool.simulated"  # PRIMEIRO — muda a leitura
         info = result.issues[0]
         assert "`web_search`" in info.message and info.severity == "info"
+        assert result.per_tool_active is True
 
     @pytest.mark.asyncio
     async def test_sem_per_tool_sem_aviso(self, monkeypatch):

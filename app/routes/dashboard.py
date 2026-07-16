@@ -10,7 +10,7 @@ CORREÇÕES (2026-04):
   MCP Streamable HTTP (spec 2025-03-26) retornam HTTP 406 Not Acceptable.
 """
 import uuid, json, logging
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body, Query, Request
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.models.schemas import ReleaseCreate, GoldCaseCreate, KnowledgeSourceCreate, ToolCreate, ToolUpdate, RunEvalRequest
@@ -2033,6 +2033,155 @@ async def list_tools(limit: int = 50, sensitivity: str = None):
         "total": await tools_repo.count(**f),
     }
 
+def _tool_transport(t: dict) -> str:
+    """Transporte REAL do conector — derivado do prefixo de `mcp_server`.
+
+    NÃO lê `tools.mcp_server_type`: a coluna existe e chega no front, mas
+    ninguém a escreve (o default 'http' do ToolCreate vale para todos,
+    inclusive stdio) e ninguém a lê no runtime. O runtime decide pelo
+    prefixo em 3 pontos independentes; a métrica usa o mesmo critério.
+    """
+    endpoint = (t.get("mcp_server") or "").strip()
+    if not endpoint:
+        return "desconhecido"
+    return "http" if endpoint.startswith("http") else "stdio"
+
+
+def _tool_pending_reason(t: dict) -> str:
+    """Por que este conector NÃO sobrevive à remoção do legado.
+
+    Espelha, na ordem, os mesmos descartes de `backfill_discovered_tools` —
+    a métrica precisa nomear exatamente o que o botão de backfill NÃO resolve.
+
+    Cuidado com `backfill_nao_cobre_auth`: o backfill EM LOTE pula oauth2/mTLS,
+    mas o "Testar conexão" do conector descobre e persiste esses casos
+    normalmente (`_build_mcp_auth` monta OAuth2 e mTLS). Chamar isso de
+    "descoberta não implementada" seria mandar o operador desistir de algo que
+    ele resolve em dois cliques.
+    """
+    if not (t.get("mcp_server") or "").strip():
+        return "sem_endpoint"
+    if (t.get("auth_requirements") or "").strip().lower() in ("oauth2", "mtls"):
+        return "backfill_nao_cobre_auth"
+    return "nunca_descoberto"
+
+
+def _tool_legacy_reason(t: dict) -> str:
+    """Por que este conector está no caminho LEGADO hoje (badge).
+
+    Distingue os dois jeitos de estar com o modo desligado — colapsá-los num
+    `modo_off` só faria o hint mandar o operador "mudar para Herdar" um
+    conector que JÁ está em Herdar (o caso que cobre a frota inteira por
+    default, já que o toggle global nasce OFF).
+    """
+    from app.mcp.runtime import per_tool_discovery_ready
+    if not per_tool_discovery_ready(t):
+        return _tool_pending_reason(t)
+    if str(t.get("per_tool_mode") or "").strip().lower() == "off":
+        return "modo_off_explicito"
+    return "global_off_herdando"
+
+
+@router.get("/tools/per-tool-coverage")
+async def per_tool_coverage(
+    max_pages: int = Query(20, ge=1, le=200),
+    page_size: int = Query(100, ge=1, le=500),
+):
+    """Cobertura per-tool da frota — o GATE OBJETIVO da remoção do legado.
+
+    Mede PRONTIDÃO (`per_tool_discovery_ready`: há `discovered_tools`?), não
+    adoção (`per_tool_covered`, que exige o modo ligado). A diferença é o
+    ponto: quando o legado {operation, query} for removido, a única coisa que
+    decide se um conector ainda tem função exposta é a descoberta persistida —
+    um conector com `per_tool_mode='off'` E descoberta está pronto. Medir por
+    adoção reportaria 0% em toda frota com o toggle global OFF (o default) e
+    travaria o gate sem motivo.
+
+    Paginado de propósito: `find_all` tem LIMIT default 100 e o backfill tem
+    teto de 500. Um gate que mede 100 de 340 e diz "100% coberto" é pior que
+    gate nenhum — quando o teto estoura, `truncated=True` sai explícito.
+
+    NÃO devolve `mcp_server` (pode carregar segredo em query string) nem
+    qualquer campo de auth — só o suficiente para agir.
+    """
+    from app.mcp.runtime import per_tool_covered, per_tool_discovery_ready
+
+    # `total` é a frota REAL (COUNT no banco); `scanned` é o que esta resposta
+    # de fato examinou. Devolver a mesma variável nos dois seria prometer dois
+    # significados e entregar um — e `truncated` viraria adivinhação.
+    try:
+        total = await tools_repo.count()
+    except Exception:
+        total = None
+
+    rows: list[dict] = []
+    for page in range(max_pages):
+        try:
+            batch = await tools_repo.find_all(limit=page_size, offset=page * page_size)
+        except TypeError:
+            # Repo sem offset (mock antigo) — pega o que der e para.
+            batch = await tools_repo.find_all(limit=page_size)
+            rows.extend(batch or [])
+            break
+        if not batch:
+            break
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+
+    scanned = len(rows)
+    if total is None:
+        total = scanned
+    truncated = scanned < total
+
+    sem_discovered: list[dict] = []
+    legado_efetivo: list[dict] = []
+    pendentes_por_transporte: dict[str, int] = {}
+    pendentes_por_motivo: dict[str, int] = {}
+
+    for t in rows:
+        if not per_tool_discovery_ready(t):
+            motivo = _tool_pending_reason(t)
+            transporte = _tool_transport(t)
+            sem_discovered.append({
+                "id": t.get("id"), "name": t.get("name") or "",
+                "transport": transporte, "motivo": motivo,
+            })
+            pendentes_por_transporte[transporte] = pendentes_por_transporte.get(transporte, 0) + 1
+            pendentes_por_motivo[motivo] = pendentes_por_motivo.get(motivo, 0) + 1
+        # Badge de LEGADO usa o OUTRO predicado (adoção): descoberto mas com o
+        # modo desligado continua no {operation, query} hoje.
+        if not per_tool_covered(t):
+            legado_efetivo.append({
+                "id": t.get("id"), "name": t.get("name") or "",
+                "motivo": _tool_legacy_reason(t),
+            })
+
+    com_discovered = scanned - len(sem_discovered)
+    return {
+        "total": total,
+        "scanned": scanned,
+        "truncated": truncated,
+        "com_discovered": com_discovered,
+        # % só quando há amostra — 0/0 = "100% coberto" é a falsa confiança
+        # que um gate não pode herdar.
+        "cobertura_pct": round(100.0 * com_discovered / scanned, 1) if scanned else None,
+        # Quantos estão no legado HOJE (adoção) — número diferente da cobertura
+        # (prontidão). A UI mostra os dois: senão o painel diz "100% pronto"
+        # enquanto TODAS as linhas exibem o chip "legado", e a tela se
+        # autocontradiz na configuração default (global OFF + Herdar).
+        "em_legado_hoje": len(legado_efetivo),
+        "sem_discovered": sem_discovered,
+        "legado_efetivo": legado_efetivo,
+        "pendentes_por_transporte": pendentes_por_transporte,
+        "pendentes_por_motivo": pendentes_por_motivo,
+        # O gate do PR6 em um booleano: só é seguro remover o fallback quando
+        # NINGUÉM depende dele. `truncated` derruba — medir parte da frota não
+        # autoriza remover nada.
+        "pronto_para_remocao_legado": bool(scanned) and not sem_discovered and not truncated,
+    }
+
+
 @router.get("/tools/{tool_id}")
 async def get_tool(tool_id: str):
     t = await tools_repo.find_by_id(tool_id)
@@ -2637,13 +2786,22 @@ class MCPBackfillRequest(BaseModel):
 
 
 @router.post("/tools/backfill-discovered")
-async def backfill_mcp_discovered(data: MCPBackfillRequest = MCPBackfillRequest()):
+async def backfill_mcp_discovered(
+    data: MCPBackfillRequest = MCPBackfillRequest(),
+    user: dict = Depends(require_role("root", "admin")),
+):
     """F5 (per-tool D) — backfill: descobre+persiste `discovered_tools` para os
     conectores MCP HTTP que ainda não têm (predam a F1).
 
     Manutenção/operação: NÃO ativa o modo per-tool — só popula a coluna dormante
     que o builder consome quando `MCP_PER_TOOL_ENABLED` está ON. Idempotente
     (pula quem já tem, salvo `force`). Best-effort por conector.
+
+    39.x (item 3 PR5): gateado em root/admin ao ganhar botão na UI. É operação
+    de FROTA — dispara egress com credencial decifrada em cada conector HTTP e
+    SPAWNA processo local em cada conector stdio, tudo em paralelo. O controle
+    irmão desta feature (o toggle global `MCP_PER_TOOL_ENABLED`) já exige
+    root/admin em /settings; o gate no template é cosmético sem este aqui.
     """
     from app.mcp.runtime import backfill_discovered_tools, per_tool_enabled
     summary = await backfill_discovered_tools(tools_repo, force=bool(data.force))

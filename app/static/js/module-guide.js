@@ -773,8 +773,9 @@ MAESTRO_SECRET_KEY=&lt;chave-forte&gt;</pre>
     fundamento: `<p>Uma <b>ferramenta</b> é uma função externa que o agente invoca durante a conversa ("valida esse CPF", "consulta o ERP"). O Maestro fala com elas pelo <b>MCP (Model Context Protocol)</b>.</p>
 <ul class="list-disc pl-4 mt-2 space-y-1.5">
   <li><b>Transportes</b> — <code>HTTP</code> (JSON-RPC, com suporte a MCP Streamable HTTP/SSE) e <code>stdio</code> (processo local: npx/node/python).</li>
-  <li><b>Descoberta</b> — o Maestro chama <code>tools/list</code> no servidor e guarda o schema real de cada ferramenta.</li>
-  <li><b>Per-tool (gated)</b> — com <code>MCP_PER_TOOL_ENABLED</code> ligado, cada ferramenta vira uma função própria com o schema real (o LLM chama <code>create_issue</code> direto, sem o intermediário <code>{operation, query}</code>).</li>
+  <li><b>Descoberta</b> — ao testar a conexão (HTTP ou stdio), o Maestro chama <code>tools/list</code> e <b>persiste</b> o schema real de cada ferramenta. Sem descoberta, não há per-tool.</li>
+  <li><b>Per-tool</b> — cada ferramenta descoberta vira uma função própria com o schema real (o LLM chama <code>create_issue</code> direto, sem o intermediário <code>{operation, query}</code>). A decisão é <b>por conector</b> (Herdar / Ligado / Desligado) e compõe com o toggle global.</li>
+  <li><b>Cobertura</b> — o painel no topo de /mcp separa <b>prontidão</b> (quantos têm descoberta: o critério objetivo para aposentar o legado) de <b>adoção</b> (quantos rodam per-tool hoje). O backfill em lote não cobre <code>oauth2</code>/<code>mTLS</code> — nesses, use "Testar conexão" no conector.</li>
 </ul>
 <p class="mt-2">O <b>Permitted Toolset</b> é a interseção entre o que está registrado em /mcp e o que a skill declara em <code>## Tool Bindings</code>. Auth suportada: API Key, OAuth2 (client credentials) e mTLS — sempre cifrada em repouso.</p>`,
     aplicacao: `<ul class="list-disc pl-4 mt-2 space-y-1.5">
@@ -782,11 +783,12 @@ MAESTRO_SECRET_KEY=&lt;chave-forte&gt;</pre>
   <li><b>Schema preciso</b> — ferramentas de argumentos estruturados (GitHub, filesystem) funcionam bem no modo per-tool.</li>
   <li><b>Auditoria</b> — toda chamada vai para <code>tool_calls</code> (args, resposta, latência, erro).</li>
 </ul>`,
-    ativar: `<p>Registre o servidor em <a href="/mcp" class="text-brand-500 underline">/mcp</a> e declare a ferramenta na skill (<code>## Tool Bindings</code>). O modo per-tool é um <b>toggle de Configurações</b> (<code>MCP_PER_TOOL_ENABLED</code>, default desligado) — sem ele, o caminho legado <code>{operation, query}</code> é idêntico ao de sempre.</p>`,
+    ativar: `<p>Registre o servidor em <a href="/mcp" class="text-brand-500 underline">/mcp</a> e declare a ferramenta na skill (<code>## Tool Bindings</code>). O modo per-tool <b>compõe</b> dois controles: o toggle global de Configurações (<code>MCP_PER_TOOL_ENABLED</code>, default desligado) e o campo <b>Modo per-tool</b> de cada conector (Herdar / Ligado / Desligado). Sem nenhum dos dois — ou sem descoberta —, o caminho legado <code>{operation, query}</code> é idêntico ao de sempre.</p>`,
     usar: `<ol class="list-decimal pl-4 mt-2 space-y-1">
-  <li>Em <a href="/mcp" class="text-brand-500 underline">/mcp</a>, cadastre o servidor MCP (HTTP ou stdio) e teste a conexão — a plataforma lista as ferramentas descobertas.</li>
+  <li>Em <a href="/mcp" class="text-brand-500 underline">/mcp</a>, cadastre o servidor MCP (HTTP ou stdio) e <b>teste a conexão</b> — é o que descobre e persiste as ferramentas (pré-requisito do per-tool).</li>
   <li>Na skill, liste a ferramenta em <b>Tool Bindings</b>; o agente passa a poder chamá-la.</li>
-  <li>Opcional: ligue o per-tool em Configurações para expor o schema real ao LLM.</li>
+  <li>Ligue o <b>Modo per-tool</b> no conector (ou o toggle global) para expor o schema real ao LLM. Use o dry-run da tool para ver exatamente a função que o LLM receberá.</li>
+  <li>Acompanhe o painel <b>Cobertura per-tool</b>: o chip <em>legado</em> mostra quem ainda está no caminho antigo e por quê.</li>
 </ol>`
   },
 
