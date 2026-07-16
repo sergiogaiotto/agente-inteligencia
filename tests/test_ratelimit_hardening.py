@@ -44,6 +44,41 @@ def test_static_exempt():
     assert _bucket_for_path("/static/js/app.js") == ("static", 0)
 
 
+# ── Incidente "tela em branco no clique rápido" (QA E2E VPS) ──
+# Clicar em vários menus rápido dispara muitos fetches de leitura por página;
+# com o balde 'api' em 60/60s isso batia 429 e a tela ficava EM BRANCO (o front
+# engolia o erro). O balde de leituras precisa folgar SEM afrouxar os caros.
+
+def test_leituras_da_ui_folgadas_sem_afrouxar_llm():
+    from app.core.config import get_settings
+    s = get_settings()
+    api_limit = _bucket_for_path("/api/v1/agents")[1]
+    ws_limit = _bucket_for_path("/api/v1/workspace/chat")[1]
+    auth_limit = _bucket_for_path("/api/v1/users/login")[1]
+    # leituras: generosas o bastante para navegação humana intensa
+    # (uma página pesada faz ~7-10 fetches; ~10 páginas/janela não pode 429).
+    assert api_limit >= 240, "balde de leituras baixo demais reintroduz a tela em branco"
+    # os baldes de custo/segurança seguem MUITO mais apertados que o de leitura
+    assert ws_limit <= 40 and ws_limit < api_limit
+    assert auth_limit <= 15 and auth_limit < api_limit
+    assert s.rate_limit_window_seconds == 60
+
+
+def test_uma_pagina_pesada_nao_estoura_o_balde_de_leitura():
+    """O Fluxo de agentes dispara ~7 GETs; várias navegações numa janela têm
+    que caber com folga no balde 'api' (regressão do incidente)."""
+    fetches_por_pagina = [
+        "/api/v1/mesh/topology", "/api/v1/mesh/layout", "/api/v1/mesh/groups",
+        "/api/v1/mesh/conditional-vars", "/api/v1/pipelines",
+        "/api/v1/agents", "/api/v1/llm/health",
+    ]
+    for p in fetches_por_pagina:
+        assert _bucket_for_path(p)[0] in ("api",), f"{p} deveria ser leitura barata 'api'"
+    api_limit = _bucket_for_path("/api/v1/agents")[1]
+    paginas_por_janela = api_limit // len(fetches_por_pagina)
+    assert paginas_por_janela >= 30, "poucas páginas por janela → clique rápido volta a dar 429"
+
+
 def test_memory_limiter_gc_removes_idle_keys():
     lim = _MemoryLimiter()
     now = 1_000_000.0
