@@ -788,10 +788,10 @@ def _split_tools_by_mode(mcp_tools: list[dict]) -> tuple[list[dict], list[dict]]
     está ON e há discovered_tools persistido. É o MESMO critério do gate de
     build_openai_tools (39.0.0): o wizard ensina exatamente o que o runtime
     vai expor."""
-    from app.mcp.runtime import _parse_discovered_tools, per_tool_enabled_for
+    from app.mcp.runtime import per_tool_covered
     per, legacy = [], []
     for t in mcp_tools or []:
-        if per_tool_enabled_for(t) and _parse_discovered_tools(t.get("discovered_tools")):
+        if per_tool_covered(t):
             per.append(t)
         else:
             legacy.append(t)

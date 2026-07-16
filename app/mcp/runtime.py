@@ -753,6 +753,38 @@ def _parse_discovered_tools(raw) -> list[dict]:
     return [d for d in data if isinstance(d, dict) and str(d.get("name") or "").strip()]
 
 
+def per_tool_discovery_ready(tool: dict | None) -> bool:
+    """O conector SOBREVIVE à remoção do legado? (39.x, item 3 PR5)
+
+    IGNORA o modo de propósito. Quando o PR6 remover o fallback
+    {operation, query}, a ÚNICA coisa que decide se um conector ainda tem
+    função exposta é `discovered_tools`. Um conector em `per_tool_mode='off'`
+    COM descoberta está pronto (só optou por sair hoje); um em `'on'` SEM
+    descoberta não está — e hoje ele cai no legado em silêncio (o gate de
+    `build_openai_tools` só expande quando há descoberta).
+
+    É o predicado da MÉTRICA DE COBERTURA — o gate objetivo do PR6. Usar
+    `per_tool_covered` aqui mediria a frota inteira como 0% enquanto o
+    toggle global estivesse OFF (que é o default), medindo adoção quando a
+    pergunta é prontidão.
+    """
+    return bool(_parse_discovered_tools((tool or {}).get("discovered_tools")))
+
+
+def per_tool_covered(tool: dict | None) -> bool:
+    """O conector está em per-tool AGORA? (39.x, item 3 PR5)
+
+    SSOT do gate de ``build_openai_tools`` (modo efetivo E descoberta) —
+    extraído para que métrica, badge, wizard, validator e dry-run façam a
+    MESMA pergunta que o builder. Divergir aqui é sinalizar ao operador um
+    estado que o runtime não pratica.
+
+    Distinto de `per_tool_discovery_ready`: este responde "hoje"; aquele
+    responde "depois do PR6". Ver a tabela no docstring de `per_tool_enabled_for`.
+    """
+    return bool(per_tool_enabled_for(tool)) and per_tool_discovery_ready(tool)
+
+
 def build_per_tool_openai_functions(server_tool: dict, discovered: list[dict]) -> list[dict]:
     """Modelo per-tool: 1 função OpenAI por tool MCP descoberta, com seu
     `inputSchema` REAL. `function.name` = nome real da tool (sanitizado) — o LLM
@@ -828,11 +860,13 @@ def build_openai_tools(
         # ON E há `discovered_tools` persistido (F1). Modo OFF → pula → caminho
         # legado byte-idêntico. 39.0.0: a decisão virou POR CONECTOR
         # (per_tool_enabled_for compõe tools.per_tool_mode com o global).
-        if per_tool_enabled_for(tool):
-            _disc = _parse_discovered_tools(tool.get("discovered_tools"))
-            if _disc:
-                openai_tools.extend(build_per_tool_openai_functions(tool, _disc))
-                continue
+        # 39.x (item 3 PR5): o gate virou `per_tool_covered` (SSOT) — mesma
+        # semântica, uma definição só. A métrica de cobertura e o badge de
+        # legado leem O MESMO predicado deste `if`, por construção.
+        if per_tool_covered(tool):
+            openai_tools.extend(build_per_tool_openai_functions(
+                tool, _parse_discovered_tools(tool.get("discovered_tools"))))
+            continue
         raw_name = tool.get('name', 'tool') or 'tool'
         name = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_name).strip('_')[:64]
         ops = tool.get('operations', []) or []

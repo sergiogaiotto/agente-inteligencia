@@ -13,6 +13,66 @@
             </button>
         </div>
 
+        <!-- ══ Cobertura per-tool (39.x, item 3 PR5) ══
+             DOIS números, de propósito, porque são DUAS perguntas:
+             · Prontidão — quantos conectores têm ferramentas descobertas
+               (é o que decide se dá para aposentar o {operation, query});
+             · Em uso hoje — quantos já rodam per-tool de fato.
+             Mostrar só o 1º fazia a tela se autocontradizer no default
+             (global OFF + Herdar): "100% pronto" em verde com o chip
+             "legado" em TODAS as linhas. -->
+        <div x-show="coverage || coverageError" class="mb-4 rounded-lg border border-surface-200 bg-white px-4 py-3" data-testid="per-tool-coverage">
+            <div class="flex items-center justify-between gap-3 mb-2">
+                <div class="flex items-baseline gap-2">
+                    <span class="text-[11px] font-semibold text-brand-900">Cobertura per-tool</span>
+                    <span class="text-[10px] text-surface-400">prontidão para aposentar o modo legado</span>
+                </div>
+                {% if user_role in ['root', 'admin'] %}
+                <button @click="runBackfill()" :disabled="!!backfilling"
+                        class="rounded-lg border border-surface-200 px-2.5 py-1 text-[10px] font-medium text-surface-600 hover:border-brand-300 hover:text-brand-600 disabled:opacity-50"
+                        data-testid="btn-backfill-discovered"
+                        x-text="backfilling ? 'Descobrindo…' : 'Descobrir pendentes'"></button>
+                {% endif %}
+            </div>
+
+            <!-- Falha da métrica NÃO pode sumir calada: sem isto, painel, chips
+                 e botão evaporam e a tela fica idêntica à de antes do PR. -->
+            <div x-show="coverageError" class="text-[11px] text-amber-600" data-testid="coverage-error">
+                Não foi possível carregar a cobertura — os chips de "legado" podem estar ausentes.
+                <button @click="loadCoverage()" class="underline hover:text-amber-700">Tentar de novo</button>
+            </div>
+
+            <div x-show="!coverageError" class="flex flex-wrap items-center gap-4">
+                <!-- Guard de amostra: 0 conectores NÃO é "100% coberto". -->
+                <template x-if="coverage && coverage.scanned">
+                    <div class="flex items-baseline gap-1">
+                        <span class="text-[20px] font-semibold tabular-nums"
+                              :class="coverage.pronto_para_remocao_legado ? 'text-emerald-600' : 'text-brand-900'"
+                              x-text="coverage.cobertura_pct + '%'" data-testid="coverage-pct"></span>
+                        <span class="text-[10px] text-surface-400"
+                              x-text="'descobertos (' + coverage.com_discovered + '/' + coverage.scanned + ')'"></span>
+                    </div>
+                </template>
+                <!-- Adoção: a outra pergunta, com o mesmo peso visual. -->
+                <template x-if="coverage && coverage.scanned && coverage.em_legado_hoje">
+                    <span class="rounded-full bg-surface-100 px-2 py-0.5 text-[10px] text-surface-500" data-testid="coverage-legacy-count"
+                          x-text="coverage.em_legado_hoje + ' de ' + coverage.scanned + ' ainda no modo legado hoje'"></span>
+                </template>
+                <template x-if="coverage && !coverage.scanned">
+                    <span class="text-[11px] text-surface-400" data-testid="coverage-empty">Nenhum conector registrado — nada a medir.</span>
+                </template>
+                <div class="flex flex-wrap items-center gap-1.5">
+                    <template x-for="[motivo, n] in Object.entries((coverage && coverage.pendentes_por_motivo) || {})" :key="motivo">
+                        <span class="rounded-full bg-surface-100 px-2 py-0.5 text-[9px] text-surface-500"
+                              x-text="n + ' ' + ({nunca_descoberto:'sem descoberta', backfill_nao_cobre_auth:'oauth2/mTLS (use Testar conexão)', sem_endpoint:'sem endpoint'}[motivo] || motivo)"></span>
+                    </template>
+                    <span x-show="coverage && coverage.truncated" class="rounded-full bg-amber-50 px-2 py-0.5 text-[9px] text-amber-600"
+                          data-testid="coverage-truncated"
+                          x-text="'frota tem ' + (coverage ? coverage.total : '?') + ' — número parcial'"></span>
+                </div>
+            </div>
+        </div>
+
         <!-- Filters -->
         <div class="flex items-center gap-2 mb-4">
             <select x-model="filter" @change="load()" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none">
@@ -23,7 +83,11 @@
                 <option value="restricted">Restrito</option>
             </select>
             <input x-model="searchText" @input="applySearch()" placeholder="Buscar..." class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none w-40">
-            <span class="text-[10px] text-surface-400" x-text="filtered.length + '/' + allTools.length + ' ferramenta(s)'"></span>
+            <!-- A lista carrega no limit default (50); o painel varre a frota
+                 inteira. Sem dizer "de N", as duas contagens da MESMA tela se
+                 contradizem quando a frota passa de 50. -->
+            <span class="text-[10px] text-surface-400" data-testid="tools-count"
+                  x-text="filtered.length + '/' + allTools.length + ' ferramenta(s)' + ((coverage && !filter && coverage.total > allTools.length) ? ' (de ' + coverage.total + ' registradas)' : '')"></span>
         </div>
 
         <!-- Tool rows -->
@@ -42,6 +106,11 @@
                             <span class="rounded-full px-1.5 py-0.5 text-[9px] font-medium shrink-0"
                                   :class="tool.sensitivity==='restricted'?'bg-rose-50 text-rose-600':tool.sensitivity==='confidential'?'bg-amber-50 text-amber-600':tool.sensitivity==='internal'?'bg-brand-50 text-brand-600':'bg-emerald-50 text-emerald-600'"
                                   x-text="tool.sensitivity"></span>
+                            <!-- Depreciação VISÍVEL (39.x, item 3 PR5): este conector
+                                 ainda usa o par {operation, query}. O title diz o que fazer. -->
+                            <span x-show="isLegacy(tool.id)" :title="legacyHint(tool.id)"
+                                  class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-medium text-surface-500 shrink-0"
+                                  data-testid="tool-legacy-chip">legado</span>
                         </div>
                         <div class="flex items-center gap-1.5 mt-0.5">
                             <span class="text-[9px] text-surface-400 truncate max-w-[200px]" x-text="tool.mcp_server || '—'"></span>
@@ -615,6 +684,12 @@ function toolsPage() {
         authConfig: { client_id: '', client_secret: '', token_url: '', scope: '', client_cert: '', client_key: '', ca_cert: '' },
         form: { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'', per_tool_mode:'inherit' },
 
+        // 39.x (item 3 PR5): cobertura per-tool da frota (gate do PR6).
+        coverage: null,
+        coverageError: false,
+        legacyById: {},
+        backfilling: false,
+
         get parsedOps() { try{const o=JSON.parse(this.form.operations||'[]');return Array.isArray(o)?o:[]}catch{return[]} },
         parseOps(ops) { try{const a=JSON.parse(ops||'[]');return Array.isArray(a)?a.join(', ')||'—':'—'}catch{return ops||'—'} },
         addOp() { const o=this.parsedOps; o.push(''); this.form.operations=JSON.stringify(o); },
@@ -1070,7 +1145,7 @@ function toolsPage() {
                 this.authConfig = { client_id:'', client_secret:'', token_url:'', scope:'', client_cert:'', client_key:'', ca_cert:'', ...this.authConfig };
             } else {
                 this.editingId = null;
-                this.form = { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'' };
+                this.form = { name:'', mcp_server:'', description:'', operations:'[]', cost_per_call:0, sensitivity:'internal', requires_trusted_context:false, auth_requirements:'', auth_token:'', per_tool_mode:'inherit' };
                 this.authConfig = { client_id:'', client_secret:'', token_url:'', scope:'', client_cert:'', client_key:'', ca_cert:'' };
                 this.hasExistingAuthToken = false;
                 this.hasExistingAuthConfigSecrets = false;
@@ -1114,6 +1189,12 @@ function toolsPage() {
                 auth_requirements: String(this.form.auth_requirements || ''),
                 auth_token: String(this.form.auth_token || ''),
                 auth_config: JSON.stringify(this.authConfig || {}),
+                // 39.x (item 3 PR5): o <select> do Modo per-tool existe desde a
+                // 39.0.0 e o backend aceita o campo — mas o payload NUNCA o
+                // enviava: o operador escolhia "Ligado", salvava, e a escolha
+                // era descartada em silêncio. Sem isto, o badge de legado
+                // apontaria para um controle que não persiste.
+                per_tool_mode: String(this.form.per_tool_mode || 'inherit'),
             };
             // PR #229: se está editando e o auth_token foi deixado vazio,
             // OMITE do payload — backend interpreta como "preservar".
@@ -1295,7 +1376,52 @@ function toolsPage() {
         async load() {
             const p=this.filter?`?sensitivity=${this.filter}`:'';
             try{const d=await api.get('/api/v1/tools'+p);this.allTools=d.tools||[];this.filtered=this.allTools;this.applySearch();}catch{}
+            await this.loadCoverage();
             this.loading=false;
+        },
+
+        // 39.x (item 3 PR5): a cobertura é computada SERVER-SIDE de propósito.
+        // O modo efetivo compõe `per_tool_mode` com a flag GLOBAL, que não
+        // chega ao front — reimplementar o tri-state em JS seria uma segunda
+        // verdade, em outra linguagem, fora do alcance dos testes de paridade.
+        async loadCoverage() {
+            try {
+                const c = await api.get('/api/v1/tools/per-tool-coverage');
+                this.coverage = c;
+                this.coverageError = false;
+                this.legacyById = Object.fromEntries((c.legado_efetivo||[]).map(r=>[r.id,r]));
+            } catch {
+                // Falhar calado zeraria painel + chips + botão, deixando a tela
+                // idêntica à de antes — "sem legado" e "métrica quebrada" ficam
+                // indistinguíveis. O erro é estado, não silêncio.
+                this.coverage=null; this.legacyById={}; this.coverageError=true;
+            }
+        },
+
+        isLegacy(id) { return !!this.legacyById[id]; },
+        legacyHint(id) {
+            const r = this.legacyById[id];
+            if (!r) return '';
+            return {
+                // Os dois jeitos de estar "desligado" pedem AÇÕES DIFERENTES:
+                // quem herda já está em Herdar — mandar "mude para Herdar"
+                // seria um no-op, e é o caso da frota inteira por default.
+                global_off_herdando: 'Descoberto e pronto. Está no legado porque o conector herda o modo global, que está desligado — ligue MCP_PER_TOOL_ENABLED em Configurações, ou mude o Modo per-tool deste conector para "Ligado".',
+                modo_off_explicito: 'Descoberto e pronto, mas este conector foi explicitamente marcado como "Desligado" — mude o Modo per-tool para "Ligado" ou "Herdar".',
+                nunca_descoberto: 'Sem ferramentas descobertas — use "Testar conexão" neste conector, ou o botão "Descobrir pendentes".',
+                backfill_nao_cobre_auth: 'Sem ferramentas descobertas. O backfill em lote não cobre oauth2/mTLS — abra este conector e use "Testar conexão" (que autentica e descobre normalmente).',
+                sem_endpoint: 'Sem endpoint/comando MCP configurado — edite o conector.',
+            }[r.motivo] || 'Conector no caminho legado {operation, query}.';
+        },
+
+        async runBackfill() {
+            this.backfilling = true;
+            try {
+                const s = await api.post('/api/v1/tools/backfill-discovered', {});
+                showToast(`Descoberta: ${s.backfilled} conector(es) atualizado(s), ${s.skipped} pulado(s), ${s.failed} falha(s)`);
+                await this.load();
+            } catch { showToast('Erro no backfill','error'); }
+            this.backfilling = false;
         },
 
         async deleteTool(id,name) {

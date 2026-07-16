@@ -1419,8 +1419,8 @@ async def get_agent_skills_context(agent_id: str, user: dict = Depends(require_u
             # form POR TOOL DESCOBERTA (campos do inputSchema real) — expor o
             # form legado {operation, query} aqui recriaria o paradigma que o
             # modo aposenta. Critério idêntico ao gate de build.
-            from app.mcp.runtime import _parse_discovered_tools, per_tool_enabled_for
-            if per_tool_enabled_for(tool) and _parse_discovered_tools(tool.get("discovered_tools")):
+            from app.mcp.runtime import per_tool_covered
+            if per_tool_covered(tool):
                 from app.workspace.binding_schema import normalize_mcp_per_tool_bindings
                 bindings_out.extend(normalize_mcp_per_tool_bindings(tool))
             else:
