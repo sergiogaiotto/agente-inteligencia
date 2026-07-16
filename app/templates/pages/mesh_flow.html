@@ -167,6 +167,47 @@
                                 </button>
                             </template>
                         </div>
+
+                        <!-- QA E2E: o SELO do contrato não tinha lugar na tela — o
+                             usuário não sabia COMO selar. Resposta: publicar sela. -->
+                        <div class="mt-2 flex items-center gap-1.5" data-testid="pipeline-seal">
+                            <template x-if="sealInfo && sealInfo.sealed">
+                                <span class="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                                    🔒 Contrato selado <span x-text="'· v' + (sealInfo.contract_version || 1)"></span>
+                                </span>
+                            </template>
+                            <template x-if="sealInfo && !sealInfo.sealed">
+                                <span class="inline-flex items-center gap-1 rounded-md bg-surface-100 px-2 py-0.5 text-[10px] font-medium text-surface-500">
+                                    🔓 Contrato não selado
+                                </span>
+                            </template>
+                            <button @click="helpTip = (helpTip === 'seal' ? null : 'seal')" type="button" data-testid="help-seal"
+                                    class="w-4 h-4 rounded-full border border-surface-300 text-[9px] font-bold text-surface-400 hover:text-brand-600 hover:border-brand-400 cursor-pointer flex items-center justify-center shrink-0"
+                                    :class="helpTip === 'seal' ? 'text-brand-600 border-brand-400 bg-brand-50' : ''"
+                                    title="Como selar o contrato?">?</button>
+                        </div>
+                        <p x-show="helpTip === 'seal'" x-cloak x-transition
+                           class="mt-1.5 rounded-lg bg-white border border-surface-200 px-2.5 py-2 text-[9.5px] text-surface-500 leading-snug">
+                            <b>Como selar:</b> mude o status para <b>→ Publicado</b> (botão acima). Publicar
+                            <b>congela o contrato de args</b> (schema + versão) que as integrações usam —
+                            editar a skill depois <b>não</b> muda a API publicada (gera <i>drift</i> até você
+                            republicar, que incrementa a versão). As Frases-Prova das conexões rodam como
+                            <b>gate</b> na publicação: frase reprovando bloqueia.
+                        </p>
+
+                        <!-- QA E2E: o chip de domínio (ex.: "e2e") aparecia na lista
+                             mas NÃO tinha onde ser informado na UI — só via API. -->
+                        <div class="mt-2">
+                            <div class="flex items-center gap-2">
+                                <label class="text-[10px] font-semibold uppercase tracking-wide text-surface-400 shrink-0">Domínio</label>
+                                <input :value="selectedPipeline.domain || ''" data-testid="pipeline-domain-input"
+                                       @change="setPipelineDomain($event.target.value)"
+                                       placeholder="ex.: telecom, e2e, aurora-credito"
+                                       maxlength="60"
+                                       class="flex-1 min-w-0 rounded-lg border border-surface-200 bg-white px-2 py-1 text-[10.5px] text-surface-700 outline-none focus:border-brand-400">
+                            </div>
+                            <p class="mt-0.5 text-[9px] text-surface-300">Etiqueta de organização — vira o chip na lista de pipelines e agrupa no Catálogo.</p>
+                        </div>
                     </div>
 
                     <!-- PR4: publicar no Catálogo (cria entry kind=pipeline em rascunho → lifecycle no Catálogo) -->
@@ -182,23 +223,36 @@
 
                     <!-- Configurações do pipeline (26.0.0) -->
                     <div class="rounded-lg border border-surface-200 bg-surface-50/50 p-2.5" data-testid="pipeline-config">
-                        <label class="flex items-start gap-2 cursor-pointer">
-                            <input type="checkbox" data-testid="pipeline-fast-routing"
-                                   :checked="!!selectedPipeline.fast_routing"
-                                   @change="setFastRouting($event.target.checked)"
-                                   class="mt-0.5 h-3.5 w-3.5 rounded border-surface-300 text-brand-600 focus:ring-brand-400 shrink-0">
-                            <span class="flex-1 min-w-0">
-                                <span class="block text-[11px] font-semibold text-brand-900">⚡ Roteamento rápido</span>
-                                <span class="block text-[9.5px] text-surface-500 leading-snug mt-0.5">
-                                    Pula a chamada LLM do agente de triagem quando a rota é 100% decidida pelos
-                                    args + pergunta (não pela resposta do triador) — invoke bem mais rápido.
-                                    Requer o master ligado em Configurações → Parâmetros. Se alguma conexão
-                                    depender da resposta do triador, a plataforma roda o LLM normalmente.
-                                </span>
-                            </span>
-                        </label>
+                        <!-- QA E2E: o texto explicativo virou popover atrás do "?" —
+                             o painel ficava um paredão de prosa; quem já sabe não relê. -->
+                        <div class="flex items-center gap-2">
+                            <label class="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                                <input type="checkbox" data-testid="pipeline-fast-routing"
+                                       :checked="!!selectedPipeline.fast_routing"
+                                       @change="setFastRouting($event.target.checked)"
+                                       class="h-3.5 w-3.5 rounded border-surface-300 text-brand-600 focus:ring-brand-400 shrink-0">
+                                <span class="text-[11px] font-semibold text-brand-900">⚡ Roteamento rápido</span>
+                            </label>
+                            <button @click="helpTip = (helpTip === 'fast' ? null : 'fast')" type="button" data-testid="help-fast-routing"
+                                    class="w-4 h-4 rounded-full border border-surface-300 text-[9px] font-bold text-surface-400 hover:text-brand-600 hover:border-brand-400 cursor-pointer flex items-center justify-center shrink-0"
+                                    :class="helpTip === 'fast' ? 'text-brand-600 border-brand-400 bg-brand-50' : ''"
+                                    title="O que é o Roteamento rápido?">?</button>
+                        </div>
+                        <p x-show="helpTip === 'fast'" x-cloak x-transition
+                           class="mt-1.5 rounded-lg bg-white border border-surface-200 px-2.5 py-2 text-[9.5px] text-surface-500 leading-snug">
+                            Pula a chamada LLM do agente de triagem quando a rota é 100% decidida pelos
+                            args + pergunta (não pela resposta do triador) — invoke bem mais rápido.
+                            Requer o master ligado em Configurações → Parâmetros. Se alguma conexão
+                            depender da resposta do triador, a plataforma roda o LLM normalmente.
+                        </p>
                         <div class="mt-2.5 pt-2.5 border-t border-surface-200">
-                            <label class="block text-[11px] font-semibold text-brand-900 mb-1">🔎 Auditoria da resposta</label>
+                            <div class="flex items-center gap-2 mb-1">
+                                <label class="flex-1 min-w-0 text-[11px] font-semibold text-brand-900">🔎 Auditoria da resposta</label>
+                                <button @click="helpTip = (helpTip === 'audit' ? null : 'audit')" type="button" data-testid="help-audit-posture"
+                                        class="w-4 h-4 rounded-full border border-surface-300 text-[9px] font-bold text-surface-400 hover:text-brand-600 hover:border-brand-400 cursor-pointer flex items-center justify-center shrink-0"
+                                        :class="helpTip === 'audit' ? 'text-brand-600 border-brand-400 bg-brand-50' : ''"
+                                        title="O que é a Auditoria da resposta?">?</button>
+                            </div>
                             <select data-testid="pipeline-audit-posture"
                                     :value="selectedPipeline.audit_posture || 'inherit'"
                                     @change="setAuditPosture($event.target.value)"
@@ -208,12 +262,13 @@
                                 <option value="async">Assíncrona — juiz em segundo plano (não atrasa)</option>
                                 <option value="disabled">Desligada — sem juiz</option>
                             </select>
-                            <span class="block text-[9.5px] text-surface-500 leading-snug mt-1">
+                            <p x-show="helpTip === 'audit'" x-cloak x-transition
+                               class="mt-1.5 rounded-lg bg-white border border-surface-200 px-2.5 py-2 text-[9.5px] text-surface-500 leading-snug">
                                 Quem avalia a qualidade de cada etapa. <b>Síncrona</b> registra um julgamento por
                                 etapa (para crédito/fraude); <b>assíncrona</b> julga sem atrasar a resposta;
                                 <b>desligada</b> pula o juiz. <b>Herdar</b> mantém o comportamento atual.
                                 Agentes marcados como <b>rigorosos</b> seguem auditados em qualquer opção (segurança).
-                            </span>
+                            </p>
                         </div>
                     </div>
 
@@ -1525,6 +1580,8 @@ function meshFlowPage() {
         docPanel: null,       // {title, content, md} — leitor expandido de Skill/Prompt
         dossier: { skill: true, prompt: true, runs: false },   // seções colapsáveis
         chat: null,           // Fase 2: {agent, msgs:[{role,text,state,ms}], sending, session, input}
+        helpTip: null,        // popover "?" aberto: 'fast' | 'audit' | 'seal' | null
+        sealInfo: null,       // {sealed, contract_version} do pipeline selecionado
 
         // Estúdio de Pipelines (PR1)
         pipelines: [], selectedPipeline: null, membership: {}, pipePanel: true,
@@ -2099,7 +2156,33 @@ function meshFlowPage() {
             this.selectedPipeline = p; this.selected = null;
             this.ctxMenu = null; this.clearIsolate();   // menu fixed e isolamento não sobrevivem à troca de lente
             this.pipeFilter = { domain: '', kind: '', q: '' };
+            this.helpTip = null;
+            this.loadSealInfo(p);
             this.$nextTick(() => this.fit());
+        },
+        // Selo do contrato (QA E2E): o inputs-schema devolve {sealed,
+        // contract_version} — a MESMA fonte que o Playground/integrações leem.
+        // Guard de seleção corrente: resposta atrasada de outro pipeline não
+        // pinta o selo do atual.
+        loadSealInfo(p) {
+            this.sealInfo = null;
+            if (!p || !p.id) return;
+            const pid = p.id;
+            api.get('/api/v1/pipelines/' + pid + '/inputs-schema')
+                .then(d => { if (this.selectedPipeline && this.selectedPipeline.id === pid) this.sealInfo = { sealed: !!d.sealed, contract_version: d.contract_version }; })
+                .catch(() => { if (this.selectedPipeline && this.selectedPipeline.id === pid) this.sealInfo = null; });
+        },
+        // Domínio do pipeline (QA E2E): o chip da lista (ex.: "e2e") não tinha
+        // onde ser informado na UI — só via API. Vazio LIMPA o domínio.
+        async setPipelineDomain(v) {
+            if (!this.selectedPipeline) return;
+            const domain = (v || '').trim();
+            try {
+                await api.put('/api/v1/pipelines/' + this.selectedPipeline.id, { domain: domain });
+                this.selectedPipeline.domain = domain;
+                await this.loadPipelines();
+                showToast(domain ? ('Domínio: ' + domain) : 'Domínio removido');
+            } catch (e) { showToast(e.message, 'error'); }
         },
         toggleSection(key) { this.sectionOpen[key] = !this.sectionOpen[key]; },
 
