@@ -43,7 +43,9 @@ class TestMenuDeRegencia:
     def test_acoes_reusam_funcoes_existentes(self):
         """Nada de segundo caminho de DELETE/entry: o menu delega ao que já existe."""
         i = SRC.index('data-testid="mesh-ctxmenu"')
-        menu = SRC[i: i + 4200]
+        # janela até o fim do bloco do menu (o docPanel vem depois) — fatia
+        # fixa quebrava toda vez que o menu ganhava um item novo (F2, F3…)
+        menu = SRC[i: SRC.index('data-testid="mesh-route-sim"', i)]
         assert "setEntry(ctxMenu.node.id)" in menu
         assert "editEdge(ctxMenu.edgeId)" in menu
         assert "deleteConn()" in menu
