@@ -1033,6 +1033,22 @@ async def create_gold_case(data: GoldCaseCreate):
     await gold_cases_repo.create({"id": gid, **payload})
     return {"id": gid, "message": "Caso adicionado ao Golden Dataset"}
 
+@router.put("/gold-cases/{case_id}")
+async def update_gold_case(case_id: str, data: GoldCaseCreate):
+    """Edição de caso do Golden Dataset (QA E2E: a UI só criava; corrigir um
+    typo exigia apagar e recriar). Substituição COMPLETA com o mesmo shape do
+    create — o caller é o form da UI, que sempre envia todos os campos.
+
+    Integridade histórica: editar um caso NÃO reescreve runs passados — cada
+    eval_run guarda o gold_hash do conjunto que avaliou, e comparações contra
+    um conjunto mutado são RECUSADAS pelo guard de hash em vez de mentir.
+    """
+    payload = data.model_dump()
+    payload["red_flags"] = json.dumps(payload.get("red_flags") or [])
+    if not await gold_cases_repo.update(case_id, payload):
+        raise HTTPException(404, "Caso não encontrado")
+    return {"message": "Caso atualizado"}
+
 @router.delete("/gold-cases/{case_id}")
 async def delete_gold_case(case_id: str):
     if not await gold_cases_repo.delete(case_id): raise HTTPException(404)
