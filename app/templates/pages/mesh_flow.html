@@ -53,6 +53,13 @@
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M3.75 3.75h16.5v16.5H3.75zM3.75 9h16.5M3.75 15h16.5M9 3.75v16.5M15 3.75v16.5"/></svg>
                 Grade
             </button>
+            <!-- 🔦 indicador do modo isolado: sem ele, o usuário acha que "sumiu tudo" -->
+            <button x-show="dimSet" x-transition.opacity @click="clearIsolate()"
+                    data-testid="mesh-isolate-pill"
+                    class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[12px] text-amber-700 hover:bg-amber-100 cursor-pointer"
+                    title="A vizinhança de um agente está isolada — clique para mostrar tudo">
+                🔦 Vizinhança isolada · <span class="font-semibold">Mostrar tudo</span>
+            </button>
             <button @click="fit()" class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 px-2.5 py-1.5 text-[12px] text-surface-600 hover:bg-surface-50" title="Ajustar à tela">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3.75 8.25V6a2.25 2.25 0 012.25-2.25h2.25M15.75 3.75H18A2.25 2.25 0 0120.25 6v2.25M20.25 15.75V18A2.25 2.25 0 0118 20.25h-2.25M8.25 20.25H6A2.25 2.25 0 013.75 18v-2.25"/></svg>
                 Ajustar
@@ -312,7 +319,7 @@
                 <!-- arestas + linha de arraste via x-html: innerHTML num <g> SVG é
                      parseado no namespace SVG (o <template> do Alpine cria no
                      namespace HTML → <path> não renderiza dentro do <svg>). -->
-                <g @click="onEdgeClick($event)" x-html="edgesSvg"></g>
+                <g @click="onEdgeClick($event)" @contextmenu.prevent="onEdgeContext($event)" x-html="edgesSvg"></g>
             </svg>
 
             <!-- nodes (lente: viewNodes filtra por pipeline selecionado) -->
@@ -438,7 +445,7 @@
                                 <div class="text-[11px] text-surface-400" x-text="selected.roleLabel + ' · ' + selected.code"></div>
                             </div>
                         </div>
-                        <button @click="selected=null" class="flex-none text-surface-400 hover:text-surface-600 p-1" aria-label="Fechar">
+                        <button @click="selected=null" class="flex-none text-surface-400 hover:text-surface-600 p-1 cursor-pointer" aria-label="Fechar">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
                         </button>
                     </div>
@@ -480,13 +487,78 @@
                         </a>
                     </div>
 
-                    <!-- PR-B1: preview do prompt do sistema (portado da Topologia) -->
-                    <template x-if="agentDetail && agentDetail.system_prompt">
-                        <div class="mt-4 pt-3 border-t border-surface-100">
-                            <div class="text-[11px] font-semibold text-surface-500 mb-1.5">Prompt do sistema</div>
-                            <p class="text-[11px] text-surface-600 leading-relaxed whitespace-pre-wrap max-h-28 overflow-y-auto scrollbar-thin bg-surface-50 rounded-lg px-2.5 py-2" x-text="agentDetail.system_prompt"></p>
+                    <!-- ── Dossiê do Agente (Fase 1, QA E2E): Skill + Prompt + Execuções
+                         em seções colapsáveis; Skill/Prompt expandem no leitor largo. ── -->
+                    <div class="mt-4 pt-3 border-t border-surface-100" data-testid="mesh-dossier">
+                        <!-- Skill -->
+                        <button @click="dossier.skill = !dossier.skill" class="w-full flex items-center justify-between cursor-pointer group py-1">
+                            <span class="text-[11px] font-semibold text-surface-500 group-hover:text-brand-700">Skill</span>
+                            <svg class="w-3 h-3 text-surface-300 transition-transform" :class="dossier.skill ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        </button>
+                        <div x-show="dossier.skill">
+                            <template x-if="skillDetail && skillDetail.loading"><div class="text-[11px] text-surface-400 py-1">Carregando skill…</div></template>
+                            <template x-if="skillDetail && !skillDetail.loading">
+                                <div class="py-1">
+                                    <button @click="openDoc('SKILL.md · ' + (skillDetail.name || ''), skillDetail.raw_content || '', true)"
+                                            data-testid="dossier-open-skill"
+                                            class="w-full text-left rounded-lg bg-surface-50 hover:bg-brand-50 border border-transparent hover:border-brand-200 px-2.5 py-2 cursor-pointer transition-colors group">
+                                        <div class="flex items-center gap-1.5 mb-0.5">
+                                            <span class="text-[12px] font-semibold text-brand-900 truncate" x-text="skillDetail.name"></span>
+                                            <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] text-surface-500" x-text="skillDetail.kind"></span>
+                                            <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] text-surface-500" x-text="skillDetail.stability || ''"></span>
+                                        </div>
+                                        <div class="text-[10px] text-surface-400 group-hover:text-brand-600">clique para ler o SKILL.md completo →</div>
+                                    </button>
+                                </div>
+                            </template>
+                            <template x-if="agentDetail && !agentDetail.loading && !agentDetail.skill_id">
+                                <div class="text-[11px] text-surface-400 py-1">Sem skill vinculada.</div>
+                            </template>
                         </div>
-                    </template>
+
+                        <!-- Prompt do sistema -->
+                        <template x-if="agentDetail && agentDetail.system_prompt">
+                            <div>
+                                <button @click="dossier.prompt = !dossier.prompt" class="w-full flex items-center justify-between cursor-pointer group py-1 mt-1.5">
+                                    <span class="text-[11px] font-semibold text-surface-500 group-hover:text-brand-700">Prompt do sistema</span>
+                                    <svg class="w-3 h-3 text-surface-300 transition-transform" :class="dossier.prompt ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                                </button>
+                                <div x-show="dossier.prompt">
+                                    <button @click="openDoc('Prompt · ' + (selected ? selected.name : ''), agentDetail.system_prompt, false)"
+                                            data-testid="dossier-open-prompt"
+                                            class="w-full text-left cursor-pointer group">
+                                        <p class="text-[11px] text-surface-600 leading-relaxed whitespace-pre-wrap max-h-28 overflow-hidden bg-surface-50 group-hover:bg-brand-50 rounded-lg px-2.5 py-2 transition-colors" x-text="agentDetail.system_prompt"></p>
+                                        <div class="text-[10px] text-surface-400 group-hover:text-brand-600 mt-0.5">clique para expandir →</div>
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- Execuções recentes (lazy) -->
+                        <button @click="dossier.runs = !dossier.runs; if (dossier.runs && selected) loadInvocations(selected.id)"
+                                class="w-full flex items-center justify-between cursor-pointer group py-1 mt-1.5">
+                            <span class="text-[11px] font-semibold text-surface-500 group-hover:text-brand-700">Execuções recentes</span>
+                            <svg class="w-3 h-3 text-surface-300 transition-transform" :class="dossier.runs ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                        </button>
+                        <div x-show="dossier.runs">
+                            <template x-if="invocations && invocations.loading"><div class="text-[11px] text-surface-400 py-1">Carregando…</div></template>
+                            <template x-if="invocations && !invocations.loading">
+                                <div class="py-1 space-y-1">
+                                    <template x-for="iv in (invocations.items || [])" :key="iv.id">
+                                        <div class="flex items-center gap-2 text-[10.5px] rounded-md bg-surface-50 px-2 py-1.5">
+                                            <span class="rounded-full px-1.5 py-0.5 text-[9px] font-semibold shrink-0"
+                                                  :class="iv.state === 'Recommend' ? 'bg-emerald-50 text-emerald-700' : iv.state === 'Refuse' ? 'bg-rose-50 text-rose-700' : 'bg-surface-100 text-surface-500'"
+                                                  x-text="iv.state || '—'"></span>
+                                            <span class="flex-1 min-w-0 truncate text-surface-600" x-text="iv.title || iv.id"></span>
+                                            <span class="text-surface-300 shrink-0 font-mono" x-text="iv.created_at ? tzTime(iv.created_at) : ''"></span>
+                                        </div>
+                                    </template>
+                                    <div x-show="!(invocations.items || []).length" class="text-[11px] text-surface-400">Nenhuma execução deste agente ainda.</div>
+                                    <div x-show="(invocations.total || 0) > (invocations.items || []).length" class="text-[10px] text-surface-400" x-text="'mostrando ' + (invocations.items || []).length + ' de ' + invocations.total"></div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
 
                     <!-- FSM canônica (abrir nó → trilha de execução) -->
                     <div class="mt-4 pt-3 border-t border-surface-100">
@@ -1215,6 +1287,88 @@
         </template>
     </div>
 
+    <!-- ── Menu de Regência (Fase 1, QA E2E): botão direito em nós e arestas.
+         fixed + clientX/Y (independe do pan/zoom); fecha com click-fora, Esc,
+         pointerdown no canvas e troca de lente. ── -->
+    <div x-show="ctxMenu" @click.away="ctxMenu=null" @keydown.escape.window="ctxMenu=null"
+         x-transition.opacity style="display:none" data-testid="mesh-ctxmenu"
+         :style="ctxMenu ? ('position:fixed; left:' + Math.min(ctxMenu.x, window.innerWidth-270) + 'px; top:' + Math.min(ctxMenu.y, window.innerHeight-320) + 'px') : ''"
+         class="z-50 w-64 rounded-xl bg-white border border-surface-200 shadow-xl py-1.5 text-[12px]">
+        <!-- ═ Nó (agente) ═ -->
+        <template x-if="ctxMenu && ctxMenu.kind === 'node'">
+            <div>
+                <div class="px-3 pb-1 pt-0.5 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full flex-none" :style="'background:' + (ctxMenu.node.color || '#94a3b8')"></span>
+                    <span class="text-[10px] font-semibold uppercase tracking-wide text-surface-400 truncate" x-text="(ctxMenu.node.roleLabel || 'Agente') + ' · ' + ctxMenu.node.name"></span>
+                </div>
+                <button x-show="selectedPipeline" @click="setEntry(ctxMenu.node.id); ctxMenu=null"
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900">
+                    <span class="w-4 text-center">🎯</span> Definir como Início
+                </button>
+                <button @click="selectNode(ctxMenu.node); dossier.skill = true; ctxMenu=null"
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900">
+                    <span class="w-4 text-center">🧬</span> Abrir Skill no dossiê
+                </button>
+                <button @click="selectNode(ctxMenu.node); dossier.runs = true; loadInvocations(ctxMenu.node.id); ctxMenu=null"
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900">
+                    <span class="w-4 text-center">📜</span> Ver execuções recentes
+                </button>
+                <button @click="toggleIsolate(ctxMenu.node.id)"
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900">
+                    <span class="w-4 text-center">🔦</span>
+                    <span x-text="dimRootId === ctxMenu.node.id ? 'Mostrar tudo' : 'Isolar vizinhança'"></span>
+                </button>
+                <div class="border-t border-surface-100 my-1"></div>
+                <button @click="location.href = '/agents/' + ctxMenu.node.id + '/edit'"
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-surface-600">
+                    <span class="w-4 text-center">✏️</span> Editar agente
+                </button>
+            </div>
+        </template>
+        <!-- ═ Aresta (conexão) ═ -->
+        <template x-if="ctxMenu && ctxMenu.kind === 'edge'">
+            <div>
+                <div class="px-3 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-surface-400"
+                     x-text="'Conexão · ' + ((ctxEdge() || {}).type || '')"></div>
+                <button @click="editEdge(ctxMenu.edgeId); ctxMenu=null"
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900">
+                    <span class="w-4 text-center">✏️</span> Editar regra
+                </button>
+                <button @click="editEdge(ctxMenu.edgeId); ctxMenu=null; deleteConn()"
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-rose-50 cursor-pointer text-rose-600">
+                    <span class="w-4 text-center">🗑</span> Excluir conexão
+                </button>
+            </div>
+        </template>
+    </div>
+
+    <!-- ── Leitor expandido (Fase 1): SKILL.md / Prompt em tela cheia legível.
+         z-[60] acima dos menus (z-50); markdown SÓ via _md (DOMPurify). ── -->
+    <div x-show="docPanel" x-transition.opacity style="display:none" data-testid="mesh-doc-panel"
+         @keydown.escape.window="docPanel=null"
+         class="fixed inset-0 z-[60] bg-black/30 flex items-center justify-center p-4"
+         @click.self="docPanel=null">
+        <div class="bg-white rounded-2xl shadow-2xl w-[90vw] max-w-3xl max-h-[85vh] flex flex-col">
+            <div class="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-surface-100 shrink-0">
+                <h3 class="text-[13px] font-bold text-brand-900 truncate" x-text="docPanel && docPanel.title"></h3>
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <button @click="copyDoc()" class="rounded-lg border border-surface-200 px-2.5 py-1 text-[11px] text-surface-600 hover:bg-surface-50 cursor-pointer">Copiar</button>
+                    <button @click="docPanel=null" class="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 cursor-pointer" aria-label="Fechar">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="flex-1 overflow-y-auto scrollbar-thin px-5 py-4">
+                <template x-if="docPanel && docPanel.md">
+                    <div class="prose prose-sm max-w-none text-[13px] leading-relaxed [&_h1]:text-[16px] [&_h2]:text-[14px] [&_h2]:mt-4 [&_code]:text-[11.5px] [&_pre]:bg-surface-50 [&_pre]:rounded-lg [&_pre]:p-3" x-html="_md(docPanel.content)"></div>
+                </template>
+                <template x-if="docPanel && !docPanel.md">
+                    <pre class="whitespace-pre-wrap text-[12px] text-surface-700 leading-relaxed font-mono" x-text="docPanel.content"></pre>
+                </template>
+            </div>
+        </div>
+    </div>
+
     <!-- (#2) Modal: cURL do invoke do pipeline — estação de auth reusável -->
     {% include 'partials/curl_auth_modal.html' %}
 </div>
@@ -1270,6 +1424,14 @@ function meshFlowPage() {
         srcDecisions: {},   // Contrato de Decisão (Cond-C, 35.19.0): {campo: [valores]} declarado pelo agente de ORIGEM da aresta em edição
         nlSuggest: null, nlLoading: false,   // Tradutor NL→Jinja (Fatia 4)
         _drag: null, _pan: null, _saveTimer: null, _suppressClick: false,
+        // ── Fase 1 (QA E2E): Menu de Regência + Dossiê do Agente ──
+        ctxMenu: null,        // {kind:'node'|'edge', x, y, node?, edgeId?} — botão direito
+        dimSet: null,         // Set<id> da vizinhança isolada (null = desligado)
+        dimRootId: null,      // nó âncora do isolamento (repete = desliga)
+        skillDetail: null,    // GET /skills/{id} do agente selecionado (dossiê)
+        invocations: null,    // execuções recentes do agente (lazy no 1º expand)
+        docPanel: null,       // {title, content, md} — leitor expandido de Skill/Prompt
+        dossier: { skill: true, prompt: true, runs: false },   // seções colapsáveis
 
         // Estúdio de Pipelines (PR1)
         pipelines: [], selectedPipeline: null, membership: {}, pipePanel: true,
@@ -1417,6 +1579,9 @@ function meshFlowPage() {
                     const skipped = ts && String(ts.status || '').startsWith('skipped');
                     op = fired ? 1 : (skipped ? 0.22 : 0.1);
                 }
+                // 🔦 Isolar vizinhança: aresta só acesa se AMBAS as pontas estão
+                // no Set (labels somem de graça — o render exige op > 0.5).
+                if (this.dimSet && !(this.dimSet.has(e.source) && this.dimSet.has(e.target))) op = Math.min(op, 0.12);
                 out.push({
                     id: e.id,
                     d: `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`,
@@ -1474,6 +1639,9 @@ function meshFlowPage() {
             this.selected = n.synthetic ? null : n;
             this.fsm = null;
             this.agentDetail = null;
+            this.skillDetail = null;    // dossiê zera junto — nada de skill do nó anterior
+            this.invocations = null; this._invFor = null;
+            this.docPanel = null;
             if (this.selected) { this.loadFsm(this.selected.id); this.loadAgentDetail(this.selected.id); }
         },
         loadFsm(agentId) {
@@ -1487,7 +1655,12 @@ function meshFlowPage() {
         loadAgentDetail(agentId) {
             this.agentDetail = { loading: true };
             api.get('/api/v1/agents/' + agentId)
-                .then(d => { if (this.selected && this.selected.id === agentId) this.agentDetail = d; })
+                .then(d => {
+                    if (!this.selected || this.selected.id !== agentId) return;
+                    this.agentDetail = d;
+                    // Dossiê (Fase 1): a skill vem em cascata do detalhe do agente.
+                    if (d.skill_id) this.loadSkillDetail(d.skill_id); else this.skillDetail = null;
+                })
                 .catch(() => { if (this.selected && this.selected.id === agentId) this.agentDetail = null; });
         },
         // PR-B1 — aviso fan-out × cadeia (portado da Topologia): raiz com ≥2 saídas
@@ -1617,11 +1790,34 @@ function meshFlowPage() {
         liveIcon(status) { return status === 'done' ? '✓' : status === 'skipped' ? '⏭' : status === 'passthrough' ? '⚡' : status === 'error' ? '✗' : '•'; },
         // ── menu de contexto do Início (botão direito) ──
         onNodeContext(ev, n) {
-            // só o "Início" da lente tem menu; agentes mantêm o menu padrão do browser
             if (n.id === '__lens_start__' && this.selectedPipeline) {
                 ev.preventDefault();
+                this.ctxMenu = null;
                 this.startMenu = { x: ev.clientX, y: ev.clientY };
+                return;
             }
+            // Fase 1 (QA E2E): agentes ganham o Menu de Regência no lugar do menu
+            // nativo do browser. clientX/Y + position:fixed independem do
+            // pan/zoom do canvas (mesmo padrão provado do startMenu).
+            if (!n.synthetic) {
+                ev.preventDefault();
+                this.closeStartMenu();
+                this.ctxMenu = { kind: 'node', x: ev.clientX, y: ev.clientY, node: n };
+            }
+        },
+        // Botão direito na ARESTA: o path transparente "gordo" (hitbox do clique
+        // esquerdo) carrega data-eid — arestas sintéticas `start` não têm hitbox,
+        // então nunca ganham menu (correto: não são editáveis).
+        onEdgeContext(ev) {
+            const eid = ev.target && ev.target.getAttribute ? ev.target.getAttribute('data-eid') : null;
+            if (!eid) return;
+            ev.preventDefault();
+            this.closeStartMenu();
+            this.ctxMenu = { kind: 'edge', x: ev.clientX, y: ev.clientY, edgeId: eid };
+        },
+        ctxEdge() {
+            if (!this.ctxMenu || this.ctxMenu.kind !== 'edge') return null;
+            return this.edges.find(e => e.id === this.ctxMenu.edgeId) || null;
         },
         closeStartMenu() { this.startMenu = null; },
         hasIncomingInLens(id) {
@@ -1676,6 +1872,8 @@ function meshFlowPage() {
             return 'neutral';
         },
         nodeOpacity(n) {
+            // 🔦 Isolar vizinhança (Fase 1): fora do Set âncora+vizinhos → quase some.
+            if (this.dimSet && !n.synthetic && !this.dimSet.has(n.id)) return 0.15;
             if (!n.synthetic && this.isOutOfChain(n.id)) return 0.45;   // (a) fora da cadeia → apagado
             if (!this.replayOn || n.synthetic) return 1;
             const st = this.replayState(n);
@@ -1803,9 +2001,10 @@ function meshFlowPage() {
         },
         isOutOfChain(id) { return !!this.selectedPipeline && this.unreachableInLens.has(id); },
 
-        selectMesh() { this.selectedPipeline = null; this.selected = null; this.$nextTick(() => this.fit()); },
+        selectMesh() { this.selectedPipeline = null; this.selected = null; this.ctxMenu = null; this.clearIsolate(); this.$nextTick(() => this.fit()); },
         selectPipeline(p) {
             this.selectedPipeline = p; this.selected = null;
+            this.ctxMenu = null; this.clearIsolate();   // menu fixed e isolamento não sobrevivem à troca de lente
             this.pipeFilter = { domain: '', kind: '', q: '' };
             this.$nextTick(() => this.fit());
         },
@@ -2543,8 +2742,10 @@ function meshFlowPage() {
         },
 
         // ── drag de nó ──
-        onNodeDown(ev, n) { if (n.id === '__lens_start__') return; this._suppressClick = false; this._drag = { n, sx: ev.clientX, sy: ev.clientY, ox: n.x, oy: n.y, moved: false }; },
-        onCanvasDown(ev) { if (this._drag || this.linking) return; this._pan = { sx: ev.clientX, sy: ev.clientY, ox: this.panX, oy: this.panY, moved: false }; },
+        // ev.button !== 0: sem o guard, o BOTÃO DIREITO (que abre o Menu de
+        // Regência) também iniciava um drag fantasma — o nó grudava no mouse.
+        onNodeDown(ev, n) { if (ev.button !== 0) return; if (n.id === '__lens_start__') return; this._suppressClick = false; this._drag = { n, sx: ev.clientX, sy: ev.clientY, ox: n.x, oy: n.y, moved: false }; },
+        onCanvasDown(ev) { this.ctxMenu = null; if (this._drag || this.linking) return; this._pan = { sx: ev.clientX, sy: ev.clientY, ox: this.panX, oy: this.panY, moved: false }; },
         onMove(ev) {
             if (this._drag) {
                 const dx = (ev.clientX - this._drag.sx) / this.scale, dy = (ev.clientY - this._drag.sy) / this.scale;
@@ -2604,6 +2805,69 @@ function meshFlowPage() {
             this.panX = r.width / 2 - ((minX + maxX) / 2) * s;
             this.panY = r.height / 2 - ((minY + maxY) / 2) * s;
         },
+
+        // ═══ Fase 1 (QA E2E): Dossiê do Agente + Menu de Regência ═══
+        // Guard de seleção corrente em todo load: o usuário pode clicar noutro
+        // nó antes do await voltar — resposta atrasada não pode sobrescrever.
+        loadSkillDetail(skillId) {
+            const forAgent = this.selected ? this.selected.id : null;
+            this.skillDetail = { loading: true };
+            api.get('/api/v1/skills/' + skillId)
+                .then(d => { if (this.selected && this.selected.id === forAgent) this.skillDetail = d; })
+                .catch(() => { if (this.selected && this.selected.id === forAgent) this.skillDetail = null; });
+        },
+        loadInvocations(agentId) {
+            if (this.invocations && !this.invocations.loading && this._invFor === agentId) return;   // cache por agente
+            this._invFor = agentId;
+            this.invocations = { loading: true };
+            api.get('/api/v1/agents/' + agentId + '/invocations?limit=10')
+                .then(d => { if (this.selected && this.selected.id === agentId) this.invocations = { items: d.invocations || [], total: d.total || 0 }; })
+                .catch(() => { if (this.selected && this.selected.id === agentId) this.invocations = { items: [], total: 0 }; });
+        },
+        openDoc(title, content, md) { this.docPanel = { title: title, content: content || '', md: !!md }; },
+        copyDoc() {
+            if (!this.docPanel) return;
+            navigator.clipboard.writeText(this.docPanel.content)
+                .then(() => showToast('Copiado para a área de transferência'))
+                .catch(() => showToast('Não foi possível copiar', 'error'));
+        },
+        // Markdown sanitizado (mesmo padrão do renderMarkdown do appShell, que é
+        // de OUTRO escopo Alpine — daí a cópia local). raw_content é conteúdo de
+        // usuário: x-html SÓ passa por aqui (DOMPurify), nunca cru.
+        _md(text) {
+            if (!text) return '';
+            if (typeof window.marked === 'undefined' || typeof window.DOMPurify === 'undefined') {
+                const esc = String(text).replace(/[&<>"']/g, ch => ({
+                    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+                }[ch]));
+                return esc.replace(/\n/g, '<br>');
+            }
+            try {
+                const html = window.marked.parse(String(text), { breaks: true, gfm: true });
+                return window.DOMPurify.sanitize(html, {
+                    ALLOWED_TAGS: ['p','br','hr','strong','em','code','pre','ul','ol','li',
+                                   'h1','h2','h3','h4','blockquote','a','table','thead',
+                                   'tbody','tr','th','td','del','ins'],
+                    ALLOWED_ATTR: ['href','title','target','rel'],
+                    ADD_ATTR: ['target'],
+                });
+            } catch (e) { return String(text).replace(/\n/g, '<br>'); }
+        },
+        // 🔦 Isolar vizinhança: dim em tudo que não toca o nó âncora. viewEdges
+        // (não edges) para respeitar a lente do pipeline selecionado.
+        toggleIsolate(id) {
+            this.ctxMenu = null;
+            if (this.dimRootId === id) { this.dimSet = null; this.dimRootId = null; return; }
+            const s = new Set([id]);
+            for (const e of this.viewEdges) {
+                if (e.type === 'start') continue;
+                if (e.source === id) s.add(e.target);
+                if (e.target === id) s.add(e.source);
+            }
+            this.dimSet = s;
+            this.dimRootId = id;
+        },
+        clearIsolate() { this.dimSet = null; this.dimRootId = null; },
     };
 }
 </script>
