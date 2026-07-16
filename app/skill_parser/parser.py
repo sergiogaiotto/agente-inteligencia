@@ -25,6 +25,25 @@ VALID_KINDS = {"orchestrator", "router", "subagent"}
 VALID_STABILITY = {"alpha", "beta", "stable", "deprecated"}
 VALID_EXEC_MODES = {"fast", "standard", "rigorous", "declarative"}
 
+# Marcadores do SCAFFOLD não-editado. A UI (skill_form.html `_newSkillScaffold`)
+# pré-preenche o editor de nova skill com um modelo que JÁ traz todas as seções
+# obrigatórias — de propósito, pra não obrigar o usuário a descobrir as faltantes
+# só ao validar. Efeito colateral: clicar em "Validar" no modelo INTOCADO passava
+# "Markdown limpo" (falso positivo — é só texto-guia, não uma skill real). Estes
+# são valores/frases que NENHUMA skill de verdade tem; detectá-los transforma o
+# verde enganoso num erro claro "ainda é o modelo".
+_SCAFFOLD_PLACEHOLDER_ID = "urn:skill:dominio:tipo:slug"
+_SCAFFOLD_PLACEHOLDER_NAME = "Nome da Skill"
+_SCAFFOLD_GUIDE_PHRASES = (
+    "Em 1-2 frases: o que esta skill faz",
+    "Quando acionar esta skill (gatilhos",
+    "entrada: descreva cada input esperado",
+    "Passo a passo do que a skill executa",
+    'Ferramentas/APIs/MCP que a skill usa (ou "nenhuma")',
+    "Formato e conteúdo da resposta esperada",
+    "O que fazer sem dado, em erro, ou fora do escopo",
+)
+
 
 @dataclass
 class SkillFrontmatter:
@@ -223,6 +242,20 @@ def parse_skill_md(content: str) -> ParsedSkill:
         result.validation_errors.append(
             "execution_mode=declarative exige ## API Bindings OU ## Data Tables "
             "com pelo menos 1 entrada válida"
+        )
+
+    # ── Scaffold intocado: o modelo pré-preenchido pela UI passa na validação
+    # estrutural (tem todas as seções), mas é só texto-guia. Flagra o modelo
+    # não-editado como erro pra o preview não dizer "Markdown limpo" e o create
+    # não gravar um placeholder. Dispara se a id/nome placeholder sobrou OU se
+    # >=2 frases-guia continuam no corpo (edição parcial ainda não-publicável). ──
+    _guide_hits = sum(1 for p in _SCAFFOLD_GUIDE_PHRASES if p in cleaned)
+    if (result.frontmatter.id == _SCAFFOLD_PLACEHOLDER_ID
+            or result.name == _SCAFFOLD_PLACEHOLDER_NAME
+            or _guide_hits >= 2):
+        result.validation_errors.append(
+            "Conteúdo ainda é o MODELO padrão — substitua a id/nome placeholder e "
+            "os textos-guia de cada seção por conteúdo real antes de criar a skill."
         )
 
     result.is_valid = len(result.validation_errors) == 0
