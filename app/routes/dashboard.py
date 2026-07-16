@@ -620,6 +620,8 @@ async def list_verifications(
     agent_id: Optional[str] = None,
     pipeline_id: Optional[str] = None,
     with_claims_only: bool = False,
+    # QA E2E ("quem é o usuário?"): filtrar pelas interações de um usuário.
+    owner_user_id: Optional[str] = None,
 ):
     """Lista paginada de verificações com filtros.
 
@@ -661,6 +663,13 @@ async def list_verifications(
         where.append(f"pipeline_id = ${len(args)}")
     if with_claims_only:
         where.append("unsupported_claims != '[]' AND unsupported_claims IS NOT NULL")
+    if owner_user_id:
+        # QA E2E ("quem é o usuário?"): verifications não tem coluna de ator —
+        # o dono vem da interação (subquery; volume atual dispensa índice).
+        args.append(owner_user_id)
+        where.append(
+            f"interaction_id IN (SELECT id FROM interactions WHERE owner_user_id = ${len(args)})"
+        )
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
 
     pool = _get_pool()
@@ -720,6 +729,28 @@ async def list_verifications(
         for d in items:
             d["agent_name"] = names_a.get(d.get("agent_id"))
             d["pipeline_name"] = names_p.get(d.get("pipeline_id"))
+
+        # ── Dono da interação julgada (QA E2E: "quem é o usuário?") ──
+        # verifications não tem coluna de ator; o dono vem por JOIN
+        # interaction_id → interactions.owner_user_id (a chave LGPD desta
+        # tabela é interaction_id; turn_id é NULL no runtime). Best-effort:
+        # decoração nunca derruba a página.
+        owner_by_inter: dict = {}
+        try:
+            i_ids = list({d["interaction_id"] for d in items if d.get("interaction_id")})
+            if i_ids:
+                rows_i = await con.fetch(
+                    "SELECT id, owner_user_id FROM interactions WHERE id = ANY($1::text[])",
+                    i_ids,
+                )
+                owner_by_inter = {r["id"]: r["owner_user_id"] for r in rows_i}
+        except Exception:
+            pass
+        names_u = await _resolve_user_names(list(owner_by_inter.values()))
+        for d in items:
+            oid = owner_by_inter.get(d.get("interaction_id"))
+            d["owner_user_id"] = oid
+            d["owner_name"] = names_u.get(oid)
         return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
@@ -864,6 +895,7 @@ async def export_verifications(
     profile: Optional[str] = None,
     interaction_id: Optional[str] = None,
     with_claims_only: bool = False,
+    owner_user_id: Optional[str] = None,
     user: dict = Depends(require_user),
 ):
     """Export da auditoria (25.0.0) p/ compliance — CSV ou JSONL, até 5000
@@ -899,6 +931,13 @@ async def export_verifications(
         where.append(f"interaction_id = ${len(args)}")
     if with_claims_only:
         where.append("unsupported_claims != '[]' AND unsupported_claims IS NOT NULL")
+    if owner_user_id:
+        # QA E2E ("quem é o usuário?"): verifications não tem coluna de ator —
+        # o dono vem da interação (subquery; volume atual dispensa índice).
+        args.append(owner_user_id)
+        where.append(
+            f"interaction_id IN (SELECT id FROM interactions WHERE owner_user_id = ${len(args)})"
+        )
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
     cols = [
         "id", "created_at", "interaction_id", "agent_id", "pipeline_id",
@@ -2480,6 +2519,29 @@ Se não conhecer, retorne: []"""
         return {"results": [], "error": str(e)[:200]}
 
 # ═══ History ═══
+async def _resolve_user_names(user_ids: list) -> dict:
+    """UUID → nome exibível (display_name || username), em 1 query batch.
+
+    QA E2E ("quem é o usuário?"): a resolução é SERVER-SIDE de propósito —
+    /api/v1/users é root/admin-only, então o front de um usuário comum não
+    consegue montar o mapa. Best-effort: nomes são decoração; a tela funciona
+    sem eles (id não resolvido → o front mostra o UUID truncado + "removido").
+    """
+    ids = [str(u) for u in {u for u in user_ids if u}]
+    if not ids:
+        return {}
+    try:
+        from app.core.database import _get_pool
+        async with _get_pool().acquire() as con:
+            rows = await con.fetch(
+                "SELECT id, username, display_name FROM users WHERE id = ANY($1::text[])",
+                ids,
+            )
+        return {r["id"]: (r["display_name"] or r["username"]) for r in rows}
+    except Exception:
+        return {}   # decoração nunca derruba a página
+
+
 @router.get("/history")
 async def get_history(entity_type: str = None, search: str = None, limit: int = 50, offset: int = 0):
     results = {}
@@ -2491,6 +2553,28 @@ async def get_history(entity_type: str = None, search: str = None, limit: int = 
         results["envelopes"] = await envelopes_repo.find_all(limit=limit, offset=offset)
     if not entity_type or entity_type == "audit":
         results["audit_log"] = await audit_repo.find_all(limit=limit, offset=offset) if not search else await audit_repo.search(search, ["action","details","entity_type"])
+
+    # ── Atribuição de usuário (QA E2E: "quem é o usuário?") ──
+    # Enriquecimento pós-fetch, best-effort e off-path: owner_name nas
+    # interações (+ badge "via chave" quando a origem foi X-API-Key) e
+    # actor_name na auditoria. Observabilidade e Histórico consomem ESTE
+    # endpoint — um enriquecimento serve as duas telas.
+    inters = results.get("interactions") or []
+    audits = results.get("audit_log") or []
+    names = await _resolve_user_names(
+        [i.get("owner_user_id") for i in inters] + [a.get("actor") for a in audits]
+    )
+    for i in inters:
+        i["owner_name"] = names.get(i.get("owner_user_id"))
+        # canal honesto: chamada via chave NÃO é clique humano — o dono da
+        # chave aparece, mas com o badge "via chave: <nome>" ao lado.
+        try:
+            meta = json.loads(i.get("metadata") or "{}")
+            i["via_api_key_name"] = meta.get("api_key_name") or None
+        except Exception:
+            i["via_api_key_name"] = None
+    for a in audits:
+        a["actor_name"] = names.get(a.get("actor"))
     return results
 
 # ═══ Drift Events §18.2 ═══

@@ -50,9 +50,16 @@
                     </div>
                     <div x-show="expandedId === e.id" x-transition.duration.150ms class="border-t border-surface-100 bg-surface-50/50 px-4 py-3">
                         <div class="ml-9 space-y-3">
-                            <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 text-[10px]">
+                            <div class="grid grid-cols-2 lg:grid-cols-5 gap-2 text-[10px]">
                                 <div><span class="text-surface-400 block">ID</span><span class="font-mono text-brand-900" x-text="e.id?.substring(0,16)+'…'"></span></div>
                                 <div><span class="text-surface-400 block">Agente</span><span class="text-brand-900" x-text="e.agent_id?.substring(0,12)+'…'"></span></div>
+                                <!-- Dono (QA E2E): nome resolvido no servidor; NULL = "—";
+                                     via chave = badge (máquina, não clique humano). -->
+                                <div data-testid="hist-owner">
+                                    <span class="text-surface-400 block">Dono</span>
+                                    <span class="text-brand-900" :title="e.owner_user_id || 'interação anterior ao rastreio de dono'"
+                                          x-text="(e.owner_name || (e.owner_user_id ? e.owner_user_id.substring(0,8)+'… (removido)' : '—')) + (e.via_api_key_name ? (' · via chave: ' + e.via_api_key_name) : '')"></span>
+                                </div>
                                 <div><span class="text-surface-400 block">Canal</span><span class="text-brand-900" x-text="e.channel || '—'"></span></div>
                                 <div><span class="text-surface-400 block">Jornada</span><span class="text-brand-900" x-text="e.journey_id || '—'"></span></div>
                             </div>
@@ -137,6 +144,11 @@
                                 <span x-text="a.entity_type + ' / ' + (a.entity_id?.substring(0,8) || '')"></span>
                             </div>
                         </div>
+                        <!-- Ator NA LINHA (QA E2E): quem fez, sem precisar expandir. -->
+                        <span x-show="a.actor_name || a.actor" data-testid="audit-actor-chip"
+                              class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] text-surface-500 shrink-0 max-w-[140px] truncate"
+                              :title="a.actor || ''"
+                              x-text="'👤 ' + (a.actor_name || (a.actor ? a.actor.substring(0,8)+'…' : ''))"></span>
                         <span class="text-[10px] text-surface-400 shrink-0" x-text="tzDateTime(a.created_at)"></span>
                         <svg class="w-3.5 h-3.5 text-surface-300 transition-transform shrink-0" :class="expandedId === a.id ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
                     </div>
@@ -146,7 +158,8 @@
                                 <div><span class="text-surface-400 block">Ação</span><span class="font-semibold text-brand-900" x-text="a.action"></span></div>
                                 <div><span class="text-surface-400 block">Entidade</span><span class="text-brand-900" x-text="a.entity_type"></span></div>
                                 <div><span class="text-surface-400 block">ID</span><span class="font-mono text-brand-900" x-text="a.entity_id"></span></div>
-                                <div><span class="text-surface-400 block">Ator</span><span class="text-brand-900" x-text="a.actor || '—'"></span></div>
+                                <!-- Nome resolvido no servidor; UUID completo no title -->
+                                <div><span class="text-surface-400 block">Ator</span><span class="text-brand-900" :title="a.actor || ''" x-text="a.actor_name || a.actor || '—'"></span></div>
                             </div>
                             <div>
                                 <div class="text-[9px] text-surface-400 mb-0.5">Detalhes</div>

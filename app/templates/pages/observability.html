@@ -114,6 +114,14 @@
                                       x-text="e.state"></span>
                             </div>
                         </div>
+                        <!-- Dono (QA E2E: "quem é o usuário?"): nome resolvido no
+                             servidor; via chave = tráfego de máquina, com badge. -->
+                        <span x-show="e.owner_name || e.owner_user_id" data-testid="obs-owner"
+                              class="inline-flex items-center gap-1 rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] text-surface-500 shrink-0 max-w-[150px]"
+                              :title="e.via_api_key_name ? ('Dono da chave — chamada via X-API-Key: ' + e.via_api_key_name) : 'Usuário que iniciou a interação'">
+                            <span x-text="'👤 ' + ownerLabel(e)" class="truncate"></span>
+                            <span x-show="e.via_api_key_name" class="rounded bg-sky-50 px-1 text-[8px] text-sky-600 shrink-0">via chave</span>
+                        </span>
                         <span class="text-[10px] text-surface-400 truncate max-w-[140px]" x-text="agentName(e.agent_id)"></span>
                         <svg class="w-3.5 h-3.5 text-surface-300 transition-transform" :class="selectedLog === e.id ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
                     </div>
@@ -121,9 +129,14 @@
                     <div x-show="selectedLog === e.id" x-transition.duration.150ms class="border-t border-surface-100 bg-surface-50/50 px-4 py-3">
                         <div class="ml-9">
                             <!-- Metadata grid -->
-                            <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+                            <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-3">
                                 <div><span class="text-[9px] text-surface-400 block">ID</span><span class="text-[10px] font-mono text-brand-900" x-text="e.id?.substring(0,12) + '…'"></span></div>
                                 <div><span class="text-[9px] text-surface-400 block">Agente</span><span class="text-[10px] font-medium text-brand-900" x-text="agentName(e.agent_id)"></span></div>
+                                <div data-testid="obs-owner-detail">
+                                    <span class="text-[9px] text-surface-400 block">Dono</span>
+                                    <span class="text-[10px] text-brand-900" :title="e.owner_user_id || 'interação anterior ao rastreio de dono'"
+                                          x-text="ownerLabel(e) + (e.via_api_key_name ? (' · via chave: ' + e.via_api_key_name) : '')"></span>
+                                </div>
                                 <div><span class="text-[9px] text-surface-400 block">Jornada</span><span class="text-[10px] text-brand-900" x-text="e.journey_id || '—'"></span></div>
                                 <div><span class="text-[9px] text-surface-400 block">Início</span><span class="text-[10px] text-brand-900" x-text="tzDateTimeSec(e.created_at)"></span></div>
                             </div>
@@ -970,11 +983,15 @@ function observabilityPage() {
         lineHeadline(l) {
             const j = l.json;
             if (!j) return (l.raw || '').substring(0, 200);
+            // QA E2E ("quem é o usuário?"): o user_id já está no JSON de cada
+            // log — a linha do erro agora DIZ quem era, sem precisar expandir.
+            // userLabel degrada honesto: sem o mapa (não-admin), UUID curto.
+            const who = j.user_id ? ' · 👤 ' + this.userLabel(j.user_id) : '';
             if (j.event === 'http.request' || j.event === 'http.response') {
                 const sc = j.status_code ? ' ' + j.status_code : '';
-                return (j.method || '') + sc + ' ' + (j.path || j.msg || '');
+                return (j.method || '') + sc + ' ' + (j.path || j.msg || '') + who;
             }
-            return j.msg || j.event || JSON.stringify(j).substring(0, 200);
+            return (j.msg || j.event || JSON.stringify(j).substring(0, 200)) + who;
         },
 
         lineHeadlineHighlighted(l) {
@@ -1243,6 +1260,16 @@ function observabilityPage() {
         agentName(id) {
             const a = this.agents.find(a => a.id === id);
             return a?.name || id?.substring(0, 8) || '—';
+        },
+
+        // Dono da interação (QA E2E: "quem é o usuário?"). owner_name vem
+        // resolvido do SERVIDOR (RBAC impede o front comum de montar o mapa).
+        // NULL = "—" (interação anterior ao rastreio) — nunca inventar; id sem
+        // nome = usuário removido, mostra o UUID truncado.
+        ownerLabel(e) {
+            if (e.owner_name) return e.owner_name;
+            if (e.owner_user_id) return e.owner_user_id.substring(0, 8) + '… (removido)';
+            return '—';
         },
 
         formatTrace(raw) {
