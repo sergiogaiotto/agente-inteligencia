@@ -571,10 +571,10 @@
     <!-- TOUR SPOTLIGHT OVERLAY                            -->
     <!-- ══════════════════════════════════════════════════ -->
     <template x-if="tourActive">
-        <div>
+        <div @resize.window="positionTour()" @scroll.window="positionTour()">
             <div class="tour-overlay" @click="nextTourStep()"></div>
-            <div class="tour-spotlight" :style="spotlightStyle"></div>
-            <div class="tour-card" :style="cardPosition">
+            <div class="tour-spotlight" :style="tourSpotStyle"></div>
+            <div class="tour-card" x-ref="tourCard" :style="tourCardStyle">
                 <div class="rounded-2xl border border-brand-200 bg-white shadow-2xl p-5 w-[360px]">
                     <div class="flex items-center justify-between mb-3">
                         <div class="flex items-center gap-2">
@@ -1031,58 +1031,97 @@
             },
             /* ══ Tour ══ */
             tourActive: false, tourStep: 0,
+            // Estilos calculados por positionTour() (reativos): o spotlight recorta o alvo
+            // e o card é preso DENTRO da viewport — nunca some pela borda (bug do browser pequeno).
+            tourSpotStyle: 'display:none',
+            tourCardStyle: 'left:50%;top:50%;transform:translate(-50%,-50%)',
             // Cada step pode ter `optional: true` — se o elemento DOM não existir
             // (porque é gated por role/permission), o tour pula automaticamente
             // (ver nextTourStep). Mantém UX fluida para usuário comum e Root.
             tourSteps: [
-                {el:'tour-logo', title:'Bem-vindo ao Maestro', description:'Em poucos minutos você vai conhecer cada área da plataforma. O Maestro é uma plataforma multi-agent orientada a SKILL.md sobre AI Mesh — pense numa orquestra: agents tocam, skills são a partitura, e a plataforma rege.'},
-                {el:'tour-model-health', title:'Saúde dos Modelos', description:'O "semáforo" dos modelos no topo. Verde: tudo o que a plataforma vai usar (chat, roteamento e embeddings) está disponível. Âmbar com um número: algum modelo está fora ou rodando em fallback. Clique para abrir o painel e ver provedor/modelo de cada papel — assim você sabe exatamente o que será usado antes de invocar um agent.'},
-                {el:'tour-nav-dashboard', title:'Dashboard', description:'O raio-X da plataforma. Em 5 segundos você vê quantos agents estão ativos, quantas interações rodaram nas últimas 24h e qual o estado geral. Use como ponto de partida do dia.'},
-                {el:'tour-nav-agents', title:'Agentes', description:'Os "trabalhadores" da plataforma. Cada agent combina um prompt, um modelo de linguagem e (opcionalmente) ferramentas. Aqui você cria, edita, duplica e invoca — versionado, rastreável, sem código.'},
-                {el:'tour-nav-skills', title:'Skills', description:'Competências reutilizáveis em arquivos SKILL.md. Define o passo-a-passo, quais ferramentas usar e o formato da resposta. A mesma skill serve em vários agents — garante consistência sem replicar lógica.'},
-                {el:'tour-nav-catalog', title:'Catálogo', description:'Marketplace interno da empresa: agents, skills, recipes, pipelines (1ª classe, com status Rascunho/Em revisão/Publicada) e plataformas externas aprovadas (ChatGPT, Cursor). Pipelines publicados são invocáveis selados via POST /api/v1/pipelines/{id}/invoke. Cada entry passa por revisão Root — governança via etiqueta nutricional.'},
-                {el:'tour-nav-catalog-queue', title:'Fila de Revisão', description:'Onde Root revisa e aprova submissões do Catálogo. Pré-verificações automáticas rodam no submit; aqui você vê o relatório e decide aprovar, rejeitar ou pedir mudanças.', optional: true},
-                {el:'tour-nav-catalog-inventory', title:'Inventário Regulatório', description:'Inventário compliance da IA na empresa. Quais agents/skills processam PII, dados regulados, têm soberania específica. Exporta CSV para auditoria. Visível só para Root.', optional: true},
-                {el:'tour-nav-catalog-stewardship', title:'Curadoria', description:'Painel para curador de área — você vê os agents e pipelines do seu domínio (fiscal, RH, jurídico…) e identifica órfãos, parados ou pouco confiáveis. Aberto a quem tem domains, não só Root.', optional: true},
-                {el:'tour-nav-catalog-cost', title:'Custo & Consumo', description:'Quanto cada agent, pipeline e skill custou em USD, por quem, em que dia, em qual modelo. Base para chargeback interno. Anomalias (pico, limite global) aparecem como alerta automático.'},
-                {el:'tour-nav-workspace', title:'Workspace', description:'O "chat" da plataforma — onde você invoca um agent e vê a resposta ao vivo com cada etapa da execução: recuperação de evidência, raciocínio, verificação. É a tela mais usada no dia-a-dia.'},
-                {el:'tour-nav-mesh', title:'AI Mesh — Fluxo de agentes', description:'Editor visual ÚNICO do AI Mesh: desenhe pipelines (sequenciais A→B→C, fan-out “sempre dispara” ou condicionais), edite agentes, organize em pipelines, gerencie o ciclo de vida e publique no Catálogo. Agents pass-through são ignorados automaticamente. Invoque um pipeline via POST /api/v1/pipelines/{id}/invoke.'},
-                {el:'tour-nav-playground', title:'Playground', description:'O console de API do AI Mesh: teste um pipeline COMO o seu app veria — roda o endpoint real via chave de API (sem cookie), com a resposta projetada por verbosidade, passo-a-passo ao vivo (streaming), abas Tempo/Trace/HTTP e o código pronto (curl/Python/Go/…). O histórico por usuário restaura a execução ao clicar (inteira quando o detalhe foi salvo), e o modo A/B compara dois lado a lado.'},
-                {el:'tour-nav-tools', title:'Ferramentas (MCP)', description:'Catálogo de ferramentas externas que os agents podem chamar — consultar ERP, validar CPF/CNPJ, ler banco de dados. Falamos com tools via protocolo MCP padronizado.'},
-                {el:'tour-nav-evidence', title:'Bases de Conhecimento', description:'Onde você cadastra os documentos que o agent vai consultar para responder com fonte: manuais, regulamentos, FAQs. Busca híbrida BM25 + vetorial. Sem isso, o LLM "inventa" do treinamento.'},
-                {el:'tour-nav-api-connectors', title:'API Connectors', description:'Registre APIs externas (CRM, ERP, e-mail, etc.) para que os agents invoquem via HTTP. Builder visual para testar antes, histórico de chamadas, health check periódico.'},
-                {el:'tour-nav-federation', title:'Federação A2A', description:'Compartilhe agentes e pipelines entre organizações com segurança. Como provider você publica um manifest + ingress assinado; como consumer você puxa peers remotos e invoca de forma assinada e auditada. Desligada por padrão (fail-closed sem chave).', optional: true},
-                {el:'tour-nav-harness', title:'Harness de Avaliação', description:'O "CI/CD de qualidade". Antes de promover uma release, o Harness roda casos do Golden Dataset e decide se passou. Gate automático com thresholds calibráveis.'},
-                {el:'tour-nav-releases', title:'Releases', description:'Versionamento atômico da configuração inteira (modelo + prompt + índice + policy). Promoção entre ambientes: staging → canary → production. Drift é registrado e a regressão entre versões é pega rodando o Harness em modo regression.'},
-                {el:'tour-nav-quality', title:'Qualidade', description:'A "nota" que a plataforma dá para cada resposta. Verifier multi-dimensional avalia factuality, completeness, tom e safety — 4 dimensões. Detecta drift e alucinação cedo.'},
-                {el:'tour-nav-observability', title:'Observabilidade', description:'Traces, custos e performance detalhados em LangFuse (SaaS) ou stack OTEL self-hosted. Use para investigar incidentes em profundidade e comparar custo entre modelos.'},
-                {el:'tour-nav-infra', title:'Infraestrutura', description:'O "motor" da plataforma sob o capô: estado dos serviços (Postgres, índice vetorial pgvector, gateway de modelos), conectividade e parâmetros operacionais. Use quando algo parece lento ou indisponível e você quer confirmar se o problema é de infra antes de mexer em agents.'},
-                {el:'tour-nav-history', title:'Histórico', description:'O "livro-razão" da plataforma: toda interação, turno, envelope e registro de auditoria fica gravado e pesquisável. Use para reconstruir o que aconteceu numa execução específica, investigar uma resposta estranha ou prestar contas — cada registro guarda o trace para correlação.'},
-                {el:'tour-nav-settings', title:'Configurações', description:'O "painel de controle" da plataforma: chaves dos provedores de modelo, modelos padrão por papel, embeddings, observabilidade e flags de comportamento. As configurações de LLM ficam no banco (platform_settings) e são aplicadas no boot — é aqui que você define o que o chip de Saúde dos Modelos vai reportar.'},
-                {el:'tour-start-btn', title:'Pronto para começar', description:'Você viu todas as áreas. Próximo passo natural: criar um agent simples em /agents → invocar no /workspace → ajustar com base no resultado. Use o botão "Ajuda desta página" em qualquer tela para aprofundar.'},
+                {el:'tour-logo', title:'Bem-vindo ao Maestro', description:'Em poucos minutos você conhece cada área da plataforma. O Maestro é uma plataforma multi-agent orientada a SKILL.md sobre AI Mesh — pense numa orquestra: os agentes tocam, as skills são a partitura, o fluxo é a regência. O princípio que atravessa tudo: declarar → provar → selar → vigiar.'},
+                {el:'tour-model-health', title:'Saúde dos Modelos', description:'O "semáforo" dos modelos no topo. Verde: tudo o que a plataforma vai usar (chat, roteamento e embeddings) está disponível. Âmbar com um número: algum modelo está fora ou em fallback. Clique para ver provedor/modelo de cada papel — você sabe exatamente o que será usado antes de invocar um agente.'},
+                {el:'tour-nav-dashboard', title:'Dashboard', description:'O raio-X da operação. Em 5 segundos você vê quantos agentes estão ativos, quantas interações rodaram nas últimas 24h e a topologia por camada (Maestro/Triagem/Especialista). Ponto de partida do dia.'},
+                {el:'tour-nav-agents', title:'Agentes', description:'Os "trabalhadores" da plataforma, em 3 camadas: Maestro (orquestra), Triagem (roteia) e Especialista (executa). Cada agente une uma skill + política de LLM + interruptores de anexo/idioma. Wizard em passos com pré-flight (checa prontidão antes de salvar).'},
+                {el:'tour-nav-skills', title:'Skills', description:'As partituras executáveis (SKILL.md). Declaram propósito, entradas (## Inputs = o contrato de args), passo a passo, ferramentas e o Contrato de Decisão (## Decisions) que roteia o fluxo. Nascem do Wizard IA em português. Nada existe fora do que está declarado.'},
+                {el:'tour-nav-catalog', title:'Catálogo', description:'O marketplace interno: agentes, skills, recipes, pipelines (1ª classe, com Rascunho/Em revisão/Publicada) e plataformas externas aprovadas. Publicar um pipeline sela o contrato e roda o gate de Frases-Prova. Cada entry passa por revisão do Root — governança com etiqueta de capacidade.'},
+                {el:'tour-nav-catalog-queue', title:'Fila de Revisão', description:'Onde o Root revisa e aprova submissões do Catálogo. Pré-verificações automáticas rodam no submit (nome, versão, dono, divulgação de capacidade…); aqui você vê o relatório frase a frase e decide aprovar, rejeitar ou pedir mudanças.', optional: true, submenu:'catalog'},
+                {el:'tour-nav-catalog-inventory', title:'Inventário Regulatório', description:'A visão de compliance: cruza cada entry com a divulgação de capacidade — quem processa PII, chama APIs externas, tem residência de dados específica. Cards de resumo + exportação CSV para o comitê de privacidade. Só para Root.', optional: true, submenu:'catalog'},
+                {el:'tour-nav-catalog-stewardship', title:'Curadoria', description:'O painel do curador de área: os agentes e pipelines do seu domínio (fiscal, RH, jurídico…), com detecção de órfãos, parados ou pouco confiáveis. Aberto a quem tem domínios, não só ao Root.', optional: true, submenu:'catalog'},
+                {el:'tour-nav-catalog-cost', title:'Custo & Consumo', description:'Quanto cada agente, pipeline e skill custou em USD, por quem, em que dia, em qual modelo — base para chargeback interno. Débito por chave de API com teto (402 ao estourar). Anomalias viram alerta. O cálculo de custo fica SEMPRE fora do caminho da resposta.', submenu:'catalog'},
+                {el:'tour-nav-mesh', title:'AI Mesh — Fluxo de agentes', description:'O editor visual único do mesh. Arraste conexões (sequencial, "sempre dispara", condicional e default) e prove as regras com Frases-Prova. Novidade: BOTÃO DIREITO abre o Menu de Regência (conversar, isolar vizinhança, editar); o clique esquerdo abre o Dossiê com a Skill expandível; há "Converse com seu agente" (chat real com FSM) e o Simulador de roteamento — digite uma frase e as arestas ACENDEM, sem gastar tokens.', submenu:'mesh'},
+                {el:'tour-nav-workspace', title:'Workspace', description:'O chat operacional multi-sessão: invoque um agente ou pipeline e veja a resposta ao vivo com cada etapa (evidência, raciocínio, verificação). Também executa uma ferramenta direto (sem LLM) por formulário tipado — inclusive per-tool.', submenu:'mesh'},
+                {el:'tour-nav-playground', title:'Playground', description:'O console de API: teste o pipeline COMO o seu app veria — endpoint real via chave, resposta projetada por verbosidade, streaming ao vivo, abas Tempo/Trace/HTTP e o código pronto (curl/Python/Go/…). "IA: descrever" traduz português→args provados; ao anexar um arquivo, o código gerado mostra o bloco attachments em base64. Histórico por usuário e modo A/B.', submenu:'mesh'},
+                {el:'tour-nav-tools', title:'Ferramentas (MCP)', description:'O registro das ferramentas externas via MCP (busca web, docs, sistemas). Cada ferramenta descoberta vira uma função com o schema real (modo per-tool, por conector). O painel de Cobertura per-tool mede a prontidão da frota; conector sem descoberta ganha o chip "legado" com dica acionável.'},
+                {el:'tour-nav-evidence', title:'Bases de Conhecimento', description:'As fontes autorizadas de evidência: manuais, regulamentos, catálogos, FAQs. Busca híbrida BM25 + vetorial (pgvector) com fusão RRF. Modo tabular vira tabela consultável (DuckDB, SQL parametrizado). Sem isso, o agente recusa em vez de inventar (grounded-by-default).'},
+                {el:'tour-nav-api-connectors', title:'API Connectors', description:'Registre APIs externas (CRM, ERP, e-mail…) para os agentes invocarem via HTTP — base das skills declarativas (execução sem LLM, custo zero de tokens). Builder para testar antes, sugestão de endpoint por IA, histórico e health por conector.'},
+                {el:'tour-nav-federation', title:'Federação A2A', description:'Duas instâncias Maestro descobrindo e invocando capacidades uma da outra. Como provider você publica um manifesto + ingress assinado; como consumer você puxa peers remotos e invoca com HMAC e anti-replay. Desligada por padrão (fail-closed sem MAESTRO_SECRET_KEY).', optional: true},
+                {el:'tour-nav-harness', title:'Avaliação (Harness)', description:'O ensaio geral com nota. Antes de promover uma release, o Harness roda o Golden Dataset (casos com estado esperado, peso, regex e red flags) por alvo (agente ou pipeline) e decide se passou. O Golden Dataset é editável (editar/excluir com integridade por hash do conjunto); as Frases-Prova rodam em todo run de pipeline.'},
+                {el:'tour-nav-releases', title:'Releases', description:'Versionamento atômico da configuração inteira (modelo + prompt + índice + policy), promovida staging → canary → production. O Harness referencia a release; a regressão entre versões é pega rodando em modo regression, e o drift fica registrado.'},
+                {el:'tour-nav-quality', title:'Qualidade', description:'A "nota" que a plataforma dá a cada resposta em produção: o LLM-as-Judge avalia factualidade, completude, tom e segurança, mais afirmações sem respaldo. Cada verificação mostra o DONO da interação julgada e há filtro por usuário — "quais respostas do fulano falharam?".'},
+                {el:'tour-nav-observability', title:'Observabilidade', description:'O COMO executou: interações, latências, tokens, eventos de drift e logs estruturados. Cada interação e cada linha de erro mostram QUEM disparou (dono/ator resolvido pelo nome); chamada por chave aparece com o badge "via chave". Traces em LangFuse + métricas RED (Prometheus/Grafana).'},
+                {el:'tour-nav-infra', title:'Infraestrutura', description:'O motor sob o capô: estado e latência de cada serviço (Postgres, pgvector, gateway de modelos), com link para a UI nativa. Use quando algo parece lento e você quer confirmar se o problema é de infra antes de mexer nos agentes.'},
+                {el:'tour-nav-history', title:'Histórico', description:'O livro-razão: toda interação, turno, envelope e registro de auditoria, pesquisável. Interações mostram o dono; a auditoria (append-only) mostra o ATOR com nome e o IP. Use para reconstruir uma execução, investigar uma resposta estranha ou prestar contas.'},
+                {el:'tour-nav-settings', title:'Configurações', description:'O painel de controle: credenciais dos provedores de LLM (seladas), roteamento por tipo de tarefa (+ papel do juiz), ~40 parâmetros com valor efetivo + fonte, preços por modelo, usuários e chaves de API. As configs de LLM vivem no banco e valem em runtime, sem restart.'},
+                {el:'tour-start-btn', title:'Pronto para começar', description:'Você viu cada área. Um bom primeiro caminho: crie uma skill pelo Wizard IA → um agente que a usa → desenhe o fluxo no AI Mesh → teste no Playground → avalie no Harness → publique no Catálogo. Em qualquer tela, o botão "?" (Ajuda desta página) aprofunda o contexto.'},
             ],
             get currentTourStep() { return this.tourSteps[this.tourStep] || {} },
-            get spotlightStyle() {
+            // Garante que o alvo do step esteja VISÍVEL antes de posicionar:
+            // o tour abre a sidebar (senão os itens viram só ícones) e o submenu
+            // dono do item (senão o item de submenu fica display:none em 0,0).
+            _ensureTourTargetVisible() {
+                if (this.sidebarCollapsed) this.sidebarCollapsed = false;
+                const sm = this.currentTourStep?.submenu;
+                if (sm === 'catalog') this.catalogSubmenuOpen = true;
+                if (sm === 'mesh') this.meshSubmenuOpen = true;
+            },
+            // Calcula spotlight + card. O card é preso na viewport (clamp) usando o
+            // tamanho REAL do card (x-ref) — assim os botões nunca ficam cortados,
+            // independentemente do tamanho do browser.
+            positionTour() {
                 const el = document.getElementById(this.currentTourStep?.el);
-                if (!el) return 'display:none';
+                if (!el) {
+                    this.tourSpotStyle = 'display:none';
+                    this.tourCardStyle = 'left:50%;top:50%;transform:translate(-50%,-50%)';
+                    return;
+                }
+                // Traz o item para dentro da área rolável da sidebar, se preciso.
+                try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch {}
                 const r = el.getBoundingClientRect();
                 const pad = 6;
-                return `left:${r.left-pad}px;top:${r.top-pad}px;width:${r.width+pad*2}px;height:${r.height+pad*2}px`;
+                this.tourSpotStyle = `left:${r.left-pad}px;top:${r.top-pad}px;width:${r.width+pad*2}px;height:${r.height+pad*2}px`;
+                const M = 12;                              // margem mínima até a borda
+                const vw = window.innerWidth, vh = window.innerHeight;
+                const card = this.$refs.tourCard;
+                const cw = (card && card.offsetWidth)  || 360;
+                const ch = (card && card.offsetHeight) || 320;
+                let left, top;
+                if (vw - r.right > cw + 24)      { left = r.right + 16; top = r.top - 20; }  // à direita
+                else if (r.left > cw + 24)       { left = r.left - cw - 16; top = r.top - 20; }  // à esquerda
+                else                             { left = r.left; top = r.bottom + 12; }  // abaixo
+                // Clamp em ambos os eixos — o card SEMPRE cabe inteiro na tela.
+                left = Math.min(Math.max(M, left), Math.max(M, vw - cw - M));
+                top  = Math.min(Math.max(M, top),  Math.max(M, vh - ch - M));
+                this.tourCardStyle = `left:${left}px;top:${top}px`;
             },
-            get cardPosition() {
-                const el = document.getElementById(this.currentTourStep?.el);
-                if (!el) return 'left:50%;top:50%;transform:translate(-50%,-50%)';
-                const r = el.getBoundingClientRect();
-                const spaceRight = window.innerWidth - r.right;
-                if (spaceRight > 400) return `left:${r.right + 16}px;top:${Math.max(16, r.top - 20)}px`;
-                if (r.left > 400) return `left:${r.left - 392}px;top:${Math.max(16, r.top - 20)}px`;
-                return `left:${Math.max(16, r.left)}px;top:${r.bottom + 12}px`;
+            // Reposiciona após o DOM assentar (submenu expandindo + card renderizado).
+            _repositionTour() {
+                this._ensureTourTargetVisible();
+                this.$nextTick(() => requestAnimationFrame(() => this.positionTour()));
             },
             startTour() {
                 this.tourStep = 0;
                 this.tourActive = true;
+                // Guarda o estado do menu para restaurar ao encerrar — o tour abre
+                // sidebar/submenus só enquanto roda, sem bagunçar a escolha do usuário.
+                this._tourSaved = {
+                    collapsed: this.sidebarCollapsed,
+                    catalog: this.catalogSubmenuOpen,
+                    mesh: this.meshSubmenuOpen,
+                };
                 // Pula steps optionais cujo elemento DOM não existe (gated por role/domain)
                 this._skipMissingSteps(1);
+                this._repositionTour();
             },
             // Avança pulando steps optionais sem elemento DOM. dir=+1 (next) ou -1 (prev).
             _skipMissingSteps(dir) {
@@ -1099,12 +1138,23 @@
                     this.tourStep = next;
                 }
             },
-            endTour() { this.tourActive = false; },
+            endTour() {
+                this.tourActive = false;
+                // Restaura o menu como o usuário deixou antes do tour.
+                const s = this._tourSaved;
+                if (s) {
+                    this.sidebarCollapsed = s.collapsed;
+                    this.catalogSubmenuOpen = s.catalog;
+                    this.meshSubmenuOpen = s.mesh;
+                    this._tourSaved = null;
+                }
+            },
             nextTourStep() {
                 if (this.tourStep < this.tourSteps.length - 1) {
                     this.tourStep++;
                     this._skipMissingSteps(+1);
-                    if (this.tourStep >= this.tourSteps.length) this.endTour();
+                    if (this.tourStep >= this.tourSteps.length) { this.endTour(); return; }
+                    this._repositionTour();
                 } else {
                     this.endTour();
                 }
@@ -1113,6 +1163,7 @@
                 if (this.tourStep > 0) {
                     this.tourStep--;
                     this._skipMissingSteps(-1);
+                    this._repositionTour();
                 }
             },
 
