@@ -2,7 +2,14 @@
 
 **Plataforma de Gestão e Desenvolvimento de Multi-Agentes de IA, orientada a SKILL.md, sobre AI Mesh**
 
-> Documenta a plataforma na versão **39.4.0** · Especificação Funcional §1–§24 · pt-BR
+> Documenta a plataforma na versão **42.1.0** · Especificação Funcional §1–§24 · pt-BR
+
+> **Novidades 40.x–42.x** (destaques detalhados nas seções indicadas):
+> - **Cobertura per-tool + depreciação visível** — métrica-gate de prontidão da frota MCP, chip "legado" e dry-run per-tool completo ([4.6](#46-mcp--tool-registry-mcp)).
+> - **Fluxo de agentes muito mais vivo** — Menu de Regência (botão direito), Dossiê do Agente com Skill expandível, **"Converse com seu agente"** (chat real com FSM), **simulador de roteamento no canvas**, isolar vizinhança, e painel do pipeline com selo/domínio/ajuda em "?" ([4.8](#48-fluxo-de-agentes-meshflow--o-estúdio-de-pipelines)).
+> - **Golden Dataset editável** — editar e excluir casos pela UI, com integridade histórica preservada ([4.13](#413-harness-de-avaliação-harness)).
+> - **"Quem é o usuário?"** — dono/ator com nome nas telas de Observabilidade, Histórico, Auditoria e Qualidade, e filtro por usuário ([4.15](#415-observabilidade-observability-infra-infra-e-histórico-history)).
+> - **Codegen ensina a anexar** — o código gerado no Playground mostra o bloco `attachments` em base64 ([Parte V](#anexos-dois-transportes)).
 
 ---
 
@@ -321,6 +328,7 @@ Cada módulo abaixo segue o mesmo esqueleto: **O que é · Fundamento · Quando 
 - **Caso de uso (piloto per-tool):** com a frota no modo clássico, ligue **Modo per-tool: Ligado** só no conector Tavily. A partir daí o LLM enxerga `tavily_search`, `tavily_extract`… como funções separadas com os campos reais (`query`, `max_results`, `search_depth`) em vez do genérico `{operation, query}`.
 - **Exemplo de ação:** registrar → **Testar conexão** (para stdio a 1ª execução pode demorar: o `npx` baixa o pacote) → conferir "N ferramentas descobertas" → decidir o Modo per-tool.
 - **Dica:** o botão de **backfill** descobre em lote os conectores antigos que ainda não têm ferramentas persistidas.
+- **Cobertura per-tool (40.0.0):** um painel no topo mede a **prontidão** da frota para aposentar o caminho legado `{operation, query}` — quantos conectores já têm ferramentas descobertas — separado da **adoção** (quantos rodam per-tool hoje). Conector sem descoberta ganha o chip **legado** com dica acionável; `oauth2`/`mTLS` aparecem como pendência nomeada (o backfill em lote não os cobre; use "Testar conexão"). O endpoint `GET /api/v1/tools/per-tool-coverage` é o gate objetivo dessa transição. O **dry-run da ferramenta** também virou per-tool completo: com o conector em modo per-tool, ele simula a função **real** descoberta e os args crus, não mais o par genérico.
 
 ## 4.7 RAG — Base de Conhecimento (`/rag`)
 
@@ -338,6 +346,14 @@ Cada módulo abaixo segue o mesmo esqueleto: **O que é · Fundamento · Quando 
 - **Caso de uso completo:** triagem de telecom — Triagem (roteador) com três saídas condicionais (técnico / financeiro / vendas) + default (atendimento geral); cada saída com 2–4 Frases-Prova.
 - **Exemplo de ação (regra em 60 segundos):** clique na conexão → "Descreva em português: *se a decisão for escalar*" → **Gerar regra** → o card verde mostra `decision.escalar == 'sim'` provada → **Usar esta regra** → cole as frases de teste → salvar.
 - **Dicas:** a linha `DECISAO:` do agente de origem é o que alimenta `decision.*` — declare `## Decisions` na skill; anexos executados por aqui usam upload da sessão (2 passos) e são roteados pelos interruptores "aceita documentos/imagens" de cada agente.
+
+### O que o canvas ganhou (41.x)
+
+- **🖱️ Menu de Regência (botão direito):** cada nó abre um menu contextual próprio (nada de menu nativo do navegador) com ações reais — **Conversar com o agente**, Definir como Início, Abrir Skill no dossiê, Ver execuções recentes, **Isolar vizinhança** (esmaece tudo que não conecta ao nó, para ler grafos grandes) e Editar agente. As **conexões** também têm menu: rodar Frases-Prova, editar regra, excluir.
+- **📋 Dossiê do Agente (clique esquerdo):** o painel direito mostra a **Skill** vinculada em cascata — nome, selos e um botão "Ver SKILL.md" que abre um **leitor expandido** (markdown legível, botão copiar); o mesmo para o prompt do sistema. Traz também as **execuções recentes** do agente. Cursor vira pointer em tudo que é clicável.
+- **💬 Converse com seu agente:** um chat estilo ChatGPT embutido no dossiê — e é o **agente real** (mesma FSM, guardrails e evidências do runtime), com o **chip do estado final** (Recommend/Refuse/Escalate) em cada resposta e **multi-turno** de verdade (a sessão continua até "Nova conversa"). Honestidade primeiro: o operador vê quando o agente recusou, não só a prosa.
+- **🧭 Simulador de roteamento no canvas:** no menu de um roteador, digite uma frase de cliente e **as arestas acendem** — a que casou fica sólida, as demais esmaecem. Determinístico, pelo **mesmo motor do publish e do harness** (`test-conditional`): custo **zero de tokens**. Cada resultado pode virar **Frase-Prova** da aresta com um clique (o veredito observado vira o `expect`), e o menu da aresta roda as Frases-Prova existentes na hora.
+- **Painel do pipeline:** os textos de "Roteamento rápido" e "Auditoria da resposta" viraram popovers atrás de um **"?"** (menos paredão de prosa); o **selo do contrato** aparece explícito (🔒 selado · vN / 🔓 não selado) com um "?" explicando que **publicar sela**; e o **domínio** do pipeline (a etiqueta que vira chip na lista) é editável ali mesmo.
 
 ## 4.9 Workspace (`/workspace`)
 
@@ -374,18 +390,21 @@ Cada módulo abaixo segue o mesmo esqueleto: **O que é · Fundamento · Quando 
 - **O que é:** o ensaio geral com nota — o Golden Dataset e as execuções de avaliação.
 - **Fundamento:** detalhado na Parte VI. Em resumo: casos reais (com estado esperado, categoria, peso, regex e *red flags*), avaliação por **alvo** (agente isolado ou pipeline completo), gate multi-dimensional, comparação A×B com casos divergentes, painel **Baseline por alvo**, e as **Frases-Prova rodando em todo run de pipeline**.
 - **Exemplo de ação:** monte 15 casos (5 adversariais) → baseline no pipeline → mude o prompt do especialista → rode **regressão** → o gate compara com o baseline do mesmo alvo e acusa a queda de acurácia antes de qualquer cliente.
+- **Golden Dataset editável (40.2.0):** cada caso tem **editar** (✏️) e **excluir** (🗑️) na própria linha — corrigir um typo não exige mais recriar o caso do zero. A integridade histórica é preservada por desenho: cada execução guarda o *hash* do conjunto que avaliou, então editar/excluir um caso **não reescreve resultados passados** — as próximas execuções é que passam a usar o conjunto novo (a confirmação de exclusão explica isso).
 
 ## 4.14 Qualidade / Auditoria (`/quality`)
 
 - **O que é:** a leitura do **LLM-as-Judge**: cada verificação multi-dimensional registrada, com filtros e deep-link a partir da conversa.
 - **Fundamento:** dimensões 1–5 (factualidade, completude, tom, segurança), conformidade de contrato, afirmações sem respaldo; julgamento assíncrono por amostragem em produção; re-julgamento sob demanda.
 - **Quando usar:** investigar "o que exatamente estava errado naquela resposta?" e acompanhar a saúde qualitativa fora dos ensaios.
+- **Quem é o usuário (42.0.0):** cada verificação mostra o **dono** da interação julgada (nome resolvido no servidor) e há **filtro por usuário** — para responder "quais respostas do fulano falharam no juiz?". Ver a nota de atribuição de usuário em [4.15](#415-observabilidade-observability-infra-infra-e-histórico-history).
 
 ## 4.15 Observabilidade (`/observability`), Infra (`/infra`) e Histórico (`/history`)
 
 - **Observabilidade** — o **como** executou: interações, latências, tokens, eventos de drift; logs estruturados com administração (tail, rotate, explicação de erro por IA); link para LangFuse; métricas RED por caminho (`/metrics` Prometheus + dashboard Grafana).
 - **Infra** — status e latência de cada serviço do docker-compose, com link para a UI nativa (útil para "é a plataforma ou é o banco?").
 - **Histórico** — consulta unificada e paginada de interações, turnos e auditoria, com busca textual. A trilha de auditoria é *append-only*: criação/edição, transições da FSM, promoções, publicações, overrides — tudo com autor e detalhe.
+- **Quem é o usuário (42.0.0):** na hora de investigar um erro, a pergunta "quem disparou isto?" agora tem resposta na tela. Interações mostram o **dono** (nome resolvido no servidor, porque a lista de usuários é restrita a admin), a auditoria mostra o **ator com nome**, e a linha de erro do Log Viewer identifica o usuário. Três regras de honestidade: chamada por chave de API não é clique humano → aparece o dono da chave com o badge **"via chave: nome"**; interação legada sem dono → **"—"** (nunca se inventa um autor); usuário deletado → UUID curto + "(removido)".
 - **Dica de troubleshooting:** `docs/troubleshooting.md` cataloga sintoma → consulta nos logs por `event=`.
 
 ## 4.16 Federação A2A (`/federation`)
@@ -468,6 +487,7 @@ EOF
 - Documento vira texto extraído (PDF/DOCX/XLSX via conversor); **imagem vai como pixels ao modelo multimodal**.
 - O dispatcher entrega cada anexo **apenas** aos agentes que o aceitam.
 - Violações → `422` nomeado. O `/invoke/async` ainda não aceita base64 (use upload-ref).
+- **O Playground ensina isso (41.3.1):** ao anexar um arquivo no Playground, o **código gerado** (curl/Python/…) passa a incluir o bloco `attachments` com o base64 — um integrador copia o snippet e já vê o formato exato, sem adivinhar. Antes o código omitia o anexo mesmo com o arquivo anexado na UI.
 
 ## Assíncrono (202 + jobs)
 
@@ -528,7 +548,7 @@ O painel do Harness mostra o baseline vigente de cada alvo **com o critério na 
 | **Autenticação/RBAC** | Sessão assinada + papéis (Root/Admin/Membro); API default-deny; endurecimentos por chave |
 | **Segredos** | Cifrados em repouso (Fernet com `MAESTRO_SECRET_KEY`); a UI mostra só fingerprints; GET nunca devolve o valor |
 | **Confidencialidade** | Bases e ferramentas classificadas (público→restrito); trusted context para tools sensíveis |
-| **Auditoria** | `audit_log` append-only com ator, ação, detalhes e IP — inclusive overrides de gate |
+| **Auditoria** | `audit_log` append-only com ator, ação, detalhes e IP — inclusive overrides de gate. As telas resolvem o **nome do ator/dono** (server-side), mas o dado exibido é o **operador da plataforma** — o titular-final (`customer_hash`) permanece hasheado e jamais aparece |
 | **LGPD — esquecimento** | `POST /privacy/forget` apaga por titular (hash do `customer_ref`): interações, turnos, verificações, jobs e **arquivos enviados** (binário incluso), em lotes até esgotar |
 | **LGPD — retenção** | Janelas configuráveis; purga automática de órfãos; resultados de jobs expiram (72h padrão) |
 | **Custo governado** | Preço por modelo → SSOT de custo por invocação; débito por chave com teto `402`; painéis por entry/área/consumidor. Princípio: cálculo de custo **nunca** no caminho da resposta |
@@ -610,6 +630,12 @@ infra/  (grafana dashboards)
 **Posso usar dois provedores de LLM ao mesmo tempo?** Sim — o Roteamento por tarefa faz exatamente isso (ex.: raciocínio no GPT-OSS 120B interno, visão no GPT-4o, juiz num terceiro).
 
 **Como apago os dados de um cliente (LGPD)?** `POST /api/v1/privacy/forget` com a referência do titular — apaga interações, turnos, verificações, jobs e arquivos, até esgotar.
+
+**Consigo saber quem disparou uma interação ou um erro?** Sim (desde a 42.0.0). Observabilidade, Histórico, Auditoria e Qualidade mostram o **dono/ator** com nome; chamadas por chave de API aparecem com o badge "via chave". Interações antigas sem dono mostram "—" (não se inventa autor).
+
+**Posso conversar com um agente sem sair do desenho do fluxo?** Sim — no Fluxo de agentes, clique no nó e use **"Converse com seu agente"**: é o agente real (com FSM e guardrails), multi-turno, com o estado de cada resposta visível.
+
+**Como testo o roteamento sem gastar tokens?** Botão direito no roteador → **Simular roteamento** → digite uma frase e veja as arestas acenderem. É determinístico (o mesmo motor do publish e do harness), custo zero.
 
 ---
 
