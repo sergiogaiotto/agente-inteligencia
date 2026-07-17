@@ -72,10 +72,39 @@
                     </span>
                 </div>
             </div>
+            <!-- Filtros do Gold (item 4, 51.0.0): client-side sobre os casos
+                 carregados; opções de versão/categoria derivadas dos dados. -->
+            <div class="flex items-center gap-1.5 flex-wrap border-b border-surface-100 bg-surface-50/60 px-3 py-2" data-testid="gold-filter-bar">
+                <select x-model="goldFilter.version" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none" title="Versão do dataset">
+                    <option value="">— versão —</option>
+                    <template x-for="v in goldVersions" :key="v"><option :value="v" x-text="v"></option></template>
+                </select>
+                <select x-model="goldFilter.case_type" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none" title="Tipo do caso">
+                    <option value="">— tipo —</option>
+                    <option value="normal">normal</option>
+                    <option value="adversarial">adversarial</option>
+                </select>
+                <select x-model="goldFilter.split" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none" title="Fatia treino/holdout">
+                    <option value="">— split —</option>
+                    <option value="train">train</option>
+                    <option value="holdout">holdout</option>
+                    <option value="sem">sem split</option>
+                </select>
+                <select x-model="goldFilter.category" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none" title="Categoria (taxonomia)">
+                    <option value="">— categoria —</option>
+                    <template x-for="cat in goldCategories" :key="cat"><option :value="cat" x-text="cat"></option></template>
+                </select>
+                <input x-model.debounce.200ms="goldFilter.q" placeholder="buscar no input/output…"
+                       class="flex-1 min-w-[120px] rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none">
+                <span class="text-[10px] text-surface-400 whitespace-nowrap" data-testid="gold-filter-count"
+                      x-text="filteredGoldCases.length+' de '+goldCases.length+(goldTotal>goldCases.length?(' carregados — '+goldTotal+' no total'):'')"></span>
+                <button x-show="goldFilterActive" @click="clearGoldFilter()" type="button"
+                        class="text-[10px] text-brand-500 hover:text-brand-700 underline">limpar</button>
+            </div>
             <!-- 49.1.0: mesma altura da lista de Execuções (55vh) — antes o Gold
                  travava em 320px (max-h-80) e a linha ficava desbalanceada. -->
             <div class="divide-y divide-surface-50 max-h-[55vh] overflow-y-auto scrollbar-thin" data-testid="gold-list-scroll">
-                <template x-for="c in goldCases" :key="c.id">
+                <template x-for="c in filteredGoldCases" :key="c.id">
                     <div @click="openCase(c)"
                          class="px-5 py-3 cursor-pointer transition-colors hover:bg-surface-50/60"
                          :class="caseDrawerOpen && selectedCase && selectedCase.id===c.id ? 'bg-brand-50/60' : ''">
@@ -127,6 +156,12 @@
                 </template>
             </div>
             <template x-if="goldCases.length===0"><div class="px-5 py-8 text-center text-[12px] text-surface-400">Golden Dataset vazio — adicione casos para começar</div></template>
+            <template x-if="goldCases.length>0 && filteredGoldCases.length===0">
+                <div class="px-5 py-8 text-center text-[12px] text-surface-400">
+                    Nenhum caso no filtro atual —
+                    <button @click="clearGoldFilter()" type="button" class="text-brand-500 hover:text-brand-700 underline">limpar filtros</button>
+                </div>
+            </template>
         </div>
 
         <!-- Eval Runs -->
@@ -166,8 +201,47 @@
                     </button>
                 </div>
             </div>
+            <!-- Filtros das Execuções (item 4, 51.0.0): sobre a janela
+                 carregada (50 runs) — o contador deixa o recorte explícito. -->
+            <div class="flex items-center gap-1.5 flex-wrap border-b border-surface-100 bg-surface-50/60 px-3 py-2" data-testid="runs-filter-bar">
+                <select x-model="runFilter.run_type" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none" title="Tipo do run">
+                    <option value="">— tipo —</option>
+                    <option value="baseline">baseline</option>
+                    <option value="regression">regression</option>
+                    <option value="experiment">experiment</option>
+                </select>
+                <select x-model="runFilter.status" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none" title="Status">
+                    <option value="">— status —</option>
+                    <option value="completed">completed</option>
+                    <option value="running">running</option>
+                    <option value="queued">queued</option>
+                    <option value="failed">failed</option>
+                    <option value="interrupted">interrupted</option>
+                    <option value="timeout">timeout</option>
+                    <!-- terminais reais persistidos (review 51.0.0 [4]): sem
+                         eles, runs abortados por teto/skip ficam inencontráveis -->
+                    <option value="budget_exceeded">budget_exceeded</option>
+                    <option value="no_cases">no_cases</option>
+                    <option value="invalid_agent">invalid_agent</option>
+                    <option value="invalid_pipeline">invalid_pipeline</option>
+                    <option value="invalid_target">invalid_target</option>
+                </select>
+                <select x-model="runFilter.target" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none max-w-[150px]" title="Alvo (agente ou pipeline)">
+                    <option value="">— alvo —</option>
+                    <template x-for="a in agents" :key="'ag-'+a.id"><option :value="a.id" x-text="a.name"></option></template>
+                    <template x-for="p in pipelines" :key="'pl-'+p.id"><option :value="p.id" x-text="'🔗 '+(p.name||p.id.substring(0,8))"></option></template>
+                </select>
+                <select x-model="runFilter.release" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none max-w-[130px]" title="Release">
+                    <option value="">— release —</option>
+                    <template x-for="rl in releases" :key="rl.id"><option :value="rl.id" x-text="rl.name||rl.id.substring(0,8)"></option></template>
+                </select>
+                <span class="text-[10px] text-surface-400 whitespace-nowrap ml-auto" data-testid="runs-filter-count"
+                      x-text="filteredEvalRuns.length+' de '+evalRuns.length+' carregados'"></span>
+                <button x-show="runFilterActive" @click="clearRunFilter()" type="button"
+                        class="text-[10px] text-brand-500 hover:text-brand-700 underline">limpar</button>
+            </div>
             <div class="divide-y divide-surface-50 max-h-[55vh] overflow-y-auto scrollbar-thin" data-testid="runs-list-scroll">
-                <template x-for="r in evalRuns" :key="r.id">
+                <template x-for="r in filteredEvalRuns" :key="r.id">
                     <div data-testid="harness-run-row">
                         <div @click="toggleEval(r)" class="px-5 py-3 cursor-pointer hover:bg-surface-50/50">
                             <div class="flex items-center justify-between mb-1">
@@ -289,6 +363,12 @@
                 </template>
             </div>
             <template x-if="evalRuns.length===0"><div class="px-5 py-8 text-center text-[12px] text-surface-400">Nenhuma avaliação executada</div></template>
+            <template x-if="evalRuns.length>0 && filteredEvalRuns.length===0">
+                <div class="px-5 py-8 text-center text-[12px] text-surface-400">
+                    Nenhum run no filtro atual —
+                    <button @click="clearRunFilter()" type="button" class="text-brand-500 hover:text-brand-700 underline">limpar filtros</button>
+                </div>
+            </template>
         </div>
     </div>
 
@@ -1082,6 +1162,48 @@ function optimizerLoop(){return{
 function harnessPage(){return{
     goldCases:[],evalRuns:[],agents:[],releases:[],showGoldForm:false,showRunForm:false,running:false,
     expandedEval: null,
+    // ── Filtros dos painéis (item 4, 51.0.0) — client-side ──
+    goldFilter:{version:'',case_type:'',split:'',category:'',q:''},
+    runFilter:{run_type:'',status:'',target:'',release:''},
+    goldTotal:0,
+    get goldVersions(){
+        return [...new Set(this.goldCases.map(c=>c.dataset_version).filter(Boolean))].sort();
+    },
+    get goldCategories(){
+        return [...new Set(this.goldCases.map(c=>c.category).filter(Boolean))].sort();
+    },
+    get goldFilterActive(){
+        const f=this.goldFilter;
+        return !!(f.version||f.case_type||f.split||f.category||f.q);
+    },
+    get runFilterActive(){
+        const f=this.runFilter;
+        return !!(f.run_type||f.status||f.target||f.release);
+    },
+    get filteredGoldCases(){
+        const f=this.goldFilter, ql=(f.q||'').toLowerCase();
+        return this.goldCases.filter(c=>
+            (!f.version || c.dataset_version===f.version) &&
+            (!f.case_type || c.case_type===f.case_type) &&
+            (!f.split || (f.split==='sem' ? !c.split : c.split===f.split)) &&
+            (!f.category || (c.category||'')===f.category) &&
+            (!ql || (c.input_text||'').toLowerCase().includes(ql)
+                 || (c.expected_output||'').toLowerCase().includes(ql)));
+    },
+    get filteredEvalRuns(){
+        const f=this.runFilter;
+        return this.evalRuns.filter(r=>
+            // Run EXPANDIDO fica pinado (review 51.0.0 [2]): o poll re-hidrata
+            // a lista e um queued→completed sumiria do filtro status NO MEIO
+            // do acompanhamento, colapsando o detalhe aberto em silêncio.
+            r.id===this.expandedEval || (
+            (!f.run_type || (r.run_type||'')===f.run_type) &&
+            (!f.status || (r.status||'')===f.status) &&
+            (!f.target || r.agent_id===f.target || r.pipeline_id===f.target) &&
+            (!f.release || r.release_id===f.release)));
+    },
+    clearGoldFilter(){this.goldFilter={version:'',case_type:'',split:'',category:'',q:''}},
+    clearRunFilter(){this.runFilter={run_type:'',status:'',target:'',release:''}},
     // Drawer master-detail do caso (padrão da plataforma — cf. catalog_inventory)
     selectedCase: null, caseDrawerOpen: false,
     // Onda 5: comparação side-by-side
@@ -1280,7 +1402,13 @@ function harnessPage(){return{
     },
     redFlagsCount(c){ return this.parseRedFlags(c).length; },
     async load(){
-        try{this.goldCases=(await api.get('/api/v1/gold-cases')).cases||[]}catch{}
+        try{
+            // limit=1000 + total: sem o limit explícito a API devolve 50 e o
+            // contador/dropdowns do filtro mentiriam sobre o dataset (review
+            // 51.0.0 [1]); goldTotal deixa o recorte explícito quando estoura.
+            const g=await api.get('/api/v1/gold-cases?limit=1000');
+            this.goldCases=g.cases||[];this.goldTotal=g.total??this.goldCases.length;
+        }catch{}
         try{
             // limit=50: o painel Baseline-por-alvo agrupa client-side — com o
             // default (20), o baseline de um alvo pouco rodado sumiria.
@@ -1306,6 +1434,23 @@ function harnessPage(){return{
         try{this.agents=(await api.get('/api/v1/agents')).agents||[]}catch{}
         try{this.releases=(await api.get('/api/v1/releases')).releases||[]}catch{}
         try{this.pipelines=(await api.get('/api/v1/pipelines')).pipelines||[]}catch{}
+        this._pruneStaleFilters();
+    },
+    _pruneStaleFilters(){
+        // Filtro fantasma (review 51.0.0 [3/7]): se a opção selecionada
+        // sumiu dos dados (caso excluído/editado, carga falhou), o <select>
+        // nativo renderiza vazio parecendo neutro enquanto o model segue
+        // filtrando tudo — poda o valor órfão de volta para ''.
+        if(this.goldFilter.version && !this.goldVersions.includes(this.goldFilter.version))
+            this.goldFilter.version='';
+        if(this.goldFilter.category && !this.goldCategories.includes(this.goldFilter.category))
+            this.goldFilter.category='';
+        if(this.runFilter.target &&
+           !this.agents.some(a=>a.id===this.runFilter.target) &&
+           !this.pipelines.some(p=>p.id===this.runFilter.target))
+            this.runFilter.target='';
+        if(this.runFilter.release && !this.releases.some(r=>r.id===this.runFilter.release))
+            this.runFilter.release='';
     },
     async createGoldCase(){
         if (!this.goldForm.input_text.trim()) { showToast('Input obrigatório','error'); return; }
@@ -1333,6 +1478,10 @@ function harnessPage(){return{
             }
             this.showGoldForm = false;
             this.resetGoldForm();
+            // Caso salvo que não casa com o filtro ativo 'sumiria' com toast
+            // de sucesso (review 51.0.0 [5]) — limpa o filtro: você sempre
+            // vê o que acabou de salvar.
+            if (this.goldFilterActive) this.clearGoldFilter();
             await this.load();
         } catch(e) { showToast(e.message,'error'); }
     },
@@ -1342,7 +1491,9 @@ function harnessPage(){return{
     this.running=true;try{const r=await api.post('/api/v1/eval-runs/execute',this.runForm);
     // Harness assíncrono (43.0.0): 202 = run enfileirado (job durável) —
     // solta o botão na hora e acompanha por polling até o terminal.
-    if(r.status==='queued'&&r.eval_id){showToast('Harness enfileirado — executando em segundo plano','info');this.showRunForm=false;await this.load();this.pollEval(r.eval_id);this.running=false;return}
+    // Filtro ativo esconderia o run recém-disparado (review 51.0.0 [2]) —
+    // limpa: quem dispara quer VER o run entrar na lista.
+    if(r.status==='queued'&&r.eval_id){showToast('Harness enfileirado — executando em segundo plano','info');this.showRunForm=false;if(this.runFilterActive)this.clearRunFilter();await this.load();this.pollEval(r.eval_id);this.running=false;return}
     // Teto de custo no caminho SÍNCRONO (43.0.0, review [12]): budget_exceeded
     // tem gate_result 'skipped' truthy — sem este guard o toast verde diria
     // "Harness: skipped (NN%)" escondendo o aborto por custo.
