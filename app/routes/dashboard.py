@@ -1226,6 +1226,14 @@ async def import_gold_cases(request: Request, file: UploadFile = File(...),
                                "modo 'atualizar' exige a coluna id (baixe "
                                "o export para obter os ids)"})
                 continue
+            # id-only (review 52.0.0 [1]): payload vazio na fase 2 caía no
+            # motivo FALSO de deleção concorrente + 'reenvie' em loop —
+            # rejeita AQUI com a verdade (e preserva o tudo-ou-nada).
+            if not (set(r["provided"]) - {"id"}):
+                errors.append({"line": r["line"], "motivo":
+                               "nenhuma célula preenchida além do id — "
+                               "nada a atualizar nesta linha"})
+                continue
             if r["id"] in seen_ids:
                 errors.append({"line": r["line"], "motivo":
                                f"id '{r['id']}' duplicado no arquivo (já "
@@ -1279,7 +1287,8 @@ async def import_gold_cases(request: Request, file: UploadFile = File(...),
                 payload["split"] = r["split"]
             # update() False = caso sumiu entre as fases (deleção
             # concorrente) — reportar 'atualizado' aqui seria mentira.
-            if payload and await gold_cases_repo.update(r["id"], payload):
+            # (payload nunca é vazio: linha id-only é rejeitada na fase 1.)
+            if await gold_cases_repo.update(r["id"], payload):
                 updated += 1
                 report.append({"line": r["line"], "status": "atualizado",
                                "id": r["id"]})
@@ -1295,6 +1304,10 @@ async def import_gold_cases(request: Request, file: UploadFile = File(...),
             await gold_cases_repo.create({"id": gid, **payload})
             created += 1
             report.append({"line": r["line"], "status": "criado", "id": gid})
+    # re-sort (review 52.0.0 [4]): a fase 2 pode anexar erros (deleção
+    # concorrente) DEPOIS do sort da fase 1 — sem isto o cap de 200 corta
+    # fora de ordem e o operador perde a linha certa.
+    errors.sort(key=lambda e: e["line"])
     return {
         "message": (f"Import '{mode}': {created} criado(s), "
                     f"{updated} atualizado(s), {len(errors)} rejeitada(s)."),

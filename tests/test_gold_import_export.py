@@ -477,16 +477,29 @@ def _ui_src() -> str:
     return _HARNESS.read_text(encoding="utf-8")
 
 
+def _ui_block(start_tid: str, end_tid: str) -> str:
+    """Janela entre dois data-testids ESTÁVEIS — regex '.*?</div>' não-guloso
+    cortava no primeiro </div> aninhado (fragilidade da revisão [11/12])."""
+    src = _ui_src()
+    i = src.find(f'data-testid="{start_tid}"')
+    j = src.find(f'data-testid="{end_tid}"')
+    assert i != -1, f"{start_tid} ausente"
+    assert j != -1 and j > i, f"{end_tid} ausente ou fora de ordem"
+    return src[i:j]
+
+
 def test_ui_csv_buttons_in_filter_bar():
     """template/exportar/importar vivem NA BARRA DE FILTROS — o export usa
     o escopo do filtro atual (contrato do item 5)."""
-    src = _ui_src()
-    m = re.search(r'data-testid="gold-filter-bar".*?</div>', src, re.S)
-    assert m, "barra de filtros do gold ausente"
-    blk = m.group(0)
+    blk = _ui_block("gold-filter-bar", "gold-csv-import-panel")
     for tid in ("gold-csv-template", "gold-csv-export",
                 "gold-csv-import-toggle"):
         assert f'data-testid="{tid}"' in blk, f"botão {tid} fora da barra"
+    # [review 3] o export server-side cobre o ESCOPO INTEIRO — o tooltip
+    # precisa avisar quando o contador só viu a janela carregada
+    assert "TODO o escopo do filtro no servidor" in blk, (
+        "botão exportar sem o aviso de divergência contador × arquivo"
+    )
 
 
 def test_ui_export_url_carries_filter_scope():
@@ -494,16 +507,20 @@ def test_ui_export_url_carries_filter_scope():
     m = re.search(r"_goldExportUrl\(\)\{.*?\n    \},", src, re.S)
     assert m, "_goldExportUrl ausente"
     blk = m.group(0)
-    for param in ("dataset_version", "case_type", "category", "split", "'q'"):
-        assert param in blk, f"export não propaga o filtro {param}"
+    # [review 10] pares LITERAIS chave-do-filtro → parâmetro — substring
+    # solta deixava passar regressão que perdesse o mapeamento
+    for pair in ("p.set('dataset_version',f.version)",
+                 "p.set('case_type',f.case_type)",
+                 "p.set('category',f.category)",
+                 "p.set('split',f.split)",
+                 "p.set('q',f.q)"):
+        assert pair.replace(" ", "") in blk.replace(" ", ""), (
+            f"export perdeu o mapeamento {pair}"
+        )
 
 
 def test_ui_import_panel_has_modes_and_report():
-    src = _ui_src()
-    m = re.search(r'data-testid="gold-csv-import-panel".*?</template>\s*</div>',
-                  src, re.S)
-    assert m, "painel de import ausente"
-    blk = m.group(0)
+    blk = _ui_block("gold-csv-import-panel", "gold-list-scroll")
     for mode in ("novos", "atualizar", "concatenar"):
         assert f'value="{mode}"' in blk, f"modo {mode} fora do select"
     assert 'data-testid="gold-csv-import-report"' in blk
@@ -522,7 +539,8 @@ def test_ui_import_uses_multipart_and_reloads():
     assert "apply_partial" in blk
     assert "await this.load()" in blk, "lista não recarrega após import"
     # 422 estrito: relatório vem em detail SEM `rejeitados` — normalizado
-    assert "rejeitados:(det.erros||[]).length" in blk, (
+    # somando os truncados ([review 4b]: só .length subcontava >200 erros)
+    assert "rejeitados:((det.erros||[]).length+(det.erros_truncados||0))" in blk, (
         "422 sem normalização de rejeitados — painel pintaria verde no erro"
     )
 
@@ -556,3 +574,92 @@ def test_import_atualizar_edits_single_field_end_to_end(monkeypatch):
     assert r.status_code == 200, r.text
     assert r.json()["atualizados"] == 1
     assert updates["caso-9"] == {"input_text": "Novo texto"}
+
+
+def test_ui_download_surfaces_http_errors():
+    """[review 2] âncora crua era cega a 413/401 — o download agora passa
+    por fetch, checa resp.ok e mostra o detail acionável no toast."""
+    src = _ui_src()
+    m = re.search(r"async _download\(url\)\{.*?\n    \},", src, re.S)
+    assert m, "_download ausente ou não-async"
+    blk = m.group(0)
+    assert "resp.ok" in blk, "download não checa status HTTP"
+    assert "showToast" in blk, "erro de download sem feedback na página"
+    assert "createObjectURL" in blk and "revokeObjectURL" in blk
+
+
+def test_ui_file_kept_when_rows_rejected():
+    """[review 14] com rejeitadas o operador está DEPURANDO o arquivo —
+    limpar o input só em sucesso total."""
+    src = _ui_src()
+    assert "if(!(body.rejeitados>0)) inp.value=''" in src, (
+        "input de arquivo limpo mesmo com linhas rejeitadas"
+    )
+
+
+def test_ui_422_normalization_guards_array_detail():
+    """[review 8] detail em Array (RequestValidationError) num spread de
+    objeto viraria message undefined."""
+    src = _ui_src()
+    assert "!Array.isArray(det)" in src, (
+        "normalização do 422 sem guard de Array"
+    )
+    # [review 4b] rejeitados soma os truncados — subcontagem em >200 erros
+    assert "(det.erros_truncados||0)" in src
+
+
+def test_filter_semantics_parity_js_python():
+    """[review 13] a semântica do filtro do Gold vive DUPLICADA: JS
+    (filteredGoldCases, contador) e Python (_gold_export_filter, arquivo
+    baixado). Este teste trava os marcadores dos DOIS lados — quem mudar
+    um sem o outro quebra aqui e descobre a duplicação."""
+    js = _ui_src()
+    py = (Path(__file__).resolve().parents[1] / "app" / "routes" /
+          "dashboard.py").read_text(encoding="utf-8")
+    # split 'sem' (casos ainda não divididos) nos dois lados
+    assert "f.split==='sem'" in js
+    assert 'split == "sem"' in py
+    # busca q varre input E output nos dois lados
+    assert "input_text" in js and "expected_output" in js
+    m = re.search(r"def _gold_export_filter.*?\n\n", py, re.S)
+    assert m, "_gold_export_filter ausente"
+    assert "input_text" in m.group(0) and "expected_output" in m.group(0), (
+        "q do export não varre os mesmos campos do filtro da UI"
+    )
+
+
+def test_import_atualizar_id_only_rejected_honestly(monkeypatch):
+    """[review 1] linha só com id passava a fase 1 e caía na fase 2 com o
+    motivo FALSO de deleção concorrente + 'reenvie' em loop eterno — agora
+    é rejeitada na FASE 1 com a verdade (e preserva o tudo-ou-nada)."""
+    _allow_admin(monkeypatch)
+    def _boom(*a, **k):
+        raise AssertionError("modo estrito não deveria aplicar nada")
+    monkeypatch.setattr(dash.gold_cases_repo, "update", _boom)
+    monkeypatch.setattr(dash.gold_cases_repo, "find_by_id",
+                        _async({"id": "x"}))
+    txt = "id,input_text,expected_output\nso-id,,\n"
+    r = _upload(_client(), txt, "atualizar")
+    assert r.status_code == 422, r.text
+    det = r.json()["detail"]
+    assert "nenhuma célula preenchida além do id" in det["erros"][0]["motivo"]
+    assert "removido entre" not in str(det), "voltou o motivo mentiroso"
+
+
+def test_import_report_errors_sorted_after_phase2(monkeypatch):
+    """[review 4] erro da fase 2 (deleção concorrente) precisa entrar
+    ORDENADO por linha no relatório — o cap de 200 corta pelo fim."""
+    _allow_admin(monkeypatch)
+    async def _find(cid):
+        return {"id": cid}
+    monkeypatch.setattr(dash.gold_cases_repo, "find_by_id", _find)
+    monkeypatch.setattr(dash.gold_cases_repo, "update", _async(False))
+    txt = ("id,input_text,expected_output\n"
+           "zumbi,linha dois,x\n"
+           ",faltou id na linha tres,x\n")
+    r = _upload(_client(), txt, "atualizar", apply_partial=True)
+    body = r.json()
+    lines = [e["line"] for e in body["erros"]]
+    assert lines == sorted(lines), (
+        f"erros fora de ordem: {lines} — fase 2 anexou depois do sort"
+    )

@@ -105,7 +105,7 @@
                 <button @click="downloadGoldTemplate()" type="button" data-testid="gold-csv-template"
                         class="text-[10px] text-surface-500 hover:text-brand-700 underline" title="Baixa o CSV vazio (só cabeçalho) para preencher">template</button>
                 <button @click="downloadGoldExport()" type="button" data-testid="gold-csv-export"
-                        class="text-[10px] text-surface-500 hover:text-brand-700 underline" title="Baixa os casos do FILTRO atual como CSV (inclui a coluna id para o modo atualizar)">exportar</button>
+                        class="text-[10px] text-surface-500 hover:text-brand-700 underline" title="Baixa os casos do FILTRO atual como CSV (inclui a coluna id para o modo atualizar). Cobre TODO o escopo do filtro no servidor — pode trazer mais linhas do que o contador quando o dataset excede os carregados.">exportar</button>
                 <button @click="importOpen=!importOpen" type="button" data-testid="gold-csv-import-toggle"
                         class="text-[10px] font-semibold hover:text-brand-700 underline"
                         :class="importOpen?'text-brand-700':'text-surface-500'">importar</button>
@@ -1259,11 +1259,27 @@ function harnessPage(){return{
         const qs=p.toString();
         return '/api/v1/gold-cases/export'+(qs?('?'+qs):'');
     },
-    _download(url){
-        // âncora temporária: o Content-Disposition do servidor decide o
-        // nome; cookie de sessão viaja junto (same-origin GET).
-        const a=document.createElement('a');a.href=url;a.download='';
-        document.body.appendChild(a);a.click();a.remove();
+    async _download(url){
+        // fetch em vez de âncora crua (review 52.0.0 [2]): âncora é cega a
+        // status — um 413 ('filtre para exportar em partes') ou 401 virava
+        // download de JSON-lixo sem NENHUM feedback na página.
+        try{
+            const resp=await fetch(url);
+            if(!resp.ok){
+                const body=await resp.json().catch(()=>({}));
+                const det=body.detail;
+                showToast(typeof det==='string'?det:('Download falhou (HTTP '+resp.status+')'),'error');
+                return;
+            }
+            const blob=await resp.blob();
+            const cd=resp.headers.get('Content-Disposition')||'';
+            const m=cd.match(/filename="([^"]+)"/);
+            const a=document.createElement('a');
+            a.href=URL.createObjectURL(blob);
+            a.download=m?m[1]:'gold_cases.csv';
+            document.body.appendChild(a);a.click();a.remove();
+            URL.revokeObjectURL(a.href);
+        }catch(e){showToast(e.message,'error')}
     },
     downloadGoldTemplate(){this._download('/api/v1/gold-cases/import-template')},
     downloadGoldExport(){this._download(this._goldExportUrl())},
@@ -1283,15 +1299,20 @@ function harnessPage(){return{
             if(resp.ok){
                 this.importReport=body;
                 showToast(body.message||'Import concluído', body.rejeitados>0?'info':'success');
-                inp.value='';
+                // arquivo só é limpo em sucesso TOTAL (review 52.0.0 [14]):
+                // com rejeitadas, o operador está depurando ESTE arquivo.
+                if(!(body.rejeitados>0)) inp.value='';
                 await this.load();
             }else{
                 // 422 estrito devolve o relatório dentro de detail — o shape
                 // não tem `rejeitados`; normaliza p/ a borda âmbar do painel.
+                // Array = RequestValidationError do FastAPI (schema), não o
+                // relatório: vira mensagem genérica (spread de array em
+                // objeto produziria message undefined).
                 const det=body.detail;
-                this.importReport=(det&&typeof det==='object')
-                    ?{rejeitados:(det.erros||[]).length||1,...det}
-                    :{message:(det||('HTTP '+resp.status)),erros:[],rejeitados:1};
+                this.importReport=(det&&typeof det==='object'&&!Array.isArray(det))
+                    ?{rejeitados:((det.erros||[]).length+(det.erros_truncados||0))||1,...det}
+                    :{message:(typeof det==='string'?det:('Requisição inválida (HTTP '+resp.status+')')),erros:[],rejeitados:1};
                 showToast(this.importReport.message||'Import recusado','error');
             }
         }catch(e){showToast(e.message,'error')}
