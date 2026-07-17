@@ -113,7 +113,10 @@ def test_list_eval_runs_filters_by_target(monkeypatch):
     monkeypatch.setattr(dash.eval_runs_repo, "find_all", _find_all)
     r = _client().get("/api/v1/eval-runs?agent_id=ag1&release_id=r1")
     assert r.status_code == 200, r.text
-    assert captured == {"agent_id": "ag1", "release_id": "r1", "limit": 20}
+    # 44.0.0: a janela do fetch é 3× o limit pedido (filtro pós-fetch de
+    # experimentos — rajada de challengers não pode expulsar runs reais);
+    # os FILTROS de alvo seguem chegando intactos ao repo.
+    assert captured == {"agent_id": "ag1", "release_id": "r1", "limit": 60}
 
 
 def test_list_eval_runs_filter_pipeline(monkeypatch):

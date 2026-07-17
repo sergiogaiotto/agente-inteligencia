@@ -291,8 +291,10 @@ class TestRotaExecuteXor:
         seen = {}
 
         async def _fake_run(release_id, agent_id, gold_version, run_type,
-                            pipeline_id=None, owner_user_id=None):
+                            pipeline_id=None, owner_user_id=None,
+                            config_overrides=None):
             # owner_user_id (35.2.0): quem disparou vira dono das interactions
+            # config_overrides (44.0.0): experimento — None fora de experiment
             seen.update(release_id=release_id, agent_id=agent_id, pipeline_id=pipeline_id)
             return {"status": "completed", "accuracy": 1.0, "gate_result": "approved"}
 

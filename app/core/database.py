@@ -1429,6 +1429,11 @@ _IDEMPOTENT_MIGRATIONS = [
     # SÍNCRONO em voo num request — o zombie-sweep do reaper só pode curar
     # a primeira (marcar um sync vivo seria corrida com o próprio request).
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS is_job BOOLEAN DEFAULT FALSE",
+    # ── Experimentos de prompt (44.0.0, PR3a do arco Otimização) ──
+    # config_overrides = JSON TEXT do que o run de run_type='experiment'
+    # sobrescreveu via seam do engine ({'system_prompt','skill_purpose'}) —
+    # o SELO auditável da variante avaliada (o agente/skill vivos nunca mudam).
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS config_overrides TEXT",
     # interactions.origin: interações criadas pelo harness são SINTÉTICAS —
     # carimbo ('harness') para segregar das visões de produção e para a
     # retenção própria (harness_synthetic_retention_days). NULL = produção.

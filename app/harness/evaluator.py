@@ -19,6 +19,7 @@ Enriquecimento por caso (Golden Dataset v2):
 """
 
 import re
+import math
 import uuid
 import json
 import time
@@ -91,6 +92,25 @@ def _safe_mean(values: list[float]) -> float | None:
 
 def _safe_round(v: float | None, ndigits: int = 4) -> float | None:
     return round(v, ndigits) if v is not None else None
+
+
+def mcnemar_exact_p(b: int, c: int) -> float:
+    """McNemar EXATO bicaudal sobre pares discordantes (44.0.0, PR3a).
+
+    b = casos onde SÓ o run A passa; c = casos onde SÓ o run B passa.
+    p = 2·P[X ≤ min(b,c)] com X ~ Binomial(b+c, 0.5), capado em 1.0.
+    n=0 → 1.0 (sem sinal). Sem SciPy de propósito (math.comb basta).
+
+    É a estatística honesta para champion-vs-challenger com gold set pequeno
+    (revisão adversarial do plano): com α=0.05, significância exige padrões
+    tipo 6-0, 8-0 ou 9-1 nos discordantes — ranking por média com N=30 é
+    ruído com verniz de ciência."""
+    n = int(b) + int(c)
+    if n <= 0:
+        return 1.0
+    k = min(int(b), int(c))
+    tail = sum(math.comb(n, i) for i in range(k + 1)) * (0.5 ** n)
+    return min(1.0, 2.0 * tail)
 
 
 def _collect_interaction_ids(result: dict) -> list[str]:
@@ -367,12 +387,19 @@ async def _write_drift_events(
         target_filter = (
             {"pipeline_id": pipeline_id} if pipeline_id else {"agent_id": agent_id}
         )
+        # limit=5 + skip de 'experiment' no LEITOR (44.0.0, review [1]): a
+        # segregação de experimentos precisa valer nas DUAS direções — um
+        # challenger concluído não pode virar o b0 do próximo run normal
+        # (drift espúrio no /quality). O repo genérico só filtra igualdade,
+        # então pula-se em Python (5 cobre rajadas curtas de experimentos;
+        # rajadas longas nem chegam aqui — experiment não ESCREVE drift).
         baselines = await eval_runs_repo.find_all(
-            gold_hash=gold_hash, status="completed", limit=1, **target_filter,
+            gold_hash=gold_hash, status="completed", limit=5, **target_filter,
         )
     except Exception as e:
         logger.warning("drift: falha ao buscar baseline: %s", str(e)[:150])
         return 0
+    baselines = [b for b in baselines if (b.get("run_type") or "") != "experiment"]
     if not baselines:
         return 0  # 1º run comparável — sem baseline, sem drift
     b0 = baselines[0]
@@ -426,6 +453,10 @@ async def run_evaluation(
     pipeline_id: str | None = None,
     owner_user_id: str | None = None,
     eval_id: str | None = None,
+    # Experimento (44.0.0, PR3a): overrides efêmeros do texto livre aplicados
+    # via seam do engine — SÓ modo agente (a rota valida; pipeline otimiza um
+    # agente por vez, decisão do plano). None = run normal.
+    config_overrides: dict | None = None,
 ) -> dict:
     """Executa harness contra Golden Dataset e produz relatório multi-dim.
 
@@ -448,6 +479,20 @@ async def run_evaluation(
     gold_context_recall: list[float] = []
     gold_answer_correctness: list[float] = []
     gold_ragas_cost_usd = 0.0
+
+    # Overrides só se aplicam a alvo AGENTE (review [16]): o branch pipeline
+    # não os repassa — aceitar aqui descartaria a variante em silêncio e o
+    # "experimento" mediria o champion duas vezes. Defesa em profundidade
+    # (a rota valida; o worker confia na linha do DB).
+    if pipeline_id and config_overrides:
+        if eval_id:
+            await eval_runs_repo.update(eval_id, {
+                "status": "invalid_target", "gate_result": "skipped"})
+        return {
+            "status": "invalid_target",
+            "message": "config_overrides só é aplicável a alvo AGENTE "
+                       "(pipeline otimiza-se um agente por vez).",
+        }
 
     # Exatamente um alvo (defesa em profundidade — a rota também valida).
     if bool(agent_id) == bool(pipeline_id):
@@ -474,6 +519,12 @@ async def run_evaluation(
             # Alvo do run (Pacote C): antes o run não sabia contra quem rodou.
             "agent_id": agent_id, "pipeline_id": pipeline_id,
             "owner_user_id": owner_user_id,
+            # SELO da variante também no caminho SÍNCRONO (review [2]): sem
+            # isto, experimentos com harness_async_enabled OFF (o default)
+            # ficavam indistinguíveis no banco — impossível auditar QUAL
+            # variante produziu quais métricas.
+            "config_overrides": (json.dumps(config_overrides)
+                                 if config_overrides else None),
         })
 
     filters = {"dataset_version": gold_version} if gold_version != "latest" else {}
@@ -650,6 +701,9 @@ async def run_evaluation(
                     user_input=case["input_text"],
                     channel=case.get("channel", "api"),
                     journey=case.get("journey", ""),
+                    # Experimento (44.0.0): variante de prompt via seam — o
+                    # agente/skill persistidos NUNCA são tocados.
+                    config_overrides=config_overrides,
                     # Golden dataset = avaliação idempotente: cada caso é uma função
                     # pura. 'none' blinda a métrica contra vazamento de histórico
                     # entre casos (reprodutibilidade), independente do default 'auto'.
@@ -1144,8 +1198,10 @@ async def run_evaluation(
     # drift_events. Compara com o baseline comparável (mesmo gold_hash) ANTES de
     # persistir este run (ainda 'running' → não vira baseline de si mesmo).
     # Run abortado por teto NÃO escreve drift: métricas parciais vs baseline
-    # completo gerariam eventos falsos (43.0.0). ───
-    if not budget_aborted:
+    # completo gerariam eventos falsos (43.0.0). Run de EXPERIMENTO idem
+    # (44.0.0): uma variante desafiante pior é resultado esperado do
+    # experimento, não drift da plataforma — segregação total. ───
+    if not budget_aborted and run_type != "experiment":
         await _write_drift_events(
             release_id=release_id, gold_hash=gold_hash,
             current_metrics={
@@ -1182,6 +1238,17 @@ async def run_evaluation(
         dimension_breakdown["routing_phrases"]["failing_dropped"] = True
         _breakdown_json = json.dumps(dimension_breakdown)
     _breakdown_json = _breakdown_json[:32000]
+    # details SEM corte cego (44.0.0, review [9]): o slice [:32000] cortava o
+    # JSON no meio de uma entry → TEXT inválido → o parse tolerante da UI e do
+    # comparador devolvia [] e o run "perdia" TODOS os detalhes (o pareado
+    # McNemar viraria veredito sobre zero casos). Degrada por nº de entries
+    # até caber — JSON sempre VÁLIDO, pior caso com menos casos (o cap é
+    # visível via total_cases > len(details), que o pareado sinaliza).
+    _details_n = min(100, len(details))
+    _details_json = json.dumps(details[:_details_n])
+    while len(_details_json) > 32000 and _details_n > 10:
+        _details_n = max(10, _details_n // 2)
+        _details_json = json.dumps(details[:_details_n])
     await eval_runs_repo.update(eval_id, {
         "total_cases": total, "passed": passed, "failed": failed,
         "accuracy": round(accuracy, 4),
@@ -1206,7 +1273,7 @@ async def run_evaluation(
         "routing_phrases_passed": (routing_phrases or {}).get("passed"),
         "routing_phrases_hash": (routing_phrases or {}).get("phrases_hash"),
         "dimension_breakdown": _breakdown_json,
-        "details": json.dumps(details[:100])[:32000],
+        "details": _details_json,
         # Custo LLM do run (43.0.0): invoke + juiz + RAGAS — visível na UI e
         # base do teto. avg_cost_usd (coluna do schema base, antes nunca
         # populada) = custo médio por caso avaliado.

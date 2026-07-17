@@ -25,6 +25,7 @@ Decisões (espelham `invoke_jobs`, com desvios deliberados):
   para multi-worker sem double-run.
 """
 import asyncio
+import json
 import logging
 from typing import Optional
 
@@ -126,12 +127,22 @@ async def _run_job(eval_id: str) -> None:
             "UPDATE eval_runs SET status='running' "
             "WHERE id=$1 AND status='queued' "
             "RETURNING id, release_id, gold_version, run_type, agent_id, "
-            "pipeline_id, owner_user_id",
+            "pipeline_id, owner_user_id, config_overrides",
             eval_id,
         )
     if not row:
         return  # outro caminho (boot × reaper) já claimou/terminou — no-op
     job = dict(row)
+    # Experimento (44.0.0): overrides selados na linha-job no aceite 202 —
+    # JSON TEXT → dict; corrompido/ausente = run normal (fail-open p/ None,
+    # nunca para um dict inválido virar override fantasma).
+    _overrides = None
+    if job.get("config_overrides"):
+        try:
+            _parsed = json.loads(job["config_overrides"])
+            _overrides = _parsed if isinstance(_parsed, dict) and _parsed else None
+        except Exception:
+            logger.warning("event=eval_job_overrides_corrupt eval_id=%s", eval_id)
     from app.harness.evaluator import run_evaluation
     try:
         await asyncio.wait_for(
@@ -143,6 +154,7 @@ async def _run_job(eval_id: str) -> None:
                 pipeline_id=job.get("pipeline_id"),
                 owner_user_id=job.get("owner_user_id"),
                 eval_id=eval_id,
+                config_overrides=_overrides,
             ),
             timeout=_timeout_minutes() * 60.0,
         )
