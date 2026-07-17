@@ -383,6 +383,9 @@ class RunEvalRequest(BaseModel):
     pipeline_id: Optional[str] = None
     gold_version: str = "latest"; run_type: str = "baseline"
     config_overrides: Optional[dict] = None
+    # Split (48.0.0, PR4a): 'train' | 'holdout' | None (todos). Experimentos
+    # medem no treino; a confirmação final roda no holdout — anti-overfit.
+    gold_split: Optional[str] = None
 
 _MIN_PASSWORD_LEN = 8  # política mínima de senha (SKILL.md §1 / CWE-521)
 

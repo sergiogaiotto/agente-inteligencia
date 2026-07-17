@@ -1176,6 +1176,80 @@ async def delete_eval_run(run_id: str):
     return {"message": "Execução removida"}
 
 
+class GoldSplitRequest(BaseModel):
+    """Auto-split do Golden Dataset (48.0.0, PR4a do arco Otimização)."""
+    gold_version: str = "latest"
+    holdout_pct: float = Field(default=0.3, ge=0.1, le=0.5)
+
+
+@router.post("/gold-cases/auto-split")
+async def auto_split_gold_cases(data: GoldSplitRequest, request: Request):
+    """Divide o gold em TREINO/HOLDOUT (anti-overfit do arco Otimização):
+    - ADVERSARIAIS → holdout SEMPRE (decisão do plano: sentinelas ficam fora
+      do treino do otimizador E fora do feedback do propositor);
+    - normais → estratificado POR CATEGORIA, determinístico (ordenado por id;
+      primeiros ceil(pct·n) de cada categoria vão ao holdout).
+    Re-rodar re-divide (idempotente para o mesmo conjunto). Os runs passados
+    não mudam (gold_hash sela o que cada um avaliou).
+
+    Gate root/admin (review [13]): o split É o controle anti-overfit que
+    governa os fluxos propose/probe/promote (todos root/admin) — reescrevê-lo
+    exige o mesmo papel, senão qualquer usuário subverteria o holdout.
+    TRANSACIONAL (review [3]/[14]): calcula TODAS as atribuições em memória e
+    grava num único executemany numa transação — antes eram N UPDATEs em
+    autocommit (uma falha no meio deixava o gold PARCIALMENTE dividido)."""
+    import math as _math
+    from app.harness.evaluator import gold_version_filters
+    await require_role("root", "admin")(request)
+    cases = await gold_cases_repo.find_all(
+        limit=500, **gold_version_filters(data.gold_version))
+    if not cases:
+        raise HTTPException(404, "Nenhum caso no Golden Dataset para dividir.")
+    by_cat: dict = {}
+    assignments: list[tuple] = []  # (case_id, split)
+    out = {"total": len(cases), "train": 0, "holdout": 0,
+           "adversarial_holdout": 0, "singleton_categories": 0}
+    for c in cases:
+        if (c.get("case_type") or "normal") == "adversarial":
+            assignments.append((c["id"], "holdout"))
+            out["holdout"] += 1
+            out["adversarial_holdout"] += 1
+        else:
+            by_cat.setdefault(c.get("category") or "(sem)", []).append(c)
+    for _cat, group in by_cat.items():
+        group.sort(key=lambda c: str(c.get("id")))
+        # Categoria com 1 só caso: k=0 (não dá para reservar sem esvaziar o
+        # treino dela) — contabilizada para a mensagem NÃO prometer holdout
+        # que não existe (review [9]).
+        if len(group) <= 1:
+            out["singleton_categories"] += 1
+        k = max(1, _math.ceil(data.holdout_pct * len(group))) \
+            if len(group) > 1 else 0
+        for i, c in enumerate(group):
+            split = "holdout" if i < k else "train"
+            assignments.append((c["id"], split))
+            out[split] += 1
+    from app.core.database import _get_pool
+    async with _get_pool().acquire() as con:
+        async with con.transaction():
+            await con.executemany(
+                "UPDATE gold_cases SET split=$2 WHERE id=$1", assignments)
+    # Mensagem honesta: só recomenda o holdout quando ele DE FATO existe.
+    if out["holdout"] > 0:
+        tail = ("Use gold_split='train' nos experimentos e confirme no "
+                "holdout antes de promover.")
+    else:
+        tail = ("ATENÇÃO: nenhum caso foi para o holdout (poucos casos por "
+                "categoria) — sem holdout não há confirmação anti-overfit; "
+                "adicione mais casos por categoria ou marque casos "
+                "manualmente como holdout.")
+    _sing = (f" {out['singleton_categories']} categoria(s) com 1 caso ficaram "
+             "só no treino." if out["singleton_categories"] else "")
+    return {**out, "message": (
+        f"Dividido: {out['train']} treino / {out['holdout']} holdout "
+        f"({out['adversarial_holdout']} adversariais no holdout).{_sing} {tail}")}
+
+
 # ── Comparação side-by-side (§9.5) — Onda 5 ───────────────────────
 
 # Direção de cada métrica: 'up' = maior é melhor; 'down' = menor é melhor.
@@ -1725,6 +1799,13 @@ async def run_harness(data: RunEvalRequest, request: Request):
         raise HTTPException(
             422, f"run_type inválido {data.run_type!r} — use 'baseline', "
                  "'regression' ou 'experiment'.")
+    # ''→None: a UI envia o runForm inteiro (select vazio vem como string
+    # vazia) — mesmo tratamento do alvo.
+    gold_split = data.gold_split or None
+    if gold_split not in (None, "train", "holdout"):
+        raise HTTPException(
+            422, f"gold_split inválido {data.gold_split!r} — use 'train', "
+                 "'holdout' ou omita (todos os casos).")
 
     # ── Experimento de prompt (44.0.0, PR3a): validação do override ──
     # Allowlist estrito = só TEXTO LIVRE (seções seladas — Decisions/Inputs/
@@ -1805,6 +1886,8 @@ async def run_harness(data: RunEvalRequest, request: Request):
             # Experimento (44.0.0): o SELO da variante avaliada — o worker lê
             # daqui; o agente/skill vivos nunca mudam.
             "config_overrides": json.dumps(overrides) if overrides else None,
+            # Fatia do gold (48.0.0): o worker claima e filtra por ela.
+            "gold_split": gold_split,
         })
         harness_jobs.dispatch(eval_id)  # sem vaga → carona do reaper despacha
         return JSONResponse(status_code=202, content={
@@ -1818,7 +1901,7 @@ async def run_harness(data: RunEvalRequest, request: Request):
         result = await run_evaluation(
             data.release_id, agent_id, data.gold_version, data.run_type,
             pipeline_id=pipeline_id, owner_user_id=_caller.get("id"),
-            config_overrides=overrides,
+            config_overrides=overrides, gold_split=gold_split,
         )
         return result
     except Exception as e:

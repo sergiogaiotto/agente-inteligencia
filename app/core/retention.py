@@ -359,10 +359,28 @@ async def purge_synthetic_once() -> dict:
             float(days), _PURGE_BATCH,
         )
         out = await _purge_ids(con, [r["id"] for r in rows])
-    if out["deleted"] or out["scrubbed_verifications"]:
+        # experiment_case_results (48.0.0, PR4a): guarda o TEXTO do output do
+        # agente (potencial PII derivada de gold cases) e NÃO tem
+        # interaction_id/customer_hash — o CASCADE de eval_runs nunca dispara
+        # (eval_runs é histórico de métrica, não purgado). Purga própria por
+        # IDADE na mesma janela sintética (review [11]).
+        eres = await con.execute(
+            "DELETE FROM experiment_case_results WHERE id IN ("
+            "  SELECT id FROM experiment_case_results "
+            "  WHERE created_at < now() - ($1 * interval '1 day') "
+            "  ORDER BY created_at LIMIT $2)",
+            float(days), _PURGE_BATCH,
+        )
+        try:
+            out["experiment_captures_deleted"] = int(str(eres).split()[-1])
+        except Exception:
+            out["experiment_captures_deleted"] = 0
+    if out["deleted"] or out["scrubbed_verifications"] \
+            or out.get("experiment_captures_deleted"):
         logger.info("event=retention_synthetic_purged deleted=%s "
-                    "scrubbed_verifications=%s days=%s",
-                    out["deleted"], out["scrubbed_verifications"], days)
+                    "scrubbed_verifications=%s experiment_captures=%s days=%s",
+                    out["deleted"], out["scrubbed_verifications"],
+                    out.get("experiment_captures_deleted", 0), days)
     return out
 
 

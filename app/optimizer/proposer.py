@@ -168,9 +168,16 @@ def summarize_gold(cases: list[dict]) -> dict:
     }
 
 
-def summarize_last_run(run: dict | None) -> dict | None:
+def summarize_last_run(run: dict | None,
+                       exclude_case_ids: set | None = None) -> dict | None:
     """Falhas do último run concluído (qualquer tipo, com o tipo anotado) —
-    o 'feedback' grounded do propositor. Red flags STRIPPED na fonte."""
+    o 'feedback' grounded do propositor. Red flags STRIPPED na fonte.
+
+    exclude_case_ids (48.0.0, PR4a — review [1]/[6]): case_ids do HOLDOUT.
+    O último run pode ter avaliado TODOS os casos (um baseline 'todos'), e
+    seus details incluiriam falhas de holdout — o feedback é o grounding mais
+    influente do propositor, então vazar padrões de falha do holdout aqui
+    anularia o anti-overfit. Filtramos essas falhas fora."""
     if not run:
         return None
     details = run.get("details") or []
@@ -179,10 +186,13 @@ def summarize_last_run(run: dict | None) -> dict | None:
             details = json.loads(details)
         except (json.JSONDecodeError, TypeError):
             details = []
+    excl = exclude_case_ids or set()
     failures = []
     for d in details:
         if not isinstance(d, dict) or d.get("passed"):
             continue
+        if d.get("case_id") in excl:
+            continue  # falha de caso de HOLDOUT — invisível ao propositor
         reasons = strip_red_flag_literals(d.get("failure_reasons") or [])
         if d.get("error"):
             reasons.append("erro de execução (detalhes omitidos)")

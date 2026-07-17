@@ -1461,6 +1461,28 @@ _IDEMPOTENT_MIGRATIONS = [
     # Índice parcial: o purge varre só as carimbadas (minoria das linhas).
     "ALTER TABLE interactions ADD COLUMN IF NOT EXISTS origin TEXT",
     "CREATE INDEX IF NOT EXISTS idx_interactions_origin ON interactions (origin) WHERE origin IS NOT NULL",
+    # ── Split train/holdout + captura por caso (48.0.0, PR4a) ──
+    # gold_cases.split: 'holdout' = NUNCA visto pelo propositor e reservado à
+    # confirmação final (anti-overfit: com gold pequeno, otimizar e medir no
+    # MESMO conjunto infla o ganho); NULL/'train' = treino.
+    # eval_runs.gold_split: qual fatia o run avaliou (transparência + aviso
+    # na promoção quando o par foi medido só no treino).
+    "ALTER TABLE gold_cases ADD COLUMN IF NOT EXISTS split TEXT",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS gold_split TEXT",
+    # experiment_case_results: outputs POR CASO de runs 'experiment' — o
+    # details do eval_run não persiste o texto (cap 32KB) e o loop reflexivo
+    # (PR4b) precisa de (case_id, output, motivos) para a mutação GEPA-style.
+    # FK CASCADE: apagar o run (housekeeping) leva as capturas junto.
+    """CREATE TABLE IF NOT EXISTS experiment_case_results (
+        id TEXT PRIMARY KEY,
+        eval_id TEXT NOT NULL REFERENCES eval_runs(id) ON DELETE CASCADE,
+        case_id TEXT NOT NULL,
+        passed BOOLEAN,
+        output TEXT,
+        failure_reasons TEXT DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_experiment_case_results_eval ON experiment_case_results (eval_id)",
 ]
 
 
