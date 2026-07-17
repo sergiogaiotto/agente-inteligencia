@@ -464,3 +464,95 @@ def test_export_filename_sanitizado(monkeypatch):
     cd = r.headers["content-disposition"]
     fname = cd.split('filename="')[1].rstrip('"')
     assert fname == "gold_cases_v_1_x.csv", cd
+
+
+# ── UI do CSV no harness (parte 2 do item 5) ──────────────────────────
+import re
+from pathlib import Path
+
+_HARNESS = Path(__file__).resolve().parents[1] / "app" / "templates" / "pages" / "harness.html"
+
+
+def _ui_src() -> str:
+    return _HARNESS.read_text(encoding="utf-8")
+
+
+def test_ui_csv_buttons_in_filter_bar():
+    """template/exportar/importar vivem NA BARRA DE FILTROS — o export usa
+    o escopo do filtro atual (contrato do item 5)."""
+    src = _ui_src()
+    m = re.search(r'data-testid="gold-filter-bar".*?</div>', src, re.S)
+    assert m, "barra de filtros do gold ausente"
+    blk = m.group(0)
+    for tid in ("gold-csv-template", "gold-csv-export",
+                "gold-csv-import-toggle"):
+        assert f'data-testid="{tid}"' in blk, f"botão {tid} fora da barra"
+
+
+def test_ui_export_url_carries_filter_scope():
+    src = _ui_src()
+    m = re.search(r"_goldExportUrl\(\)\{.*?\n    \},", src, re.S)
+    assert m, "_goldExportUrl ausente"
+    blk = m.group(0)
+    for param in ("dataset_version", "case_type", "category", "split", "'q'"):
+        assert param in blk, f"export não propaga o filtro {param}"
+
+
+def test_ui_import_panel_has_modes_and_report():
+    src = _ui_src()
+    m = re.search(r'data-testid="gold-csv-import-panel".*?</template>\s*</div>',
+                  src, re.S)
+    assert m, "painel de import ausente"
+    blk = m.group(0)
+    for mode in ("novos", "atualizar", "concatenar"):
+        assert f'value="{mode}"' in blk, f"modo {mode} fora do select"
+    assert 'data-testid="gold-csv-import-report"' in blk
+    assert "erros_truncados" in blk, "relatório não expõe truncamento"
+    assert "célula vazia MANTÉM" in blk, (
+        "painel não documenta a semântica parcial do modo atualizar"
+    )
+
+
+def test_ui_import_uses_multipart_and_reloads():
+    src = _ui_src()
+    m = re.search(r"async importGoldCsv\(\)\{.*?\n    \},", src, re.S)
+    assert m, "importGoldCsv ausente"
+    blk = m.group(0)
+    assert "FormData" in blk, "import sem multipart"
+    assert "apply_partial" in blk
+    assert "await this.load()" in blk, "lista não recarrega após import"
+    # 422 estrito: relatório vem em detail SEM `rejeitados` — normalizado
+    assert "rejeitados:(det.erros||[]).length" in blk, (
+        "422 sem normalização de rejeitados — painel pintaria verde no erro"
+    )
+
+
+def test_parse_atualizar_mode_allows_empty_core_fields():
+    """Achado do E2E ao vivo da UI (52.0.0): no modo atualizar a semântica
+    parcial vale TAMBÉM para input/output — célula vazia mantém o valor,
+    senão é impossível editar um campo sem reenviar o resto."""
+    txt = "id,input_text,expected_output\nabc,Só o input muda,\n"
+    rows, errors = parse_gold_csv(txt, mode="atualizar")
+    assert errors == []
+    assert rows[0]["provided"] == {"id", "input_text"}
+    # nos modos de criação continua obrigatório
+    rows2, errors2 = parse_gold_csv(txt, mode="novos")
+    assert rows2 == [] and "expected_output vazio" in errors2[0]["motivo"]
+
+
+def test_import_atualizar_edits_single_field_end_to_end(monkeypatch):
+    """Rota + parser juntos: CSV só com id+input_text atualiza SÓ o input."""
+    _allow_admin(monkeypatch)
+    updates = {}
+    async def _find(cid):
+        return {"id": cid}
+    async def _update(cid, payload):
+        updates[cid] = payload
+        return True
+    monkeypatch.setattr(dash.gold_cases_repo, "find_by_id", _find)
+    monkeypatch.setattr(dash.gold_cases_repo, "update", _update)
+    txt = "id,input_text,expected_output\ncaso-9,Novo texto,\n"
+    r = _upload(_client(), txt, "atualizar")
+    assert r.status_code == 200, r.text
+    assert r.json()["atualizados"] == 1
+    assert updates["caso-9"] == {"input_text": "Novo texto"}

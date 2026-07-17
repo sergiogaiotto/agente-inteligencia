@@ -100,6 +100,49 @@
                       x-text="filteredGoldCases.length+' de '+goldCases.length+(goldTotal>goldCases.length?(' carregados — '+goldTotal+' no total'):'')"></span>
                 <button x-show="goldFilterActive" @click="clearGoldFilter()" type="button"
                         class="text-[10px] text-brand-500 hover:text-brand-700 underline">limpar</button>
+                <!-- CSV no ESCOPO DO FILTRO (item 5, 52.0.0) -->
+                <span class="mx-1 h-4 w-px bg-surface-200"></span>
+                <button @click="downloadGoldTemplate()" type="button" data-testid="gold-csv-template"
+                        class="text-[10px] text-surface-500 hover:text-brand-700 underline" title="Baixa o CSV vazio (só cabeçalho) para preencher">template</button>
+                <button @click="downloadGoldExport()" type="button" data-testid="gold-csv-export"
+                        class="text-[10px] text-surface-500 hover:text-brand-700 underline" title="Baixa os casos do FILTRO atual como CSV (inclui a coluna id para o modo atualizar)">exportar</button>
+                <button @click="importOpen=!importOpen" type="button" data-testid="gold-csv-import-toggle"
+                        class="text-[10px] font-semibold hover:text-brand-700 underline"
+                        :class="importOpen?'text-brand-700':'text-surface-500'">importar</button>
+            </div>
+            <!-- Painel de import CSV (item 5): 3 modos + relatório linha a linha -->
+            <div x-show="importOpen" x-cloak x-transition class="border-b border-surface-100 bg-amber-50/40 px-3 py-2.5 space-y-2" data-testid="gold-csv-import-panel">
+                <div class="flex items-center gap-2 flex-wrap">
+                    <input type="file" accept=".csv,text/csv" x-ref="goldCsvFile" @change="importReport=null"
+                           class="text-[10px] file:mr-2 file:rounded-md file:border-0 file:bg-white file:px-2 file:py-1 file:text-[10px] file:font-semibold file:text-brand-700 hover:file:bg-brand-50">
+                    <select x-model="importMode" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none" title="novos: id vazio; atualizar: casa por id e muda SÓ células preenchidas; concatenar: tudo vira caso novo">
+                        <option value="novos">novos (id vazio)</option>
+                        <option value="atualizar">atualizar (por id)</option>
+                        <option value="concatenar">concatenar</option>
+                    </select>
+                    <label class="flex items-center gap-1 text-[10px] text-surface-500" title="Com erro em alguma linha: aplicar mesmo assim as válidas (default: nada é aplicado)">
+                        <input type="checkbox" x-model="importPartial" class="rounded border-surface-300"> aplicar só as válidas
+                    </label>
+                    <button @click="importGoldCsv()" :disabled="!!importBusy" data-testid="gold-csv-import-send"
+                            class="rounded-lg bg-brand-500 px-3 py-1 text-[10px] font-semibold text-white hover:bg-brand-600 disabled:opacity-40"
+                            x-text="importBusy?'Enviando…':'Enviar'"></button>
+                    <span class="text-[10px] text-surface-400">CSV UTF-8 · até 5MB/2000 linhas · <span class="font-semibold">atualizar</span>: célula vazia MANTÉM o valor atual</span>
+                </div>
+                <template x-if="importReport">
+                    <div class="rounded-lg border bg-white p-2 text-[10px] space-y-1"
+                         :class="importReport.rejeitados>0?'border-amber-200':'border-emerald-200'"
+                         data-testid="gold-csv-import-report">
+                        <p class="font-semibold" :class="importReport.rejeitados>0?'text-amber-800':'text-emerald-700'" x-text="importReport.message"></p>
+                        <template x-if="(importReport.erros||[]).length">
+                            <div class="max-h-32 overflow-y-auto scrollbar-thin space-y-0.5 font-mono">
+                                <template x-for="(e, ei) in importReport.erros" :key="ei">
+                                    <div class="text-rose-700"><span class="text-surface-400" x-text="'linha '+e.line+': '"></span><span x-text="e.motivo"></span></div>
+                                </template>
+                                <p x-show="importReport.erros_truncados>0" class="text-surface-400" x-text="'… +'+importReport.erros_truncados+' erro(s) omitido(s)'"></p>
+                            </div>
+                        </template>
+                    </div>
+                </template>
             </div>
             <!-- 49.1.0: mesma altura da lista de Execuções (55vh) — antes o Gold
                  travava em 320px (max-h-80) e a linha ficava desbalanceada. -->
@@ -1204,6 +1247,56 @@ function harnessPage(){return{
     },
     clearGoldFilter(){this.goldFilter={version:'',case_type:'',split:'',category:'',q:''}},
     clearRunFilter(){this.runFilter={run_type:'',status:'',target:'',release:''}},
+    // ── CSV do Golden Dataset no escopo do filtro (item 5, 52.0.0) ──
+    importOpen:false,importMode:'novos',importPartial:false,importBusy:false,importReport:null,
+    _goldExportUrl(){
+        const f=this.goldFilter, p=new URLSearchParams();
+        if(f.version)p.set('dataset_version',f.version);
+        if(f.case_type)p.set('case_type',f.case_type);
+        if(f.category)p.set('category',f.category);
+        if(f.split)p.set('split',f.split);
+        if(f.q)p.set('q',f.q);
+        const qs=p.toString();
+        return '/api/v1/gold-cases/export'+(qs?('?'+qs):'');
+    },
+    _download(url){
+        // âncora temporária: o Content-Disposition do servidor decide o
+        // nome; cookie de sessão viaja junto (same-origin GET).
+        const a=document.createElement('a');a.href=url;a.download='';
+        document.body.appendChild(a);a.click();a.remove();
+    },
+    downloadGoldTemplate(){this._download('/api/v1/gold-cases/import-template')},
+    downloadGoldExport(){this._download(this._goldExportUrl())},
+    async importGoldCsv(){
+        const inp=this.$refs.goldCsvFile;
+        if(!inp||!inp.files||!inp.files.length){showToast('Escolha um arquivo CSV','error');return}
+        this.importBusy=true;this.importReport=null;
+        const fd=new FormData();
+        fd.append('file',inp.files[0]);
+        fd.append('mode',this.importMode);
+        fd.append('apply_partial',String(this.importPartial));
+        try{
+            // fetch cru: api.post é JSON-only; multipart precisa do browser
+            // montar o boundary (NÃO setar Content-Type manualmente).
+            const resp=await fetch('/api/v1/gold-cases/import',{method:'POST',body:fd});
+            const body=await resp.json().catch(()=>({}));
+            if(resp.ok){
+                this.importReport=body;
+                showToast(body.message||'Import concluído', body.rejeitados>0?'info':'success');
+                inp.value='';
+                await this.load();
+            }else{
+                // 422 estrito devolve o relatório dentro de detail — o shape
+                // não tem `rejeitados`; normaliza p/ a borda âmbar do painel.
+                const det=body.detail;
+                this.importReport=(det&&typeof det==='object')
+                    ?{rejeitados:(det.erros||[]).length||1,...det}
+                    :{message:(det||('HTTP '+resp.status)),erros:[],rejeitados:1};
+                showToast(this.importReport.message||'Import recusado','error');
+            }
+        }catch(e){showToast(e.message,'error')}
+        this.importBusy=false;
+    },
     // Drawer master-detail do caso (padrão da plataforma — cf. catalog_inventory)
     selectedCase: null, caseDrawerOpen: false,
     // Onda 5: comparação side-by-side

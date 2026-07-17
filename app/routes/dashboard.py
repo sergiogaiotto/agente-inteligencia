@@ -1206,7 +1206,7 @@ async def import_gold_cases(request: Request, file: UploadFile = File(...),
     except UnicodeDecodeError:
         raise HTTPException(422, "Arquivo não é UTF-8 — salve como 'CSV UTF-8' "
                                  "no Excel/LibreOffice e tente de novo.")
-    rows, errors = parse_gold_csv(text)
+    rows, errors = parse_gold_csv(text, mode=mode)
     if len(rows) > _GOLD_IMPORT_MAX_ROWS:
         raise HTTPException(413, f"{len(rows)} linhas — máximo "
                                  f"{_GOLD_IMPORT_MAX_ROWS} por import.")
@@ -1237,12 +1237,18 @@ async def import_gold_cases(request: Request, file: UploadFile = File(...),
                 errors.append({"line": r["line"], "motivo":
                                f"id '{r['id']}' não existe no Golden Dataset"})
                 continue
-        try:
-            GoldCaseCreate(**r["data"])
-        except Exception as e:
-            errors.append({"line": r["line"], "motivo":
-                           f"validação: {str(e)[:200]}"})
-            continue
+        if mode != "atualizar":
+            # criação: o shape completo precisa fechar com o GoldCaseCreate.
+            # No atualizar PARCIAL os campos não-enviados carregam defaults
+            # de preenchimento que NÃO serão gravados — validar o dict cheio
+            # rejeitaria linhas legítimas; os formatos por campo já foram
+            # validados no parser.
+            try:
+                GoldCaseCreate(**r["data"])
+            except Exception as e:
+                errors.append({"line": r["line"], "motivo":
+                               f"validação: {str(e)[:200]}"})
+                continue
         valid.append(r)
 
     errors.sort(key=lambda e: e["line"])

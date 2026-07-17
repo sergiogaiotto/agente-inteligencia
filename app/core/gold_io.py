@@ -110,9 +110,14 @@ def _parse_weight(cell: str) -> float | str:
         return f"weight não numérico '{cell}'"
 
 
-def parse_gold_csv(text: str) -> tuple[list[dict], list[dict]]:
+def parse_gold_csv(text: str, mode: str = "novos") -> tuple[list[dict], list[dict]]:
     """CSV → (linhas válidas, erros). Cada linha válida vira um dict pronto
     para o shape do GoldCaseCreate + {'id','split','provided'} à parte.
+
+    `mode='atualizar'`: input_text/expected_output VAZIOS deixam de ser erro
+    — a semântica parcial (célula vazia MANTÉM o valor atual) vale para as
+    colunas obrigatórias também; sem isso era impossível editar só um campo
+    sem reenviar o resto (achado do E2E ao vivo da própria UI, 52.0.0).
 
     - `line`: linha FÍSICA do arquivo via reader.line_num (cabeçalho=1) —
       células quoted com quebra de linha e linhas em branco NÃO deslocam a
@@ -178,10 +183,11 @@ def parse_gold_csv(text: str) -> tuple[list[dict], list[dict]]:
         problems: list[str] = []
         input_text = get("input_text")
         expected_output = get("expected_output")
-        if not input_text:
-            problems.append("input_text vazio")
-        if not expected_output:
-            problems.append("expected_output vazio")
+        if mode != "atualizar":
+            if not input_text:
+                problems.append("input_text vazio")
+            if not expected_output:
+                problems.append("expected_output vazio")
         case_type = get("case_type").lower() or "normal"
         if case_type not in _VALID_CASE_TYPES:
             problems.append(f"case_type inválido '{get('case_type')}' "
