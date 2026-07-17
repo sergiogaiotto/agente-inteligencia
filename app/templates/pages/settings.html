@@ -226,6 +226,27 @@
                 </p>
             </div>
 
+            <!-- Otimizador de prompt (45.0.0, PR3b — Experimento de prompt no Harness) -->
+            <div class="rounded-xl border-2 border-brand-200 bg-brand-50/30 p-4" data-testid="routing-optimizer-block">
+                <div class="flex items-start justify-between gap-3 mb-2">
+                    <div class="flex-1 min-w-0">
+                        <h4 class="text-[13px] font-bold text-brand-900">🧪 Otimizador de prompt</h4>
+                        <p class="text-[11px] text-brand-800 leading-relaxed mt-0.5" x-text="routingDescriptions.optimizer || ''"></p>
+                    </div>
+                    <span class="rounded-full bg-brand-100 px-2 py-0.5 text-[10px] font-mono font-bold text-brand-800 shrink-0">optimizer</span>
+                </div>
+                <select x-model="routingForm.optimizer" @change="routingDirty = true" data-testid="routing-optimizer-select"
+                        class="w-full rounded-lg border border-brand-200 bg-white px-3 py-2 text-[12px] font-mono outline-none focus:border-brand-400">
+                    <template x-for="opt in routingOptions" :key="opt.value">
+                        <option :value="opt.value" x-text="opt.label + (opt.multimodal ? ' 🖼' : '')"></option>
+                    </template>
+                </select>
+                <p class="text-[10px] text-brand-800 mt-1.5">
+                    <strong>Recomendado:</strong> modelo <strong>diferente</strong> do papel "LLM como Juiz" —
+                    o mesmo modelo propondo e julgando variantes seleciona prompts que agradam a si próprio (Goodhart).
+                </p>
+            </div>
+
             <!-- Multimodal fallback -->
             <div class="rounded-xl border-2 border-red-200 bg-red-50/30 p-4">
                 <div class="flex items-start justify-between gap-3 mb-2">
@@ -1863,7 +1884,7 @@ function settingsPage() {
         },
 
         /* ── Roteamento LLM (Onda 7) ── */
-        routingForm: {tool_calling:'', reasoning:'', instruct:'', classification:'', skill_generation:'', judge:'', multimodal_fallback:'', fallback_show_in_trace:true},
+        routingForm: {tool_calling:'', reasoning:'', instruct:'', classification:'', skill_generation:'', judge:'', optimizer:'', multimodal_fallback:'', fallback_show_in_trace:true},
         routingDefaults: {},
         routingDescriptions: {},
         routingDirty: false, routingSaving: false, routingLastSaved: '',
@@ -1992,6 +2013,7 @@ function settingsPage() {
                     classification: r.routing?.classification || '',
                     skill_generation: r.routing?.skill_generation || '',
                     judge: r.routing?.judge || '',
+                    optimizer: r.routing?.optimizer || '',
                     multimodal_fallback: r.routing?.multimodal_fallback || '',
                     // Default true (transparência) quando o backend não informa.
                     fallback_show_in_trace: r.fallback_show_in_trace !== false,
@@ -2019,6 +2041,8 @@ function settingsPage() {
                 classification: this.routingDefaults.classification || 'maritaca/sabia-4',
                 skill_generation: this.routingDefaults.skill_generation || 'azure/gpt-4o',
                 judge: this.routingDefaults.judge || 'azure/gpt-4o',
+                // ≠ judge por default (anti-Goodhart do Experimento de prompt)
+                optimizer: this.routingDefaults.optimizer || 'gpt-oss-120b/openai/gpt-oss-120b',
                 multimodal_fallback: this.routingDefaults.multimodal_fallback || 'azure/gpt-4o',
                 // Padrão recomendado: mostrar a contingência (transparência).
                 fallback_show_in_trace: true,

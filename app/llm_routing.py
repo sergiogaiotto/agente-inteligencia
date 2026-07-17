@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # ─── Catálogo ──────────────────────────────────────────────────────
 
 TASK_TYPES = ("tool_calling", "reasoning", "instruct", "classification",
-              "skill_generation", "judge")
+              "skill_generation", "judge", "optimizer")
 
 DEFAULT_ROUTING: dict[str, str] = {
     "tool_calling": "gpt-oss-120b/openai/gpt-oss-120b",
@@ -61,6 +61,14 @@ DEFAULT_ROUTING: dict[str, str] = {
     # VERIFIER_JUDGE_MODEL quando o operador não salvou rota na UI (ver
     # _apply_judge_env_default) — retrocompat com instalações pré-UI.
     "judge": "azure/gpt-4o",
+    # optimizer: PROPOSITOR de variantes de prompt (45.0.0, PR3b do arco
+    # Otimização). Recomendação anti-Goodhart: provider/modelo DIFERENTE do
+    # papel `judge` — o mesmo modelo propondo E julgando variantes seleciona
+    # prompts que agradam a si próprio. Por isso o default é o hub gpt-oss
+    # (≠ azure/gpt-4o do judge) — com default igual, TODA instalação nova
+    # nasceria com o aviso permanente de Goodhart na rota /optimizer/propose
+    # (a rota também re-checa o modelo REALMENTE usado pós-fallback).
+    "optimizer": "gpt-oss-120b/openai/gpt-oss-120b",
     "multimodal_fallback": "azure/gpt-4o",
 }
 
