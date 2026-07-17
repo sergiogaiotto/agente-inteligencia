@@ -127,7 +127,7 @@ async def _run_job(eval_id: str) -> None:
             "UPDATE eval_runs SET status='running' "
             "WHERE id=$1 AND status='queued' "
             "RETURNING id, release_id, gold_version, run_type, agent_id, "
-            "pipeline_id, owner_user_id, config_overrides",
+            "pipeline_id, owner_user_id, config_overrides, gold_split",
             eval_id,
         )
     if not row:
@@ -155,6 +155,7 @@ async def _run_job(eval_id: str) -> None:
                 owner_user_id=job.get("owner_user_id"),
                 eval_id=eval_id,
                 config_overrides=_overrides,
+                gold_split=job.get("gold_split"),
             ),
             timeout=_timeout_minutes() * 60.0,
         )

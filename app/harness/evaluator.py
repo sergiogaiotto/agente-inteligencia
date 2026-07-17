@@ -94,6 +94,42 @@ def _safe_round(v: float | None, ndigits: int = 4) -> float | None:
     return round(v, ndigits) if v is not None else None
 
 
+def gold_version_filters(gold_version: str) -> dict:
+    """Filtro de dataset por gold_version (48.0.0): 'latest' = sem filtro
+    (todos os datasets). SSOT — antes o idioma
+    `{"dataset_version": v} if v != "latest" else {}` estava copiado em 4
+    lugares (review PR4a [15]); agora todos importam daqui."""
+    return {"dataset_version": gold_version} if gold_version != "latest" else {}
+
+
+async def _flush_experiment_captures(eval_id: str, rows: list[tuple]) -> None:
+    """Grava as capturas por caso de UM run 'experiment' de uma vez (48.0.0,
+    PR4a). O details do eval_run não persiste o TEXTO do output (cap 32KB) e
+    o loop reflexivo (PR4b) precisa de (case_id, output, motivos) para a
+    mutação GEPA-style. UM acquire + executemany numa transação (review [16]:
+    antes era 1 acquire por caso); FK CASCADE limpa junto do run.
+    failure_reasons: truncamos a LISTA (elementos + contagem) ANTES do
+    json.dumps — nunca fatiar a STRING do JSON (cortaria no meio de um token
+    e gravaria JSON inválido, review [5])."""
+    if not rows:
+        return
+    payload = [
+        (f"ecr_{uuid.uuid4().hex[:16]}", eval_id, case_id, bool(passed),
+         (output or "")[:4000],
+         json.dumps([str(r)[:500] for r in (reasons or [])][:20]))
+        for (case_id, passed, output, reasons) in rows
+    ]
+    from app.core.database import _get_pool
+    async with _get_pool().acquire() as con:
+        async with con.transaction():
+            await con.executemany(
+                "INSERT INTO experiment_case_results "
+                "(id, eval_id, case_id, passed, output, failure_reasons) "
+                "VALUES ($1,$2,$3,$4,$5,$6)",
+                payload,
+            )
+
+
 def mcnemar_exact_p(b: int, c: int) -> float:
     """McNemar EXATO bicaudal sobre pares discordantes (44.0.0, PR3a).
 
@@ -457,6 +493,12 @@ async def run_evaluation(
     # via seam do engine — SÓ modo agente (a rota valida; pipeline otimiza um
     # agente por vez, decisão do plano). None = run normal.
     config_overrides: dict | None = None,
+    # Split train/holdout (48.0.0, PR4a): 'train' = casos com split≠'holdout'
+    # (NULL conta como treino — retrocompat); 'holdout' = só os reservados.
+    # None = todos (comportamento de sempre). case_ids = subconjunto por id
+    # (sonda go/no-go / minibatch — uso interno, sem superfície HTTP).
+    gold_split: str | None = None,
+    case_ids: list[str] | None = None,
 ) -> dict:
     """Executa harness contra Golden Dataset e produz relatório multi-dim.
 
@@ -525,10 +567,24 @@ async def run_evaluation(
             # variante produziu quais métricas.
             "config_overrides": (json.dumps(config_overrides)
                                  if config_overrides else None),
+            # Fatia avaliada (48.0.0): transparência do split — a promoção
+            # avisa quando o par foi medido só no TREINO.
+            "gold_split": gold_split,
         })
+    elif gold_split:
+        # Linha-job pré-criada (202): carimba a fatia claimada pelo worker.
+        await eval_runs_repo.update(eval_id, {"gold_split": gold_split})
 
-    filters = {"dataset_version": gold_version} if gold_version != "latest" else {}
-    cases = await gold_cases_repo.find_all(limit=500, **filters)
+    cases = await gold_cases_repo.find_all(
+        limit=500, **gold_version_filters(gold_version))
+    # Split/subset (48.0.0) ANTES do no_cases: fatia vazia encerra honesto.
+    if gold_split == "train":
+        cases = [c for c in cases if (c.get("split") or "") != "holdout"]
+    elif gold_split == "holdout":
+        cases = [c for c in cases if (c.get("split") or "") == "holdout"]
+    if case_ids:
+        _wanted = set(case_ids)
+        cases = [c for c in cases if c.get("id") in _wanted]
     if not cases:
         await eval_runs_repo.update(eval_id, {"status": "no_cases", "gate_result": "skipped"})
         return {"eval_id": eval_id, "status": "no_cases", "message": "Nenhum caso no Golden Dataset"}
@@ -655,6 +711,10 @@ async def run_evaluation(
     run_invoke_cost_usd = 0.0
     run_judge_cost_usd = 0.0
     budget_aborted = False
+    # Capturas por caso do EXPERIMENTO (48.0.0) — acumuladas e gravadas UMA
+    # vez após o loop (review [16]/[17]: evita N acquires e um write morto por
+    # caso). (case_id, passed, output, failure_reasons).
+    experiment_captures: list[tuple] = []
 
     for case in cases:
         if budget_usd > 0 and (
@@ -903,6 +963,11 @@ async def run_evaluation(
             }
             if failure_reasons:
                 entry["failure_reasons"] = failure_reasons
+            # Captura por caso do EXPERIMENTO (48.0.0) — acumula; flush único
+            # após o loop.
+            if run_type == "experiment":
+                experiment_captures.append(
+                    (case["id"], case_passed, output, failure_reasons))
             if pipeline_id:
                 # Rota percorrida — auditável no drawer do run (quem completou,
                 # quem foi pulado). Status abreviado p/ caber no cap de 32KB
@@ -987,6 +1052,10 @@ async def run_evaluation(
                 "error": str(e),
                 "dim_skipped": ["factuality", "completeness", "tone", "safety"],
             })
+            if run_type == "experiment":
+                experiment_captures.append(
+                    (case["id"], False, "",
+                     ["erro de execução (detalhes nos logs)"]))
 
         # ─── Bucket por categoria (incluindo dim acumuladas) ───
         bucket = by_category.setdefault(category, {
@@ -1006,6 +1075,15 @@ async def run_evaluation(
             v = last.get(src_key)
             if isinstance(v, (int, float)):
                 bucket[dst_key].append(float(v))
+
+    # Flush único das capturas do experimento (48.0.0) — best-effort: falha
+    # de escrita não invalida o run (o details do eval_run já tem o veredito).
+    if experiment_captures:
+        try:
+            await _flush_experiment_captures(eval_id, experiment_captures)
+        except Exception:
+            logger.warning("event=harness.capture_flush_failed eval_id=%s n=%s",
+                           eval_id, len(experiment_captures), exc_info=True)
 
     # ─── Agregação global ───
     # Aborto por teto (43.0.0): as taxas passam a dividir pelos casos

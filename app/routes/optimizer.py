@@ -55,6 +55,154 @@ class ProposeRequest(BaseModel):
     n_variants: int = Field(default=2, ge=1, le=3)
 
 
+class ProbeRequest(BaseModel):
+    """Sonda go/no-go (48.0.0, PR4a): avalia a variante num MINIBATCH
+    estratificado ANTES de gastar o run completo — 49% dos runs de otimização
+    ficam abaixo do baseline na literatura; a sonda barata detecta paisagem
+    plana e poupa o gold set inteiro."""
+    agent_id: str
+    release_id: str
+    gold_version: str = "latest"
+    champion_eval_id: str
+    config_overrides: dict
+    n_cases: int = Field(default=8, ge=4, le=20)
+
+
+@router.post("/probe")
+async def probe_variant(data: ProbeRequest, request: Request):
+    """Mini-experimento REAL (run_type='experiment' com subset de casos do
+    TREINO, visível na lista como qualquer run) + veredito pareado contra o
+    champion nos MESMOS casos. go = challenger ganha mais casos do que perde;
+    no_go = paisagem plana provável — não gaste o run completo."""
+    caller = await require_role("root", "admin")(request)
+    agent = await agents_repo.find_by_id(data.agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{data.agent_id}' não encontrado.")
+    overrides = data.config_overrides or {}
+    if set(overrides) - {"system_prompt"} or not isinstance(
+            overrides.get("system_prompt"), str) or \
+            not overrides["system_prompt"].strip():
+        raise HTTPException(422, "config_overrides: sonda aceita apenas "
+                                 "{'system_prompt': <string não-vazia>}.")
+    champ = await eval_runs_repo.find_by_id(data.champion_eval_id)
+    if not champ or (champ.get("run_type") or "") != "experiment" or \
+            (champ.get("status") or "") != "completed" or \
+            champ.get("agent_id") != data.agent_id:
+        raise HTTPException(422, "champion inválido: precisa ser run "
+                                 "'experiment' completed deste agente.")
+    # Champion = BASELINE (sem overrides), como no /promote (review [10]):
+    # senão o GO significaria 'melhor que outra variante', não 'melhor que a
+    # config atual do agente'.
+    if champ.get("config_overrides"):
+        raise HTTPException(422, "champion não pode ter config_overrides — a "
+                                 "sonda compara a variante contra a config "
+                                 "ATUAL do agente (champion sem variante).")
+    from app.routes.dashboard import _paired_comparison, _parse_json_field
+    _parse_json_field(champ, "details", [])
+    champ_details = [d for d in (champ.get("details") or [])
+                     if isinstance(d, dict) and d.get("case_id")]
+    if not champ_details:
+        raise HTTPException(422, "champion sem details por caso — re-rode o "
+                                 "run do champion (runs antigos/truncados não "
+                                 "servem de base à sonda).")
+
+    # HOLDOUT fora da sonda SEMPRE (review [7]): os case_ids vêm dos details
+    # do champion, que pode ter rodado 'todos' — sem este filtro a sonda
+    # mediria no holdout em silêncio. Busca os ids reservados e os exclui.
+    from app.harness.evaluator import gold_version_filters
+    _gold = await gold_cases_repo.find_all(
+        limit=500, **gold_version_filters(data.gold_version))
+    holdout_ids = {c.get("id") for c in _gold
+                   if (c.get("split") or "") == "holdout"}
+    champ_details = [d for d in champ_details
+                     if d.get("case_id") not in holdout_ids]
+    if not champ_details:
+        raise HTTPException(422, "champion só avaliou casos de holdout — a "
+                                 "sonda mede no TREINO; rode o champion no "
+                                 "treino primeiro.")
+
+    # Minibatch estratificado POR CATEGORIA (round-robin determinístico) a
+    # partir dos casos de TREINO que o champion avaliou.
+    by_cat: dict[str, list] = {}
+    for d in sorted(champ_details, key=lambda x: str(x.get("case_id"))):
+        by_cat.setdefault(d.get("category") or "(sem)", []).append(d)
+    case_ids: list[str] = []
+    while len(case_ids) < data.n_cases and any(by_cat.values()):
+        for cat in sorted(by_cat):
+            if by_cat[cat] and len(case_ids) < data.n_cases:
+                case_ids.append(by_cat[cat].pop(0)["case_id"])
+    if len(case_ids) < 4:
+        raise HTTPException(422, "champion com menos de 4 casos de treino "
+                                 "pareáveis — sonda não teria sinal algum.")
+
+    # Mini-run REAL do challenger, SÓ NO TREINO (gold_split='train' + case_ids
+    # já filtrados de holdout = dupla garantia). Timeout de parede (review
+    # [4]): a sonda roda INLINE (precisa do veredito síncrono), então um
+    # provider lento não pode pendurar o request — cancela e devolve 504.
+    import asyncio
+    from app.core.config import get_settings as _gs
+    from app.harness.evaluator import run_evaluation
+    try:
+        _to = min(float(_gs().harness_job_timeout_minutes or 60), 15.0) * 60.0
+    except Exception:
+        _to = 600.0
+    try:
+        result = await asyncio.wait_for(run_evaluation(
+            data.release_id, agent_id=data.agent_id,
+            gold_version=data.gold_version, run_type="experiment",
+            owner_user_id=caller.get("id"),
+            config_overrides=overrides, gold_split="train",
+            case_ids=case_ids,
+        ), timeout=_to)
+    except (TimeoutError, asyncio.TimeoutError):
+        raise HTTPException(504, "A sonda excedeu o tempo limite (provider "
+                                 "lento?) — tente com menos casos ou "
+                                 "verifique o gateway de modelos.")
+    # Mini-run que não avaliou nada (subset esvaziou, no_cases): NÃO é NO-GO —
+    # é ausência de sinal (review [12]).
+    if (result or {}).get("status") not in ("completed", "budget_exceeded"):
+        return {"go": False, "inconclusive": True,
+                "probe_eval_id": result.get("eval_id"),
+                "note": "Sonda inconclusiva: o mini-run não avaliou casos "
+                        f"({result.get('status')}). Verifique o gold set."}
+    probe_eval_id = result.get("eval_id")
+    chall_row = await eval_runs_repo.find_by_id(probe_eval_id) or {}
+    _parse_json_field(chall_row, "details", [])
+    _sub = set(case_ids)
+    champ_sub = {"details": [d for d in champ_details
+                             if d.get("case_id") in _sub],
+                 "total_cases": len(case_ids)}
+    chall_sub = {"details": [d for d in (chall_row.get("details") or [])
+                             if isinstance(d, dict)
+                             and d.get("case_id") in _sub],
+                 "total_cases": len(case_ids)}
+    paired = _paired_comparison(champ_sub, chall_sub)
+    # sem_pareamento = ZERO casos pareáveis (não é paisagem plana — é falta de
+    # dado). Reportar inconclusivo, não NO-GO (review [12]).
+    if paired["verdict"] == "sem_pareamento":
+        return {"go": False, "inconclusive": True, "paired": paired,
+                "probe_eval_id": probe_eval_id, "case_ids": case_ids,
+                "note": "Sonda inconclusiva: nenhum caso pareável entre "
+                        "champion e a variante (dados ausentes). Re-rode o "
+                        "champion."}
+    go = paired["only_b_passes"] > paired["only_a_passes"]
+    logger.info("event=optimizer.probe agent=%s go=%s only_b=%s only_a=%s",
+                data.agent_id, go, paired["only_b_passes"],
+                paired["only_a_passes"])
+    return {
+        "go": go,
+        "paired": paired,
+        "probe_eval_id": probe_eval_id,
+        "case_ids": case_ids,
+        "note": (
+            "GO: a variante ganhou casos na sonda — vale o run completo no "
+            "treino." if go else
+            "NO-GO: paisagem plana provável (a variante não ganhou casos na "
+            "sonda) — não gaste o gold set completo com esta variante; "
+            "proponha outra ou melhore o gold set."),
+    }
+
+
 @router.post("/promote")
 async def promote_variant(data: PromoteRequest, request: Request):
     """Aplica ao agente o system_prompt do challenger VENCEDOR (report→apply
@@ -200,12 +348,19 @@ async def promote_variant(data: PromoteRequest, request: Request):
         logger.warning("event=optimizer.promote_audit_failed", exc_info=True)
     logger.info("event=optimizer.promoted agent=%s challenger=%s verdict=%s",
                 data.agent_id, data.challenger_eval_id, paired["verdict"])
+    promo_warnings: list[str] = []
+    if (chall.get("gold_split") or "") == "train":
+        promo_warnings.append(
+            "O par foi medido só no TREINO (gold_split='train') — o veredito "
+            "pode estar superajustado. Recomendado: confirmar com um par de "
+            "runs no HOLDOUT antes de confiar no ganho (48.0.0).")
     return {
         "message": "Variante promovida — o prompt anterior está no Histórico "
                    "de revisões (restaurável).",
         "version": new_version, "revision_id": revision_id,
         "paired": paired, "sealed": sealed,
         "affected_pipelines": affected,
+        "warnings": promo_warnings,
         "revalidate_hint": (
             "O selo registra o modelo efetivo do agente na promoção — se a "
             "config de LLM mudar depois, re-rode o experimento (prompt "
@@ -241,34 +396,56 @@ async def propose_variants(data: ProposeRequest, request: Request):
                 "guardrails": parsed.guardrails, "inputs": parsed.inputs,
             }
 
-    filters = ({"dataset_version": data.gold_version}
-               if data.gold_version != "latest" else {})
-    cases = await gold_cases_repo.find_all(limit=500, **filters)
+    from app.harness.evaluator import gold_version_filters
+    cases = await gold_cases_repo.find_all(
+        limit=500, **gold_version_filters(data.gold_version))
     if not cases:
         raise HTTPException(
             422, "Nenhum caso no Golden Dataset para este gold_version — o "
                  "propositor precisa do resumo do gold para fundamentar "
                  "(e o experimento precisaria dele para medir).")
-    gold_summary = summarize_gold(cases)
+    # Split (48.0.0, PR4a): o propositor SÓ vê o TREINO — holdout é invisível
+    # a ele (anti-overfit; a confirmação final roda lá). O detector de
+    # vazamento continua varrendo TODOS os casos (defesa em profundidade).
+    holdout_ids = {c.get("id") for c in cases
+                   if (c.get("split") or "") == "holdout"}
+    train_cases = [c for c in cases if c.get("id") not in holdout_ids]
+    warnings: list[str] = []
+    if train_cases:
+        gold_summary = summarize_gold(train_cases)
+        if holdout_ids:
+            gold_summary["split_note"] = (
+                f"resumo do TREINO ({len(train_cases)} casos); "
+                f"{len(holdout_ids)} no holdout, invisíveis ao propositor")
+    else:
+        # Tudo marcado holdout (degenerado): sem treino não há o que otimizar
+        # de forma anti-overfit. Usa TODOS os casos mas AVISA (review [8]:
+        # antes o fallback vazava o holdout em silêncio).
+        gold_summary = summarize_gold(cases)
+        warnings.append(
+            "Nenhum caso de TREINO (todos marcados holdout ou gold não "
+            "dividido corretamente) — o resumo usa todos os casos e o "
+            "anti-overfit fica sem holdout. Rode 'Dividir treino/holdout'.")
 
     # Último run CONCLUÍDO do alvo (feedback grounded). Prefere não-experiment
     # (série real); na ausência, um experiment anterior também informa.
     # Filtro por gold_version quando específico (review PR3b [36]): fundamentar
     # a reescrita em falhas de OUTRO dataset descreveria erros que o
     # experimento não vai medir — mesmo precedente do evaluator.
-    _run_f = ({"gold_version": data.gold_version}
-              if data.gold_version != "latest" else {})
     runs = await eval_runs_repo.find_all(
-        agent_id=data.agent_id, status="completed", limit=5, **_run_f)
+        agent_id=data.agent_id, status="completed", limit=5,
+        **({"gold_version": data.gold_version}
+           if data.gold_version != "latest" else {}))
     last_run_row = next(
         (r for r in runs if (r.get("run_type") or "") != "experiment"),
         runs[0] if runs else None)
-    last_run = summarize_last_run(last_run_row)
+    # exclude_case_ids=holdout (review [1]/[6]): o feedback é o grounding mais
+    # influente — falhas de casos de holdout NÃO podem chegar ao propositor.
+    last_run = summarize_last_run(last_run_row, exclude_case_ids=holdout_ids)
 
     # Aviso anti-Goodhart: optimizer == judge → o propositor otimiza para o
     # próprio gosto do juiz que pontuará as variantes. Aviso, não bloqueio —
     # escolha visível do operador (rotas em Configurações → Roteamento LLM).
-    warnings: list[str] = []
     _judge_route: tuple | None = None
     from app.llm_routing import resolve_llm_for_task
     provider, model = await resolve_llm_for_task("optimizer")

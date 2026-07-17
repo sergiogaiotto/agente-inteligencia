@@ -10,7 +10,15 @@
                 <h2 class="text-[13px] font-semibold text-brand-900">Golden Dataset</h2>
                 <!-- toggleGoldForm: abrir pelo "+ Novo caso" sempre chega num form
                      LIMPO em modo criação — mesmo se a última ação foi uma edição. -->
-                <button @click="toggleGoldForm()" class="text-[12px] text-brand-500 font-medium hover:text-brand-700" x-text="showGoldForm ? 'Fechar' : '+ Novo caso'"></button>
+                <div class="flex items-center gap-3">
+                    <!-- Auto-split treino/holdout (48.0.0, PR4a) -->
+                    <button @click="goldAutoSplit()" data-testid="gold-auto-split"
+                            class="text-[12px] text-amber-700 font-medium hover:text-amber-800"
+                            title="Divide o gold: adversariais → holdout; normais estratificados por categoria (30% holdout). Anti-overfit do otimizador.">
+                        Dividir treino/holdout
+                    </button>
+                    <button @click="toggleGoldForm()" class="text-[12px] text-brand-500 font-medium hover:text-brand-700" x-text="showGoldForm ? 'Fechar' : '+ Novo caso'"></button>
+                </div>
             </div>
             <div x-show="showGoldForm" x-transition class="p-4 border-b border-surface-100 bg-surface-50 space-y-2">
                 <textarea x-model="goldForm.input_text" rows="3" placeholder="Input do caso (obrigatório) — pode ter múltiplas linhas; arraste o canto inferior direito para redimensionar"
@@ -89,6 +97,14 @@
                                     :title="parseRedFlags(c).join(', ')"
                                     x-text="'⚑ ' + redFlagsCount(c)"></span>
                             </template>
+                            <!-- Split train/holdout (48.0.0, PR4a) — paleta sem
+                                 roxo/violet (convenção da plataforma) -->
+                            <template x-if="c.split">
+                                <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                                      :class="c.split==='holdout' ? 'bg-amber-50 text-amber-800' : 'bg-sky-50 text-sky-700'"
+                                      :title="c.split==='holdout' ? 'reservado à confirmação final — invisível ao propositor' : 'fatia de treino do otimizador'"
+                                      x-text="c.split"></span>
+                            </template>
                             <span class="text-[10px] text-surface-400 font-mono ml-auto" x-text="c.dataset_version"></span>
                             <!-- Editar/Excluir (QA E2E): sem isto, corrigir um typo
                                  exigia apagar (via API) e recriar. @click.stop: os
@@ -135,6 +151,13 @@
                 <div class="flex gap-2">
                     <select x-model="runForm.run_type" data-testid="harness-runtype" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                         <option value="baseline">Baseline</option><option value="regression">Regressão</option>
+                    </select>
+                    <!-- Fatia do gold (48.0.0): experimentos medem no treino;
+                         confirmação final no holdout -->
+                    <select x-model="runForm.gold_split" data-testid="harness-goldsplit" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none" title="Fatia do Golden Dataset avaliada neste run">
+                        <option value="">todos os casos</option>
+                        <option value="train">só treino</option>
+                        <option value="holdout">só holdout</option>
                     </select>
                     <button @click="executeHarness()" data-testid="harness-run" :disabled="running" class="rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50">
                         <span x-text="running?'Executando...':'Executar Harness'"></span>
@@ -608,10 +631,18 @@
                                   x-text="v.kind==='control' ? 'controle (sem LLM)' : 'IA · ' + v.style_tip"></span>
                             <span class="text-[10px] text-surface-400" x-text="v.proposed_by || ''"></span>
                         </div>
-                        <button @click="runAB(v)" :disabled="!optForm.release_id || optRunning" data-testid="optimizer-run-ab"
-                                class="rounded-lg bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-40">
-                            Rodar experimento A/B
-                        </button>
+                        <div class="flex items-center gap-2">
+                            <!-- Sonda (48.0.0): só após um champion completo existir -->
+                            <button x-show="championId()" @click="probeVariant(v)" :disabled="optRunning" data-testid="optimizer-probe"
+                                    class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-40"
+                                    title="Minibatch de ~8 casos do treino antes do run completo — NO-GO poupa o gold set inteiro">
+                                Sondar (mini A/B)
+                            </button>
+                            <button @click="runAB(v)" :disabled="!optForm.release_id || optRunning" data-testid="optimizer-run-ab"
+                                    class="rounded-lg bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-40">
+                                Rodar experimento A/B
+                            </button>
+                        </div>
                     </div>
                     <p class="text-[11px] text-surface-500" x-text="v.rationale"></p>
                     <textarea readonly class="w-full rounded-lg border border-surface-100 bg-surface-50/60 p-2 font-mono text-[11px] text-brand-900" rows="5" x-text="v.system_prompt"></textarea>
@@ -826,7 +857,16 @@ function harnessPage(){return{
         expected_pattern:'',
         red_flags_text:''   // textarea: split por linhas
     },
-    runForm:{agent_id:'',pipeline_id:'',release_id:'',run_type:'baseline',gold_version:'latest'},
+    runForm:{agent_id:'',pipeline_id:'',release_id:'',run_type:'baseline',gold_version:'latest',gold_split:''},
+    // Auto-split treino/holdout (48.0.0, PR4a) — anti-overfit do otimizador.
+    async goldAutoSplit(){
+        const ok=await uiConfirm({message:'Dividir o Golden Dataset em TREINO/HOLDOUT? Adversariais vão SEMPRE ao holdout; normais são estratificados por categoria (~30% holdout). Runs passados não mudam (gold_hash sela cada um).',danger:false});
+        if(!ok)return;
+        try{
+            const r=await api.post('/api/v1/gold-cases/auto-split',{gold_version:'latest',holdout_pct:0.3});
+            showToast(r.message||'Dividido');await this.load();
+        }catch(e){showToast(e.message,'error')}
+    },
     pipelines:[],
     // Rótulo honesto do run (43.0.0, review [4]): terminal de job (timeout/
     // failed/interrupted/budget_exceeded) e estados de voo aparecem pelo
@@ -1010,11 +1050,37 @@ function harnessPage(){return{
     // A/B em 3 variantes pagava 3 champions IDÊNTICOS (gold set inteiro ×
     // invoke + juiz cada). O braço A roda 1x e os challengers pareiam com ele.
     _champions:{},
+    championId(){
+        const k=[this.optForm.agent_id,this.optForm.release_id,this.optForm.gold_version||'latest'].join('|');
+        const v=this._champions[k];
+        return (v && v!==true) ? v : null;
+    },
+    // Sonda go/no-go (48.0.0, PR4a): minibatch barato ANTES do run completo —
+    // paisagem plana não merece o gold set inteiro.
+    async probeVariant(v){
+        const champ=this.championId();
+        if(!champ){showToast('Rode o A/B uma vez primeiro (a sonda compara contra o champion completo)','error');return}
+        this.optRunning=true;
+        try{
+            const r=await api.post('/api/v1/optimizer/probe',{
+                agent_id:this.optForm.agent_id,release_id:this.optForm.release_id,
+                gold_version:this.optForm.gold_version||'latest',
+                champion_eval_id:champ,
+                config_overrides:{system_prompt:v.system_prompt}});
+            showToast((r.go?'GO — ':'NO-GO — ')+(r.note||''),r.go?'success':'error');
+            await this.load();
+        }catch(e){showToast(e.message,'error')}
+        this.optRunning=false;
+    },
     async runAB(v){
         if(!this.optForm.agent_id||!this.optForm.release_id){showToast('Selecione agente e release','error');return}
         this.optRunning=true;
+        // gold_split:'train' (48.0.0): o A/B do otimizador mede no TREINO —
+        // holdout fica reservado à confirmação final (gold sem divisão:
+        // 'train' = todos, retrocompat).
         const base={release_id:this.optForm.release_id,agent_id:this.optForm.agent_id,
-                    gold_version:this.optForm.gold_version||'latest',run_type:'experiment'};
+                    gold_version:this.optForm.gold_version||'latest',run_type:'experiment',
+                    gold_split:'train'};
         const champKey=[base.agent_id,base.release_id,base.gold_version].join('|');
         try{
             if(!this._champions[champKey]){
@@ -1047,14 +1113,19 @@ function harnessPage(){return{
             danger: force});
         if(!ok)return;
         const body={agent_id:rb.agent_id,champion_eval_id:ra.id,challenger_eval_id:rb.id,force};
-        try{
-            const r=await api.post('/api/v1/optimizer/promote',body);
+        // Mostra o(s) aviso(s) do backend (ex.: 'par medido só no TREINO —
+        // confirme no holdout') — review [2]/[18]: antes eram descartados.
+        const showPromo=(r)=>{
             showToast(r.message||'Variante promovida');
+            (r.warnings||[]).forEach(w=>showToast('⚠ '+w,'info'));
+        };
+        try{
+            showPromo(await api.post('/api/v1/optimizer/promote',body));
         }catch(e){
             if((e.message||'').includes('PUBLICADO')){
                 const ok2=await uiConfirm({message:'O agente participa de pipeline(s) PUBLICADO(s) — o novo prompt muda o comportamento deles em produção. Confirmar a promoção?',danger:true});
                 if(!ok2)return;
-                try{const r2=await api.post('/api/v1/optimizer/promote',{...body,ack_blast:true});showToast(r2.message||'Variante promovida')}
+                try{showPromo(await api.post('/api/v1/optimizer/promote',{...body,ack_blast:true}))}
                 catch(e2){showToast(e2.message,'error')}
             } else showToast(e.message,'error');
         }
