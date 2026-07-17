@@ -242,6 +242,7 @@ async def _wizard_llm_complete(
     messages: list[dict], provider: str, model: str, *, route: str,
     temperature: Optional[float] = None, response_format: Optional[dict] = None,
     reasoning_effort: Optional[str] = None,
+    usage_sink: Optional[dict] = None,
 ) -> tuple[str, str, str]:
     """Gera com o provider roteado; se INACESSÍVEL, tenta o fallback hospedado.
 
@@ -276,6 +277,12 @@ async def _wizard_llm_complete(
             llm = get_provider(provider, **prov_kwargs)
             resp = await llm.generate(messages, **gen_kwargs)
             await breaker.record_success(canon_primary)
+            # usage_sink (45.0.0, optimizer): caller opta por receber o usage
+            # REAL da chamada (tokens) p/ contabilizar custo no ledger —
+            # out-param não muda a assinatura de retorno (call sites intactos).
+            if usage_sink is not None:
+                usage_sink.update({"provider": provider, "model": model,
+                                   "usage": resp.get("usage") or {}})
             return resp["content"], provider, model
         except Exception as exc:
             # Rejeição de PARÂMETRO (ex.: servidor OpenAI-compatible atrás da URL
@@ -298,7 +305,7 @@ async def _wizard_llm_complete(
                 return await _wizard_llm_complete(
                     messages, provider, model, route=route,
                     temperature=temperature, response_format=response_format,
-                    reasoning_effort=None,
+                    reasoning_effort=None, usage_sink=usage_sink,
                 )
             primary_auth = _is_llm_auth_error(exc)
             if _is_llm_unreachable(exc):
@@ -334,6 +341,9 @@ async def _wizard_llm_complete(
                 fb_llm = get_provider(fb_provider, **fb_kwargs)
                 resp = await fb_llm.generate(messages, **gen_kwargs)
                 await breaker.record_success(canon_fb)
+                if usage_sink is not None:
+                    usage_sink.update({"provider": fb_provider, "model": fb_model,
+                                       "usage": resp.get("usage") or {}})
                 return resp["content"], fb_provider, fb_model
             except Exception as exc2:
                 if _is_llm_unreachable(exc2):

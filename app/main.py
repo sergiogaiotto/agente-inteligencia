@@ -21,6 +21,7 @@ from app.routes.data_tables import router as data_tables_router
 from app.routes.logs_admin import router as logs_admin_router
 from app.routes.db_health import router as db_health_router
 from app.routes.playground import router as playground_router
+from app.routes.optimizer import router as optimizer_router
 from app.routes.privacy import router as privacy_router
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -286,6 +287,8 @@ app.include_router(logs_admin_router)
 app.include_router(db_health_router)
 app.include_router(playground_router)
 app.include_router(privacy_router)
+# Otimização de Prompt/Skill (45.0.0, PR3b): propositor grounded de variantes.
+app.include_router(optimizer_router)
 
 @app.get("/api/health")
 async def health():

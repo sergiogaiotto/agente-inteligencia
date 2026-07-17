@@ -271,6 +271,9 @@ def _bucket_for_path(path: str) -> tuple[str, int]:
     is_llm = (
         path.startswith("/api/v1/workspace")
         or path.startswith("/api/v1/wizard")
+        # Propositor de variantes (45.0.0): até 3 chamadas LLM por request —
+        # sem isto caía no bucket genérico (300/min = 900 chamadas LLM/min).
+        or path.startswith("/api/v1/optimizer")
         or (path.startswith("/api/v1/agents/")
             and (path.endswith("/invoke") or path.endswith("/run")))
         or (path.startswith("/api/v1/pipelines/") and "/invoke" in path)

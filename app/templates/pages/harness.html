@@ -550,6 +550,68 @@
         </div>
     </div>
 
+    <!-- ─── Experimento de prompt (45.0.0, PR3b — arco Otimização) ── -->
+    <!-- Propositor GROUNDED: variantes de system_prompt (IA + controle
+         determinística), report-only; "Rodar A/B" dispara champion e
+         challenger como run_type='experiment' (PR3a) — o veredito sai no
+         Comparar Execuções acima (McNemar pareado). Requer root/admin. -->
+    <div class="mt-6 rounded-xl border border-surface-200 bg-white" data-testid="optimizer-card">
+        <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3.5">
+            <h2 class="text-[13px] font-semibold text-brand-900">Experimento de prompt <span class="ml-1 rounded bg-brand-50 px-1.5 py-0.5 text-[9px] font-bold text-brand-600 align-middle">beta</span></h2>
+            <span class="text-[10px] text-surface-400">propõe variantes → roda A/B → veredito pareado acima</span>
+        </div>
+        <div class="p-4 space-y-3">
+            <div class="flex items-end gap-2 flex-wrap">
+                <div class="flex-1 min-w-[180px]">
+                    <label class="block text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-1">Agente (alvo)</label>
+                    <select x-model="optForm.agent_id" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                        <option value="">— escolha o agente —</option>
+                        <template x-for="a in agents" :key="a.id"><option :value="a.id" x-text="a.name"></option></template>
+                    </select>
+                </div>
+                <div class="flex-1 min-w-[180px]">
+                    <label class="block text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-1">Release</label>
+                    <select x-model="optForm.release_id" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                        <option value="">— escolha a release —</option>
+                        <template x-for="rl in releases" :key="rl.id"><option :value="rl.id" x-text="rl.version || rl.id"></option></template>
+                    </select>
+                </div>
+                <div class="w-[130px]">
+                    <label class="block text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-1">Gold version</label>
+                    <input x-model="optForm.gold_version" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none" placeholder="latest">
+                </div>
+                <button @click="proposeVariants()" :disabled="!optForm.agent_id || optLoading" data-testid="optimizer-propose"
+                        class="rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-40">
+                    <span x-text="optLoading ? 'Propondo…' : 'Propor variantes (IA)'"></span>
+                </button>
+            </div>
+            <template x-if="optWarnings.length">
+                <div class="rounded-lg border border-amber-200 bg-amber-50/60 p-2 text-[11px] text-amber-900">
+                    <template x-for="(w, wi) in optWarnings" :key="wi"><div x-text="'⚠ ' + w"></div></template>
+                </div>
+            </template>
+            <template x-for="(v, vi) in optVariants" :key="vi">
+                <div class="rounded-lg border border-surface-200 p-3 space-y-2">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                        <div class="flex items-center gap-2">
+                            <span class="rounded-full px-2 py-0.5 text-[10px] font-bold"
+                                  :class="v.kind==='control' ? 'bg-surface-100 text-surface-600' : 'bg-brand-50 text-brand-700'"
+                                  x-text="v.kind==='control' ? 'controle (sem LLM)' : 'IA · ' + v.style_tip"></span>
+                            <span class="text-[10px] text-surface-400" x-text="v.proposed_by || ''"></span>
+                        </div>
+                        <button @click="runAB(v)" :disabled="!optForm.release_id || optRunning" data-testid="optimizer-run-ab"
+                                class="rounded-lg bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-40">
+                            Rodar experimento A/B
+                        </button>
+                    </div>
+                    <p class="text-[11px] text-surface-500" x-text="v.rationale"></p>
+                    <textarea readonly class="w-full rounded-lg border border-surface-100 bg-surface-50/60 p-2 font-mono text-[11px] text-brand-900" rows="5" x-text="v.system_prompt"></textarea>
+                </div>
+            </template>
+            <p class="text-[10px] text-surface-400">Report-only: nada é aplicado ao agente. O A/B cria dois runs <span class="font-mono">experiment</span> (champion sem variante — executado 1x e reutilizado; challenger com) — compare-os no painel acima quando concluírem. Com <span class="font-mono">harness_async_enabled</span> desligado os runs executam DENTRO do request (podem estourar timeout de proxy em gold sets grandes) — prefira ligar o modo assíncrono em Configurações → Parâmetros.</p>
+        </div>
+    </div>
+
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- DRAWER do caso — padrão da plataforma (cf. catalog_inventory): -->
     <!-- aside fixed right-0, overlay, ESC + clique-fora + botão fecham. -->
@@ -916,6 +978,51 @@ function harnessPage(){return{
     if(r.gate_result===undefined||r.gate_result===null){showToast(r.message||('Harness: '+(r.status||'não executado')),'error')}
     else{showToast(`Harness: ${r.gate_result} (${(r.accuracy*100).toFixed(1)}%)`)}
     this.showRunForm=false;await this.load()}catch(e){showToast(e.message,'error')}this.running=false},
+    // ── Experimento de prompt (45.0.0, PR3b) ────────────────────────────
+    // Propositor grounded + A/B: report-only; o backend valida (gate root/
+    // admin, allowlist, declarativa) — a UI só orquestra os dois POSTs.
+    optForm:{agent_id:'',release_id:'',gold_version:'latest'},
+    optVariants:[],optWarnings:[],optLoading:false,optRunning:false,
+    async proposeVariants(){
+        if(!this.optForm.agent_id){showToast('Selecione o agente-alvo','error');return}
+        this.optLoading=true;this.optVariants=[];this.optWarnings=[];
+        try{
+            const r=await api.post('/api/v1/optimizer/propose',{
+                agent_id:this.optForm.agent_id,
+                gold_version:this.optForm.gold_version||'latest',
+                n_variants:2,
+            });
+            this.optVariants=r.variants||[];this.optWarnings=r.warnings||[];
+            if(!this.optVariants.length)showToast('Nenhuma variante utilizável — veja os avisos','error');
+        }catch(e){showToast(e.message,'error')}
+        this.optLoading=false;
+    },
+    // Champion REUTILIZADO por (agente, release, gold) — review PR3b: rodar
+    // A/B em 3 variantes pagava 3 champions IDÊNTICOS (gold set inteiro ×
+    // invoke + juiz cada). O braço A roda 1x e os challengers pareiam com ele.
+    _champions:{},
+    async runAB(v){
+        if(!this.optForm.agent_id||!this.optForm.release_id){showToast('Selecione agente e release','error');return}
+        this.optRunning=true;
+        const base={release_id:this.optForm.release_id,agent_id:this.optForm.agent_id,
+                    gold_version:this.optForm.gold_version||'latest',run_type:'experiment'};
+        const champKey=[base.agent_id,base.release_id,base.gold_version].join('|');
+        try{
+            if(!this._champions[champKey]){
+                const a=await api.post('/api/v1/eval-runs/execute',base);
+                this._champions[champKey]=a.eval_id||true;
+                if(a.eval_id)this.pollEval(a.eval_id);
+            }else{
+                showToast('Champion já executado para este alvo — disparando só o challenger','info');
+            }
+            const b=await api.post('/api/v1/eval-runs/execute',{...base,
+                config_overrides:{system_prompt:v.system_prompt}});
+            showToast('Experimento disparado — compare champion × challenger quando concluírem','info');
+            await this.load();
+            if(b.eval_id)this.pollEval(b.eval_id);
+        }catch(e){showToast(e.message,'error')}
+        this.optRunning=false;
+    },
     // ── Polling do harness assíncrono (43.0.0) ──────────────────────────
     // Segue um run 'queued'/'running' até o terminal; o load() re-arma para
     // runs em voo (sobrevive a F5). Set-guard evita pollers duplicados.

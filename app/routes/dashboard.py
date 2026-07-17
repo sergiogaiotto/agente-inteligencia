@@ -1594,6 +1594,9 @@ class LLMRoutingUpdate(BaseModel):
     # Papel "LLM como Juiz" (Verifier §14.2/MultiDimJudge). Rota salva aqui
     # vence a env legada VERIFIER_JUDGE_MODEL (ver _apply_judge_env_default).
     judge: Optional[str] = None
+    # Papel "Otimizador de prompt" (45.0.0, PR3b): propositor de variantes —
+    # recomendado ≠ judge (anti-Goodhart; a rota de proposta avisa se coincidem).
+    optimizer: Optional[str] = None
     multimodal_fallback: Optional[str] = None
     # Checkbox "Mostrar contingência na rastreabilidade" (bloco Multimodal
     # Fallback). Controla SOMENTE a nota VISÍVEL no painel do Workspace; a
@@ -1637,6 +1640,7 @@ async def get_llm_routing():
             "skill_generation": "Criação e alteração de SKILL.md no Wizard. Como o SKILL.md precisa respeitar um formato rígido, escolha um modelo forte em seguir instruções e gerar saída estruturada (JSON). Default: o modelo global da plataforma (Modelo Primário) — você pode trocar aqui a qualquer momento. O esforço de raciocínio dessa geração é configurável em Parâmetros → 'Esforço de raciocínio do Wizard' e só se aplica a modelos que suportam (gpt-oss sempre; Azure/OpenAI só o1/o3/o4/gpt-5 — gpt-4o/gpt-4.1 ignoram sem erro).",
             "judge": "LLM como Juiz (Verifier): avalia cada resposta dos agentes em 4 dimensões — factualidade, completude, tom e segurança — e alimenta as páginas Qualidade e o gate de release do Harness. Escolha um modelo forte em análise e saída JSON. Default: Azure GPT-4o (ou a variável VERIFIER_JUDGE_MODEL, se configurada no ambiente).",
             "multimodal_fallback": "Modelo usado quando o input contém imagem mas o modelo da task escolhida é text-only. Default: Azure GPT-4o (único multimodal nativo pronto pra produção).",
+            "optimizer": "Propositor de variantes de prompt (módulo Experimento de prompt, no Harness): recebe o contexto do agente + resumo do gold set e propõe reescritas do system_prompt para A/B. Recomendação anti-Goodhart: use um modelo DIFERENTE do papel 'LLM como Juiz' — o mesmo modelo propondo e julgando seleciona prompts que agradam a si próprio. Default: GPT-OSS-120B (hub interno).",
         },
     }
 
