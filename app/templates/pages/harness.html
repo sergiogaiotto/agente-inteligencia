@@ -72,7 +72,9 @@
                     </span>
                 </div>
             </div>
-            <div class="divide-y divide-surface-50 max-h-80 overflow-y-auto scrollbar-thin">
+            <!-- 49.1.0: mesma altura da lista de Execuções (55vh) — antes o Gold
+                 travava em 320px (max-h-80) e a linha ficava desbalanceada. -->
+            <div class="divide-y divide-surface-50 max-h-[55vh] overflow-y-auto scrollbar-thin" data-testid="gold-list-scroll">
                 <template x-for="c in goldCases" :key="c.id">
                     <div @click="openCase(c)"
                          class="px-5 py-3 cursor-pointer transition-colors hover:bg-surface-50/60"
@@ -164,7 +166,7 @@
                     </button>
                 </div>
             </div>
-            <div class="divide-y divide-surface-50 max-h-[55vh] overflow-y-auto scrollbar-thin">
+            <div class="divide-y divide-surface-50 max-h-[55vh] overflow-y-auto scrollbar-thin" data-testid="runs-list-scroll">
                 <template x-for="r in evalRuns" :key="r.id">
                     <div data-testid="harness-run-row">
                         <div @click="toggleEval(r)" class="px-5 py-3 cursor-pointer hover:bg-surface-50/50">
