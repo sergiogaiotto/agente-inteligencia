@@ -1227,6 +1227,9 @@ def _summary_of_run(run: dict) -> dict:
         "routing_phrase_pass_rate": round(rp_rate, 4) if rp_rate is not None else None,
         "run_type": run.get("run_type"),
         "gold_version": run.get("gold_version"),
+        # Promoção (47.0.0, PR5): challenger identificável no compare — a UI
+        # só oferece "Promover" quando o lado B carrega o selo da variante.
+        "has_overrides": bool(run.get("config_overrides")),
         "status": run.get("status"),
         "gate_result": run.get("gate_result"),
         "gate_reason": run.get("gate_reason"),
