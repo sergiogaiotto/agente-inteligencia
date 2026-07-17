@@ -700,6 +700,11 @@
                               x-text="loopRun.status"></span>
                         <span class="text-surface-500" x-text="'rodada '+(loopRun.rounds_done||0)+'/'+(loopRun.max_rounds||0)"></span>
                         <span class="text-surface-400" x-text="(loopRun.cost_usd?('US$ '+Number(loopRun.cost_usd).toFixed(4)):'')"></span>
+                        <!-- Reabre o modal de acompanhamento (item 1, 50.0.0) -->
+                        <button @click="loopModalOpen=true" type="button" data-testid="optimizer-loop-follow"
+                                class="ml-auto rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-800 hover:bg-amber-100">
+                            Acompanhar
+                        </button>
                     </div>
                     <template x-if="loopRun.result">
                         <div class="text-[11px] text-surface-600 space-y-0.5">
@@ -726,6 +731,125 @@
                 </div>
             </template>
             <p class="text-[10px] text-surface-400">Report-only: o loop NÃO altera o agente — ele explora variantes e aponta a melhor. Requer <span class="font-mono">optimizer_loop_enabled</span> ligado (Configurações → Parâmetros) e o gold set dividido em treino/holdout.</p>
+        </div>
+
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- MODAL de acompanhamento do loop (item 1, 50.0.0): abre ao     -->
+        <!-- disparar e reabre pelo botão "Acompanhar" — o usuário segue a -->
+        <!-- evolução SEM sair da tela de Avaliação. Fica DENTRO do        -->
+        <!-- x-data do optimizerLoop (compartilha loopRun/loopCandidates). -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- z-[9995]: ACIMA do drawer do caso (z-[9990]) — se os dois
+             abrirem, o modal (tarefa em foco) vence. Escape fecha o modal;
+             se o drawer também estiver aberto, fecha junto (listeners
+             independentes em window — trade-off documentado). -->
+        <div x-show="loopModalOpen" x-cloak class="fixed inset-0 z-[9995]"
+             @keydown.escape.window="loopModalOpen=false" style="display:none;"
+             data-testid="optimizer-loop-modal">
+            <div x-show="loopModalOpen" x-transition.opacity.duration.150ms
+                 class="fixed inset-0 bg-black/40" @click="loopModalOpen=false"></div>
+            <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+                <div x-show="loopModalOpen"
+                     x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
+                     x-transition:leave="transition ease-in duration-150" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95"
+                     class="pointer-events-auto w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl bg-white shadow-2xl outline-none"
+                     role="dialog" aria-modal="true" tabindex="-1"
+                     x-effect="if(loopModalOpen) $el.focus()"
+                     aria-label="Acompanhamento da otimização automática">
+
+                    <header class="flex items-center gap-3 border-b border-surface-100 px-5 py-4 shrink-0">
+                        <div class="min-w-0 flex-1">
+                            <p class="text-[10px] font-semibold uppercase tracking-wider text-amber-700">Otimização automática</p>
+                            <h3 class="text-[14px] font-bold text-brand-900 truncate" x-text="loopAgentName()"></h3>
+                        </div>
+                        <template x-if="loopRun">
+                            <div class="flex items-center gap-2 shrink-0">
+                                <span class="rounded-full px-2 py-0.5 text-[10px] font-bold"
+                                      :class="loopRun.status==='completed'?'bg-emerald-50 text-emerald-700':['failed','timeout','interrupted'].includes(loopRun.status)?'bg-rose-50 text-rose-700':'bg-brand-50 text-brand-700 animate-pulse'"
+                                      x-text="loopRun.status"></span>
+                                <span class="text-[11px] text-surface-500 font-mono"
+                                      x-text="'US$ '+Number(loopRun.cost_usd||0).toFixed(4)+(Number(loopRun.budget_usd)>0?(' / teto '+Number(loopRun.budget_usd).toFixed(2)):'')"></span>
+                            </div>
+                        </template>
+                        <button @click="loopModalOpen=false" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 shrink-0" aria-label="Fechar">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </header>
+
+                    <div class="flex-1 overflow-y-auto scrollbar-thin px-5 py-4 space-y-1" data-testid="optimizer-loop-trail">
+                        <template x-if="!loopRun">
+                            <p class="text-[12px] text-surface-400 py-6 text-center">Aguardando o job entrar na fila…</p>
+                        </template>
+                        <template x-for="(s, si) in loopTrail" :key="s.key">
+                            <div class="flex gap-3">
+                                <!-- Trilho: bolinha de estado + conector vertical -->
+                                <div class="flex flex-col items-center pt-1">
+                                    <span class="w-2.5 h-2.5 rounded-full shrink-0"
+                                          :class="s.state==='done'?'bg-emerald-500':s.state==='active'?'bg-amber-500 animate-pulse':s.state==='error'?'bg-rose-400':s.state==='skipped'?'bg-surface-200':'bg-surface-300'"></span>
+                                    <span x-show="si < loopTrail.length-1" class="w-px flex-1 bg-surface-200 my-1"></span>
+                                </div>
+                                <div class="pb-4 min-w-0 flex-1">
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-[12px] font-semibold"
+                                              :class="s.state==='skipped'?'text-surface-300 line-through':s.state==='error'?'text-rose-700':s.state==='pending'?'text-surface-400':'text-brand-900'"
+                                              x-text="s.label"></span>
+                                        <span x-show="s.state==='active'" class="text-[10px] text-amber-700 font-medium">em andamento…</span>
+                                    </div>
+                                    <p x-show="s.desc" class="text-[11px] text-surface-500 mt-0.5" x-text="s.desc"></p>
+                                    <!-- Candidatos da rodada: chip + score + pareto + reflexão -->
+                                    <template x-if="s.cands && s.cands.length">
+                                        <div class="mt-2 space-y-1.5">
+                                            <template x-for="c in s.cands" :key="c.id">
+                                                <div class="rounded-lg border border-surface-100 bg-surface-50/60 px-2.5 py-1.5">
+                                                    <div class="flex items-center gap-2 text-[10px] font-mono">
+                                                        <span class="rounded px-1 font-sans font-semibold"
+                                                              :class="c.kind==='champion'?'bg-surface-100 text-surface-600':c.kind==='control'?'bg-sky-50 text-sky-700':'bg-brand-50 text-brand-700'"
+                                                              x-text="c.kind"></span>
+                                                        <span :class="c.on_pareto?'text-emerald-700 font-bold':'text-surface-500'"
+                                                              x-text="'score '+Number(c.score).toFixed(3)+(c.on_pareto?' ✓pareto':'')"></span>
+                                                        <button @click="viewPrompt(c)" type="button"
+                                                                class="ml-auto font-sans text-[10px] text-brand-500 hover:text-brand-700 underline"
+                                                                x-text="_prompts[c.id]?'ocultar prompt':'ver prompt'"></button>
+                                                    </div>
+                                                    <p x-show="c.reflection" class="text-[10px] text-surface-500 mt-1 line-clamp-2"
+                                                       :title="c.reflection" x-text="c.reflection"></p>
+                                                    <pre x-show="_prompts[c.id]" x-cloak
+                                                         class="mt-1.5 max-h-40 overflow-y-auto scrollbar-thin whitespace-pre-wrap rounded bg-white border border-surface-100 p-2 text-[10px] text-surface-600"
+                                                         x-text="_prompts[c.id]"></pre>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- Veredito final -->
+                        <template x-if="loopRun && loopRun.result">
+                            <div class="rounded-xl border p-3 text-[11px] space-y-1"
+                                 :class="loopRun.result.improved?'border-emerald-200 bg-emerald-50/50':'border-surface-200 bg-surface-50'"
+                                 data-testid="optimizer-loop-verdict">
+                                <p class="font-semibold text-[12px]"
+                                   :class="loopRun.result.improved?'text-emerald-800':'text-brand-900'"
+                                   x-text="loopRun.result.improved?'Melhoria confirmada no holdout':'Sem ganho confirmado'"></p>
+                                <p class="text-surface-600" x-text="'Melhor score (treino): '+loopRun.result.best_score+' vs champion '+loopRun.result.champion_score"></p>
+                                <p class="text-surface-600" x-text="'Holdout: '+(loopRun.result.holdout_verdict||'—')+(loopRun.result.holdout_note?(' — '+loopRun.result.holdout_note):'')"></p>
+                                <p class="text-surface-400" x-text="loopRun.result.stop_reason"></p>
+                                <p x-show="loopRun.result.improved" class="text-amber-800">A melhor variante está no <strong>Histórico de revisões</strong> do agente (restaurável) — a promoção é sempre humana.</p>
+                            </div>
+                        </template>
+                        <template x-if="loopRun && loopRun.error && !loopRun.result">
+                            <div class="rounded-xl border border-rose-200 bg-rose-50/60 p-3 text-[11px] text-rose-800"
+                                 x-text="'O loop terminou sem relatório: '+loopRun.error"></div>
+                        </template>
+                    </div>
+
+                    <footer class="flex items-center justify-between border-t border-surface-100 px-5 py-3 shrink-0">
+                        <p class="text-[10px] text-surface-400">Report-only: nada é aplicado ao agente. Pode fechar — o job segue no servidor e o card mostra o resultado.</p>
+                        <button @click="loopModalOpen=false" class="rounded-lg border border-surface-200 px-3 py-1.5 text-[11px] font-medium text-surface-600 hover:bg-surface-50">Fechar</button>
+                    </footer>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -836,9 +960,91 @@
 function optimizerLoop(){return{
     loopForm:{agent_id:'',release_id:'',max_rounds:4,budget_usd:0},
     agents:[],releases:[],loopBusy:false,loopRun:null,loopCandidates:[],_loopPollId:null,
+    // Modal de acompanhamento (item 1, 50.0.0)
+    loopModalOpen:false,_prompts:{},
     init(){
         api.get('/api/v1/agents').then(r=>this.agents=r.agents||[]).catch(()=>{});
         api.get('/api/v1/releases').then(r=>this.releases=r.releases||[]).catch(()=>{});
+    },
+    loopAgentName(){
+        const id=(this.loopRun&&this.loopRun.agent_id)||this.loopForm.agent_id;
+        const a=this.agents.find(x=>x.id===id);
+        return a?a.name:(id?id.substring(0,8):'—');
+    },
+    // Trilha derivada de loopRun+loopCandidates — estados: done | active |
+    // pending | skipped (não executada) | error (interrompida/falhou).
+    //
+    // Honestidade acima de brilho (revisão adversarial 50.0.0, 6 achados):
+    // • 'active' SÓ com evidência: antes do champion existir, a única
+    //   atividade possível é semeá-lo; uma rodada só pulsa se JÁ tem
+    //   candidato inserido; holdout só pulsa quando todas as rodadas
+    //   fecharam. Rodada vazia em run 'running' fica 'pending' — o dado
+    //   polled NÃO distingue "rodada propondo" de "holdout após parada
+    //   antecipada", então a trilha não inventa um estado.
+    // • Run failed/timeout/interrupted: rodada parcial vira 'error' (não
+    //   verde), vazias viram 'skipped' com a legenda do MOTIVO real, e o
+    //   veredito NUNCA fica verde sem relatório.
+    // • holdout_verdict 'sem_holdout'/'nao_confirmado_sem_ganho' = a
+    //   avaliação de holdout NÃO rodou → 'skipped' com explicação.
+    get loopTrail(){
+        const r=this.loopRun; if(!r) return [];
+        const byRound={};
+        for(const c of this.loopCandidates){(byRound[c.round]=byRound[c.round]||[]).push(c)}
+        const champion=(byRound[0]||[]).find(c=>c.kind==='champion');
+        const running=r.status==='running';
+        const crashed=['failed','timeout','interrupted'].includes(r.status);
+        const terminal=!running&&r.status!=='queued';
+        const roundsDone=r.rounds_done||0, maxR=r.max_rounds||0;
+        const res=r.result||null;
+        const steps=[];
+        steps.push({key:'queue',label:'Na fila',
+            desc:'job durável aguardando slot de execução',
+            state:r.status==='queued'?'active':'done'});
+        steps.push({key:'champion',label:'Champion — baseline no treino',
+            desc:champion?('score '+Number(champion.score).toFixed(3)+' (config atual do agente)')
+                :(terminal?('não medido — o run terminou: '+r.status):'medindo a config atual do agente…'),
+            state:champion?'done':(running?'active':(terminal?'skipped':'pending'))});
+        for(let i=1;i<=maxR;i++){
+            const cands=byRound[i]||[];
+            let st, desc='';
+            if(cands.length){
+                if(running&&i===roundsDone+1){st='active'}
+                else if(crashed&&i>roundsDone){st='error';desc='interrompida no meio — o run terminou: '+r.status}
+                else{st='done'}
+            }else if(terminal){
+                st='skipped';
+                desc=crashed?('não executada — o run terminou: '+r.status)
+                    :'não executada (parada antecipada por paciência/teto)';
+            }else{st='pending'}
+            steps.push({key:'round'+i,label:'Rodada '+i+' — propõe variantes e avalia no treino',
+                desc, cands, state:st});
+        }
+        const hv=res?res.holdout_verdict:null;
+        const holdoutSkipped=hv==='sem_holdout'||hv==='nao_confirmado_sem_ganho';
+        steps.push({key:'holdout',label:'Confirmação no holdout',
+            desc:holdoutSkipped
+                ?('não executada — '+(hv==='sem_holdout'?'gold sem split de holdout':'nenhuma variante superou o champion no treino'))
+                :(res?('veredito: '+(hv||'—'))
+                    :(terminal?('não executada — o run terminou: '+r.status)
+                        :'os casos reservados validam o ganho (anti-overfit)')),
+            state:holdoutSkipped?'skipped'
+                :(res&&hv?'done'
+                    :(terminal?'skipped'
+                        :(running&&roundsDone>=maxR?'active':'pending')))});
+        steps.push({key:'verdict',label:'Veredito final',
+            desc:res?'':(crashed?('o run terminou sem relatório: '+(r.error||r.status)):(terminal?'sem relatório':'relatório sai ao terminar')),
+            state:res?'done':(crashed?'error':(terminal?'skipped':'pending'))});
+        return steps;
+    },
+    async viewPrompt(c){
+        if(this._prompts[c.id]){
+            // toggle: some da tela (nova referência p/ reatividade do proxy)
+            const p={...this._prompts}; delete p[c.id]; this._prompts=p; return;
+        }
+        try{
+            const d=await api.get('/api/v1/optimizer/optimize/'+this.loopRun.id+'/candidates/'+c.id);
+            this._prompts={...this._prompts,[c.id]:d.system_prompt||'(vazio)'};
+        }catch(e){showToast(e.message,'error')}
     },
     async startLoop(){
         if(!this.loopForm.agent_id||!this.loopForm.release_id){showToast('Selecione agente e release','error');return}
@@ -853,6 +1059,10 @@ function optimizerLoop(){return{
                 // teto", configure optimizer_default_budget_usd=0.
                 budget_usd:(this.loopForm.budget_usd>0?this.loopForm.budget_usd:undefined)});
             showToast(r.message||'Loop enfileirado','info');
+            // Item 1 (50.0.0): abre o acompanhamento na hora — o usuário
+            // não sai da tela de Avaliação. Estado zerado do run anterior.
+            this.loopRun=null;this.loopCandidates=[];this._prompts={};
+            this.loopModalOpen=true;
             this.pollLoop(r.optimization_id);
         }catch(e){showToast(e.message,'error');this.loopBusy=false}
     },
