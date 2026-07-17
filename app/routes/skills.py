@@ -2,7 +2,7 @@
 import logging
 import re
 import uuid, hashlib
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from app.models.schemas import SkillCreateRaw, SkillCreateManual
 from app.core.database import skills_repo, _get_pool
 from app.skill_parser.parser import (
@@ -296,6 +296,13 @@ async def create_skill(data: SkillCreateRaw):
         raise
     except Exception as e:
         _raise_for_db_error(e, db_data["urn"])
+    # Snapshot inicial (46.0.0): a criação também entra no histórico.
+    from app.core import revisions as _rev
+    await _rev.safe_record(
+        entity_type=_rev.ENTITY_SKILL, entity_id=sid,
+        content=db_data.get("raw_content") or data.raw_content,
+        version=db_data.get("version"), source="create",
+    )
     warnings = (parsed.validation_errors if not parsed.is_valid else [])
     warnings += await _warn_unknown_evidence_sources(parsed)
     return {
@@ -320,6 +327,11 @@ async def create_skill_manual(data: SkillCreateManual):
         raise
     except Exception as e:
         _raise_for_db_error(e, d.get("urn") or d.get("name", ""))
+    from app.core import revisions as _rev
+    await _rev.safe_record(
+        entity_type=_rev.ENTITY_SKILL, entity_id=sid,
+        content=data.raw_content, version=d.get("version"), source="create",
+    )
     return {"id": sid, "message": "Skill criada manualmente"}
 
 def _sync_frontmatter_version(raw: str, new_version: str) -> str:
@@ -341,31 +353,104 @@ def _sync_frontmatter_version(raw: str, new_version: str) -> str:
     return raw[: m.start(2)] + head2 + raw[m.end(2):]
 
 
-@router.put("/{skill_id}")
-async def update_skill(skill_id: str, data: SkillCreateRaw):
+async def _persist_skill_update(skill_id: str, raw_content: str,
+                                tags: str | None, *, source: str = "update",
+                                note: str | None = None,
+                                author_user_id: str | None = None,
+                                parent_revision_id: str | None = None):
+    """Miolo compartilhado do PUT e do rollback (46.0.0): bump + sync de
+    frontmatter + persistência + SNAPSHOT em content_revisions. O rollback
+    NÃO rebobina — restaura como um save novo (histórico intacto)."""
+    from app.core import revisions as _rev
     existing = await skills_repo.find_by_id(skill_id)
     if not existing: raise HTTPException(404)
     new_version = _bump_version(existing.get("version", "0.1.0"))
     # Sincroniza o frontmatter ANTES do parse — assim raw_content persistido,
     # content_hash e a coluna version contam a mesma história.
-    raw_synced = _sync_frontmatter_version(data.raw_content, new_version)
+    raw_synced = _sync_frontmatter_version(raw_content, new_version)
     parsed = parse_skill_md(raw_synced)
     _reject_bad_skill_name(parsed.name)
     db_data = skill_to_db_dict(parsed)
     db_data["version"] = new_version
-    db_data["tags"] = data.tags or existing.get("tags", "[]")
+    db_data["tags"] = tags or existing.get("tags", "[]")
+    # Backfill ANTES do overwrite: 1ª edição pós-feature preserva o estado
+    # antigo (senão ele seria destruído — a razão de existir do histórico).
+    await _rev.safe_backfill(
+        entity_type=_rev.ENTITY_SKILL, entity_id=skill_id,
+        old_content=existing.get("raw_content") or "",
+        version=existing.get("version"),
+    )
     try:
         updated = await skills_repo.update(skill_id, db_data)
     except HTTPException:
         raise
     except Exception as e:
         _raise_for_db_error(e, db_data["urn"])
+    await _rev.safe_record(
+        entity_type=_rev.ENTITY_SKILL, entity_id=skill_id,
+        content=db_data.get("raw_content") or raw_synced, version=new_version,
+        source=source, note=note, author_user_id=author_user_id,
+        parent_revision_id=parent_revision_id,
+    )
     # Warnings aditivos no PUT (o create já devolvia; o update não devolvia nada
     # além do row — quem edita o UUID à mão faz isso no PUT, não no POST).
     warnings = (parsed.validation_errors if not parsed.is_valid else [])
     warnings += await _warn_unknown_evidence_sources(parsed)
     if isinstance(updated, dict) and warnings:
         updated = {**updated, "warnings": warnings}
+    return updated
+
+
+@router.put("/{skill_id}")
+async def update_skill(skill_id: str, data: SkillCreateRaw, request: Request):
+    _caller = getattr(request.state, "auth_user", None) or {}
+    return await _persist_skill_update(
+        skill_id, data.raw_content, data.tags,
+        source="update", author_user_id=_caller.get("id"),
+    )
+
+
+@router.get("/{skill_id}/revisions")
+async def list_skill_revisions(skill_id: str):
+    """Histórico de revisões (46.0.0) — sem o conteúdo (leve p/ a UI)."""
+    if not await skills_repo.find_by_id(skill_id):
+        raise HTTPException(404)
+    from app.core import revisions as _rev
+    return {"revisions": await _rev.list_revisions(_rev.ENTITY_SKILL, skill_id)}
+
+
+@router.get("/{skill_id}/revisions/{revision_id}")
+async def get_skill_revision(skill_id: str, revision_id: str):
+    from app.core import revisions as _rev
+    rev = await _rev.get_revision(revision_id)
+    if not rev or rev.get("entity_type") != _rev.ENTITY_SKILL \
+            or rev.get("entity_id") != skill_id:
+        raise HTTPException(404, "Revisão não encontrada para esta skill")
+    return rev
+
+
+@router.post("/{skill_id}/revisions/{revision_id}/rollback")
+async def rollback_skill_revision(skill_id: str, revision_id: str,
+                                  request: Request):
+    """Restaura o conteúdo de uma revisão como SAVE NOVO (versão bumpada,
+    revisão nova source='rollback' com parent na restaurada) — o histórico
+    nunca é reescrito."""
+    from app.core import revisions as _rev
+    rev = await _rev.get_revision(revision_id)
+    if not rev or rev.get("entity_type") != _rev.ENTITY_SKILL \
+            or rev.get("entity_id") != skill_id:
+        raise HTTPException(404, "Revisão não encontrada para esta skill")
+    _caller = getattr(request.state, "auth_user", None) or {}
+    updated = await _persist_skill_update(
+        skill_id, rev.get("content") or "", None,
+        source="rollback",
+        note=f"restaurada da revisão {revision_id} "
+             f"(v{rev.get('version') or '?'})",
+        author_user_id=_caller.get("id"),
+        parent_revision_id=revision_id,
+    )
+    if isinstance(updated, dict):
+        updated = {**updated, "message": "Conteúdo restaurado como nova versão"}
     return updated
 
 @router.delete("/{skill_id}")

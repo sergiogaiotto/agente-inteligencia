@@ -1255,6 +1255,44 @@
             </template>
         </div>
     </div>
+
+    <!-- ─── Histórico de revisões (46.0.0, PR1 — arco Otimização) ───
+         Componente standalone (revisionsPanel em base.html): lê o id do
+         pathname; só renderiza em modo edição. Rollback = save novo. -->
+    <div x-data="revisionsPanel('skill')" x-show="revId" x-cloak
+         class="mt-6 rounded-xl border border-surface-200 bg-white" data-testid="revisions-panel">
+        <button @click="revToggle()" class="flex w-full items-center justify-between px-5 py-3.5 text-left" data-testid="revisions-toggle">
+            <h2 class="text-[13px] font-semibold text-brand-900">Histórico de revisões <span class="ml-1 text-[10px] font-normal text-surface-400">cada salvamento vira uma revisão restaurável</span></h2>
+            <span class="text-[10px] text-surface-400" x-text="revOpen ? 'ocultar' : 'mostrar'"></span>
+        </button>
+        <div x-show="revOpen" x-cloak class="border-t border-surface-100 divide-y divide-surface-50">
+            <template x-if="revLoading"><div class="px-5 py-4 text-[11px] text-surface-400">Carregando…</div></template>
+            <template x-if="!revLoading && !revisions.length"><div class="px-5 py-4 text-[11px] text-surface-400">Sem revisões ainda — o histórico começa no próximo salvamento.</div></template>
+            <template x-for="r in revisions" :key="r.id">
+                <div class="px-5 py-2.5">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                        <div class="flex items-center gap-2 text-[11px]">
+                            <span class="rounded-full px-2 py-0.5 text-[9px] font-bold"
+                                  :class="r.source==='rollback' ? 'bg-amber-50 text-amber-700' : r.source==='backfill' ? 'bg-surface-100 text-surface-500' : 'bg-brand-50 text-brand-700'"
+                                  x-text="r.source"></span>
+                            <span class="font-mono text-brand-900" x-text="r.version ? 'v'+r.version : '—'"></span>
+                            <span class="text-surface-400" x-text="tzDateTimeSec(r.created_at)"></span>
+                            <span class="font-mono text-[9px] text-surface-300" x-text="r.content_hash"></span>
+                            <span class="text-surface-400" x-text="(r.content_chars||0)+' chars'"></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button @click="revView(r)" class="text-[11px] text-brand-600 hover:underline">ver</button>
+                            <button @click="revRollback(r)" data-testid="revision-rollback" class="text-[11px] font-semibold text-amber-700 hover:underline">restaurar</button>
+                        </div>
+                    </div>
+                    <p x-show="r.note" class="mt-1 text-[10px] text-surface-400" x-text="r.note"></p>
+                    <template x-if="revViewing && revViewing.id === r.id">
+                        <pre class="mt-2 max-h-64 overflow-auto rounded-lg bg-surface-50 p-3 text-[10px] font-mono text-brand-900 whitespace-pre-wrap" x-text="revViewing.content"></pre>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </div>
 </div>
 {% endblock %}
 
