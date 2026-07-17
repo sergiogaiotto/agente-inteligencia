@@ -375,6 +375,21 @@ async def purge_synthetic_once() -> dict:
             out["experiment_captures_deleted"] = int(str(eres).split()[-1])
         except Exception:
             out["experiment_captures_deleted"] = 0
+        # optimization_runs TERMINAIS por idade (49.0.0, PR4b, review [12]):
+        # guardam system_prompts de candidatos (CASCADE apaga a árvore) e o
+        # result — crescem indefinidamente sem isto. Só terminal (queued/
+        # running em voo nunca são apagados).
+        ores = await con.execute(
+            "DELETE FROM optimization_runs WHERE id IN ("
+            "  SELECT id FROM optimization_runs "
+            "  WHERE status IN ('completed','failed','timeout','interrupted') "
+            "    AND updated_at < now() - ($1 * interval '1 day') "
+            "  ORDER BY updated_at LIMIT $2)",
+            float(days), _PURGE_BATCH)
+        try:
+            out["optimization_runs_deleted"] = int(str(ores).split()[-1])
+        except Exception:
+            out["optimization_runs_deleted"] = 0
     if out["deleted"] or out["scrubbed_verifications"] \
             or out.get("experiment_captures_deleted"):
         logger.info("event=retention_synthetic_purged deleted=%s "

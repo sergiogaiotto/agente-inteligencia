@@ -158,14 +158,16 @@ def test_tour_scroll_listener_uses_capture():
 def test_settings_step_parameter_count_claim_matches_code():
     """Claim numérica do passo de Configurações precisa bater com o produto
     (PARAMETER_UI_KEYS) — mesma classe da regressão 'rollback automático'."""
+    import re
     from app.core.config import PARAMETER_UI_KEYS
     src = _src()
-    assert "~40 parâmetros" not in src, "claim '~40 parâmetros' diverge do produto (31 reais)"
     n = len(PARAMETER_UI_KEYS)
-    if "~30 parâmetros" in src:
-        assert 25 <= n <= 35, f"claim '~30' divergiu do produto ({n} parâmetros) — atualize o passo"
-    # 43.0.0 (harness assíncrono): +5 chaves → claim atualizada para '~35'.
-    if "~35 parâmetros" in src:
-        assert 30 <= n <= 40, f"claim '~35' divergiu do produto ({n} parâmetros) — atualize o passo"
-    assert ("~30 parâmetros" in src) or ("~35 parâmetros" in src), \
-        "passo de Configurações perdeu a claim de contagem — re-ancore no PARAMETER_UI_KEYS"
+    # A claim "~NN parâmetros" do passo de Configurações precisa ficar dentro
+    # de ±5 do produto real (PARAMETER_UI_KEYS) — o número exato varia a cada
+    # arco (43.0.0 harness +5, 49.0.0 loop do otimizador +6…).
+    m = re.search(r"~(\d+) parâmetros", src)
+    assert m, ("passo de Configurações perdeu a claim de contagem — "
+               "re-ancore no PARAMETER_UI_KEYS")
+    claimed = int(m.group(1))
+    assert abs(claimed - n) <= 5, \
+        f"claim '~{claimed}' divergiu do produto ({n} parâmetros) — atualize o passo"

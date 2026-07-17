@@ -97,6 +97,16 @@ async def lifespan(app: FastAPI):
             logger.info(f"eval_jobs no boot: {hj}")
     except Exception as e:
         logger.warning(f"harness jobs resume falhou no startup: {e}")
+    # Loop reflexivo do otimizador (49.0.0, PR4b): 'running' órfão →
+    # 'interrupted' (paga LLM — nunca re-executa), 'queued' → retoma com o
+    # toggle ON. Nunca derruba o boot.
+    try:
+        from app.optimizer.jobs import resume_on_boot as _opt_resume
+        oj = await _opt_resume()
+        if oj.get("interrupted") or oj.get("dispatched"):
+            logger.info(f"optimization_runs no boot: {oj}")
+    except Exception as e:
+        logger.warning(f"optimizer jobs resume falhou no startup: {e}")
     # Reaper em try PRÓPRIO (review): uma falha no resume não pode deixar o
     # processo inteiro sem retenção/despacho até o próximo restart.
     try:
@@ -122,6 +132,12 @@ async def lifespan(app: FastAPI):
             await shutdown_eval_jobs(timeout=5.0)
         except Exception as e:
             logger.warning(f"harness jobs shutdown falhou: {e}")
+        # Loop do otimizador (49.0.0): idem.
+        try:
+            from app.optimizer.jobs import shutdown_optimizer_jobs
+            await shutdown_optimizer_jobs(timeout=5.0)
+        except Exception as e:
+            logger.warning(f"optimizer jobs shutdown falhou: {e}")
         # Drena tasks async do verifier antes de fechar o pool — evita
         # erros em INSERT contra pool já fechado quando shutdown pega
         # uma task de production sample no meio.

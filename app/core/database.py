@@ -1483,6 +1483,51 @@ _IDEMPOTENT_MIGRATIONS = [
         created_at TIMESTAMP DEFAULT now()
     )""",
     "CREATE INDEX IF NOT EXISTS idx_experiment_case_results_eval ON experiment_case_results (eval_id)",
+    # ── Loop reflexivo GEPA-style (49.0.0, PR4b — fecha o arco Otimização) ──
+    # optimization_runs: a linha É o job durável do loop (queued→running→
+    # terminal), como eval_runs é do harness. Report-only: ao fim aponta a
+    # melhor variante (best_revision_id em content_revisions) e o resultado
+    # no holdout; a promoção continua sendo humana (PR5).
+    """CREATE TABLE IF NOT EXISTS optimization_runs (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        release_id TEXT NOT NULL,
+        gold_version TEXT DEFAULT 'latest',
+        status TEXT DEFAULT 'queued',
+        owner_user_id TEXT,
+        max_rounds INTEGER DEFAULT 4,
+        children_per_round INTEGER DEFAULT 2,
+        budget_usd REAL DEFAULT 0,
+        rounds_done INTEGER DEFAULT 0,
+        cost_usd REAL DEFAULT 0,
+        best_candidate_id TEXT,
+        best_revision_id TEXT,
+        holdout_verdict TEXT,
+        result TEXT,
+        error TEXT,
+        created_at TIMESTAMP DEFAULT now(),
+        updated_at TIMESTAMP DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_optimization_runs_agent ON optimization_runs (agent_id, created_at DESC)",
+    # optimization_candidates: a ÁRVORE genética. Cada nó = 1 variante avaliada
+    # numa rodada; parent_candidate_id = linhagem; passes = case_ids que passou
+    # (frente de Pareto por caso); reflection = a crítica NL que o gerou.
+    # FK CASCADE do optimization_run.
+    """CREATE TABLE IF NOT EXISTS optimization_candidates (
+        id TEXT PRIMARY KEY,
+        optimization_id TEXT NOT NULL REFERENCES optimization_runs(id) ON DELETE CASCADE,
+        round INTEGER DEFAULT 0,
+        parent_candidate_id TEXT,
+        kind TEXT DEFAULT 'llm',
+        system_prompt TEXT,
+        eval_id TEXT,
+        passes TEXT DEFAULT '[]',
+        score REAL DEFAULT 0,
+        on_pareto BOOLEAN DEFAULT FALSE,
+        reflection TEXT,
+        created_at TIMESTAMP DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_optimization_candidates_opt ON optimization_candidates (optimization_id, round)",
 ]
 
 

@@ -652,6 +652,81 @@
         </div>
     </div>
 
+    <!-- ─── Otimização automática — loop reflexivo GEPA (49.0.0, PR4b) ───
+         Job durável que itera rodadas de propor→avaliar no treino, mantém a
+         frente de Pareto por caso, confirma o melhor no holdout. Report-only:
+         aponta a melhor variante como revisão restaurável; promoção é humana. -->
+    <div class="mt-6 rounded-xl border border-surface-200 bg-white" data-testid="optimizer-loop-card" x-data="optimizerLoop()">
+        <div class="flex items-center justify-between border-b border-surface-100 px-5 py-3.5">
+            <h2 class="text-[13px] font-semibold text-brand-900">Otimização automática <span class="ml-1 rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700 align-middle">loop · beta</span></h2>
+            <span class="text-[10px] text-surface-400">propõe → avalia no treino → Pareto → confirma no holdout</span>
+        </div>
+        <div class="p-4 space-y-3">
+            <div class="flex items-end gap-2 flex-wrap">
+                <div class="flex-1 min-w-[160px]">
+                    <label class="block text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-1">Agente</label>
+                    <select x-model="loopForm.agent_id" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                        <option value="">— agente —</option>
+                        <template x-for="a in agents" :key="a.id"><option :value="a.id" x-text="a.name"></option></template>
+                    </select>
+                </div>
+                <div class="flex-1 min-w-[160px]">
+                    <label class="block text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-1">Release</label>
+                    <select x-model="loopForm.release_id" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                        <option value="">— release —</option>
+                        <template x-for="rl in releases" :key="rl.id"><option :value="rl.id" x-text="rl.name || rl.id.substring(0,8)"></option></template>
+                    </select>
+                </div>
+                <div class="w-[90px]">
+                    <label class="block text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-1">Rodadas</label>
+                    <input type="number" min="1" max="10" x-model.number="loopForm.max_rounds" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
+                </div>
+                <div class="w-[110px]">
+                    <label class="block text-[10px] font-semibold uppercase tracking-wider text-surface-400 mb-1">Teto US$</label>
+                    <input type="number" min="0" step="0.5" x-model.number="loopForm.budget_usd" class="w-full rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none" placeholder="0 = s/ teto">
+                </div>
+                <button @click="startLoop()" :disabled="!loopForm.agent_id || !loopForm.release_id || loopBusy" data-testid="optimizer-loop-start"
+                        class="rounded-lg bg-amber-600 px-4 py-2 text-[12px] font-semibold text-white hover:bg-amber-700 disabled:opacity-40">
+                    <span x-text="loopBusy ? 'Rodando…' : 'Otimizar automaticamente'"></span>
+                </button>
+            </div>
+            <template x-if="loopRun">
+                <div class="rounded-lg border border-surface-200 p-3 space-y-2" data-testid="optimizer-loop-status">
+                    <div class="flex items-center gap-2 text-[12px]">
+                        <span class="rounded-full px-2 py-0.5 text-[10px] font-bold"
+                              :class="loopRun.status==='completed'?'bg-emerald-50 text-emerald-700':['failed','timeout','interrupted'].includes(loopRun.status)?'bg-rose-50 text-rose-700':'bg-brand-50 text-brand-700 animate-pulse'"
+                              x-text="loopRun.status"></span>
+                        <span class="text-surface-500" x-text="'rodada '+(loopRun.rounds_done||0)+'/'+(loopRun.max_rounds||0)"></span>
+                        <span class="text-surface-400" x-text="(loopRun.cost_usd?('US$ '+Number(loopRun.cost_usd).toFixed(4)):'')"></span>
+                    </div>
+                    <template x-if="loopRun.result">
+                        <div class="text-[11px] text-surface-600 space-y-0.5">
+                            <div x-text="'Melhor score (treino): '+(loopRun.result.best_score)+' vs champion '+(loopRun.result.champion_score)+(loopRun.result.improved?' — melhorou':' — sem ganho')"></div>
+                            <div x-text="'Holdout: '+(loopRun.result.holdout_verdict||'—')+(loopRun.result.holdout_note?(' ('+loopRun.result.holdout_note+')'):'')"></div>
+                            <div class="text-surface-400" x-text="loopRun.result.stop_reason"></div>
+                        </div>
+                    </template>
+                    <!-- Árvore de candidatos (round · score · pareto) -->
+                    <template x-if="loopCandidates.length">
+                        <div class="mt-1 max-h-40 overflow-y-auto text-[10px] font-mono space-y-0.5">
+                            <template x-for="c in loopCandidates" :key="c.id">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-surface-400" x-text="'r'+c.round"></span>
+                                    <span class="rounded px-1" :class="c.kind==='champion'?'bg-surface-100':c.kind==='control'?'bg-sky-50 text-sky-700':'bg-brand-50 text-brand-700'" x-text="c.kind"></span>
+                                    <span :class="c.on_pareto?'text-emerald-700 font-bold':'text-surface-500'" x-text="'score '+Number(c.score).toFixed(3)+(c.on_pareto?' ✓pareto':'')"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                    <template x-if="loopRun.status==='completed' && loopRun.result && loopRun.result.improved">
+                        <p class="text-[10px] text-amber-800">Melhor variante salva no <strong>Histórico de revisões</strong> do agente (restaurável). Para aplicá-la, use o A/B do painel acima ou restaure a revisão — a promoção é sempre humana.</p>
+                    </template>
+                </div>
+            </template>
+            <p class="text-[10px] text-surface-400">Report-only: o loop NÃO altera o agente — ele explora variantes e aponta a melhor. Requer <span class="font-mono">optimizer_loop_enabled</span> ligado (Configurações → Parâmetros) e o gold set dividido em treino/holdout.</p>
+        </div>
+    </div>
+
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- DRAWER do caso — padrão da plataforma (cf. catalog_inventory): -->
     <!-- aside fixed right-0, overlay, ESC + clique-fora + botão fecham. -->
@@ -754,6 +829,44 @@
 {% endblock %}
 {% block scripts %}
 <script>
+// Loop reflexivo do otimizador (49.0.0, PR4b) — componente STANDALONE (busca
+// seus próprios agents/releases; não acopla ao x-data da página). Report-only.
+function optimizerLoop(){return{
+    loopForm:{agent_id:'',release_id:'',max_rounds:4,budget_usd:0},
+    agents:[],releases:[],loopBusy:false,loopRun:null,loopCandidates:[],_loopPollId:null,
+    init(){
+        api.get('/api/v1/agents').then(r=>this.agents=r.agents||[]).catch(()=>{});
+        api.get('/api/v1/releases').then(r=>this.releases=r.releases||[]).catch(()=>{});
+    },
+    async startLoop(){
+        if(!this.loopForm.agent_id||!this.loopForm.release_id){showToast('Selecione agente e release','error');return}
+        this.loopBusy=true;
+        try{
+            const r=await api.post('/api/v1/optimizer/optimize',{
+                agent_id:this.loopForm.agent_id,release_id:this.loopForm.release_id,
+                gold_version:'latest',
+                max_rounds:this.loopForm.max_rounds||undefined,
+                // Omite quando vazio/0 → aplica o teto PADRÃO da plataforma
+                // (review [10]: enviar 0 sempre matava o default). Para "sem
+                // teto", configure optimizer_default_budget_usd=0.
+                budget_usd:(this.loopForm.budget_usd>0?this.loopForm.budget_usd:undefined)});
+            showToast(r.message||'Loop enfileirado','info');
+            this.pollLoop(r.optimization_id);
+        }catch(e){showToast(e.message,'error');this.loopBusy=false}
+    },
+    pollLoop(id){
+        const tick=async()=>{
+            let d=null;
+            try{d=await api.get('/api/v1/optimizer/optimize/'+id)}catch(e){this.loopBusy=false;return}
+            this.loopRun=d.run;this.loopCandidates=d.candidates||[];
+            if(['queued','running'].includes(d.run.status)){setTimeout(tick,5000);return}
+            this.loopBusy=false;
+            if(d.run.status==='completed')showToast('Otimização concluída — veja o melhor candidato','success');
+            else showToast('Otimização: '+(d.run.error||d.run.status),'error');
+        };
+        setTimeout(tick,3000);
+    },
+}}
 function harnessPage(){return{
     goldCases:[],evalRuns:[],agents:[],releases:[],showGoldForm:false,showRunForm:false,running:false,
     expandedEval: null,
