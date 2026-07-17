@@ -1146,6 +1146,7 @@ async def list_eval_runs(release_id: str = None, agent_id: str = None,
     for r in runs:
         _parse_json_field(r, "dimension_breakdown", {})
         _parse_json_field(r, "details", [])
+        _ensure_eval_run_aliases(r)
     return {"runs": runs}
 
 
@@ -1283,6 +1284,30 @@ def _fmt_target(t: tuple | None) -> str:
     return f"{t[0]} {t[1]}" if t else "sem alvo (run legado)"
 
 
+def _ensure_eval_run_aliases(d: dict) -> dict:
+    """Paridade de shape entre TODAS as vias de leitura de eval runs (49.0.1).
+
+    O resumo do evaluator fala `total`/`eval_id`; a linha crua da tabela fala
+    `total_cases`/`id`. Consumidor que aprende o shape numa via (POST /execute,
+    GET /{id}, GET lista, compare) não pode perder campo ao migrar pra outra —
+    todo payload carrega AMBOS os nomes de cada par. Em linha em voo
+    (status='running') `total_cases` é NULL → `total=None` de propósito: a
+    chave existe SEMPRE, e o poller distingue "ainda sem número" de "shape
+    mudou". Achado do E2E de profundidade + revisão adversarial do 49.0.1.
+    """
+    if not isinstance(d, dict):
+        return d
+    if "total" not in d and "total_cases" in d:
+        d["total"] = d.get("total_cases")
+    if "total_cases" not in d and "total" in d:
+        d["total_cases"] = d.get("total")
+    if "eval_id" not in d and "id" in d:
+        d["eval_id"] = d.get("id")
+    if "id" not in d and "eval_id" in d:
+        d["id"] = d.get("eval_id")
+    return d
+
+
 def _summary_of_run(run: dict) -> dict:
     """Sumário leve de um eval_run para o response (sem details cruas)."""
     # Frases-Prova (36.6.0): pass-rate derivado — fonte única no evaluator.
@@ -1290,7 +1315,7 @@ def _summary_of_run(run: dict) -> dict:
     rp_rate = _phrases_pass_rate(
         run.get("routing_phrases_total"), run.get("routing_phrases_passed"),
     )
-    return {
+    return _ensure_eval_run_aliases({
         "id": run.get("id"),
         "release_id": run.get("release_id"),
         "agent_id": run.get("agent_id"),
@@ -1323,7 +1348,7 @@ def _summary_of_run(run: dict) -> dict:
         "false_positive_rate": run.get("false_positive_rate"),
         "avg_latency_ms": run.get("avg_latency_ms"),
         "created_at": run.get("created_at"),
-    }
+    })
 
 
 def _compute_delta(a, b, direction: str) -> dict:
@@ -1633,7 +1658,7 @@ async def get_eval_run(run_id: str):
         raise HTTPException(404, "Execução de avaliação não encontrada")
     _parse_json_field(r, "dimension_breakdown", {})
     _parse_json_field(r, "details", [])
-    return r
+    return _ensure_eval_run_aliases(r)
 
 
 @router.get("/dashboard/verifier/async-stats")
@@ -1903,7 +1928,7 @@ async def run_harness(data: RunEvalRequest, request: Request):
             pipeline_id=pipeline_id, owner_user_id=_caller.get("id"),
             config_overrides=overrides, gold_split=gold_split,
         )
-        return result
+        return _ensure_eval_run_aliases(result)
     except Exception as e:
         raise HTTPException(500, f"Erro no harness: {str(e)}")
 

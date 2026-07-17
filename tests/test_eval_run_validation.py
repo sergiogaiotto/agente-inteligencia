@@ -107,3 +107,76 @@ async def test_run_evaluation_invalid_agent(monkeypatch):
     out = await evaluator.run_evaluation("r1", "ghost-agent", "latest", "baseline")
     assert out["status"] == "invalid_agent", out
     assert "não existe" in out["message"]
+
+
+# ── Paridade de shape entre as vias de leitura de eval runs (49.0.1) ──
+# Achado do E2E de profundidade (2026-07-17) + revisão adversarial: o resumo
+# do evaluator fala `total`/`eval_id`; a linha crua fala `total_cases`/`id`.
+# Consumidor que aprende o shape numa via (POST síncrono, GET /{id}, GET
+# lista, compare) não pode perder campo ao migrar pra outra — TODO payload
+# carrega ambos os nomes de cada par (_ensure_eval_run_aliases).
+
+_ROW = {"id": "e1", "status": "completed", "total_cases": 4, "passed": 4,
+        "failed": 0, "details": "[]", "dimension_breakdown": "{}"}
+
+
+def _assert_pairs(body: dict, total, ident):
+    assert body["total"] == total
+    assert body["total_cases"] == total
+    assert body["id"] == ident
+    assert body["eval_id"] == ident
+
+
+def test_execute_sync_response_carries_both_names(monkeypatch):
+    monkeypatch.setattr(dash.releases_repo, "find_by_id", _async({"id": "r1"}))
+    monkeypatch.setattr(dash.agents_repo, "find_by_id", _async({"id": "a1"}))
+    monkeypatch.setattr(
+        evaluator, "run_evaluation",
+        _async({"eval_id": "e9", "status": "completed",
+                "total": 8, "passed": 7, "failed": 1}),
+    )
+    r = _client().post("/api/v1/eval-runs/execute", json=_BODY)
+    assert r.status_code == 200, r.text
+    _assert_pairs(r.json(), total=8, ident="e9")
+
+
+def test_get_eval_run_carries_both_names(monkeypatch):
+    monkeypatch.setattr(dash.eval_runs_repo, "find_by_id", _async(dict(_ROW)))
+    r = _client().get("/api/v1/eval-runs/e1")
+    assert r.status_code == 200, r.text
+    _assert_pairs(r.json(), total=4, ident="e1")
+
+
+def test_get_eval_run_in_flight_keeps_total_key(monkeypatch):
+    """Linha em voo (poll do async): total_cases NULL → total=None mas a
+    CHAVE existe — poller distingue 'ainda sem número' de 'shape mudou'."""
+    row = {**_ROW, "status": "running", "total_cases": None,
+           "passed": None, "failed": None}
+    monkeypatch.setattr(dash.eval_runs_repo, "find_by_id", _async(row))
+    body = _client().get("/api/v1/eval-runs/e1").json()
+    assert "total" in body and body["total"] is None
+    assert body["eval_id"] == "e1"
+
+
+def test_list_eval_runs_rows_carry_both_names(monkeypatch):
+    monkeypatch.setattr(dash.eval_runs_repo, "find_all", _async([dict(_ROW)]))
+    r = _client().get("/api/v1/eval-runs")
+    assert r.status_code == 200, r.text
+    _assert_pairs(r.json()["runs"][0], total=4, ident="e1")
+
+
+def test_summary_of_run_carries_both_names():
+    """/eval-runs/compare monta run_a/run_b via _summary_of_run — a quarta
+    via de leitura precisa da mesma paridade."""
+    body = dash._summary_of_run(dict(_ROW))
+    _assert_pairs(body, total=4, ident="e1")
+
+
+def test_alias_is_coupled_to_real_evaluator_contract():
+    """Anti-drift: o alias na rota é chaveado nos literais `total`/`eval_id`
+    do resumo REAL de run_evaluation — se alguém renomear lá, este teste
+    quebra junto (senão o alias vira no-op silencioso e a paridade some)."""
+    import inspect
+    src = inspect.getsource(evaluator.run_evaluation)
+    assert '"eval_id": eval_id' in src, "resumo do evaluator renomeou eval_id"
+    assert '"total": total' in src, "resumo do evaluator renomeou total"
