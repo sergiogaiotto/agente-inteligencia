@@ -1992,6 +1992,33 @@ def _verify_autopass(
     return exec_profile != "rigorous" or not v2_enabled
 
 
+def _apply_experiment_overrides(agent: dict,
+                                config_overrides: dict | None) -> dict:
+    """Seam de EXPERIMENTO (44.0.0, PR3a do arco Otimização de Prompt/Skill).
+
+    Aplica overrides EFÊMEROS do texto livre por cima da config carregada:
+    'system_prompt' (do agente) e 'skill_purpose' (## Purpose da skill).
+    Allowlist por chaves fixas — seções SELADAS (Decisions/Inputs/contratos)
+    nunca são aceitas (a rota valida; aqui é defesa em profundidade).
+
+    CÓPIA DEFENSIVA do dict do agente: _topo_agent pode vir do cache de
+    topologia — um experimento NÃO pode envenenar a config viva das próximas
+    execuções (mesmo racional da cópia do live-resolve do task_type).
+    skill_purpose sem skill (skill_data vazio) é no-op: não há seção
+    ## Purpose a renderizar. Nada é persistido, nunca."""
+    if not config_overrides:
+        return agent
+    agent = dict(agent)
+    if config_overrides.get("system_prompt") is not None:
+        agent["system_prompt"] = str(config_overrides["system_prompt"])
+    skill_data = agent.get("_parsed_skill") or {}
+    if config_overrides.get("skill_purpose") is not None and skill_data:
+        skill_data = dict(skill_data)
+        skill_data["purpose"] = str(config_overrides["skill_purpose"])
+        agent["_parsed_skill"] = skill_data
+    return agent
+
+
 async def execute_interaction(
     agent_id: str,
     user_input: str,
@@ -2040,6 +2067,11 @@ async def execute_interaction(
     # NÃO toca o ContextVar (herda o do pai); os 4 call sites TOP-LEVEL (rotas,
     # workspace, catálogo, harness) usam False e mantêm o reset anti-herança.
     inherit_creation_context: bool = False,
+    # Seam de EXPERIMENTO (44.0.0, PR3a do arco Otimização): overrides
+    # EFÊMEROS do texto livre ({'system_prompt': str, 'skill_purpose': str})
+    # — o harness avalia uma variante de prompt SEM mutar agente/skill vivos
+    # (seria racy com produção) e sem persistir nada. None = sem efeito.
+    config_overrides: dict | None = None,
 ) -> dict:
     """Execução completa de uma interação pela FSM §15.
 
@@ -2178,6 +2210,10 @@ async def execute_interaction(
             }
 
     agent["_parsed_skill"] = skill_data
+
+    # ── Seam de EXPERIMENTO (44.0.0, PR3a do arco Otimização) ──
+    agent = _apply_experiment_overrides(agent, config_overrides)
+    skill_data = agent["_parsed_skill"]
 
     # ── Execution Profile: determina modo de execução ──
     exec_profile = skill_data.get("_execution_mode", "standard")

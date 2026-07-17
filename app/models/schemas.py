@@ -372,11 +372,17 @@ class CAREntryCreate(BaseModel):
 class RunEvalRequest(BaseModel):
     """Alvo do harness (Pacote C): exatamente UM de agent_id | pipeline_id.
     agent_id era obrigatório; virou opcional para o modo pipeline — a rota
-    valida o XOR (mantém 422/404 amigáveis em vez de erro de schema)."""
+    valida o XOR (mantém 422/404 amigáveis em vez de erro de schema).
+
+    config_overrides (44.0.0, PR3a — experimento de prompt): overrides
+    EFÊMEROS do texto livre ({'system_prompt','skill_purpose'}) aplicados via
+    seam do engine. A rota valida allowlist/limites e EXIGE run_type=
+    'experiment' + alvo agente (segregação total do run de experimento)."""
     release_id: str
     agent_id: Optional[str] = None
     pipeline_id: Optional[str] = None
     gold_version: str = "latest"; run_type: str = "baseline"
+    config_overrides: Optional[dict] = None
 
 _MIN_PASSWORD_LEN = 8  # política mínima de senha (SKILL.md §1 / CWE-521)
 

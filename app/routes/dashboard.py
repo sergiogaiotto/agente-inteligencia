@@ -1111,15 +1111,37 @@ def _parse_json_field(row: dict, field: str, default):
 
 @router.get("/eval-runs")
 async def list_eval_runs(release_id: str = None, agent_id: str = None,
-                         pipeline_id: str = None, limit: int = 20):
+                         pipeline_id: str = None, limit: int = 20,
+                         include_experiments: bool = False):
     """Execuções de avaliação. Filtros opcionais por release e por ALVO
     (mesmo contrato do GET /drift-events): com múltiplos alvos por release,
-    `agent_id`/`pipeline_id` isolam o histórico/baseline de cada um."""
+    `agent_id`/`pipeline_id` isolam o histórico/baseline de cada um.
+
+    include_experiments (44.0.0): runs run_type='experiment' ficam FORA por
+    default (segregação — consumidores/dashboards não misturam variantes de
+    prompt com a série real); a página do Harness pede =true para permitir
+    o Comparar Execuções entre champion e challenger. Filtro pós-fetch (o
+    repo genérico só filtra por igualdade) — a lista pode vir < limit."""
     f = {}
     if release_id: f["release_id"] = release_id
     if agent_id: f["agent_id"] = agent_id
     if pipeline_id: f["pipeline_id"] = pipeline_id
-    runs = await eval_runs_repo.find_all(limit=limit, **f)
+    # DUAS janelas (review [4]/[6]): uma rajada de experimentos não pode
+    # expulsar os runs reais da janela (esvaziaria Baseline-por-alvo e a
+    # própria lista). Janela normal = 3× o limit filtrada pós-fetch (o repo
+    # só filtra igualdade); experimentos entram por consulta PRÓPRIA
+    # (run_type='experiment') quando pedidos, mesclados por recência.
+    runs = await eval_runs_repo.find_all(limit=max(limit, 20) * 3, **f)
+    normal = [r for r in runs if (r.get("run_type") or "") != "experiment"][:limit]
+    if include_experiments:
+        exps = await eval_runs_repo.find_all(
+            limit=20, run_type="experiment", **f)
+        seen_ids = {r.get("id") for r in normal}
+        merged = normal + [r for r in exps if r.get("id") not in seen_ids]
+        merged.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        runs = merged
+    else:
+        runs = normal
     # dimension_breakdown e details vêm como TEXT JSON; UI precisa de objeto.
     for r in runs:
         _parse_json_field(r, "dimension_breakdown", {})
@@ -1337,6 +1359,66 @@ def _divergent_cases(run_a: dict, run_b: dict, limit: int = 20) -> list:
     return flips[:limit]
 
 
+def _paired_comparison(run_a: dict, run_b: dict) -> dict:
+    """Comparação PAREADA caso-a-caso (44.0.0, PR3a do arco Otimização).
+
+    Cruza os `details` dos dois runs por case_id e aplica McNemar exato sobre
+    os discordantes. `details` é capado em 100 casos na persistência — se um
+    run avaliou mais que isso, o pareamento é PARCIAL e `truncated` avisa
+    (a UI deve exibir o aviso; nunca silêncio)."""
+    from app.harness.evaluator import mcnemar_exact_p
+
+    def _passes_map(run: dict) -> dict:
+        # Tolerante a details ainda em string (chamadas fora do compare) e a
+        # entries malformadas — mesmo espírito do _details() do divergentes.
+        det = run.get("details") or []
+        if isinstance(det, str):
+            try:
+                det = json.loads(det)
+            except (json.JSONDecodeError, TypeError):
+                det = []
+        return {d.get("case_id"): bool(d.get("passed"))
+                for d in det if isinstance(d, dict) and d.get("case_id")}
+
+    da = _passes_map(run_a)
+    db = _passes_map(run_b)
+    common = set(da) & set(db)
+    only_a = sum(1 for c in common if da[c] and not db[c])
+    only_b = sum(1 for c in common if db[c] and not da[c])
+    both_pass = sum(1 for c in common if da[c] and db[c])
+    both_fail = sum(1 for c in common if not da[c] and not db[c])
+    n_disc = only_a + only_b
+    p = mcnemar_exact_p(only_a, only_b)
+    if not common:
+        # Review [3]: zero casos PAREÁVEIS (details ausentes/corrompidos/
+        # legados) NÃO é concordância — afirmar 'empate' aqui seria a falsa
+        # confiança exata que a convenção proíbe.
+        verdict = "sem_pareamento"
+        note = ("nenhum caso pareável — details ausentes ou de runs legados; "
+                "re-rode as duas avaliações para habilitar o veredito pareado")
+    elif n_disc == 0:
+        verdict = "empate"
+        note = "nenhum caso discordante — os runs concordam em todos os casos pareados"
+    elif p < 0.05:
+        verdict = "a_melhor" if only_a > only_b else "b_melhor"
+        note = (f"diferença significativa a α=0.05 (p={p:.4f}) sobre "
+                f"{n_disc} discordante(s)")
+    else:
+        verdict = "inconclusivo"
+        note = (f"discordantes ({only_a}×{only_b}) insuficientes para "
+                f"significância a α=0.05 (p={p:.4f}) — a diferença pode ser "
+                "ruído; mais casos no gold set aumentam o poder")
+    return {
+        "paired_cases": len(common),
+        "both_pass": both_pass, "both_fail": both_fail,
+        "only_a_passes": only_a, "only_b_passes": only_b,
+        "mcnemar_p": round(p, 5), "alpha": 0.05,
+        "verdict": verdict, "verdict_note": note,
+        "truncated": (int(run_a.get("total_cases") or 0) > len(da)
+                      or int(run_b.get("total_cases") or 0) > len(db)),
+    }
+
+
 @router.get("/eval-runs/compare")
 async def compare_eval_runs(a: str, b: str):
     """Compara dois eval_runs side-by-side. Valida ALVO + status +
@@ -1418,11 +1500,18 @@ async def compare_eval_runs(a: str, b: str):
         "by_category_deltas": {},
         "divergent_cases": [],
         "routing_phrases": None,
+        "paired": None,
     }
     if comparable:
         response["deltas"] = _aggregate_deltas(run_a, run_b)
         response["by_category_deltas"] = _by_category_deltas(run_a, run_b)
         response["divergent_cases"] = _divergent_cases(run_a, run_b, limit=20)
+        # ── Comparação PAREADA + McNemar exato (44.0.0, PR3a) ──
+        # A estatística honesta p/ champion-vs-challenger: veredito só sobre
+        # os DISCORDANTES, com rótulo explícito de 'inconclusivo' quando não
+        # há poder — deltas de média com N pequeno enganam (convenção
+        # sem-falsa-confiança).
+        response["paired"] = _paired_comparison(run_a, run_b)
         # ── Frases-Prova (36.6.0): linha com guarda de HASH própria ──
         # Fora de `deltas`/_METRIC_DIRECTIONS de propósito: o delta genérico
         # não tem como exigir o MESMO conjunto de frases — pass-rates de
@@ -1621,6 +1710,70 @@ async def run_harness(data: RunEvalRequest, request: Request):
         from app.core.database import pipelines_repo
         if not await pipelines_repo.find_by_id(pipeline_id):
             raise HTTPException(404, f"Pipeline '{pipeline_id}' não encontrado.")
+
+    # run_type é ENUM fechado (44.0.0, review [8]): a segregação de drift/
+    # lista/baseline depende inteiramente dele — campo livre deixaria um typo
+    # (ou má-fé) esconder um run do monitoramento sem ninguém perceber.
+    if data.run_type not in ("baseline", "regression", "experiment"):
+        raise HTTPException(
+            422, f"run_type inválido {data.run_type!r} — use 'baseline', "
+                 "'regression' ou 'experiment'.")
+
+    # ── Experimento de prompt (44.0.0, PR3a): validação do override ──
+    # Allowlist estrito = só TEXTO LIVRE (seções seladas — Decisions/Inputs/
+    # contratos — nunca são otimizáveis); alvo AGENTE (um agente por vez,
+    # decisão do plano ancorada na evidência de otimização independente);
+    # run_type='experiment' obrigatório (segrega de baseline/drift/lista).
+    overrides = data.config_overrides or None
+    if overrides:
+        # Gate por ROLE (review [7]): o seam injeta system_prompt ARBITRÁRIO
+        # e a avaliação executa as tools/MCP/bindings REAIS do agente — poder
+        # novo exige papel elevado. A rota base (sem overrides) segue no
+        # nível dos irmãos do módulo, como documentado no DELETE.
+        await require_role("root", "admin")(request)
+        if pipeline_id:
+            raise HTTPException(
+                422, "config_overrides: experimento otimiza UM agente por vez "
+                     "— use agent_id (pipeline otimiza-se agente a agente).")
+        _allowed = {"system_prompt", "skill_purpose"}
+        _bad = sorted(set(overrides) - _allowed)
+        if _bad:
+            raise HTTPException(
+                422, f"config_overrides: chaves não permitidas {_bad}; aceitas: "
+                     f"{sorted(_allowed)} (seções seladas nunca são otimizáveis).")
+        for k, v in overrides.items():
+            if not isinstance(v, str) or not v.strip():
+                raise HTTPException(422, f"config_overrides.{k}: string não-vazia.")
+            if len(v) > 20000:
+                raise HTTPException(422, f"config_overrides.{k}: máximo 20000 caracteres.")
+        if data.run_type != "experiment":
+            raise HTTPException(
+                422, "config_overrides exige run_type='experiment' — runs de "
+                     "variante não podem virar baseline nem gerar drift.")
+        # Skill DECLARATIVA não tem LLM — não há prompt a otimizar; recusa
+        # explícita em vez de rodar K=2 e medir um empate vazio (decisão do
+        # plano: o seletor de alvo recusa declarativas). Usa o parser SSOT
+        # (o modo pode ser declarado OU inferido — grep no raw não basta).
+        _agent_row = await agents_repo.find_by_id(agent_id)
+        _skill_row = None
+        if _agent_row and _agent_row.get("skill_id"):
+            _skill_row = await skills_repo.find_by_id(_agent_row["skill_id"])
+        _raw = (_skill_row or {}).get("raw_content") or ""
+        # skill_purpose sem skill = no-op silencioso no seam (review [5]):
+        # o "experimento" executaria o champion duas vezes e o veredito
+        # mediria ruído — recusa com o motivo verdadeiro.
+        if "skill_purpose" in overrides and not _raw:
+            raise HTTPException(
+                422, "config_overrides.skill_purpose: o agente não tem skill "
+                     "com conteúdo — não há ## Purpose a sobrescrever.")
+        if _raw:
+            from app.skill_parser.parser import parse_skill_md
+            if parse_skill_md(_raw).execution_mode == "declarative":
+                raise HTTPException(
+                    422, "config_overrides: a skill deste agente é "
+                         "DECLARATIVA (executa sem LLM) — não há prompt "
+                         "a otimizar neste alvo.")
+
     # IDOR (35.2.0): quem disparou o run vira o DONO das interactions dos
     # casos (o middleware default-deny já autenticou; auth_user é o cache).
     _caller = getattr(request.state, "auth_user", None) or {}
@@ -1642,6 +1795,9 @@ async def run_harness(data: RunEvalRequest, request: Request):
             # Linha-JOB (≠ run síncrono): habilita o zombie-sweep do reaper a
             # curá-la sem risco de tocar um run sync em voo no mesmo processo.
             "is_job": True,
+            # Experimento (44.0.0): o SELO da variante avaliada — o worker lê
+            # daqui; o agente/skill vivos nunca mudam.
+            "config_overrides": json.dumps(overrides) if overrides else None,
         })
         harness_jobs.dispatch(eval_id)  # sem vaga → carona do reaper despacha
         return JSONResponse(status_code=202, content={
@@ -1655,6 +1811,7 @@ async def run_harness(data: RunEvalRequest, request: Request):
         result = await run_evaluation(
             data.release_id, agent_id, data.gold_version, data.run_type,
             pipeline_id=pipeline_id, owner_user_id=_caller.get("id"),
+            config_overrides=overrides,
         )
         return result
     except Exception as e:

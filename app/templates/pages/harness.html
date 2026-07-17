@@ -349,6 +349,31 @@
 
             <template x-if="compareResult && compareResult.comparable">
                 <div class="space-y-4">
+                    <!-- ── Veredito PAREADO + McNemar (44.0.0, PR3a) ──
+                         A leitura honesta para champion×challenger: só os
+                         DISCORDANTES decidem; 'inconclusivo' explícito quando
+                         não há poder estatístico (sem falsa confiança). -->
+                    <template x-if="compareResult.paired">
+                        <div class="rounded-lg border p-3 text-[12px]" data-testid="compare-paired"
+                             :class="['inconclusivo','sem_pareamento'].includes(compareResult.paired.verdict) ? 'border-amber-200 bg-amber-50/60 text-amber-900' : compareResult.paired.verdict==='empate' ? 'border-surface-200 bg-surface-50 text-surface-700' : 'border-emerald-200 bg-emerald-50/60 text-emerald-900'">
+                            <div class="font-semibold mb-1">
+                                Veredito pareado (McNemar exato):
+                                <span x-text="compareResult.paired.verdict==='a_melhor' ? 'A é melhor' : compareResult.paired.verdict==='b_melhor' ? 'B é melhor' : compareResult.paired.verdict==='sem_pareamento' ? 'sem pareamento' : compareResult.paired.verdict"></span>
+                                <span class="font-mono text-[10px] ml-1" x-text="'p=' + compareResult.paired.mcnemar_p"></span>
+                            </div>
+                            <div class="text-[11px]" x-text="compareResult.paired.verdict_note"></div>
+                            <div class="mt-1 flex flex-wrap gap-3 text-[10px] text-surface-500">
+                                <span x-text="compareResult.paired.paired_cases + ' casos pareados'"></span>
+                                <span x-text="'só A passa: ' + compareResult.paired.only_a_passes"></span>
+                                <span x-text="'só B passa: ' + compareResult.paired.only_b_passes"></span>
+                                <span x-text="'ambos passam: ' + compareResult.paired.both_pass"></span>
+                                <span x-text="'ambos falham: ' + compareResult.paired.both_fail"></span>
+                            </div>
+                            <template x-if="compareResult.paired.truncated">
+                                <div class="mt-1 text-[10px] text-amber-700">⚠ pareamento PARCIAL — um dos runs avaliou mais casos do que os detalhes persistidos (cap 100).</div>
+                            </template>
+                        </div>
+                    </template>
                     <!-- Header dos 2 runs -->
                     <div class="grid md:grid-cols-2 gap-3">
                         <template x-for="side in ['a','b']" :key="side">
@@ -823,7 +848,10 @@ function harnessPage(){return{
         try{
             // limit=50: o painel Baseline-por-alvo agrupa client-side — com o
             // default (20), o baseline de um alvo pouco rodado sumiria.
-            const runs = (await api.get('/api/v1/eval-runs?limit=50')).runs||[];
+            // include_experiments=true (44.0.0): a página do Harness é a CASA
+            // dos experimentos — precisa vê-los p/ Comparar Execuções; os
+            // demais consumidores da API seguem sem eles por default.
+            const runs = (await api.get('/api/v1/eval-runs?limit=50&include_experiments=true')).runs||[];
             // Defensivo: backend ja parseia, mas tolera caso receba string crua.
             for (const r of runs) {
                 if (typeof r.dimension_breakdown === 'string') {
