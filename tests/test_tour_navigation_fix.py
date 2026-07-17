@@ -88,13 +88,23 @@ def test_ensure_visible_opens_sidebar_and_submenu():
     assert "if (sm === 'mesh') this.meshSubmenuOpen = true;" in src
 
 
+def test_ensure_visible_opens_mobile_drawer_too():
+    """Em < lg a sidebar é off-canvas por sidebarOpen (-translate-x-full): sem abrir,
+    23/25 passos apontam para fora da tela (tela escura sem destaque)."""
+    src = _src()
+    assert "if (!this.sidebarOpen) this.sidebarOpen = true;" in src, \
+        "_ensureTourTargetVisible não abre o drawer mobile (sidebarOpen)"
+
+
 def test_tour_restores_menu_state_on_end():
     """Ao encerrar, o tour devolve sidebar/submenus como o usuário deixou."""
     src = _src()
     assert "_tourSaved" in src, "tour não guarda o estado do menu"
     assert "this.sidebarCollapsed = s.collapsed;" in src
+    assert "this.sidebarOpen = s.open;" in src
     assert "this.catalogSubmenuOpen = s.catalog;" in src
     assert "this.meshSubmenuOpen = s.mesh;" in src
+    assert "open: this.sidebarOpen," in src, "_tourSaved não guarda sidebarOpen"
 
 
 # ── C. Clamp do card na viewport ─────────────────────────────────────
@@ -114,12 +124,43 @@ def test_card_uses_reactive_state_not_unbounded_getter():
     assert 'x-ref="tourCard"' in src, "card do tour sem x-ref para medir a altura"
     assert ':style="tourCardStyle"' in src, "card não usa o estilo reativo tourCardStyle"
     assert ':style="tourSpotStyle"' in src, "spotlight não usa o estilo reativo tourSpotStyle"
-    # o getter antigo, sem clamp vertical, foi removido
+    # os getters antigos, sem clamp vertical, foram removidos
     assert "get cardPosition()" not in src, "getter cardPosition legado (sem clamp) ainda presente"
-    assert "top:${r.bottom + 12}px`;\n" not in src or "positionTour" in src
+    assert "get spotlightStyle()" not in src, "getter spotlightStyle legado ainda presente"
 
 
 def test_tour_repositions_on_resize():
-    """Redimensionar o browser reposiciona o card (era a causa do 'some na tela')."""
+    """Redimensionar o browser reposiciona o card (era a causa do 'some na tela').
+    Passa por _repositionTour: cruzar o breakpoint lg dispara a transição da sidebar
+    e precisa da re-medição atrasada (não só do positionTour imediato)."""
     src = _src()
-    assert '@resize.window="positionTour()"' in src, "tour não reposiciona no resize"
+    assert '@resize.window="_repositionTour()"' in src, "tour não reposiciona no resize"
+
+
+def test_tour_remeasures_after_sidebar_transition():
+    """A sidebar tem transition-all duration-200: medir 1 frame após abrir pega o rect
+    NO MEIO da animação e congela spotlight/card errados. Precisa re-medir após assentar."""
+    src = _src()
+    assert "_tourSettleTimer" in src, "sem re-medição pós-transição (timer de assentamento)"
+    assert "setTimeout(() => { if (this.tourActive) this.positionTour(); }, 250)" in src, \
+        "re-medição não espera os 200ms da transição da sidebar"
+    assert "clearTimeout(this._tourSettleTimer)" in src, "timer de assentamento nunca é limpo"
+
+
+def test_tour_scroll_listener_uses_capture():
+    """Scroll de container interno (nav overflow-y-auto) NÃO borbulha até window —
+    só a fase capture enxerga e reposiciona o spotlight."""
+    src = _src()
+    assert '@scroll.window.capture="positionTour()"' in src, \
+        "listener de scroll sem .capture — scroll interno da nav desalinha o spotlight"
+
+
+def test_settings_step_parameter_count_claim_matches_code():
+    """Claim numérica do passo de Configurações precisa bater com o produto
+    (PARAMETER_UI_KEYS) — mesma classe da regressão 'rollback automático'."""
+    from app.core.config import PARAMETER_UI_KEYS
+    src = _src()
+    assert "~40 parâmetros" not in src, "claim '~40 parâmetros' diverge do produto (31 reais)"
+    n = len(PARAMETER_UI_KEYS)
+    if "~30 parâmetros" in src:
+        assert 25 <= n <= 35, f"claim '~30' divergiu do produto ({n} parâmetros) — atualize o passo"
