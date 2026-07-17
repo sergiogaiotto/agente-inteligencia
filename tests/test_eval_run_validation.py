@@ -57,6 +57,9 @@ def test_runs_when_both_exist(monkeypatch):
 # ── DELETE /eval-runs/{id} (housekeeping — 27.1.0) ────────────────
 
 def test_delete_eval_run_ok(monkeypatch):
+    # 43.0.0: a rota consulta o run ANTES (guard de 'running') — mocka o find.
+    monkeypatch.setattr(dash.eval_runs_repo, "find_by_id",
+                        _async({"id": "some-id", "status": "completed"}))
     monkeypatch.setattr(dash.eval_runs_repo, "delete", _async(True))
     r = _client().delete("/api/v1/eval-runs/some-id")
     assert r.status_code == 200, r.text
@@ -64,9 +67,19 @@ def test_delete_eval_run_ok(monkeypatch):
 
 
 def test_delete_eval_run_404_when_missing(monkeypatch):
+    monkeypatch.setattr(dash.eval_runs_repo, "find_by_id", _async(None))
     monkeypatch.setattr(dash.eval_runs_repo, "delete", _async(False))
     r = _client().delete("/api/v1/eval-runs/ghost")
     assert r.status_code == 404, r.text
+
+
+def test_delete_eval_run_409_quando_running(monkeypatch):
+    """43.0.0 (review [11]): run em execução não pode ser removido — o
+    worker/request em voo continuaria pagando LLM invisível."""
+    monkeypatch.setattr(dash.eval_runs_repo, "find_by_id",
+                        _async({"id": "busy", "status": "running"}))
+    r = _client().delete("/api/v1/eval-runs/busy")
+    assert r.status_code == 409, r.text
 
 
 # ── run_evaluation com agente deletado → invalid_agent (27.1.0) ───

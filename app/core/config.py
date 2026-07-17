@@ -296,6 +296,31 @@ class Settings(BaseSettings):
     # (determinístico), não o comportamento do LLM.
     harness_phrases_gate: bool = False
 
+    # ── Harness assíncrono + custo no ledger (43.0.0, PR2 do arco Otimização) ──
+    # Job durável do harness: POST /eval-runs/execute → 202 + eval_run 'queued'
+    # (a linha de eval_runs É o job: claim atômico, execução fora do request,
+    # polling em GET /eval-runs/{id}). Default OFF (superfície nova, gated):
+    # OFF mantém o caminho síncrono EXATO de hoje e congela o despacho da fila
+    # (kill-switch — higiene de boot continua rodando).
+    harness_async_enabled: bool = False
+    # Runs de harness simultâneos neste processo (cap PRÓPRIO, não compartilha
+    # o do invoke): um run já serializa N casos de LLM; 1 é o default seguro
+    # para o provider/circuit-breaker.
+    harness_jobs_max_concurrent: int = 1
+    # Deadline por run assíncrono (minutos): run pendurado é cancelado e vira
+    # 'timeout' (os custos por caso já registrados sobrevivem — são off-path).
+    harness_job_timeout_minutes: int = 60
+    # Teto de custo LLM por run (US$): checado ENTRE casos (mid-run), somando
+    # invoke + juiz + RAGAS. Estourou → aborto gracioso: status
+    # 'budget_exceeded', métricas PARCIAIS persistidas com aviso e gate
+    # 'skipped' (convenção sem-falsa-confiança). 0 = sem teto (default).
+    harness_budget_usd_per_run: float = 0.0
+    # Retenção das interações SINTÉTICAS do harness (interactions.origin=
+    # 'harness'), em DIAS: purga na carona do reaper (mesmo caminho da
+    # retenção LGPD — scrub das verifications preserva a linha analítica).
+    # 0 = desligado (default). Independe de interactions_retention_days.
+    harness_synthetic_retention_days: int = 0
+
     # ── RAGAS com gabarito (ground truth) — 33.12.0 ──
     # context_recall + answer_correctness exigem a resposta-padrão do gold E uma
     # chamada LLM-judge extra POR MÉTRICA (custo). Gated default-OFF: quando
@@ -576,6 +601,12 @@ _UI_TO_ENV_MAP = {
     "harness_max_dim_regression_pct": "HARNESS_MAX_DIM_REGRESSION_PCT",
     "harness_max_regression_pct": "HARNESS_MAX_REGRESSION_PCT",
     "harness_phrases_gate": "HARNESS_PHRASES_GATE",
+    # Harness assíncrono + custo (43.0.0) — comportamento, não-selado.
+    "harness_async_enabled": "HARNESS_ASYNC_ENABLED",
+    "harness_jobs_max_concurrent": "HARNESS_JOBS_MAX_CONCURRENT",
+    "harness_job_timeout_minutes": "HARNESS_JOB_TIMEOUT_MINUTES",
+    "harness_budget_usd_per_run": "HARNESS_BUDGET_USD_PER_RUN",
+    "harness_synthetic_retention_days": "HARNESS_SYNTHETIC_RETENTION_DAYS",
     "ragas_ground_truth_enabled": "RAGAS_GROUND_TRUTH_ENABLED",
     # Tuning de performance (25.2.0)
     "query_topology_cache_enabled": "QUERY_TOPOLOGY_CACHE_ENABLED",
@@ -621,6 +652,11 @@ PARAMETER_UI_KEYS = (
     "harness_max_dim_regression_pct",
     "harness_max_regression_pct",
     "harness_phrases_gate",
+    "harness_async_enabled",
+    "harness_jobs_max_concurrent",
+    "harness_job_timeout_minutes",
+    "harness_budget_usd_per_run",
+    "harness_synthetic_retention_days",
     "ragas_ground_truth_enabled",
     "query_topology_cache_enabled",
     "fast_routing_enabled",

@@ -152,6 +152,11 @@ Configurado por ambiente (alguns também na UI). Defaults pensados para zero-ris
 | `HARNESS_USE_VERIFIER` | true | Harness re-julga casos via Verifier (gate combinado). |
 | `HARNESS_MIN_*` / `MAX_*` | vários | Thresholds multidimensionais do gate de qualidade. |
 | `HARNESS_PHRASES_GATE` | **false** | Em runs de PIPELINE, Frase-Prova de roteamento reprovada reprova o gate do run. OFF = reprovações viram nota informativa no `gate_reason`. As frases (seladas nas arestas condicionais) provam a REGRA de roteamento — avaliação determinística, sem custo LLM. |
+| `HARNESS_ASYNC_ENABLED` | **false** | Harness como JOB durável (43.0.0): `POST /eval-runs/execute` → 202 + `eval_id`; a linha de `eval_runs` é o próprio job (`queued`→`running`→terminal), executado fora do request; polling em `GET /eval-runs/{id}`. OFF = caminho síncrono de sempre; também congela o despacho da fila (kill-switch). |
+| `HARNESS_JOBS_MAX_CONCURRENT` | 1 | Runs de harness simultâneos no processo (cap próprio — um run já serializa N casos de LLM). |
+| `HARNESS_JOB_TIMEOUT_MINUTES` | 60 | Deadline por run assíncrono; estouro cancela e marca `timeout` (custos por caso já registrados sobrevivem). |
+| `HARNESS_BUDGET_USD_PER_RUN` | 0 (sem teto) | Teto de custo LLM por run (invoke + juiz + RAGAS), checado ENTRE casos. Estouro = aborto gracioso: status `budget_exceeded`, métricas PARCIAIS com aviso, gate `skipped`, sem drift events. |
+| `HARNESS_SYNTHETIC_RETENTION_DAYS` | 0 (desligado) | Retenção própria das interações SINTÉTICAS do harness (`interactions.origin='harness'`): purga na carona do reaper, mesmo caminho da retenção LGPD (scrub preserva a linha analítica das verifications). |
 
 ### 3.5 Harness multi-agente (DeepAgent)
 | Variável | Default | Efeito |

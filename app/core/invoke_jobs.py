@@ -689,6 +689,18 @@ async def _reaper_loop() -> None:
             logger.warning("event=retention_purge_timeout")
         except Exception as e:
             logger.warning("event=retention_purge_failed error=%s", str(e)[:200])
+        # Carona (43.0.0): despacho da fila do HARNESS assíncrono (eval_runs
+        # 'queued' → running quando abre vaga do cap próprio). No-op com
+        # harness_async_enabled OFF (kill-switch congela o backlog).
+        try:
+            from app.harness.jobs import sweep_queued
+            await asyncio.wait_for(sweep_queued(), timeout=_CARONA_TIMEOUT_S)
+        except asyncio.CancelledError:
+            raise
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning("event=eval_jobs_sweep_timeout")
+        except Exception as e:
+            logger.warning("event=eval_jobs_sweep_failed error=%s", str(e)[:200])
 
 
 def start_reaper() -> None:

@@ -164,3 +164,8 @@ def test_settings_step_parameter_count_claim_matches_code():
     n = len(PARAMETER_UI_KEYS)
     if "~30 parâmetros" in src:
         assert 25 <= n <= 35, f"claim '~30' divergiu do produto ({n} parâmetros) — atualize o passo"
+    # 43.0.0 (harness assíncrono): +5 chaves → claim atualizada para '~35'.
+    if "~35 parâmetros" in src:
+        assert 30 <= n <= 40, f"claim '~35' divergiu do produto ({n} parâmetros) — atualize o passo"
+    assert ("~30 parâmetros" in src) or ("~35 parâmetros" in src), \
+        "passo de Configurações perdeu a claim de contagem — re-ancore no PARAMETER_UI_KEYS"

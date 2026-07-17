@@ -1415,6 +1415,26 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS routing_phrases_total INTEGER",
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS routing_phrases_passed INTEGER",
     "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS routing_phrases_hash TEXT",
+    # ── Harness assíncrono + custo (43.0.0, PR2 do arco Otimização) ──
+    # eval_runs vira a PRÓPRIA linha-job ('queued'→'running'→terminal):
+    #   owner_user_id = quem disparou (dono/ator, observabilidade #665);
+    #   cost_usd     = custo LLM TOTAL do run (invoke + juiz + RAGAS) — o
+    #                  harness chama o engine direto e ficava invisível ao
+    #                  ledger; avg_cost_usd (schema base) passa a ser populada;
+    #   error        = falha de execução do job assíncrono (timeout/exception).
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS owner_user_id TEXT",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS cost_usd REAL",
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS error TEXT",
+    # is_job distingue linha-JOB (nasceu 'queued' no aceite 202) de run
+    # SÍNCRONO em voo num request — o zombie-sweep do reaper só pode curar
+    # a primeira (marcar um sync vivo seria corrida com o próprio request).
+    "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS is_job BOOLEAN DEFAULT FALSE",
+    # interactions.origin: interações criadas pelo harness são SINTÉTICAS —
+    # carimbo ('harness') para segregar das visões de produção e para a
+    # retenção própria (harness_synthetic_retention_days). NULL = produção.
+    # Índice parcial: o purge varre só as carimbadas (minoria das linhas).
+    "ALTER TABLE interactions ADD COLUMN IF NOT EXISTS origin TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_interactions_origin ON interactions (origin) WHERE origin IS NOT NULL",
 ]
 
 
