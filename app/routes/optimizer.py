@@ -34,12 +34,183 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/optimizer", tags=["optimizer"])
 
 
+class PromoteRequest(BaseModel):
+    """Promoção da variante vencedora (47.0.0, PR5): aplica o system_prompt
+    do CHALLENGER ao agente, com o prompt atual preservado como revisão
+    restaurável (PR1). force só pula o VEREDITO (inconclusivo/empate);
+    não-comparável e sem_pareamento são bloqueios duros."""
+    agent_id: str
+    champion_eval_id: str
+    challenger_eval_id: str
+    force: bool = False
+    ack_blast: bool = False
+    note: str | None = None
+
+
 class ProposeRequest(BaseModel):
     agent_id: str
     gold_version: str = "latest"
     # K pequeno de propósito (PR3a: com gold sets pequenos, K grande dilui o
     # poder estatístico — champion×challenger é o desenho honesto).
     n_variants: int = Field(default=2, ge=1, le=3)
+
+
+@router.post("/promote")
+async def promote_variant(data: PromoteRequest, request: Request):
+    """Aplica ao agente o system_prompt do challenger VENCEDOR (report→apply
+    fechando o ciclo do arco). Honestidade primeiro: exige par de runs
+    'experiment' COMPARÁVEIS do mesmo alvo, challenger com selo
+    (config_overrides) e champion sem; o veredito pareado (McNemar) guia —
+    'b_melhor' promove direto, inconclusivo/empate exigem force explícito.
+    Blast-radius: pipelines PUBLICADOS que contêm o agente exigem ack.
+    O prompt atual vira revisão restaurável (PR1) antes do apply."""
+    import json as _json
+
+    caller = await require_role("root", "admin")(request)
+    agent = await agents_repo.find_by_id(data.agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{data.agent_id}' não encontrado.")
+
+    champ = await eval_runs_repo.find_by_id(data.champion_eval_id)
+    chall = await eval_runs_repo.find_by_id(data.challenger_eval_id)
+    if not champ or not chall:
+        raise HTTPException(404, "Run champion/challenger não encontrado.")
+    for label, run in (("champion", champ), ("challenger", chall)):
+        if (run.get("run_type") or "") != "experiment":
+            raise HTTPException(422, f"{label}: run_type deve ser 'experiment' "
+                                     "(segregação do arco).")
+        if (run.get("status") or "") != "completed":
+            raise HTTPException(422, f"{label}: run precisa estar completed "
+                                     f"(está {run.get('status')!r}).")
+        if run.get("agent_id") != data.agent_id or run.get("pipeline_id"):
+            raise HTTPException(422, f"{label}: alvo do run não é este agente.")
+    if champ.get("config_overrides"):
+        raise HTTPException(422, "champion não pode ter config_overrides — "
+                                 "ele é a config ATUAL do agente.")
+    try:
+        overrides = _json.loads(chall.get("config_overrides") or "null")
+    except Exception:
+        overrides = None
+    if not isinstance(overrides, dict) or not overrides:
+        raise HTTPException(422, "challenger sem selo de variante "
+                                 "(config_overrides) — nada a promover.")
+    if set(overrides) - {"system_prompt"}:
+        raise HTTPException(
+            422, "Promoção suporta apenas 'system_prompt' por ora — "
+                 "skill_purpose será promovível quando o propositor emitir "
+                 "variantes de Purpose (edite a skill pelo editor, com "
+                 "histórico do PR1).")
+    new_prompt = (overrides.get("system_prompt") or "").strip()
+    if not new_prompt:
+        raise HTTPException(422, "challenger com system_prompt vazio.")
+
+    # Comparabilidade dura (mesmo racional do /eval-runs/compare): dataset
+    # idêntico por CONTEÚDO — sem isso o veredito não significa nada.
+    if champ.get("gold_version") != chall.get("gold_version"):
+        raise HTTPException(409, "Runs de gold_version diferentes — não "
+                                 "comparáveis; re-rode o par no mesmo dataset.")
+    if champ.get("gold_hash") and chall.get("gold_hash") and \
+            champ.get("gold_hash") != chall.get("gold_hash"):
+        raise HTTPException(409, "O CONTEÚDO do gold mudou entre os runs "
+                                 "(hashes diferentes) — re-rode o par.")
+
+    from app.routes.dashboard import _paired_comparison, _parse_json_field
+    for r in (champ, chall):
+        _parse_json_field(r, "details", [])
+    paired = _paired_comparison(champ, chall)
+    if paired["verdict"] == "sem_pareamento":
+        raise HTTPException(409, "Nenhum caso pareável entre os runs — "
+                                 "promoção às cegas não é permitida (nem com "
+                                 "force). Re-rode o par de experimentos.")
+    if paired["verdict"] != "b_melhor" and not data.force:
+        raise HTTPException(409, {
+            "error": "verdict_not_better",
+            "message": "O veredito pareado não aponta o challenger como "
+                       f"melhor ({paired['verdict']}, p={paired['mcnemar_p']})"
+                       " — envie force=true para promover assim mesmo "
+                       "(decisão sua, registrada na revisão).",
+            "paired": paired,
+        })
+
+    # Blast-radius: pipelines PUBLICADOS que contêm o agente mudam de
+    # comportamento com o novo prompt (o invoke lê o system_prompt VIVO).
+    affected: list[dict] = []
+    try:
+        from app.core.database import pipelines_repo
+        from app.catalog.pipeline_defs import _build_subgraph
+        for p in await pipelines_repo.find_all(limit=200):
+            try:
+                sub = await _build_subgraph(p["id"])
+            except Exception:
+                continue
+            if any(n.get("id") == data.agent_id
+                   for n in (sub or {}).get("nodes", [])):
+                affected.append({"id": p["id"], "name": p.get("name"),
+                                 "status": p.get("status")})
+    except Exception:
+        logger.warning("event=optimizer.blast_radius_failed", exc_info=True)
+    published = [p for p in affected if p.get("status") == "publicado"]
+    if published and not data.ack_blast:
+        raise HTTPException(409, {
+            "error": "blast_radius",
+            "message": "O agente participa de pipeline(s) PUBLICADO(s) — o "
+                       "novo prompt muda o comportamento deles em produção. "
+                       "Envie ack_blast=true para confirmar.",
+            "published_pipelines": published,
+        })
+
+    # Apply com histórico (PR1): backfill do prompt atual + revisão nova
+    # source='promotion' com o SELO completo no note (experimentos, veredito,
+    # modelo efetivo — Model Drifting: prompt é artefato acoplado ao modelo).
+    from app.core import revisions as _rev
+    from app.routes.agents import _bump_version
+    await _rev.safe_backfill(
+        entity_type=_rev.ENTITY_AGENT_PROMPT, entity_id=data.agent_id,
+        old_content=agent.get("system_prompt") or "",
+        version=agent.get("version"),
+    )
+    new_version = _bump_version(agent.get("version", "1.0.0"))
+    await agents_repo.update(data.agent_id, {
+        "system_prompt": new_prompt, "version": new_version})
+    sealed = {
+        "provider": agent.get("llm_provider"), "model": agent.get("model"),
+        "judge_model": chall.get("judge_model"),
+        "gold_hash": chall.get("gold_hash"),
+        "champion_eval_id": data.champion_eval_id,
+        "challenger_eval_id": data.challenger_eval_id,
+        "verdict": paired["verdict"], "mcnemar_p": paired["mcnemar_p"],
+        "forced": bool(data.force and paired["verdict"] != "b_melhor"),
+    }
+    note = ("PROMOÇÃO de variante do Experimento de prompt: "
+            + _json.dumps(sealed, ensure_ascii=False)
+            + (f" | nota: {data.note}" if data.note else ""))
+    revision_id = await _rev.safe_record(
+        entity_type=_rev.ENTITY_AGENT_PROMPT, entity_id=data.agent_id,
+        content=new_prompt, version=new_version, source="promotion",
+        author_user_id=caller.get("id"), note=note[:2000],
+    )
+    try:
+        from app.core.database import audit_repo
+        await audit_repo.create({
+            "entity_type": "agent", "entity_id": data.agent_id,
+            "action": "prompt_promoted", "actor": caller.get("username"),
+            "details": _json.dumps(sealed, ensure_ascii=False)[:2000],
+        })
+    except Exception:
+        logger.warning("event=optimizer.promote_audit_failed", exc_info=True)
+    logger.info("event=optimizer.promoted agent=%s challenger=%s verdict=%s",
+                data.agent_id, data.challenger_eval_id, paired["verdict"])
+    return {
+        "message": "Variante promovida — o prompt anterior está no Histórico "
+                   "de revisões (restaurável).",
+        "version": new_version, "revision_id": revision_id,
+        "paired": paired, "sealed": sealed,
+        "affected_pipelines": affected,
+        "revalidate_hint": (
+            "O selo registra o modelo efetivo do agente na promoção — se a "
+            "config de LLM mudar depois, re-rode o experimento (prompt "
+            "otimizado não transfere entre modelos)."),
+    }
 
 
 @router.post("/propose")

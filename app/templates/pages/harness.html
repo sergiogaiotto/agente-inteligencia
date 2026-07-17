@@ -372,6 +372,15 @@
                             <template x-if="compareResult.paired.truncated">
                                 <div class="mt-1 text-[10px] text-amber-700">⚠ pareamento PARCIAL — um dos runs avaliou mais casos do que os detalhes persistidos (cap 100).</div>
                             </template>
+                            <!-- Promoção (47.0.0, PR5): fecha o ciclo report→apply.
+                                 Só challengers com selo de variante; o prompt atual
+                                 vira revisão restaurável (PR1). -->
+                            <template x-if="compareResult.run_b?.has_overrides && compareResult.run_b?.agent_id && compareResult.paired.verdict !== 'sem_pareamento'">
+                                <button @click="promoteChallenger()" data-testid="promote-challenger"
+                                        class="mt-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-700">
+                                    Promover challenger ao agente
+                                </button>
+                            </template>
                         </div>
                     </template>
                     <!-- Header dos 2 runs -->
@@ -1022,6 +1031,33 @@ function harnessPage(){return{
             if(b.eval_id)this.pollEval(b.eval_id);
         }catch(e){showToast(e.message,'error')}
         this.optRunning=false;
+    },
+    // ── Promoção do challenger (47.0.0, PR5) ────────────────────────────
+    // Report→apply com honestidade: veredito desfavorável exige confirmação
+    // explícita (vira force=true, registrado na revisão); blast-radius de
+    // pipeline publicado pede segundo ack. O backend re-valida tudo.
+    async promoteChallenger(){
+        const p=this.compareResult?.paired, ra=this.compareResult?.run_a, rb=this.compareResult?.run_b;
+        if(!p||!ra||!rb||!rb.has_overrides||!rb.agent_id){showToast('Só challengers de experimento (com variante selada) podem ser promovidos','error');return}
+        const force=p.verdict!=='b_melhor';
+        const ok=await uiConfirm({
+            message: force
+                ? `O veredito pareado NÃO aponta o challenger como melhor (${p.verdict}, p=${p.mcnemar_p}). Promover MESMO ASSIM? A decisão fica registrada na revisão; o prompt atual vira revisão restaurável.`
+                : `Promover o challenger (veredito: B é melhor, p=${p.mcnemar_p})? O prompt atual do agente vira revisão restaurável.`,
+            danger: force});
+        if(!ok)return;
+        const body={agent_id:rb.agent_id,champion_eval_id:ra.id,challenger_eval_id:rb.id,force};
+        try{
+            const r=await api.post('/api/v1/optimizer/promote',body);
+            showToast(r.message||'Variante promovida');
+        }catch(e){
+            if((e.message||'').includes('PUBLICADO')){
+                const ok2=await uiConfirm({message:'O agente participa de pipeline(s) PUBLICADO(s) — o novo prompt muda o comportamento deles em produção. Confirmar a promoção?',danger:true});
+                if(!ok2)return;
+                try{const r2=await api.post('/api/v1/optimizer/promote',{...body,ack_blast:true});showToast(r2.message||'Variante promovida')}
+                catch(e2){showToast(e2.message,'error')}
+            } else showToast(e.message,'error');
+        }
     },
     // ── Polling do harness assíncrono (43.0.0) ──────────────────────────
     // Segue um run 'queued'/'running' até o terminal; o load() re-arma para

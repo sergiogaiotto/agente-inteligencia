@@ -20,4 +20,4 @@ por PR). NÃO confundir com a versão de spec/API ("2.0.0" em ``main.py``), que 
 outra coisa.
 """
 
-APP_VERSION = "46.0.0"
+APP_VERSION = "47.0.0"
