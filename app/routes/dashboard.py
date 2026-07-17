@@ -1116,28 +1116,42 @@ def _gold_export_filter(cases: list[dict], *, category: str = None,
     return out
 
 
+_GOLD_EXPORT_MAX = 10000
+
+
 @router.get("/gold-cases/export")
 async def export_gold_cases(dataset_version: str = None, case_type: str = None,
                             category: str = None, split: str = None,
                             q: str = None):
     """Baixa o Golden Dataset (escopo do filtro) como CSV — mesmas colunas
     do template, com `id` para o modo 'atualizar' do import. Ungated como o
-    GET /gold-cases (mesma visibilidade de dado)."""
+    GET /gold-cases (mesma visibilidade de dado).
+
+    Acima de 10000 casos: 413 pedindo filtro — truncar em silêncio geraria
+    um "backup" incompleto sem aviso (convenção métricas sem falsa
+    confiança)."""
+    import re as _re
     from fastapi.responses import Response
     from app.core.gold_io import gold_cases_to_csv
     f = {}
     if dataset_version: f["dataset_version"] = dataset_version
     if case_type: f["case_type"] = case_type
-    cases = await gold_cases_repo.find_all(limit=10000, **f)
+    cases = await gold_cases_repo.find_all(limit=_GOLD_EXPORT_MAX + 1, **f)
+    if len(cases) > _GOLD_EXPORT_MAX:
+        raise HTTPException(
+            413, f"Mais de {_GOLD_EXPORT_MAX} casos no escopo — filtre por "
+                 "dataset_version/case_type para exportar em partes.")
     cases = _gold_export_filter(cases, category=category, split=split, q=q)
     # red_flags vem TEXT JSON do banco — normaliza p/ lista antes do CSV
     for c in cases:
         _parse_json_field(c, "red_flags", [])
     csv_text = gold_cases_to_csv(cases)
-    fname = f"gold_cases_{dataset_version or 'todos'}.csv"
+    # filename só com caracteres seguros — aspas/não-latin-1 no header
+    # quebram o encode do h11 (500) ou o quoting do Content-Disposition.
+    safe = _re.sub(r"[^A-Za-z0-9._-]+", "_", dataset_version or "todos")[:60]
     return Response(content=csv_text, media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition":
-                             f'attachment; filename="{fname}"'})
+                             f'attachment; filename="gold_cases_{safe}.csv"'})
 
 
 @router.get("/gold-cases/import-template")
@@ -1163,8 +1177,10 @@ async def import_gold_cases(request: Request, file: UploadFile = File(...),
     """Upload de casos em CSV, em 3 modos:
       • novos      — cria; coluna `id` DEVE vir vazia (protege contra colar
                      um export inteiro sem querer e duplicar o dataset);
-      • atualizar  — substitui casos existentes casando por `id` (o export
-                     inclui a coluna); linha sem id ou id inexistente falha;
+      • atualizar  — casa por `id` (o export inclui a coluna) e muda SÓ as
+                     colunas com célula preenchida — célula vazia MANTÉM o
+                     valor atual (split inclusive); linha sem id, id
+                     inexistente ou id duplicado no arquivo falha;
       • concatenar — cria TUDO como caso novo, ignorando `id`.
 
     Duas fases: valida o arquivo INTEIRO antes de aplicar. Com qualquer
@@ -1180,7 +1196,9 @@ async def import_gold_cases(request: Request, file: UploadFile = File(...),
     if mode not in ("novos", "atualizar", "concatenar"):
         raise HTTPException(422, "mode inválido — use 'novos', 'atualizar' "
                                  "ou 'concatenar'.")
-    blob = await file.read()
+    # read(cap+1): não bufferiza um upload arbitrário inteiro em memória
+    # antes de checar o teto.
+    blob = await file.read(_GOLD_IMPORT_MAX_BYTES + 1)
     if len(blob) > _GOLD_IMPORT_MAX_BYTES:
         raise HTTPException(413, "Arquivo acima de 5MB — divida o import.")
     try:
@@ -1195,6 +1213,7 @@ async def import_gold_cases(request: Request, file: UploadFile = File(...),
 
     # ── fase 1: validação por modo (nada aplicado ainda) ──
     valid: list[dict] = []
+    seen_ids: dict[str, int] = {}
     for r in rows:
         if mode == "novos" and r["id"]:
             errors.append({"line": r["line"], "motivo":
@@ -1207,6 +1226,13 @@ async def import_gold_cases(request: Request, file: UploadFile = File(...),
                                "modo 'atualizar' exige a coluna id (baixe "
                                "o export para obter os ids)"})
                 continue
+            if r["id"] in seen_ids:
+                errors.append({"line": r["line"], "motivo":
+                               f"id '{r['id']}' duplicado no arquivo (já "
+                               f"aparece na linha {seen_ids[r['id']]}) — "
+                               "last-wins silencioso não; deixe só uma"})
+                continue
+            seen_ids[r["id"]] = r["line"]
             if not await gold_cases_repo.find_by_id(r["id"]):
                 errors.append({"line": r["line"], "motivo":
                                f"id '{r['id']}' não existe no Golden Dataset"})
@@ -1234,15 +1260,31 @@ async def import_gold_cases(request: Request, file: UploadFile = File(...),
     created = updated = 0
     report: list[dict] = []
     for r in valid:
-        payload = dict(r["data"])
-        payload["red_flags"] = json.dumps(payload.get("red_flags") or [])
-        payload["split"] = r["split"]
         if mode == "atualizar":
-            await gold_cases_repo.update(r["id"], payload)
-            updated += 1
-            report.append({"line": r["line"], "status": "atualizado",
-                           "id": r["id"]})
+            # UPDATE PARCIAL: só colunas com célula preenchida mudam —
+            # célula vazia MANTÉM o valor atual (red_flags/split inclusive).
+            # Mesma classe do footgun histórico do PUT /settings que zerava
+            # segredos de abas não enviadas (fix exclude_unset, 22.x).
+            payload = {k: v for k, v in r["data"].items()
+                       if k in r["provided"]}
+            if "red_flags" in r["provided"]:
+                payload["red_flags"] = json.dumps(r["data"]["red_flags"])
+            if "split" in r["provided"]:
+                payload["split"] = r["split"]
+            # update() False = caso sumiu entre as fases (deleção
+            # concorrente) — reportar 'atualizado' aqui seria mentira.
+            if payload and await gold_cases_repo.update(r["id"], payload):
+                updated += 1
+                report.append({"line": r["line"], "status": "atualizado",
+                               "id": r["id"]})
+            else:
+                errors.append({"line": r["line"], "motivo":
+                               "caso não encontrado na aplicação (removido "
+                               "entre a validação e o update?) — reenvie"})
         else:
+            payload = dict(r["data"])
+            payload["red_flags"] = json.dumps(payload.get("red_flags") or [])
+            payload["split"] = r["split"]
             gid = str(uuid.uuid4())
             await gold_cases_repo.create({"id": gid, **payload})
             created += 1

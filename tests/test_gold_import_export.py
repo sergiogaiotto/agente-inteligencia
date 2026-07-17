@@ -50,8 +50,10 @@ def _case(**over):
 # ── Camada pura ───────────────────────────────────────────────────────
 def test_template_has_only_header():
     t = template_csv()
-    assert t.startswith("﻿"), "sem BOM o Excel quebra os acentos"
-    lines = [ln for ln in t.lstrip("﻿").splitlines() if ln.strip()]
+    # escape EXPLÍCITO (﻿): com o caractere literal, um editor que
+    # limpe BOMs transformaria o assert em startswith('') == sempre True.
+    assert t.startswith("\ufeff"), "sem BOM o Excel quebra os acentos"
+    lines = [ln for ln in t.lstrip("\ufeff").splitlines() if ln.strip()]
     assert len(lines) == 1, "template com linha extra vira caso-lixo no upload"
     assert lines[0].split(",") == GOLD_CSV_COLUMNS
 
@@ -140,9 +142,85 @@ def test_parse_skips_fully_empty_lines():
 
 
 def test_parse_tolerates_bom():
-    txt = "﻿input_text,expected_output\noi,tchau\n"
+    txt = "\ufeffinput_text,expected_output\noi,tchau\n"
     rows, errors = parse_gold_csv(txt)
     assert len(rows) == 1 and errors == []
+
+
+# ── Endurecimento pós-revisão adversarial (18 achados) ────────────────
+def test_parse_physical_line_number_with_multiline_cell_and_blank_lines():
+    """[review 1/13] célula quoted multiline consome várias linhas físicas
+    e linha em branco é pulada pelo DictReader — o número reportado precisa
+    seguir o ARQUIVO (reader.line_num), não o índice do registro."""
+    txt = ('input_text,expected_output\n'          # linha 1
+           '"multi\nlinha\naqui",ok\n'             # linhas 2-4 (1 registro)
+           '\n'                                    # linha 5 (em branco)
+           ',faltou input\n')                      # linha 6 ← o erro
+    rows, errors = parse_gold_csv(txt)
+    assert len(rows) == 1
+    assert rows[0]["data"]["input_text"] == "multi\nlinha\naqui"
+    assert errors[0]["line"] == 6, (
+        f"linha reportada {errors[0]['line']} — o operador corrigiria a "
+        "linha ERRADA no editor"
+    )
+
+
+def test_parse_cr_only_line_endings_do_not_crash():
+    """[review 2] \\r-only (Mac antigo) derrubava o csv com _csv.Error →
+    500 na rota. Normalização de line endings resolve ANTES do reader."""
+    txt = "input_text,expected_output\ra,b\r"
+    rows, errors = parse_gold_csv(txt)
+    assert len(rows) == 1 and errors == []
+    assert rows[0]["data"]["input_text"] == "a"
+
+
+def test_parse_csv_error_reported_not_raised():
+    """[review 2] csv.Error no meio da iteração vira erro ACIONÁVEL com
+    linha, nunca exceção → 500 na rota. Em produção a classe é neutralizada
+    upstream (line endings normalizados + field_size_limit 10MB); o branch
+    é o cinto-e-suspensório — testado baixando o limite temporariamente."""
+    import csv as _csv
+    old = _csv.field_size_limit(64)
+    try:
+        txt = ("input_text,expected_output\n"
+               f"\"{'x' * 500}\",estoura o limite\n")
+        rows, errors = parse_gold_csv(txt)
+    finally:
+        _csv.field_size_limit(old)
+    assert rows == []
+    assert errors and "CSV malformado" in errors[0]["motivo"]
+
+
+def test_parse_normalizes_excel_capitalization():
+    """[review 6] Excel autocapitaliza células: 'Normal', 'TRAIN' e
+    'recommend' precisam ser aceitos com normalização de caixa."""
+    txt = ("input_text,expected_output,case_type,split,expected_state\n"
+           "a,b,Normal,TRAIN,recommend\n")
+    rows, errors = parse_gold_csv(txt)
+    assert errors == []
+    d = rows[0]
+    assert d["data"]["case_type"] == "normal"
+    assert d["split"] == "train"
+    assert d["data"]["expected_state"] == "Recommend"
+
+
+def test_parse_rejects_invalid_expected_state():
+    """[review 3] o evaluator compara por igualdade estrita — estado
+    inválido importado em silêncio poluiria a métrica para sempre."""
+    txt = ("input_text,expected_output,expected_state\n"
+           "a,b,Aprovar\n")
+    rows, errors = parse_gold_csv(txt)
+    assert rows == []
+    assert "expected_state inválido" in errors[0]["motivo"]
+
+
+def test_parse_weight_thousand_separator_ptbr():
+    """[review 5] '1.000,5' = mil ponto cinco pt-BR → 1000.5 → erro de
+    range CLARO (não 'não numérico')."""
+    txt = "input_text,expected_output,weight\na,b,\"1.000,5\"\n"
+    rows, errors = parse_gold_csv(txt)
+    assert rows == []
+    assert "fora de [0.1, 10.0]: 1000.5" in errors[0]["motivo"]
 
 
 # ── Rota de export ────────────────────────────────────────────────────
@@ -286,3 +364,103 @@ def test_import_mode_invalido_e_nao_utf8(monkeypatch):
                data={"mode": "novos"})
     assert r.status_code == 422
     assert "UTF-8" in r.json()["detail"]
+
+
+def test_import_atualizar_preserva_campos_nao_enviados(monkeypatch):
+    """[review 10/18] célula vazia MANTÉM o valor atual — update PARCIAL.
+    Mesma classe do footgun histórico do PUT /settings que zerava segredos:
+    um CSV só com id+input_text não pode apagar split/red_flags/weight."""
+    _allow_admin(monkeypatch)
+    updates = {}
+    async def _find(cid):
+        return {"id": cid}
+    async def _update(cid, payload):
+        updates[cid] = payload
+        return True
+    monkeypatch.setattr(dash.gold_cases_repo, "find_by_id", _find)
+    monkeypatch.setattr(dash.gold_cases_repo, "update", _update)
+    txt = ("id,input_text,expected_output,split,weight\n"
+           "caso-1,texto novo,saida nova,,\n")
+    r = _upload(_client(), txt, "atualizar")
+    assert r.status_code == 200, r.text
+    p = updates["caso-1"]
+    assert p["input_text"] == "texto novo"
+    assert "split" not in p, "célula vazia APAGOU o split (footgun settings)"
+    assert "weight" not in p, "célula vazia sobrescreveu weight com default"
+    assert "red_flags" not in p, "red_flags resetada sem célula preenchida"
+    assert "case_type" not in p and "expected_state" not in p
+
+
+def test_import_atualizar_id_duplicado_no_arquivo(monkeypatch):
+    """[review 12] segundo update do MESMO id no arquivo = last-wins
+    silencioso — a 2ª ocorrência é rejeitada apontando a linha da 1ª."""
+    _allow_admin(monkeypatch)
+    monkeypatch.setattr(dash.gold_cases_repo, "find_by_id",
+                        _async({"id": "x"}))
+    updates = []
+    async def _update(cid, payload):
+        updates.append(cid)
+        return True
+    monkeypatch.setattr(dash.gold_cases_repo, "update", _update)
+    txt = ("id,input_text,expected_output\n"
+           "dup-1,versao um,s\n"
+           "dup-1,versao dois,s\n")
+    r = _upload(_client(), txt, "atualizar", apply_partial=True)
+    body = r.json()
+    assert body["atualizados"] == 1 and body["rejeitados"] == 1
+    assert "duplicado" in body["erros"][0]["motivo"]
+    assert updates == ["dup-1"], "aplicou os dois updates (last-wins)"
+
+
+def test_import_atualizar_update_false_nao_mente(monkeypatch):
+    """[review 7/15] caso deletado ENTRE a fase 1 e a fase 2: update()
+    devolve False e a linha vai para rejeitadas — reportar 'atualizado'
+    seria mentira no relatório."""
+    _allow_admin(monkeypatch)
+    monkeypatch.setattr(dash.gold_cases_repo, "find_by_id",
+                        _async({"id": "zumbi"}))
+    monkeypatch.setattr(dash.gold_cases_repo, "update", _async(False))
+    txt = "id,input_text,expected_output\nzumbi,a,b\n"
+    r = _upload(_client(), txt, "atualizar")
+    body = r.json()
+    assert body["atualizados"] == 0
+    assert body["rejeitados"] == 1
+    assert "removido entre" in body["erros"][0]["motivo"]
+
+
+def test_import_apply_partial_todas_invalidas_aplica_zero(monkeypatch):
+    """[review 17] apply_partial=true com TODAS as linhas inválidas: 200
+    honesto com 0 aplicados e as rejeições no relatório (nada explode,
+    nada é criado)."""
+    _allow_admin(monkeypatch)
+    def _boom(*a, **k):
+        raise AssertionError("nada deveria ser criado")
+    monkeypatch.setattr(dash.gold_cases_repo, "create", _boom)
+    txt = "input_text,expected_output\n,so falta\n,tudo errado\n"
+    r = _upload(_client(), txt, "novos", apply_partial=True)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["criados"] == 0 and body["rejeitados"] == 2
+    assert "0 criado(s)" in body["message"]
+
+
+def test_export_413_acima_do_teto(monkeypatch):
+    """[review 8/16] dataset maior que o teto: 413 pedindo filtro — nunca
+    truncar em silêncio (o operador baixaria um 'backup' incompleto)."""
+    grandes = [_case(id=str(i), red_flags="[]") for i in range(10001)]
+    monkeypatch.setattr(dash.gold_cases_repo, "find_all", _async(grandes))
+    r = _client().get("/api/v1/gold-cases/export")
+    assert r.status_code == 413
+    assert "filtre" in r.json()["detail"]
+
+
+def test_export_filename_sanitizado(monkeypatch):
+    """[review 9] dataset_version com aspas/unicode no header quebrava o
+    encode do h11 (500) — filename só com [A-Za-z0-9._-]."""
+    monkeypatch.setattr(dash.gold_cases_repo, "find_all",
+                        _async([_case(red_flags="[]")]))
+    r = _client().get('/api/v1/gold-cases/export?dataset_version=v"1—x')
+    assert r.status_code == 200, r.text
+    cd = r.headers["content-disposition"]
+    fname = cd.split('filename="')[1].rstrip('"')
+    assert fname == "gold_cases_v_1_x.csv", cd
