@@ -93,6 +93,35 @@ def _safe_round(v: float | None, ndigits: int = 4) -> float | None:
     return round(v, ndigits) if v is not None else None
 
 
+def _collect_interaction_ids(result: dict) -> list[str]:
+    """Interações criadas por UM caso do harness: master + steps (modo
+    pipeline cria uma por step). Dedup preservando ordem."""
+    ids = []
+    if (result or {}).get("interaction_id"):
+        ids.append(result["interaction_id"])
+    for s in (result or {}).get("pipeline_steps") or []:
+        if isinstance(s, dict) and s.get("interaction_id"):
+            ids.append(s["interaction_id"])
+    return list(dict.fromkeys(ids))
+
+
+async def _tag_synthetic_interactions(ids: list[str]) -> None:
+    """Carimbo de origem SINTÉTICA (43.0.0): o harness cria interações reais
+    a cada caso — sem o carimbo elas se misturam às de produção nas telas de
+    análise e ficam fora da retenção própria (harness_synthetic_retention_days).
+    Best-effort, AWAIT direto no loop do caso (2 round-trips são ruído vs
+    segundos de LLM; task detached vazaria entre event loops na suíte). Só
+    carimba quem ainda não tem origem (não sobrescreve)."""
+    if not ids:
+        return
+    from app.core.database import _get_pool
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            "UPDATE interactions SET origin = 'harness' "
+            "WHERE id = ANY($1) AND origin IS NULL", ids,
+        )
+
+
 async def _judge_draft(case: dict, result: dict) -> dict | None:
     """Re-judge do draft pelo Verifier quando engine não devolveu verification.
     Garante profile=rigorous independentemente do _execution_mode do skill.
@@ -396,6 +425,7 @@ async def run_evaluation(
     run_type: str = "baseline",
     pipeline_id: str | None = None,
     owner_user_id: str | None = None,
+    eval_id: str | None = None,
 ) -> dict:
     """Executa harness contra Golden Dataset e produz relatório multi-dim.
 
@@ -421,18 +451,30 @@ async def run_evaluation(
 
     # Exatamente um alvo (defesa em profundidade — a rota também valida).
     if bool(agent_id) == bool(pipeline_id):
+        # Job durável (43.0.0, review [6]): com eval_id o worker JÁ claimou a
+        # linha ('running') — persistir o terminal aqui, senão ela fica órfã
+        # ("running" eterno) até o próximo boot.
+        if eval_id:
+            await eval_runs_repo.update(eval_id, {
+                "status": "invalid_target", "gate_result": "skipped"})
         return {
             "status": "invalid_target",
             "message": "Informe exatamente UM alvo: agent_id OU pipeline_id.",
         }
 
-    eval_id = str(uuid.uuid4())
-    await eval_runs_repo.create({
-        "id": eval_id, "release_id": release_id, "gold_version": gold_version,
-        "run_type": run_type, "status": "running",
-        # Alvo do run (Pacote C): antes o run não sabia contra quem rodou.
-        "agent_id": agent_id, "pipeline_id": pipeline_id,
-    })
+    # Job durável (43.0.0): quando o run nasce do aceite 202 (harness_async_
+    # enabled), a linha de eval_runs JÁ existe ('queued', claimada 'running'
+    # pelo worker) — reusa o id em vez de criar outra. Caminho síncrono segue
+    # criando a própria linha, agora com o dono (observabilidade ator #665).
+    if not eval_id:
+        eval_id = str(uuid.uuid4())
+        await eval_runs_repo.create({
+            "id": eval_id, "release_id": release_id, "gold_version": gold_version,
+            "run_type": run_type, "status": "running",
+            # Alvo do run (Pacote C): antes o run não sabia contra quem rodou.
+            "agent_id": agent_id, "pipeline_id": pipeline_id,
+            "owner_user_id": owner_user_id,
+        })
 
     filters = {"dataset_version": gold_version} if gold_version != "latest" else {}
     cases = await gold_cases_repo.find_all(limit=500, **filters)
@@ -547,12 +589,44 @@ async def run_evaluation(
     all_unsupported_claims: list[str] = []
     judge_model_observed: str | None = None
 
+    # ── Custo no ledger + teto por run (43.0.0, PR2 do arco Otimização) ──
+    # O harness chama o engine DIRETO (sem a camada HTTP) e o gasto ficava
+    # invisível ao SSOT invocation_costs. Passa a: (a) registrar o custo REAL
+    # de cada caso (source='harness', await direto best-effort); (b) somar
+    # invoke + juiz + RAGAS num acumulador; (c) checar o teto ENTRE casos
+    # (mid-run) — estouro aborta gracioso com métricas PARCIAIS marcadas
+    # (sem falsa confiança).
+    from app.core.api_key_budget import cost_and_tokens_from_result
+    from app.core.cost_ledger import record_invocation_cost
+    # getattr defensivo: os testes do harness stubam settings com
+    # SimpleNamespace parcial — atributo ausente = teto desligado.
+    budget_usd = float(getattr(settings, "harness_budget_usd_per_run", 0.0) or 0.0)
+    run_invoke_cost_usd = 0.0
+    run_judge_cost_usd = 0.0
+    budget_aborted = False
+
     for case in cases:
+        if budget_usd > 0 and (
+            run_invoke_cost_usd + run_judge_cost_usd + gold_ragas_cost_usd
+        ) >= budget_usd:
+            budget_aborted = True
+            break
         weight = float(case.get("weight") or 1.0)
         category = case.get("category") or "(sem categoria)"
         weighted_total += weight
 
         start = time.time()
+        # Coletor de steps CONCLUÍDOS (43.0.0, review [2]): num raise no MEIO
+        # do caso, o gasto de LLM já pago não pode sumir do teto/ledger —
+        # mesmo padrão do invoke_jobs. Só cobre o modo pipeline
+        # (execute_interaction não expõe callback de progresso; limitação
+        # documentada no PR).
+        _case_events: list = []
+
+        async def _collect_case(event) -> None:
+            if isinstance(event, dict) and event.get("type") == "agent_done":
+                _case_events.append(event)
+
         try:
             if pipeline_id:
                 # Modo PIPELINE: invoca a cadeia SELADA (root + membros), o
@@ -568,6 +642,7 @@ async def run_evaluation(
                     allowed_agent_ids=pipeline_members,
                     pipeline_id=pipeline_id,
                     grounding_strict=False,
+                    progress_callback=_collect_case,
                 )
             else:
                 result = await execute_interaction(
@@ -588,6 +663,45 @@ async def run_evaluation(
                 )
             latency = (time.time() - start) * 1000
             total_latency += latency
+
+            # Custo REAL do caso → acumulador do teto + ledger SSOT + carimbo
+            # de origem sintética. AWAIT direto (não schedule_analytics): o
+            # harness não está no caminho de resposta de um invoke — 2 escritas
+            # por caso são ruído vs segundos de LLM —, o registro fica durável
+            # caso o processo caia no meio do run, e não se vaza task detached
+            # entre event loops (footgun real da suíte). Best-effort: falha de
+            # escrita nunca invalida o caso.
+            _case_cost, _case_tokens = cost_and_tokens_from_result(result)
+            run_invoke_cost_usd += _case_cost
+            # Custo do JUIZ em modo pipeline (review [1]): cada step rigorous
+            # carrega a própria verification com judge_cost_usd — somar SÓ a
+            # do envelope reancorado subcontaria (1/N do gasto real de juiz;
+            # é o mesmo per-step que o Playground soma). O bloco top-level
+            # abaixo cobre modo agente e o re-judge de fallback.
+            if pipeline_id:
+                for _s in result.get("pipeline_steps") or []:
+                    _v = _s.get("verification") if isinstance(_s, dict) else None
+                    if isinstance(_v, dict):
+                        try:
+                            run_judge_cost_usd += float(_v.get("judge_cost_usd") or 0.0)
+                        except (TypeError, ValueError):
+                            pass
+            try:
+                await record_invocation_cost(
+                    interaction_id=result.get("interaction_id"),
+                    pipeline_id=pipeline_id, agent_id=agent_id,
+                    user_id=owner_user_id, channel="harness", source="harness",
+                    cost_usd=_case_cost, tokens_used=_case_tokens,
+                    latency_ms=latency, final_state=result.get("final_state"),
+                )
+            except Exception:
+                logger.warning("event=harness.cost_ledger_failed case=%s",
+                               case.get("id"), exc_info=True)
+            try:
+                await _tag_synthetic_interactions(_collect_interaction_ids(result))
+            except Exception:
+                logger.warning("event=harness.synthetic_tag_failed case=%s",
+                               case.get("id"), exc_info=True)
 
             if pipeline_id:
                 # Reancora decisão E julgamento no ÚLTIMO step COMPLETADO — o
@@ -667,6 +781,19 @@ async def run_evaluation(
 
             if verification:
                 judge_used_count += 1
+                # Custo do juiz (engine-run ou re-judge) entra no teto do run
+                # e no cost_usd persistido — o LEDGER dele é do próprio
+                # verifier (não duplicamos a linha aqui). Em modo PIPELINE
+                # com verification do envelope, o custo já foi somado por
+                # step no bloco acima (review [1]) — só conta aqui o modo
+                # agente e o re-judge de fallback (que não está em step).
+                if isinstance(verification, dict) and (
+                        not pipeline_id or not engine_verified):
+                    try:
+                        run_judge_cost_usd += float(
+                            verification.get("judge_cost_usd") or 0.0)
+                    except (TypeError, ValueError):
+                        pass
                 if dims["judge_model"] and not judge_model_observed:
                     judge_model_observed = dims["judge_model"]
                 if dims["factuality"] is not None:
@@ -770,6 +897,34 @@ async def run_evaluation(
 
         except Exception as e:
             failed += 1
+            # Gasto pago ANTES do raise → teto + ledger (review [2]): os steps
+            # concluídos coletados pelo _collect_case não podem virar US$ 0 —
+            # um alvo que quebra PÓS-gasto furaria o teto do run inteiro.
+            _ev_cost = sum(float(ev.get("cost_usd") or 0.0) for ev in _case_events)
+            if _ev_cost > 0:
+                run_invoke_cost_usd += _ev_cost
+                try:
+                    await record_invocation_cost(
+                        interaction_id=next(
+                            (ev.get("interaction_id") for ev in _case_events
+                             if ev.get("interaction_id")), None),
+                        pipeline_id=pipeline_id, agent_id=agent_id,
+                        user_id=owner_user_id, channel="harness", source="harness",
+                        cost_usd=_ev_cost,
+                        tokens_used=sum(int(ev.get("tokens_used") or 0)
+                                        for ev in _case_events),
+                        latency_ms=(time.time() - start) * 1000,
+                        final_state="CaseError",
+                    )
+                except Exception:
+                    logger.warning("event=harness.partial_cost_ledger_failed case=%s",
+                                   case.get("id"), exc_info=True)
+                try:
+                    await _tag_synthetic_interactions(
+                        [ev.get("interaction_id") for ev in _case_events
+                         if ev.get("interaction_id")])
+                except Exception:
+                    pass
             details.append({
                 "case_id": case["id"],
                 "category": category,
@@ -799,6 +954,37 @@ async def run_evaluation(
                 bucket[dst_key].append(float(v))
 
     # ─── Agregação global ───
+    # Aborto por teto (43.0.0): as taxas passam a dividir pelos casos
+    # EFETIVAMENTE avaliados — dividir pelo planejado diluiria hallucination/
+    # FP e venderia falsa confiança. total_cases persistido = avaliados; o
+    # gate é PULADO e o aviso vai no gate_reason (planejado vs avaliado).
+    run_total_cost_usd = run_invoke_cost_usd + run_judge_cost_usd + gold_ragas_cost_usd
+    budget_note: str | None = None
+    if budget_aborted:
+        budget_note = (
+            f"teto de custo do run atingido (harness_budget_usd_per_run="
+            f"US$ {budget_usd:.2f}; gasto US$ {run_total_cost_usd:.4f}): "
+            f"avaliados {len(details)}/{total} casos — métricas PARCIAIS; "
+            "gate não aplicado"
+        )
+        total = len(details)
+    # RAGAS-gold no ledger (review [27]): o custo entra em eval_runs.cost_usd
+    # — sem uma linha própria, ledger e run nunca reconciliariam com RAGAS
+    # ligado. 1 linha por run, best-effort.
+    if gold_ragas_cost_usd > 0:
+        try:
+            await record_invocation_cost(
+                pipeline_id=pipeline_id, agent_id=agent_id, user_id=owner_user_id,
+                channel="harness", source="harness",
+                cost_usd=gold_ragas_cost_usd, tokens_used=0, latency_ms=0.0,
+                final_state="RagasGold",
+            )
+        except Exception:
+            logger.warning("event=harness.ragas_ledger_failed", exc_info=True)
+    # Fechamento do run calculado UMA vez (review [18]) — persistência e
+    # retorno usam os mesmos valores.
+    _final_status = "budget_exceeded" if budget_aborted else "completed"
+    _final_cost_usd = round(run_total_cost_usd, 6)
     accuracy = weighted_passed / weighted_total if weighted_total > 0 else 0
     accuracy_unweighted = passed / total if total > 0 else 0
     avg_latency = total_latency / total if total > 0 else 0
@@ -894,7 +1080,9 @@ async def run_evaluation(
                 )
 
     # ─── Regressão por dimensão (run_type=regression) ───
-    if run_type == "regression":
+    # Aborto por teto pula a consulta de baseline (review [21]): o gate será
+    # sobrescrito para 'skipped' — computar regressão seria I/O descartado.
+    if run_type == "regression" and not budget_aborted:
         # Baseline de referência: mesmo release, MESMO dataset (gold_version) e
         # CONCLUÍDO. Sem esses filtros, um baseline 'running'/abortado (avg_* NULL,
         # accuracy=0) ou de outro dataset viraria referência e mascararia a
@@ -945,33 +1133,42 @@ async def run_evaluation(
         gate_reason_text = (
             f"{gate_reason_text}; {phrases_note}" if gate_reason_text else phrases_note
         )
+    # Aborto por teto (43.0.0): gate NÃO se aplica a métricas parciais — os
+    # motivos calculados sobre o subconjunto avaliado enviesariam o veredito;
+    # o gate_reason vira o aviso do teto (planejado vs avaliado + gasto).
+    if budget_aborted:
+        gate = "skipped"
+        gate_reason_text = budget_note
 
     # ─── Drift release-over-release (33.11.0): PRODUTOR que faltava para
     # drift_events. Compara com o baseline comparável (mesmo gold_hash) ANTES de
-    # persistir este run (ainda 'running' → não vira baseline de si mesmo). ───
-    await _write_drift_events(
-        release_id=release_id, gold_hash=gold_hash,
-        current_metrics={
-            "accuracy": accuracy,
-            "avg_factuality": avg_factuality,
-            "avg_completeness": avg_completeness,
-            "avg_tone": avg_tone,
-            "contract_compliance_rate": contract_compliance_rate,
-            "correct_refusal_rate": correct_refusal_rate,
-            "safety_violation_rate": safety_violation_rate,
-            "hallucination_rate": hallucination_rate,
-            "false_positive_rate": false_positive_rate,
-            # Frases-Prova (36.6.0): derivada + hash p/ a guarda própria do
-            # writer (só compara com baseline do MESMO conjunto de frases).
-            "routing_phrase_pass_rate": _phrases_pass_rate(
-                (routing_phrases or {}).get("evaluated"),
-                (routing_phrases or {}).get("passed"),
-            ),
-            "routing_phrases_hash": (routing_phrases or {}).get("phrases_hash"),
-        },
-        regression_pct_threshold=settings.harness_max_dim_regression_pct,
-        agent_id=agent_id, pipeline_id=pipeline_id,
-    )
+    # persistir este run (ainda 'running' → não vira baseline de si mesmo).
+    # Run abortado por teto NÃO escreve drift: métricas parciais vs baseline
+    # completo gerariam eventos falsos (43.0.0). ───
+    if not budget_aborted:
+        await _write_drift_events(
+            release_id=release_id, gold_hash=gold_hash,
+            current_metrics={
+                "accuracy": accuracy,
+                "avg_factuality": avg_factuality,
+                "avg_completeness": avg_completeness,
+                "avg_tone": avg_tone,
+                "contract_compliance_rate": contract_compliance_rate,
+                "correct_refusal_rate": correct_refusal_rate,
+                "safety_violation_rate": safety_violation_rate,
+                "hallucination_rate": hallucination_rate,
+                "false_positive_rate": false_positive_rate,
+                # Frases-Prova (36.6.0): derivada + hash p/ a guarda própria do
+                # writer (só compara com baseline do MESMO conjunto de frases).
+                "routing_phrase_pass_rate": _phrases_pass_rate(
+                    (routing_phrases or {}).get("evaluated"),
+                    (routing_phrases or {}).get("passed"),
+                ),
+                "routing_phrases_hash": (routing_phrases or {}).get("phrases_hash"),
+            },
+            regression_pct_threshold=settings.harness_max_dim_regression_pct,
+            agent_id=agent_id, pipeline_id=pipeline_id,
+        )
 
     # ─── Persistência ───
     # Slice cego [:32000] no JSON corrompe o campo inteiro quando estoura (o
@@ -1010,7 +1207,13 @@ async def run_evaluation(
         "routing_phrases_hash": (routing_phrases or {}).get("phrases_hash"),
         "dimension_breakdown": _breakdown_json,
         "details": json.dumps(details[:100])[:32000],
-        "status": "completed", "gate_result": gate,
+        # Custo LLM do run (43.0.0): invoke + juiz + RAGAS — visível na UI e
+        # base do teto. avg_cost_usd (coluna do schema base, antes nunca
+        # populada) = custo médio por caso avaliado.
+        "cost_usd": _final_cost_usd,
+        "avg_cost_usd": round(run_total_cost_usd / total, 6) if total else 0.0,
+        "status": _final_status,
+        "gate_result": gate,
     })
 
     return {
@@ -1032,7 +1235,9 @@ async def run_evaluation(
         "category_breakdown": category_breakdown,
         "dimension_breakdown": dimension_breakdown,
         "routing_phrases": routing_phrases,
-        "gate_result": gate, "gate_reason": gate_reason_text, "status": "completed",
+        "cost_usd": _final_cost_usd,
+        "gate_result": gate, "gate_reason": gate_reason_text,
+        "status": _final_status,
     }
 
 

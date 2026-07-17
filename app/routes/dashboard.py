@@ -1136,7 +1136,19 @@ async def delete_eval_run(run_id: str):
     Gating: mantido no MESMO nível dos irmãos do módulo (delete_gold_case e
     /eval-runs/execute são ungated). Role-gating dos mutadores de Avaliação/
     Qualidade é item cross-cutting do backlog de segurança — não introduzido
-    aqui isolado (seria inconsistente com o irmão aberto)."""
+    aqui isolado (seria inconsistente com o irmão aberto).
+
+    43.0.0 (review [11]): run 'running' não pode ser removido — o worker/
+    request em voo continuaria pagando LLM invisível e o terminal dele viraria
+    no-op silencioso. 'queued' PODE (o claim posterior não acha a linha e
+    vira no-op limpo — é o jeito de desistir de um job enfileirado)."""
+    _run = await eval_runs_repo.find_by_id(run_id)
+    if not _run:
+        raise HTTPException(404, "Execução de avaliação não encontrada")
+    if (_run.get("status") or "") == "running":
+        raise HTTPException(
+            409, "Execução em andamento — aguarde o terminal (ou desligue "
+                 "harness_async_enabled para congelar a fila) antes de remover.")
     if not await eval_runs_repo.delete(run_id):
         raise HTTPException(404, "Execução de avaliação não encontrada")
     return {"message": "Execução removida"}
@@ -1444,6 +1456,20 @@ async def compare_eval_runs(a: str, b: str):
         }
     return response
 
+
+@router.get("/eval-runs/{run_id}")
+async def get_eval_run(run_id: str):
+    """Um run de avaliação — polling do harness assíncrono (43.0.0) e
+    drill-down. DECLARADO DEPOIS de /eval-runs/compare: FastAPI casa rotas na
+    ordem de registro — antes dele, 'compare' viraria run_id e o A/B quebrava."""
+    r = await eval_runs_repo.find_by_id(run_id)
+    if not r:
+        raise HTTPException(404, "Execução de avaliação não encontrada")
+    _parse_json_field(r, "dimension_breakdown", {})
+    _parse_json_field(r, "details", [])
+    return r
+
+
 @router.get("/dashboard/verifier/async-stats")
 async def verifier_async_stats():
     """Snapshot dos counters do dispatcher async + config corrente.
@@ -1595,11 +1621,37 @@ async def run_harness(data: RunEvalRequest, request: Request):
         from app.core.database import pipelines_repo
         if not await pipelines_repo.find_by_id(pipeline_id):
             raise HTTPException(404, f"Pipeline '{pipeline_id}' não encontrado.")
+    # IDOR (35.2.0): quem disparou o run vira o DONO das interactions dos
+    # casos (o middleware default-deny já autenticou; auth_user é o cache).
+    _caller = getattr(request.state, "auth_user", None) or {}
+
+    # Harness assíncrono (43.0.0): com o toggle ON, o run vira um JOB durável
+    # — a linha de eval_runs nasce 'queued', o worker claima e executa fora do
+    # request; o cliente recebe 202 + eval_id e polla GET /eval-runs/{id}.
+    # OFF (default) = caminho síncrono EXATO de antes.
+    from app.core.config import get_settings as _gs
+    if _gs().harness_async_enabled:
+        from fastapi.responses import JSONResponse
+        from app.harness import jobs as harness_jobs
+        eval_id = str(uuid.uuid4())
+        await eval_runs_repo.create({
+            "id": eval_id, "release_id": data.release_id,
+            "gold_version": data.gold_version, "run_type": data.run_type,
+            "status": "queued", "agent_id": agent_id, "pipeline_id": pipeline_id,
+            "owner_user_id": _caller.get("id"),
+            # Linha-JOB (≠ run síncrono): habilita o zombie-sweep do reaper a
+            # curá-la sem risco de tocar um run sync em voo no mesmo processo.
+            "is_job": True,
+        })
+        harness_jobs.dispatch(eval_id)  # sem vaga → carona do reaper despacha
+        return JSONResponse(status_code=202, content={
+            "eval_id": eval_id, "status": "queued",
+            "poll_url": f"/api/v1/eval-runs/{eval_id}",
+            "message": "Execução enfileirada — acompanhe pelo poll_url.",
+        })
+
     from app.harness.evaluator import run_evaluation
     try:
-        # IDOR (35.2.0): quem disparou o run vira o DONO das interactions dos
-        # casos (o middleware default-deny já autenticou; auth_user é o cache).
-        _caller = getattr(request.state, "auth_user", None) or {}
         result = await run_evaluation(
             data.release_id, agent_id, data.gold_version, data.run_type,
             pipeline_id=pipeline_id, owner_user_id=_caller.get("id"),
@@ -3190,6 +3242,12 @@ class SettingsSave(BaseModel):
     harness_max_dim_regression_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     harness_max_regression_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     harness_phrases_gate: Optional[bool] = None
+    # Harness assíncrono + custo (43.0.0) — faixas espelham a aba Parâmetros.
+    harness_async_enabled: Optional[bool] = None
+    harness_jobs_max_concurrent: Optional[int] = Field(default=None, ge=1, le=8)
+    harness_job_timeout_minutes: Optional[int] = Field(default=None, ge=1, le=720)
+    harness_budget_usd_per_run: Optional[float] = Field(default=None, ge=0.0, le=1000.0)
+    harness_synthetic_retention_days: Optional[int] = Field(default=None, ge=0, le=3650)
     # Tuning de performance do invoke (25.2.0)
     query_topology_cache_enabled: Optional[bool] = None
     fast_routing_enabled: Optional[bool] = None

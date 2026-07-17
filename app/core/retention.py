@@ -53,6 +53,17 @@ def _retention_days() -> int:
         return 0
 
 
+def _synthetic_retention_days() -> int:
+    """Retenção PRÓPRIA das interações sintéticas do harness (43.0.0):
+    origin='harness'. Independe da retenção LGPD global — massa de avaliação
+    não é conversa de titular e pode (deve) expirar mais cedo."""
+    from app.core.config import get_settings
+    try:
+        return max(0, int(get_settings().harness_synthetic_retention_days or 0))
+    except Exception:
+        return 0
+
+
 def _now_monotonic() -> float:
     # time.monotonic() é permitido (≠ time.time()/Date.now()); não retrocede.
     return time.monotonic()
@@ -331,17 +342,47 @@ async def forget_customer(customer_hash: str) -> dict:
     return total
 
 
+async def purge_synthetic_once() -> dict:
+    """UMA passada de purga das interações SINTÉTICAS do harness (43.0.0):
+    origin='harness' mais velhas que harness_synthetic_retention_days. Mesmo
+    miolo transacional da retenção LGPD (_purge_ids: scrub das verifications
+    preserva a linha analítica de /quality; DELETE cascateia turns/telemetria).
+    No-op quando desligado (0)."""
+    days = _synthetic_retention_days()
+    if days <= 0:
+        return {"deleted": 0, "scrubbed_verifications": 0}
+    async with _pool().acquire() as con:
+        rows = await con.fetch(
+            "SELECT id FROM interactions WHERE origin = 'harness' "
+            "AND created_at < now() - ($1 * interval '1 day') "
+            "ORDER BY created_at LIMIT $2",
+            float(days), _PURGE_BATCH,
+        )
+        out = await _purge_ids(con, [r["id"] for r in rows])
+    if out["deleted"] or out["scrubbed_verifications"]:
+        logger.info("event=retention_synthetic_purged deleted=%s "
+                    "scrubbed_verifications=%s days=%s",
+                    out["deleted"], out["scrubbed_verifications"], days)
+    return out
+
+
 async def maybe_purge() -> Optional[dict]:
     """Chamada a cada tick do reaper; só executa 1x por _PURGE_MIN_INTERVAL_S.
-    Retorna os contadores quando rodou, None quando pulou (throttle/desligado)."""
+    Retorna os contadores quando rodou, None quando pulou (throttle/desligado).
+    Cobre as DUAS retenções (cada uma checa o próprio toggle): por idade
+    (LGPD, interactions_retention_days) e sintética do harness (43.0.0)."""
     global _last_purge_at
-    if _retention_days() <= 0:
+    if _retention_days() <= 0 and _synthetic_retention_days() <= 0:
         return None
     now = _now_monotonic()
     if _last_purge_at is not None and (now - _last_purge_at) < _PURGE_MIN_INTERVAL_S:
         return None
     _last_purge_at = now
-    return await purge_interactions_once()
+    out = await purge_interactions_once()
+    synth = await purge_synthetic_once()
+    out["synthetic_deleted"] = synth.get("deleted", 0)
+    out["synthetic_scrubbed"] = synth.get("scrubbed_verifications", 0)
+    return out
 
 
 def _reset_for_tests() -> None:

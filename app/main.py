@@ -86,6 +86,16 @@ async def lifespan(app: FastAPI):
             logger.info(f"invoke_jobs no boot: {rj}")
     except Exception as e:
         logger.warning(f"invoke_jobs resume falhou no startup: {e}")
+    # Harness assíncrono (43.0.0): 'running' órfão → 'interrupted' (harness
+    # paga LLM por caso — nunca re-executa às cegas), 'queued' → retoma se o
+    # toggle estiver ON. Nunca derruba o boot.
+    try:
+        from app.harness.jobs import resume_on_boot
+        hj = await resume_on_boot()
+        if hj.get("interrupted") or hj.get("dispatched"):
+            logger.info(f"eval_jobs no boot: {hj}")
+    except Exception as e:
+        logger.warning(f"harness jobs resume falhou no startup: {e}")
     # Reaper em try PRÓPRIO (review): uma falha no resume não pode deixar o
     # processo inteiro sem retenção/despacho até o próximo restart.
     try:
@@ -104,6 +114,13 @@ async def lifespan(app: FastAPI):
             await shutdown_invoke_jobs(timeout=5.0)
         except Exception as e:
             logger.warning(f"invoke_jobs shutdown falhou: {e}")
+        # Harness assíncrono (43.0.0): espera/cancela runs ativos e marca
+        # 'interrupted' — mesmo racional (e mesma janela) do invoke_jobs.
+        try:
+            from app.harness.jobs import shutdown_eval_jobs
+            await shutdown_eval_jobs(timeout=5.0)
+        except Exception as e:
+            logger.warning(f"harness jobs shutdown falhou: {e}")
         # Drena tasks async do verifier antes de fechar o pool — evita
         # erros em INSERT contra pool já fechado quando shutdown pega
         # uma task de production sample no meio.
