@@ -1093,6 +1093,171 @@ async def delete_gold_case(case_id: str):
     if not await gold_cases_repo.delete(case_id): raise HTTPException(404)
     return {"message": "Caso removido"}
 
+
+# ═══ Export/Import do Golden Dataset (item 5, 52.0.0) ═══
+
+def _gold_export_filter(cases: list[dict], *, category: str = None,
+                        split: str = None, q: str = None) -> list[dict]:
+    """Filtros pós-fetch (o repo genérico só filtra igualdade exata e estes
+    três precisam de semântica própria): category exata, split com o valor
+    especial 'sem' (casos ainda não divididos), busca q em input/output."""
+    out = cases
+    if category:
+        out = [c for c in out if (c.get("category") or "") == category]
+    if split:
+        if split == "sem":
+            out = [c for c in out if not c.get("split")]
+        else:
+            out = [c for c in out if (c.get("split") or "") == split]
+    if q:
+        ql = q.lower()
+        out = [c for c in out if ql in (c.get("input_text") or "").lower()
+               or ql in (c.get("expected_output") or "").lower()]
+    return out
+
+
+@router.get("/gold-cases/export")
+async def export_gold_cases(dataset_version: str = None, case_type: str = None,
+                            category: str = None, split: str = None,
+                            q: str = None):
+    """Baixa o Golden Dataset (escopo do filtro) como CSV — mesmas colunas
+    do template, com `id` para o modo 'atualizar' do import. Ungated como o
+    GET /gold-cases (mesma visibilidade de dado)."""
+    from fastapi.responses import Response
+    from app.core.gold_io import gold_cases_to_csv
+    f = {}
+    if dataset_version: f["dataset_version"] = dataset_version
+    if case_type: f["case_type"] = case_type
+    cases = await gold_cases_repo.find_all(limit=10000, **f)
+    cases = _gold_export_filter(cases, category=category, split=split, q=q)
+    # red_flags vem TEXT JSON do banco — normaliza p/ lista antes do CSV
+    for c in cases:
+        _parse_json_field(c, "red_flags", [])
+    csv_text = gold_cases_to_csv(cases)
+    fname = f"gold_cases_{dataset_version or 'todos'}.csv"
+    return Response(content=csv_text, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{fname}"'})
+
+
+@router.get("/gold-cases/import-template")
+async def gold_import_template():
+    """Template vazio (só cabeçalho) para preencher e subir no import."""
+    from fastapi.responses import Response
+    from app.core.gold_io import template_csv
+    return Response(content=template_csv(),
+                    media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition":
+                             'attachment; filename="gold_cases_template.csv"'})
+
+
+_GOLD_IMPORT_MAX_BYTES = 5 * 1024 * 1024
+_GOLD_IMPORT_MAX_ROWS = 2000
+_GOLD_IMPORT_REPORT_CAP = 200
+
+
+@router.post("/gold-cases/import")
+async def import_gold_cases(request: Request, file: UploadFile = File(...),
+                            mode: str = Form("novos"),
+                            apply_partial: bool = Form(False)):
+    """Upload de casos em CSV, em 3 modos:
+      • novos      — cria; coluna `id` DEVE vir vazia (protege contra colar
+                     um export inteiro sem querer e duplicar o dataset);
+      • atualizar  — substitui casos existentes casando por `id` (o export
+                     inclui a coluna); linha sem id ou id inexistente falha;
+      • concatenar — cria TUDO como caso novo, ignorando `id`.
+
+    Duas fases: valida o arquivo INTEIRO antes de aplicar. Com qualquer
+    erro e apply_partial=false (default), NADA é aplicado e o relatório
+    volta em 422 — sem meia-importação silenciosa. apply_partial=true
+    aplica as linhas válidas e reporta as rejeitadas.
+
+    Gate root/admin (mesmo racional do auto-split: mutação em massa muda
+    baseline e gate de release).
+    """
+    from app.core.gold_io import parse_gold_csv
+    await require_role("root", "admin")(request)
+    if mode not in ("novos", "atualizar", "concatenar"):
+        raise HTTPException(422, "mode inválido — use 'novos', 'atualizar' "
+                                 "ou 'concatenar'.")
+    blob = await file.read()
+    if len(blob) > _GOLD_IMPORT_MAX_BYTES:
+        raise HTTPException(413, "Arquivo acima de 5MB — divida o import.")
+    try:
+        text = blob.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(422, "Arquivo não é UTF-8 — salve como 'CSV UTF-8' "
+                                 "no Excel/LibreOffice e tente de novo.")
+    rows, errors = parse_gold_csv(text)
+    if len(rows) > _GOLD_IMPORT_MAX_ROWS:
+        raise HTTPException(413, f"{len(rows)} linhas — máximo "
+                                 f"{_GOLD_IMPORT_MAX_ROWS} por import.")
+
+    # ── fase 1: validação por modo (nada aplicado ainda) ──
+    valid: list[dict] = []
+    for r in rows:
+        if mode == "novos" and r["id"]:
+            errors.append({"line": r["line"], "motivo":
+                           "coluna id preenchida — no modo 'novos' deixe "
+                           "vazia (para substituir use 'atualizar')"})
+            continue
+        if mode == "atualizar":
+            if not r["id"]:
+                errors.append({"line": r["line"], "motivo":
+                               "modo 'atualizar' exige a coluna id (baixe "
+                               "o export para obter os ids)"})
+                continue
+            if not await gold_cases_repo.find_by_id(r["id"]):
+                errors.append({"line": r["line"], "motivo":
+                               f"id '{r['id']}' não existe no Golden Dataset"})
+                continue
+        try:
+            GoldCaseCreate(**r["data"])
+        except Exception as e:
+            errors.append({"line": r["line"], "motivo":
+                           f"validação: {str(e)[:200]}"})
+            continue
+        valid.append(r)
+
+    errors.sort(key=lambda e: e["line"])
+    if errors and not apply_partial:
+        raise HTTPException(422, detail={
+            "message": (f"{len(errors)} linha(s) com erro — NADA foi "
+                        "aplicado. Corrija (ou envie apply_partial=true "
+                        "para importar só as válidas)."),
+            "mode": mode, "linhas_validas": len(valid),
+            "erros": errors[:_GOLD_IMPORT_REPORT_CAP],
+            "erros_truncados": max(0, len(errors) - _GOLD_IMPORT_REPORT_CAP),
+        })
+
+    # ── fase 2: aplicação ──
+    created = updated = 0
+    report: list[dict] = []
+    for r in valid:
+        payload = dict(r["data"])
+        payload["red_flags"] = json.dumps(payload.get("red_flags") or [])
+        payload["split"] = r["split"]
+        if mode == "atualizar":
+            await gold_cases_repo.update(r["id"], payload)
+            updated += 1
+            report.append({"line": r["line"], "status": "atualizado",
+                           "id": r["id"]})
+        else:
+            gid = str(uuid.uuid4())
+            await gold_cases_repo.create({"id": gid, **payload})
+            created += 1
+            report.append({"line": r["line"], "status": "criado", "id": gid})
+    return {
+        "message": (f"Import '{mode}': {created} criado(s), "
+                    f"{updated} atualizado(s), {len(errors)} rejeitada(s)."),
+        "mode": mode, "criados": created, "atualizados": updated,
+        "rejeitados": len(errors),
+        "erros": errors[:_GOLD_IMPORT_REPORT_CAP],
+        "erros_truncados": max(0, len(errors) - _GOLD_IMPORT_REPORT_CAP),
+        "report": report[:_GOLD_IMPORT_REPORT_CAP],
+        "report_truncado": max(0, len(report) - _GOLD_IMPORT_REPORT_CAP),
+    }
+
 # ═══ Harness §9.5 ═══
 def _parse_json_field(row: dict, field: str, default):
     """Parsing tolerante: TEXT JSON do banco vira objeto/lista para a UI.
