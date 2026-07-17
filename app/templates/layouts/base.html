@@ -571,7 +571,10 @@
     <!-- TOUR SPOTLIGHT OVERLAY                            -->
     <!-- ══════════════════════════════════════════════════ -->
     <template x-if="tourActive">
-        <div @resize.window="positionTour()" @scroll.window="positionTour()">
+        <!-- resize passa por _repositionTour (cruzar breakpoint lg dispara transição da
+             sidebar → precisa da re-medição atrasada); scroll usa .capture para enxergar
+             scroll de containers INTERNOS (nav overflow-y-auto), que não borbulha até window. -->
+        <div @resize.window="_repositionTour()" @scroll.window.capture="positionTour()">
             <div class="tour-overlay" @click="nextTourStep()"></div>
             <div class="tour-spotlight" :style="tourSpotStyle"></div>
             <div class="tour-card" x-ref="tourCard" :style="tourCardStyle">
@@ -1062,7 +1065,7 @@
                 {el:'tour-nav-observability', title:'Observabilidade', description:'O COMO executou: interações, latências, tokens, eventos de drift e logs estruturados. Cada interação e cada linha de erro mostram QUEM disparou (dono/ator resolvido pelo nome); chamada por chave aparece com o badge "via chave". Traces em LangFuse + métricas RED (Prometheus/Grafana).'},
                 {el:'tour-nav-infra', title:'Infraestrutura', description:'O motor sob o capô: estado e latência de cada serviço (Postgres, pgvector, gateway de modelos), com link para a UI nativa. Use quando algo parece lento e você quer confirmar se o problema é de infra antes de mexer nos agentes.'},
                 {el:'tour-nav-history', title:'Histórico', description:'O livro-razão: toda interação, turno, envelope e registro de auditoria, pesquisável. Interações mostram o dono; a auditoria (append-only) mostra o ATOR com nome e o IP. Use para reconstruir uma execução, investigar uma resposta estranha ou prestar contas.'},
-                {el:'tour-nav-settings', title:'Configurações', description:'O painel de controle: credenciais dos provedores de LLM (seladas), roteamento por tipo de tarefa (+ papel do juiz), ~40 parâmetros com valor efetivo + fonte, preços por modelo, usuários e chaves de API. As configs de LLM vivem no banco e valem em runtime, sem restart.'},
+                {el:'tour-nav-settings', title:'Configurações', description:'O painel de controle: credenciais dos provedores de LLM (seladas), roteamento por tipo de tarefa (+ papel do juiz), ~30 parâmetros com valor efetivo + fonte, preços por modelo, usuários e chaves de API. As configs de LLM vivem no banco e valem em runtime, sem restart.'},
                 {el:'tour-start-btn', title:'Pronto para começar', description:'Você viu cada área. Um bom primeiro caminho: crie uma skill pelo Wizard IA → um agente que a usa → desenhe o fluxo no AI Mesh → teste no Playground → avalie no Harness → publique no Catálogo. Em qualquer tela, o botão "?" (Ajuda desta página) aprofunda o contexto.'},
             ],
             get currentTourStep() { return this.tourSteps[this.tourStep] || {} },
@@ -1071,6 +1074,9 @@
             // dono do item (senão o item de submenu fica display:none em 0,0).
             _ensureTourTargetVisible() {
                 if (this.sidebarCollapsed) this.sidebarCollapsed = false;
+                // Em < lg a sidebar é um drawer off-canvas controlado por sidebarOpen
+                // (-translate-x-full) — sem abrir, todo passo da nav aponta p/ fora da tela.
+                if (!this.sidebarOpen) this.sidebarOpen = true;
                 const sm = this.currentTourStep?.submenu;
                 if (sm === 'catalog') this.catalogSubmenuOpen = true;
                 if (sm === 'mesh') this.meshSubmenuOpen = true;
@@ -1105,9 +1111,13 @@
                 this.tourCardStyle = `left:${left}px;top:${top}px`;
             },
             // Reposiciona após o DOM assentar (submenu expandindo + card renderizado).
+            // A sidebar tem transition de largura (duration-200): a 1ª medição (1 frame)
+            // pega o rect NO MEIO da animação e congelaria errado — re-mede após assentar.
             _repositionTour() {
                 this._ensureTourTargetVisible();
                 this.$nextTick(() => requestAnimationFrame(() => this.positionTour()));
+                clearTimeout(this._tourSettleTimer);
+                this._tourSettleTimer = setTimeout(() => { if (this.tourActive) this.positionTour(); }, 250);
             },
             startTour() {
                 this.tourStep = 0;
@@ -1116,6 +1126,7 @@
                 // sidebar/submenus só enquanto roda, sem bagunçar a escolha do usuário.
                 this._tourSaved = {
                     collapsed: this.sidebarCollapsed,
+                    open: this.sidebarOpen,
                     catalog: this.catalogSubmenuOpen,
                     mesh: this.meshSubmenuOpen,
                 };
@@ -1140,10 +1151,12 @@
             },
             endTour() {
                 this.tourActive = false;
+                clearTimeout(this._tourSettleTimer);
                 // Restaura o menu como o usuário deixou antes do tour.
                 const s = this._tourSaved;
                 if (s) {
                     this.sidebarCollapsed = s.collapsed;
+                    this.sidebarOpen = s.open;
                     this.catalogSubmenuOpen = s.catalog;
                     this.meshSubmenuOpen = s.mesh;
                     this._tourSaved = null;
