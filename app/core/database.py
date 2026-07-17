@@ -337,6 +337,27 @@ CREATE TABLE IF NOT EXISTS car_entries (
     created_at TIMESTAMP DEFAULT now()
 );
 
+-- Histórico INSERT-ONLY de conteúdo autoral (46.0.0, PR1 do arco Otimização):
+-- snapshots de skills.raw_content e agents.system_prompt a cada save — antes,
+-- o PUT sobrescrevia e o texto anterior era DESTRUÍDO (sem rollback).
+-- parent_revision_id = linhagem (vira a árvore genética do loop GEPA no PR4).
+-- Poda mantém as últimas N por entidade (app/core/revisions.py).
+CREATE TABLE IF NOT EXISTS content_revisions (
+    id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT,
+    version TEXT,
+    source TEXT DEFAULT 'update',
+    author_user_id TEXT,
+    note TEXT,
+    parent_revision_id TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_content_revisions_entity
+    ON content_revisions (entity_type, entity_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id BIGSERIAL PRIMARY KEY,
     entity_type TEXT NOT NULL,

@@ -234,6 +234,14 @@ async def create_agent(data: AgentCreate):
             d[f] = 1 if d[f] else 0
     await agents_repo.create(d)
     await audit_repo.create({"entity_type":"agent","entity_id":aid,"action":"created","details":json.dumps({"name":data.name,"kind":data.kind,"version":data.version})})
+    # Snapshot inicial do system_prompt (46.0.0, PR1 do arco Otimização).
+    if (d.get("system_prompt") or "").strip():
+        from app.core import revisions as _rev
+        await _rev.safe_record(
+            entity_type=_rev.ENTITY_AGENT_PROMPT, entity_id=aid,
+            content=d["system_prompt"], version=d.get("version"),
+            source="create",
+        )
     return {"id": aid, "message": "Agente criado"}
 
 @router.put("/{agent_id}")
@@ -294,7 +302,82 @@ async def update_agent(agent_id: str, data: AgentUpdate):
     significant = {"system_prompt","model","llm_provider","skill_id","kind","temperature","task_type"}
     if any(k in upd for k in significant) and "version" not in upd:
         upd["version"] = _bump_version(existing.get("version","1.0.0"))
-    return await agents_repo.update(agent_id, upd)
+    result = await agents_repo.update(agent_id, upd)
+    # Histórico do system_prompt (46.0.0, PR1): backfill do antigo na 1ª
+    # edição pós-feature + snapshot do novo. DEPOIS do update (self-review:
+    # gravar antes deixaria revisão fantasma se o update falhasse) e
+    # best-effort — nunca quebra o PUT.
+    if "system_prompt" in upd and \
+            (upd["system_prompt"] or "") != (existing.get("system_prompt") or ""):
+        from app.core import revisions as _rev
+        await _rev.safe_backfill(
+            entity_type=_rev.ENTITY_AGENT_PROMPT, entity_id=agent_id,
+            old_content=existing.get("system_prompt") or "",
+            version=existing.get("version"),
+        )
+        await _rev.safe_record(
+            entity_type=_rev.ENTITY_AGENT_PROMPT, entity_id=agent_id,
+            content=upd["system_prompt"] or "",
+            version=upd.get("version") or existing.get("version"),
+            source="update",
+        )
+    return result
+
+
+@router.get("/{agent_id}/prompt-revisions")
+async def list_agent_prompt_revisions(agent_id: str):
+    """Histórico do system_prompt (46.0.0) — sem o conteúdo (leve p/ a UI)."""
+    if not await agents_repo.find_by_id(agent_id):
+        raise HTTPException(404)
+    from app.core import revisions as _rev
+    return {"revisions": await _rev.list_revisions(
+        _rev.ENTITY_AGENT_PROMPT, agent_id)}
+
+
+@router.get("/{agent_id}/prompt-revisions/{revision_id}")
+async def get_agent_prompt_revision(agent_id: str, revision_id: str):
+    from app.core import revisions as _rev
+    rev = await _rev.get_revision(revision_id)
+    if not rev or rev.get("entity_type") != _rev.ENTITY_AGENT_PROMPT \
+            or rev.get("entity_id") != agent_id:
+        raise HTTPException(404, "Revisão não encontrada para este agente")
+    return rev
+
+
+@router.post("/{agent_id}/prompt-revisions/{revision_id}/rollback")
+async def rollback_agent_prompt_revision(agent_id: str, revision_id: str,
+                                         request: Request):
+    """Restaura um system_prompt antigo como SAVE NOVO (version bump; revisão
+    source='rollback' com parent na restaurada) — histórico intacto. Só o
+    system_prompt muda; o resto da config do agente fica como está."""
+    from app.core import revisions as _rev
+    existing = await agents_repo.find_by_id(agent_id)
+    if not existing:
+        raise HTTPException(404)
+    rev = await _rev.get_revision(revision_id)
+    if not rev or rev.get("entity_type") != _rev.ENTITY_AGENT_PROMPT \
+            or rev.get("entity_id") != agent_id:
+        raise HTTPException(404, "Revisão não encontrada para este agente")
+    _caller = getattr(request.state, "auth_user", None) or {}
+    new_version = _bump_version(existing.get("version", "1.0.0"))
+    await agents_repo.update(agent_id, {
+        "system_prompt": rev.get("content") or "", "version": new_version})
+    await _rev.safe_record(
+        entity_type=_rev.ENTITY_AGENT_PROMPT, entity_id=agent_id,
+        content=rev.get("content") or "", version=new_version,
+        source="rollback", author_user_id=_caller.get("id"),
+        note=f"restaurado da revisão {revision_id} "
+             f"(v{rev.get('version') or '?'})",
+        parent_revision_id=revision_id,
+    )
+    await audit_repo.create({
+        "entity_type": "agent", "entity_id": agent_id,
+        "action": "prompt_rollback",
+        "details": json.dumps({"revision_id": revision_id,
+                               "new_version": new_version}),
+    })
+    return {"message": "System prompt restaurado como nova versão",
+            "version": new_version}
 
 @router.patch("/{agent_id}/status")
 async def toggle_agent_status(agent_id: str, status: str = "active"):

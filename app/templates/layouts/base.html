@@ -1515,6 +1515,43 @@
         async patch(url, body) { const r = await _fetchWithTrace(url, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if (!r.ok) { const e = await r.json().catch(()=>({})); const tid = window.lastTraceIds.request; const d = _errDetail(e, `PATCH ${url} → ${r.status}`); throw new Error(tid ? `${d} [${tid}]` : d); } return r.json(); },
         async del(url) { const r = await _fetchWithTrace(url, {method:'DELETE'}); if (!r.ok) { const e = await r.json().catch(()=>({})); const tid = window.lastTraceIds.request; const d = _errDetail(e, `DELETE ${url} → ${r.status}`); throw new Error(tid ? `${d} [${tid}]` : d); } return r.json(); },
     };
+    // ── Histórico de revisões (46.0.0, PR1 do arco Otimização) ─────────
+    // Componente Alpine STANDALONE (não acopla ao x-data das páginas): lê o
+    // id da entidade do pathname (/skills/{id}/edit, /agents/{id}/edit).
+    // Rollback restaura como SAVE NOVO (nada é perdido) e recarrega o form.
+    function revisionsPanel(kind){
+        const m = location.pathname.match(
+            kind === 'skill' ? /\/skills\/([^/]+)\/edit/ : /\/agents\/([^/]+)\/edit/);
+        const id = m ? m[1] : null;
+        const basePath = kind === 'skill'
+            ? `/api/v1/skills/${id}/revisions`
+            : `/api/v1/agents/${id}/prompt-revisions`;
+        return {
+            revId: id, revisions: [], revLoading: false, revOpen: false, revViewing: null,
+            async revLoad(){
+                if(!this.revId) return;
+                this.revLoading = true;
+                try{ this.revisions = (await api.get(basePath)).revisions || []; }
+                catch(e){ this.revisions = []; }
+                this.revLoading = false;
+            },
+            revToggle(){ this.revOpen = !this.revOpen; if(this.revOpen && !this.revisions.length) this.revLoad(); },
+            async revView(r){
+                if(this.revViewing && this.revViewing.id === r.id){ this.revViewing = null; return; }
+                try{ this.revViewing = await api.get(basePath + '/' + r.id); }
+                catch(e){ showToast(e.message, 'error'); }
+            },
+            async revRollback(r){
+                const ok = await uiConfirm({message: `Restaurar a revisão ${(r.id||'').slice(4,12)} (${r.version ? 'v'+r.version : r.source})? O conteúdo ATUAL vira uma versão nova antes — nada é perdido.`, danger: false});
+                if(!ok) return;
+                try{
+                    const res = await api.post(`${basePath}/${r.id}/rollback`, {});
+                    showToast(res.message || 'Restaurado como nova versão');
+                    setTimeout(()=>location.reload(), 700);
+                }catch(e){ showToast(e.message, 'error'); }
+            },
+        };
+    }
     function showToast(msg, type='success') {
         const t = document.createElement('div');
         const c = {success:'bg-emerald-500',error:'bg-rose-500',info:'bg-brand-500'};
