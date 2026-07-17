@@ -701,6 +701,17 @@ async def _reaper_loop() -> None:
             logger.warning("event=eval_jobs_sweep_timeout")
         except Exception as e:
             logger.warning("event=eval_jobs_sweep_failed error=%s", str(e)[:200])
+        # Carona (49.0.0, PR4b): despacho + zombie-sweep da fila do LOOP do
+        # otimizador. No-op de despacho com optimizer_loop_enabled OFF.
+        try:
+            from app.optimizer.jobs import sweep_queued as _opt_sweep
+            await asyncio.wait_for(_opt_sweep(), timeout=_CARONA_TIMEOUT_S)
+        except asyncio.CancelledError:
+            raise
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning("event=optimizer_jobs_sweep_timeout")
+        except Exception as e:
+            logger.warning("event=optimizer_jobs_sweep_failed error=%s", str(e)[:200])
 
 
 def start_reaper() -> None:

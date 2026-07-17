@@ -13,12 +13,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.core.auth import require_role
-from app.core.database import agents_repo, eval_runs_repo, gold_cases_repo, skills_repo
+from app.core.database import (
+    agents_repo, eval_runs_repo, gold_cases_repo, releases_repo, skills_repo,
+)
 from app.optimizer.proposer import (
     STYLE_TIPS,
     build_control_variant,
@@ -32,6 +36,33 @@ from app.optimizer.proposer import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/optimizer", tags=["optimizer"])
+
+
+async def _agent_skill_sections(agent: dict, *,
+                                reject_declarative: bool = False) -> dict | None:
+    """Seções de TEXTO LIVRE da skill do agente para o contexto grounded do
+    propositor (49.0.0: SSOT compartilhado entre a rota /propose e o loop
+    reflexivo). Sem skill/conteúdo → None. reject_declarative=True levanta 422
+    para skills sem LLM (nada a otimizar)."""
+    if not agent.get("skill_id"):
+        return None
+    skill_row = await skills_repo.find_by_id(agent["skill_id"])
+    raw = (skill_row or {}).get("raw_content") or ""
+    if not raw:
+        return None
+    from app.skill_parser.parser import parse_skill_md
+    parsed = parse_skill_md(raw)
+    if parsed.execution_mode == "declarative":
+        if reject_declarative:
+            raise HTTPException(
+                422, "A skill deste agente é DECLARATIVA (executa sem LLM) — "
+                     "não há prompt a otimizar neste alvo.")
+        return None
+    return {
+        "purpose": parsed.purpose, "workflow": parsed.workflow,
+        "output_contract": parsed.output_contract,
+        "guardrails": parsed.guardrails, "inputs": parsed.inputs,
+    }
 
 
 class PromoteRequest(BaseModel):
@@ -53,6 +84,120 @@ class ProposeRequest(BaseModel):
     # K pequeno de propósito (PR3a: com gold sets pequenos, K grande dilui o
     # poder estatístico — champion×challenger é o desenho honesto).
     n_variants: int = Field(default=2, ge=1, le=3)
+
+
+class OptimizeRequest(BaseModel):
+    """Loop reflexivo do otimizador (49.0.0, PR4b): lança o job GEPA."""
+    agent_id: str
+    release_id: str
+    gold_version: str = "latest"
+    max_rounds: Optional[int] = Field(default=None, ge=1, le=10)
+    children_per_round: Optional[int] = Field(default=None, ge=1, le=4)
+    budget_usd: Optional[float] = Field(default=None, ge=0.0, le=1000.0)
+
+
+@router.post("/optimize")
+async def start_optimization(data: OptimizeRequest, request: Request):
+    """Lança o loop reflexivo (GEPA-style) como JOB durável — 202 + id, roda
+    em background, acompanha em GET /optimizer/optimize/{id}. Report-only: ao
+    fim aponta a melhor variante (revisão restaurável) + veredito no holdout;
+    a promoção segue humana (PR5). Gate root/admin (dispara muitos runs de
+    LLM injetando prompts arbitrários; mesmo racional do /propose e /promote).
+    Recusa skill declarativa e gold sem casos de treino."""
+    import uuid as _uuid
+    from app.core.config import get_settings
+
+    caller = await require_role("root", "admin")(request)
+    if not get_settings().optimizer_loop_enabled:
+        raise HTTPException(
+            403, "O loop reflexivo do otimizador está desligado — habilite "
+                 "'optimizer_loop_enabled' em Configurações → Parâmetros "
+                 "(dispara muitos runs de LLM; OFF por default).")
+    agent = await agents_repo.find_by_id(data.agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{data.agent_id}' não encontrado.")
+    if not await releases_repo.find_by_id(data.release_id):
+        raise HTTPException(404, f"Release '{data.release_id}' não encontrada.")
+    # Declarativa 422 (reusa o helper compartilhado com o /propose).
+    await _agent_skill_sections(agent, reject_declarative=True)
+
+    from app.harness.evaluator import gold_version_filters
+    cases = await gold_cases_repo.find_all(
+        limit=500, **gold_version_filters(data.gold_version))
+    train = [c for c in cases if (c.get("split") or "") != "holdout"]
+    if len(train) < 4:
+        raise HTTPException(
+            422, "Menos de 4 casos de TREINO — o loop não teria sinal. "
+                 "Adicione casos ao Golden Dataset e rode 'Dividir "
+                 "treino/holdout'.")
+
+    s = get_settings()
+    opt_id = f"opt_{_uuid.uuid4().hex[:16]}"
+    async with _pool_dep().acquire() as con:
+        await con.execute(
+            "INSERT INTO optimization_runs (id, agent_id, release_id, "
+            "gold_version, status, owner_user_id, max_rounds, "
+            "children_per_round, budget_usd) "
+            "VALUES ($1,$2,$3,$4,'queued',$5,$6,$7,$8)",
+            opt_id, data.agent_id, data.release_id, data.gold_version,
+            caller.get("id"),
+            int(data.max_rounds or s.optimizer_max_rounds),
+            int(data.children_per_round or 2),
+            float(data.budget_usd if data.budget_usd is not None
+                  else s.optimizer_default_budget_usd),
+        )
+    from app.optimizer import jobs as opt_jobs
+    opt_jobs.dispatch(opt_id)  # sem vaga → carona do reaper despacha
+    return JSONResponse(status_code=202, content={
+        "optimization_id": opt_id, "status": "queued",
+        "poll_url": f"/api/v1/optimizer/optimize/{opt_id}",
+        "message": "Loop de otimização enfileirado — acompanhe pelo poll_url. "
+                   "Report-only: nada é aplicado ao agente."})
+
+
+@router.get("/optimize/{opt_id}")
+async def get_optimization(opt_id: str, request: Request):
+    """Estado do loop + árvore de candidatos (polling e drill-down). Gate
+    root/admin (review [14]): os candidatos guardam system_prompts — IP de
+    prompt-engineering que não deve vazar a qualquer autenticado/API-key."""
+    import json as _json
+    await require_role("root", "admin")(request)
+    async with _pool_dep().acquire() as con:
+        run = await con.fetchrow(
+            "SELECT * FROM optimization_runs WHERE id=$1", opt_id)
+        if not run:
+            raise HTTPException(404, "Otimização não encontrada.")
+        cands = await con.fetch(
+            "SELECT id, round, parent_candidate_id, kind, eval_id, score, "
+            "on_pareto, reflection, length(system_prompt) AS prompt_chars "
+            "FROM optimization_candidates WHERE optimization_id=$1 "
+            "ORDER BY round, score DESC", opt_id)
+    run = dict(run)
+    if run.get("result"):
+        try:
+            run["result"] = _json.loads(run["result"])
+        except Exception:
+            pass
+    return {"run": run, "candidates": [dict(c) for c in cands]}
+
+
+@router.get("/optimize/{opt_id}/candidates/{cand_id}")
+async def get_optimization_candidate(opt_id: str, cand_id: str, request: Request):
+    """system_prompt completo de um candidato (para ver/diff na UI). Gate
+    root/admin (review [14])."""
+    await require_role("root", "admin")(request)
+    async with _pool_dep().acquire() as con:
+        row = await con.fetchrow(
+            "SELECT * FROM optimization_candidates WHERE id=$1 AND "
+            "optimization_id=$2", cand_id, opt_id)
+    if not row:
+        raise HTTPException(404, "Candidato não encontrado.")
+    return dict(row)
+
+
+def _pool_dep():
+    from app.core.database import _get_pool
+    return _get_pool()
 
 
 class ProbeRequest(BaseModel):
@@ -377,24 +522,8 @@ async def propose_variants(data: ProposeRequest, request: Request):
     if not agent:
         raise HTTPException(404, f"Agente '{data.agent_id}' não encontrado.")
 
-    # Seções de texto livre da skill (contexto grounded) + recusa declarativa
-    # (sem LLM não há prompt a otimizar — mesma regra do config_overrides).
-    skill_sections: dict | None = None
-    if agent.get("skill_id"):
-        skill_row = await skills_repo.find_by_id(agent["skill_id"])
-        raw = (skill_row or {}).get("raw_content") or ""
-        if raw:
-            from app.skill_parser.parser import parse_skill_md
-            parsed = parse_skill_md(raw)
-            if parsed.execution_mode == "declarative":
-                raise HTTPException(
-                    422, "A skill deste agente é DECLARATIVA (executa sem "
-                         "LLM) — não há prompt a otimizar neste alvo.")
-            skill_sections = {
-                "purpose": parsed.purpose, "workflow": parsed.workflow,
-                "output_contract": parsed.output_contract,
-                "guardrails": parsed.guardrails, "inputs": parsed.inputs,
-            }
+    # Seções de texto livre da skill (contexto grounded) + recusa declarativa.
+    skill_sections = await _agent_skill_sections(agent, reject_declarative=True)
 
     from app.harness.evaluator import gold_version_filters
     cases = await gold_cases_repo.find_all(

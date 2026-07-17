@@ -3495,6 +3495,13 @@ class SettingsSave(BaseModel):
     harness_job_timeout_minutes: Optional[int] = Field(default=None, ge=1, le=720)
     harness_budget_usd_per_run: Optional[float] = Field(default=None, ge=0.0, le=1000.0)
     harness_synthetic_retention_days: Optional[int] = Field(default=None, ge=0, le=3650)
+    # Loop reflexivo do otimizador (49.0.0) — faixas espelham a aba Parâmetros.
+    optimizer_loop_enabled: Optional[bool] = None
+    optimizer_max_rounds: Optional[int] = Field(default=None, ge=1, le=10)
+    optimizer_patience: Optional[int] = Field(default=None, ge=1, le=5)
+    optimizer_default_budget_usd: Optional[float] = Field(default=None, ge=0.0, le=1000.0)
+    optimizer_job_timeout_minutes: Optional[int] = Field(default=None, ge=5, le=720)
+    optimizer_jobs_max_concurrent: Optional[int] = Field(default=None, ge=1, le=4)
     # Tuning de performance do invoke (25.2.0)
     query_topology_cache_enabled: Optional[bool] = None
     fast_routing_enabled: Optional[bool] = None

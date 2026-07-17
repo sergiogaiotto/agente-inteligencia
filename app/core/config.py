@@ -321,6 +321,24 @@ class Settings(BaseSettings):
     # 0 = desligado (default). Independe de interactions_retention_days.
     harness_synthetic_retention_days: int = 0
 
+    # ── Loop reflexivo do otimizador (49.0.0, PR4b — fecha o arco) ──
+    # Habilita POST /optimizer/optimize → 202 + job durável do loop GEPA.
+    # Default OFF (dispara MUITOS runs de LLM; gated como toda superfície
+    # nova). OFF também congela o despacho da fila (kill-switch).
+    optimizer_loop_enabled: bool = False
+    # Rodadas máximas do loop (cada rodada: propor filhos → avaliar no treino).
+    optimizer_max_rounds: int = 4
+    # Paciência do early-stop: para após N rodadas sem MELHORA do melhor score
+    # (o tail de otimização overfitta — resultado negativo replicado no plano).
+    optimizer_patience: int = 2
+    # Teto de custo LLM por loop (US$); 0 = sem teto. Checado entre variantes.
+    optimizer_default_budget_usd: float = 0.0
+    # Deadline de parede por loop (minutos): o worker cancela no estouro.
+    optimizer_job_timeout_minutes: int = 120
+    # Loops simultâneos no processo (cap próprio — cada loop já serializa
+    # muitos runs de LLM; 1 é o default seguro).
+    optimizer_jobs_max_concurrent: int = 1
+
     # ── RAGAS com gabarito (ground truth) — 33.12.0 ──
     # context_recall + answer_correctness exigem a resposta-padrão do gold E uma
     # chamada LLM-judge extra POR MÉTRICA (custo). Gated default-OFF: quando
@@ -607,6 +625,13 @@ _UI_TO_ENV_MAP = {
     "harness_job_timeout_minutes": "HARNESS_JOB_TIMEOUT_MINUTES",
     "harness_budget_usd_per_run": "HARNESS_BUDGET_USD_PER_RUN",
     "harness_synthetic_retention_days": "HARNESS_SYNTHETIC_RETENTION_DAYS",
+    # Loop reflexivo do otimizador (49.0.0) — comportamento, não-selado.
+    "optimizer_loop_enabled": "OPTIMIZER_LOOP_ENABLED",
+    "optimizer_max_rounds": "OPTIMIZER_MAX_ROUNDS",
+    "optimizer_patience": "OPTIMIZER_PATIENCE",
+    "optimizer_default_budget_usd": "OPTIMIZER_DEFAULT_BUDGET_USD",
+    "optimizer_job_timeout_minutes": "OPTIMIZER_JOB_TIMEOUT_MINUTES",
+    "optimizer_jobs_max_concurrent": "OPTIMIZER_JOBS_MAX_CONCURRENT",
     "ragas_ground_truth_enabled": "RAGAS_GROUND_TRUTH_ENABLED",
     # Tuning de performance (25.2.0)
     "query_topology_cache_enabled": "QUERY_TOPOLOGY_CACHE_ENABLED",
@@ -657,6 +682,12 @@ PARAMETER_UI_KEYS = (
     "harness_job_timeout_minutes",
     "harness_budget_usd_per_run",
     "harness_synthetic_retention_days",
+    "optimizer_loop_enabled",
+    "optimizer_max_rounds",
+    "optimizer_patience",
+    "optimizer_default_budget_usd",
+    "optimizer_job_timeout_minutes",
+    "optimizer_jobs_max_concurrent",
     "ragas_ground_truth_enabled",
     "query_topology_cache_enabled",
     "fast_routing_enabled",
