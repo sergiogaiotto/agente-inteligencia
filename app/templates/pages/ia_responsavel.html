@@ -284,6 +284,68 @@
         <p class="text-[10px] text-surface-400">Mapeamento indicativo (não é parecer jurídico). Ligar OPA / Verifier / retenção eleva a cobertura.</p>
     </div>
 
+    <!-- ─── Prontidão (attestation + papéis + relatório) ─── -->
+    <div x-show="tab === 'attest'" class="space-y-4">
+        <div class="flex items-center justify-between gap-3">
+            <p class="text-[11px] text-surface-500 max-w-lg">Prontidão de governança: designe os papéis, registre sign-offs formais e exporte o relatório para o auditor.</p>
+            <button @click="exportReport()" data-testid="ir-report-export" class="flex-none rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600"><i></i>Exportar relatório</button>
+        </div>
+
+        <div class="rounded-xl border border-surface-200 bg-white p-4" data-testid="ir-officers">
+            <h2 class="text-[13px] font-semibold text-brand-900 mb-2">Papéis de governança</h2>
+            <p class="text-[10.5px] text-surface-400 mb-2">Responsabilidade de governança, ortogonal ao papel de acesso (RBAC).</p>
+            <template x-for="o in offices" :key="o.office">
+                <div class="mb-2.5">
+                    <div class="text-[11px] font-semibold text-surface-600 mb-1" x-text="o.label"></div>
+                    <div class="flex flex-wrap items-center gap-1.5">
+                        <template x-for="a in officersFor(o.office)" :key="a.id">
+                            <span class="inline-flex items-center gap-1 rounded bg-brand-50 text-brand-700 px-2 py-0.5 text-[11px]"><span x-text="a.name"></span><button @click="removeOfficer(a.id)" class="text-brand-400 hover:text-rose-500 leading-none">×</button></span>
+                        </template>
+                        <select x-model="officerForm[o.office]" class="rounded border border-surface-200 px-2 py-1 text-[11px] outline-none">
+                            <option value="">+ designar…</option>
+                            <template x-for="u in attUsers" :key="u.id"><option :value="u.id" x-text="u.display_name || u.username"></option></template>
+                        </select>
+                        <button @click="assignOfficer(o.office)" :disabled="!officerForm[o.office]" class="text-[11px] text-brand-600 hover:text-brand-800 disabled:opacity-40">adicionar</button>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <div class="rounded-xl border border-surface-200 bg-white p-4" data-testid="ir-attest-sign">
+            <h2 class="text-[13px] font-semibold text-brand-900 mb-2">Assinar prontidão</h2>
+            <div class="grid sm:grid-cols-3 gap-2 mb-2">
+                <select x-model="attForm.scope" class="rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none">
+                    <option value="platform">Plataforma (geral)</option>
+                    <option value="agent">Agente</option>
+                    <option value="pipeline">Pipeline</option>
+                </select>
+                <input x-show="attForm.scope !== 'platform'" x-model="attForm.entity_id" placeholder="id do ativo" class="rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none">
+                <select x-model="attForm.office" class="rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none">
+                    <option value="">— seu papel (opcional) —</option>
+                    <template x-for="o in offices" :key="o.office"><option :value="o.office" x-text="o.label"></option></template>
+                </select>
+            </div>
+            <textarea x-model="attForm.statement" rows="2" placeholder="Declaro que este escopo está pronto para produção sob os controles de governança vigentes." class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none mb-2 focus:border-brand-400"></textarea>
+            <div class="flex justify-end">
+                <button @click="signAttestation()" :disabled="attBusy || !attForm.statement.trim()" data-testid="ir-attest-save" class="rounded-lg bg-brand-500 px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-40"><span x-text="attBusy ? 'Assinando…' : 'Assinar prontidão'"></span></button>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-surface-200 bg-white overflow-hidden max-h-[45vh] overflow-y-auto" data-testid="ir-attest-list">
+            <template x-for="a in attestations" :key="a.id">
+                <div class="px-3 py-2 border-t border-surface-100 first:border-t-0 text-[11.5px]">
+                    <div class="flex items-center gap-2">
+                        <span class="rounded bg-emerald-50 text-emerald-700 px-1.5 py-0.5 text-[9.5px] uppercase" x-text="a.scope"></span>
+                        <span x-show="a.entity_id" class="text-[10px] text-surface-400 font-mono truncate" x-text="a.entity_id"></span>
+                        <span class="ml-auto text-[10px] text-surface-400 flex-none" x-text="a.signed_by + ' · ' + fmtWhen(a.signed_at)"></span>
+                    </div>
+                    <p class="text-surface-700 mt-0.5" x-text="a.statement"></p>
+                </div>
+            </template>
+            <p x-show="!attestations.length" class="px-3 py-4 text-[11px] text-surface-400">Nenhuma prontidão assinada ainda.</p>
+        </div>
+    </div>
+
     <!-- ─── Auditoria ─── -->
     <div x-show="tab === 'audit'" class="space-y-3">
         <p class="text-[11px] text-surface-500">Trilha imutável (append-only): quem fez o quê, quando e de onde.</p>
@@ -329,6 +391,7 @@ function iaResponsavel() {
             { k: 'cards', l: 'Model cards' },
             { k: 'risk', l: 'Risco' },
             { k: 'crosswalk', l: 'Conformidade' },
+            { k: 'attest', l: 'Prontidão' },
             { k: 'audit', l: 'Auditoria' },
             { k: 'roadmap', l: 'Roadmap' },
         ],
@@ -339,6 +402,8 @@ function iaResponsavel() {
         guard: { prompt_guard_enabled: true, prompt_guard_block_threshold: 0.7, prompt_guard_warn_threshold: 0.4, dlp_enabled: true, dlp_redact_before_llm: false },
         guardSnapshot: '', guardBusy: false,
         crosswalk: null, crossSel: 0,
+        offices: [], officersAssigned: [], attestations: [], attUsers: [],
+        officerForm: {}, attForm: { scope: 'platform', entity_id: '', office: '', statement: '' }, attBusy: false,
         skillSections: [
             { k: 'purpose', l: 'Propósito' }, { k: 'guardrails', l: 'Guardrails' },
             { k: 'evidence_policy', l: 'Política de evidência' }, { k: 'output_contract', l: 'Contrato de saída' },
@@ -348,7 +413,6 @@ function iaResponsavel() {
         forgetRef: '', forgetBusy: false, forgetResult: '',
         roadmap: [
             { t: 'Políticas (OPA)', f: 'Fase 2', d: 'Editor de regras Rego, simulador what-if e log de decisão (allow/deny). Hoje o OPA é headless.' },
-            { t: 'Attestation & papéis', f: 'Fase 3', d: 'Sign-off formal de prontidão + papéis DPO / AI Officer + relatório de conformidade exportável.' },
         ],
         get postureColor() {
             const s = this.summary ? this.summary.posture_score : 0;
@@ -384,6 +448,34 @@ function iaResponsavel() {
             try { this.risk = await api.get('/api/v1/governance/risk-register'); } catch {}
             try { this.crosswalk = await api.get('/api/v1/governance/crosswalk'); } catch {}
             await this.loadGuard();
+            await this.loadAttest();
+        },
+        officersFor(office) { return this.officersAssigned.filter(a => a.office === office); },
+        async loadAttest() {
+            try { const o = await api.get('/api/v1/governance/officers'); this.offices = o.offices || []; this.officersAssigned = o.assigned || []; this.offices.forEach(x => { if (!(x.office in this.officerForm)) this.officerForm[x.office] = ''; }); } catch {}
+            try { this.attestations = (await api.get('/api/v1/governance/attestations')).attestations || []; } catch {}
+            try { this.attUsers = (await api.get('/api/v1/users')).users || []; } catch {}
+        },
+        async assignOfficer(office) {
+            const uid = this.officerForm[office]; if (!uid) return;
+            try { await api.post('/api/v1/governance/officers', { office, user_id: uid }); this.officerForm[office] = ''; showToast('Papel designado'); await this.loadAttest(); } catch (e) { showToast(e.message, 'error'); }
+        },
+        async removeOfficer(id) {
+            try { await api.del('/api/v1/governance/officers/' + id); await this.loadAttest(); } catch (e) { showToast(e.message, 'error'); }
+        },
+        async signAttestation() {
+            this.attBusy = true;
+            try { await api.post('/api/v1/governance/attestations', this.attForm); showToast('Prontidão assinada'); this.attForm.statement = ''; this.attForm.entity_id = ''; await this.loadAttest(); } catch (e) { showToast(e.message, 'error'); }
+            this.attBusy = false;
+        },
+        async exportReport() {
+            try {
+                const r = await api.get('/api/v1/governance/report');
+                const blob = new Blob([JSON.stringify(r, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = 'relatorio-conformidade.json'; a.click(); URL.revokeObjectURL(url);
+                showToast('Relatório exportado');
+            } catch (e) { showToast(e.message, 'error'); }
         },
         get curFw() { return this.crosswalk ? this.crosswalk.frameworks[this.crossSel] : null; },
         ctrlLabel(k) { return (this.crosswalk && this.crosswalk.control_labels[k]) || k; },

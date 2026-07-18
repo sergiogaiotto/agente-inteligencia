@@ -447,6 +447,29 @@ CREATE TABLE IF NOT EXISTS governance_risk (
     UNIQUE(entity_type, entity_id)
 );
 
+-- Papéis de governança (IA Responsável 61.0.0): DPO / AI Officer designados a
+-- usuários — responsabilidade de governança, ORTOGONAL ao RBAC de acesso.
+CREATE TABLE IF NOT EXISTS governance_officer (
+    id TEXT PRIMARY KEY,
+    office TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    assigned_by TEXT,
+    assigned_at TIMESTAMP DEFAULT now(),
+    UNIQUE(office, user_id)
+);
+
+-- Attestation: sign-off formal de prontidão (plataforma/agente/pipeline).
+-- Append-only na prática (registro de aprovação com quem/quando).
+CREATE TABLE IF NOT EXISTS governance_attestation (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL,
+    entity_id TEXT,
+    office TEXT,
+    statement TEXT NOT NULL,
+    signed_by TEXT,
+    signed_at TIMESTAMP DEFAULT now()
+);
+
 -- API keys para integrações externas (Zapier, n8n, scripts, mobile apps).
 -- Header `X-API-Key` é validado contra `key_hash` (SHA-256 da plaintext).
 -- `key_prefix` é gravado pra UI exibir "ag_live_a1b2…" sem revelar o resto.
@@ -2060,6 +2083,8 @@ class AuditRepository(Repository):
 audit_repo = AuditRepository("audit_log")
 drift_repo = Repository("drift_events")
 governance_risk_repo = Repository("governance_risk")
+governance_officer_repo = Repository("governance_officer")
+governance_attestation_repo = Repository("governance_attestation")
 prompts_repo = Repository("system_prompts")
 users_repo = Repository("users")
 domains_repo = Repository("domains")
