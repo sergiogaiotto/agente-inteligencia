@@ -361,3 +361,102 @@ async def guard_config_put(data: GuardConfig, user=Depends(_gate)):
         "action": "guard_dlp_updated", "actor": who,
     })
     return {"message": "Configuração de guarda/DLP salva", "keys": list(payload.keys()), "env_applied": applied}
+
+
+# ── Crosswalk de conformidade (EU AI Act / NIST / ISO 42001 / LGPD / OWASP) ───
+# Cobertura HONESTA: mapeia os controles REAIS da plataforma (flags + capacidades
+# entregues) contra os requisitos de cada framework. Um requisito é "coberto" se
+# ALGUM dos controles que o atendem está ativo. Zero % inventado.
+_CONTROL_LABELS = {
+    "grounding": "Grounding estrito",
+    "prompt_guard": "Guarda de injeção (LLM01)",
+    "dlp": "DLP / redação de PII",
+    "verifier": "Verifier / juiz multidim",
+    "circuit_breaker": "Circuit breaker",
+    "opa": "Policy-as-code (OPA)",
+    "retention": "Retenção por idade",
+    "forget": "Direito ao esquecimento",
+    "audit": "Trilha de auditoria",
+    "rbac": "RBAC / papéis",
+    "model_cards": "Model cards",
+    "risk_register": "Registro de risco",
+    "federation_guard": "Federação (SSRF/HMAC)",
+    "evidence_policy": "Política de evidência",
+}
+
+_FRAMEWORKS = {
+    "EU AI Act": [
+        ("Classificação de risco do sistema", ["risk_register"]),
+        ("Transparência e documentação técnica", ["model_cards"]),
+        ("Supervisão humana", ["risk_register", "audit"]),
+        ("Governança de dados", ["dlp", "retention", "evidence_policy"]),
+        ("Registro / manutenção de logs", ["audit"]),
+        ("Precisão e robustez", ["grounding", "verifier"]),
+        ("Cibersegurança", ["prompt_guard", "federation_guard"]),
+    ],
+    "NIST AI RMF": [
+        ("Govern — políticas e papéis", ["rbac", "opa"]),
+        ("Map — contexto e risco", ["risk_register", "model_cards"]),
+        ("Measure — avaliação e métricas", ["verifier", "audit"]),
+        ("Manage — mitigação e monitoramento", ["circuit_breaker", "prompt_guard", "dlp"]),
+    ],
+    "ISO/IEC 42001": [
+        ("Política de IA", ["opa", "rbac"]),
+        ("Papéis e responsabilidades", ["rbac"]),
+        ("Avaliação de risco de IA", ["risk_register"]),
+        ("Controles operacionais", ["grounding", "prompt_guard", "dlp"]),
+        ("Monitoramento e melhoria", ["audit", "verifier"]),
+    ],
+    "LGPD": [
+        ("Direito ao esquecimento (Art. 18)", ["forget"]),
+        ("Retenção e minimização", ["retention", "dlp"]),
+        ("Segurança do tratamento", ["prompt_guard", "federation_guard"]),
+        ("Registro das operações de tratamento", ["audit"]),
+    ],
+    "OWASP LLM Top 10": [
+        ("LLM01 — Prompt injection", ["prompt_guard"]),
+        ("LLM02/05 — Saída/output insegura", ["verifier", "grounding"]),
+        ("LLM06 — Vazamento de dados sensíveis", ["dlp"]),
+        ("LLM08 — Excesso de agência", ["risk_register", "rbac"]),
+        ("LLM09 — Dependência excessiva / alucinação", ["grounding", "verifier"]),
+    ],
+}
+
+
+def _controls() -> dict:
+    s = get_settings()
+    return {
+        "grounding": _flag("grounding_strict", True),
+        "prompt_guard": _flag("prompt_guard_enabled", True),
+        "dlp": _flag("dlp_enabled", True),
+        "verifier": _flag("verifier_v2_enabled", False),
+        "circuit_breaker": _flag("circuit_breaker_enabled", True),
+        "opa": _flag("opa_enabled", False),
+        "retention": int(getattr(s, "interactions_retention_days", 0) or 0) > 0,
+        "forget": True,
+        "audit": True,
+        "rbac": True,
+        "model_cards": True,
+        "risk_register": True,
+        "federation_guard": True,
+        "evidence_policy": True,
+    }
+
+
+@router.get("/crosswalk")
+async def compliance_crosswalk(user=Depends(_gate)):
+    controls = _controls()
+    frameworks = []
+    for name, reqs in _FRAMEWORKS.items():
+        rows, covered = [], 0
+        for req, keys in reqs:
+            satisfied = [k for k in keys if controls.get(k)]
+            is_cov = bool(satisfied)
+            covered += 1 if is_cov else 0
+            rows.append({"requirement": req, "controls": keys, "covered": is_cov, "satisfied_by": satisfied})
+        frameworks.append({
+            "framework": name, "covered": covered, "total": len(reqs),
+            "pct": round(covered / len(reqs) * 100) if reqs else 0,
+            "requirements": rows,
+        })
+    return {"frameworks": frameworks, "controls": controls, "control_labels": _CONTROL_LABELS}
