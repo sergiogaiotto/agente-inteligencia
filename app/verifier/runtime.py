@@ -38,6 +38,11 @@ class VerificationResult:
     issues: list[str] = field(default_factory=list)
     risk_high: bool = False
     fraud_suspected: bool = False
+    # #684 (Fatia F) — sinais de DECISÃO derivados do rascunho, populados só
+    # quando `verifier_signals_drive_fsm` está ON. Default False → a FSM ignora
+    # (mapeamento de estado inalterado quando a flag está OFF).
+    policy_refusal: bool = False      # o agente RECUSOU (dado de 3º, injection, política) → Refuse
+    needs_escalation: bool = False    # o agente ESCALOU (NOC/gerência/supervisão) → Escalate
     # Novos (Verifier v2)
     dimensions: dict[str, dict] = field(default_factory=dict)
     """{factuality: {score, reason}, completeness: {...}, tone_adherence: {...}, safety: {...}}"""
@@ -68,6 +73,58 @@ class VerificationResult:
     """Draft corrigido pelo LLM no retry. Preservado pra audit (se retry
     falhou, operador precisa ver o que LLM produziu na 2ª tentativa).
     Vazio quando contract_retried=False."""
+
+
+# ───────────────────────────────────────────────────────────────
+# #684 (Fatia F) — detecção de sinais de DECISÃO no rascunho final
+# ───────────────────────────────────────────────────────────────
+
+# Recusa controlada redigida pelo agente (dado de 3º, injection, política).
+# Frases FORTES (não fragmentos) → conservador, evita falso Refuse em produção.
+_REFUSAL_PATTERNS = (
+    r"n[ãa]o posso (?:fornecer|compartilhar|informar|repassar|divulgar|ajudar com)",
+    r"n[ãa]o (?:é|e) poss[íi]vel (?:fornecer|compartilhar|informar)",
+    r"n[ãa]o (?:tenho|possuo) autoriza[çc][ãa]o",
+    r"dados? de (?:outro|terceiro|3º|outra pessoa)",
+    r"informa[çc][õo]es de (?:outro titular|outro cliente|terceiros?)",
+    r"n[ãa]o (?:vou|posso) (?:seguir|executar|acatar) (?:essas|as|as suas) instru[çc][õo]es",
+    r"por (?:quest[õo]es|motivos) de (?:privacidade|seguran[çc]a|prote[çc][ãa]o de dados)",
+    r"recus(?:o|ar) (?:controlada|a solicita[çc][ãa]o|o pedido)",
+)
+
+# Escalonamento a instância superior (NOC, gerência, supervisão humana).
+_ESCALATION_PATTERNS = (
+    r"encaminh(?:ar|ei|ado|amos) (?:ao|para o|à|para a) (?:noc|central de opera|ger[êe]ncia|supervis)",
+    r"acionar o noc",
+    r"abrir chamado (?:noc|t[ée]cnico)",
+    r"abertura de chamado noc",
+    r"escal(?:ar|onar|onamento) (?:para|ao|à|imediat)",
+    r"supervis[ãa]o humana",
+    r"prot(?:ocolo)? de escalonamento",
+    r"falar com a ger[êe]ncia",
+)
+
+
+def _matches_any(text: str, patterns) -> bool:
+    low = (text or "").lower()
+    return any(re.search(p, low) for p in patterns)
+
+
+def detect_decision_signals(draft: str) -> tuple[bool, bool]:
+    """#684: infere sinais de DECISÃO do rascunho FINAL do agente.
+
+    Devolve ``(policy_refusal, needs_escalation)``:
+    - ``policy_refusal``: o texto RECUSA (dado de 3º, injection, política).
+    - ``needs_escalation``: o texto ESCALA (NOC/gerência/supervisão).
+
+    Função PURA, determinística e conservadora — favorece NÃO disparar (menos
+    falso Refuse/Escalate quando a flag estiver ligada em produção). Recusa tem
+    precedência sobre escalonamento (uma recusa por política não é "escalar").
+    Quem aplica é o chamador, atrás de ``verifier_signals_drive_fsm``.
+    """
+    if _matches_any(draft, _REFUSAL_PATTERNS):
+        return True, False
+    return False, _matches_any(draft, _ESCALATION_PATTERNS)
 
 
 # ───────────────────────────────────────────────────────────────

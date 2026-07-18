@@ -2902,6 +2902,7 @@ async def execute_interaction(
                 "ok": verification.ok, "confidence": verification.confidence,
                 "risk_high": verification.risk_high,
                 "fraud_suspected": verification.fraud_suspected,
+                **_decision_signals(draft),
             })
         except Exception as _e:
             logger.warning(
@@ -2999,6 +3000,7 @@ async def execute_interaction(
                 "confidence": verification.confidence,
                 "risk_high": verification.risk_high,
                 "fraud_suspected": verification.fraud_suspected,
+                **_decision_signals(draft),
             })
         except Exception as _e:
             logger.warning(f"Verifier v2 falhou ({type(_e).__name__}: {_e}); fallback para heurística")
@@ -3013,6 +3015,7 @@ async def execute_interaction(
             "confidence": verification.confidence,
             "risk_high": verification.risk_high,
             "fraud_suspected": verification.fraud_suspected,
+            **_decision_signals(draft),
         })
     elif evidences:
         # Standard: verificação heurística (sem chamada LLM)
@@ -3070,6 +3073,20 @@ async def execute_interaction(
         mcp_tools_unmatched=mcp_tools_unmatched,
         verification=verification,
     )
+
+
+def _decision_signals(draft: str) -> dict:
+    """#684 (Fatia F): sinais de decisão (policy_refusal/needs_escalation) para a
+    FSM, atrás da flag `verifier_signals_drive_fsm`. Retorna ``{}`` quando OFF →
+    a FSM cai nos defaults False (mapeamento de estado INALTERADO em produção).
+    Ligar a flag faz recusa/escalonamento redigidos pelo agente virarem estado
+    Refuse/Escalate (em vez de ficarem invisíveis em Recommend)."""
+    from app.core.config import get_settings as _gs_ds
+    if not getattr(_gs_ds(), "verifier_signals_drive_fsm", False):
+        return {}
+    from app.verifier.runtime import detect_decision_signals
+    policy_refusal, needs_escalation = detect_decision_signals(draft)
+    return {"policy_refusal": policy_refusal, "needs_escalation": needs_escalation}
 
 
 def _serialize_verification(v) -> dict | None:
