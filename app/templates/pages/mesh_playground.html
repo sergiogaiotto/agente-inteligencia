@@ -367,11 +367,14 @@
                             </template>
                         </div>
                         <p class="text-[10px] text-surface-400 leading-snug">↑ é exatamente o JSON que o seu app recebe via <span class="font-mono">X-API-Key</span> (<span x-text="verbLabel"></span>).</p>
-                        <div x-show="(result.steps||result.pipeline_steps||[]).length" class="flex flex-wrap gap-1.5">
+                        <div x-show="(result.steps||result.pipeline_steps||[]).length" class="flex flex-col gap-1" data-testid="pg-result-steps">
                             <template x-for="(s, i) in (result.steps || result.pipeline_steps || [])" :key="i">
-                                <span class="inline-flex items-center gap-1 rounded-md bg-surface-100 px-1.5 py-0.5 text-[10px]" :class="stepCls(s)">
-                                    <span x-text="stepMeta(s).icon"></span><span x-text="s.agent_name"></span>
-                                </span>
+                                <div class="flex items-center gap-1.5 rounded-md bg-surface-100 px-2 py-1 text-[10px]" :class="stepCls(s)" :title="stepTip(s)">
+                                    <span class="flex-none w-3 text-center" x-text="stepIcon(s)"></span>
+                                    <span class="font-medium flex-none" x-text="stepName(s)"></span>
+                                    <span class="text-surface-500 italic truncate min-w-0" x-text="'💬 ' + stepMsg(s)"></span>
+                                    <span x-show="stepMs(s) !== null" class="flex-none ml-auto font-mono text-surface-400" x-text="fmtMs(stepMs(s))"></span>
+                                </div>
                             </template>
                         </div>
                     </div>
@@ -601,9 +604,14 @@
                                             <p class="text-[12px] text-surface-800 leading-relaxed whitespace-pre-wrap break-words" x-text="slot.result.output || '(sem saída)'"></p>
                                         </template>
                                     </div>
-                                    <div x-show="(slot.result.steps || slot.result.pipeline_steps || []).length" class="flex flex-wrap gap-1">
+                                    <div x-show="(slot.result.steps || slot.result.pipeline_steps || []).length" class="flex flex-col gap-1">
                                         <template x-for="(s, i) in (slot.result.steps || slot.result.pipeline_steps || [])" :key="i">
-                                            <span class="inline-flex items-center gap-1 rounded bg-surface-100 px-1.5 py-0.5 text-[10px]" :class="stepCls(s)"><span x-text="stepMeta(s).icon"></span><span x-text="s.agent_name"></span></span>
+                                            <div class="flex items-center gap-1.5 rounded bg-surface-100 px-2 py-1 text-[10px]" :class="stepCls(s)" :title="stepTip(s)">
+                                                <span class="flex-none w-3 text-center" x-text="stepIcon(s)"></span>
+                                                <span class="font-medium flex-none" x-text="stepName(s)"></span>
+                                                <span class="text-surface-500 italic truncate min-w-0" x-text="'💬 ' + stepMsg(s)"></span>
+                                                <span x-show="stepMs(s) !== null" class="flex-none ml-auto font-mono text-surface-400" x-text="fmtMs(stepMs(s))"></span>
+                                            </div>
                                         </template>
                                     </div>
                                     <div class="flex flex-wrap gap-2 text-[10px] text-surface-400 font-mono">
@@ -662,12 +670,14 @@
                         <!-- passo-a-passo por agente: ao vivo durante o stream, trilha
                              compacta (esmaecida) depois. É o que um app externo em
                              streaming veria — o mesmo /invoke/stream. -->
-                        <div x-show="m.role === 'assistant' && (m.liveSteps || []).length" class="flex flex-wrap gap-1 mb-1" :class="m.text ? 'opacity-60' : ''" data-testid="pg-chat-steps">
-                            <template x-for="(s, si) in m.liveSteps" :key="si">
-                                <span class="inline-flex items-center gap-1 rounded bg-surface-100 px-1.5 py-0.5 text-[10px]" :class="stepCls(s)">
-                                    <span x-text="s.status === 'running' ? '▷' : liveIcon(s.status)"></span>
-                                    <span x-text="s.name || 'agente'"></span>
-                                </span>
+                        <div x-show="m.role === 'assistant' && chatSteps(m).length" class="flex flex-col gap-1 mb-1" :class="m.text ? 'opacity-70' : ''" data-testid="pg-chat-steps">
+                            <template x-for="(s, si) in chatSteps(m)" :key="si">
+                                <div class="flex items-center gap-1.5 rounded bg-surface-100 px-2 py-1 text-[10px]" :class="stepCls(s)" :title="stepTip(s)">
+                                    <span class="flex-none w-3 text-center" x-text="stepIcon(s)"></span>
+                                    <span class="font-medium flex-none" x-text="stepName(s)"></span>
+                                    <span class="text-surface-500 italic truncate min-w-0" x-text="'💬 ' + stepMsg(s)"></span>
+                                    <span x-show="stepMs(s) !== null" class="flex-none ml-auto font-mono text-surface-400" x-text="fmtMs(stepMs(s))"></span>
+                                </div>
                             </template>
                             <span x-show="m.streaming" class="inline-flex items-center gap-1 text-[10px] text-surface-400">
                                 <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
@@ -1629,6 +1639,15 @@ function playgroundPage() {
         },
         stepCls(s) { const st = (s && s.status) || '', fs = (s && s.final_state) || ''; if (st === 'error') return 'text-rose-600'; if ((s && s.final_state) === 'Refuse') return 'text-amber-700'; if (st === 'completed' || st === 'done') return 'text-emerald-700'; return 'text-surface-500'; },
         liveIcon(status) { return status === 'done' ? '✓' : status === 'skipped' ? '⏭' : status === 'passthrough' ? '⚡' : status === 'error' ? '✗' : '•'; },
+        // ── Linha de etapa persistente (ícone + nome + 💬 mensagem de status +
+        // tempo), agnóstica ao formato do step: liveSteps (name/message, sem
+        // duração) OU steps do result (agent_name/status_message/duration_ms).
+        stepName(s) { return (s && (s.agent_name || s.name)) || 'agente'; },
+        stepMsg(s) { const m = ((s && (s.status_message || s.message)) || '').trim(); return m || 'Sem mensagem status'; },
+        stepMs(s) { const d = s && s.duration_ms; return (typeof d === 'number' && isFinite(d)) ? d : null; },
+        stepIcon(s) { return (s && s.status) === 'running' ? '▷' : this.stepMeta(s).icon; },
+        stepTip(s) { const st = (s && (s.final_state || s.status)) || ''; const ms = this.stepMs(s); return this.stepName(s) + (st ? ' · ' + st : '') + ' · ' + this.stepMsg(s) + (ms !== null ? ' · ' + this.fmtMs(ms) : ''); },
+        chatSteps(m) { return (m && m.result && (m.result.steps || m.result.pipeline_steps)) || (m && m.liveSteps) || []; },
 
         // ── Tempo (profiler) ──  custo/tokens só existem na resposta FULL (Debug);
         // o waterfall usa o timing dos eventos do stream (vale em qualquer modo).

@@ -71,6 +71,24 @@ class TestEnvelope:
         assert r["output_is_json"] is True
         assert "pipeline_steps" in r  # full mantém verbatim (retrocompat)
 
+    def test_summary_step_carrega_status_message_e_duration(self):
+        # a UI (Playground) mostra 💬 mensagem de status + tempo por step; ambos
+        # precisam sobreviver à projeção summary.
+        res = _result()
+        res["pipeline_steps"] = [{
+            "agent_name": "Triagem", "status": "completed",
+            "status_message": "Olha eu aki", "duration_ms": 42, "output": "...",
+        }]
+        step = project_pipeline_result(res, "summary")["steps"][0]
+        assert step["status_message"] == "Olha eu aki"
+        assert step["duration_ms"] == 42
+
+    def test_summary_step_duration_none_quando_ausente(self):
+        # step sem duração (ex.: pulado) → None, e a UI esconde o tempo.
+        step = project_pipeline_result(_result(), "summary")["steps"][0]
+        assert step["duration_ms"] is None
+        assert step["status_message"] == ""
+
     def test_prose_output_gives_null_data(self):
         res = _result()
         res["output"] = "resposta em prosa, não JSON"
