@@ -2433,7 +2433,12 @@ async def execute_interaction(
         }
         opa_decision = await opa_client.evaluate("interaction", "allow", opa_input)
         opa_reasons = await opa_client.evaluate_value("interaction", "reasons", opa_input) or []
-        policy_ok_raw = opa_decision["allow"]
+        # 64.0.0 (auditoria holística): prompt_guard permanece AUTORITATIVO — AND, não
+        # replace. A interaction.rego tem o limiar de injeção hardcoded (0.7); a UI de
+        # Guarda (Fase 2) configura prompt_guard_block_threshold. Sem o AND, um bloqueio
+        # já auditado como 'prompt_injection_blocked' seria sobrescrito por allow=True da
+        # rego (limiar divergente) ou pelo failsafe-open → auditoria diz bloqueado, runtime executa.
+        policy_ok_raw = opa_decision["allow"] and not guard_blocked
         if not policy_ok_raw and opa_reasons:
             guard_reason = guard_reason or f"Política de acesso negou a solicitação ({', '.join(opa_reasons)})."
         elif not policy_ok_raw:
@@ -2587,7 +2592,11 @@ async def execute_interaction(
                         d = await opa_client.evaluate("tool_invocation", "allow", {
                             "tool": {
                                 "name": t.get("name", ""),
-                                "sensitivity": t.get("sensitivity") or "low",
+                                # 64.0.0: mapeia o rótulo de sensibilidade da UI
+                                # (public/internal/confidential/restricted) para o tier
+                                # da rego (low/medium/high) — senão ligar o OPA negaria
+                                # TODA tool classificada (achado de auditoria holística).
+                                "sensitivity": opa_client.map_tool_sensitivity_to_tier(t.get("sensitivity")),
                                 "requires_trusted_context": bool(t.get("requires_trusted_context", False)),
                             },
                             "user": {"role": user_role},
@@ -4690,6 +4699,9 @@ async def execute_pipeline(
                 channel=channel,
                 attachments=_forwarded_atts,
                 pipeline_context=pipeline_ctx,
+                owner_user_id=owner_user_id,  # 64.0.0: propaga o dono → clearance/papel
+                # REAIS em cada passo (senão o Evidence ACL/gate de tools rodava com o
+                # default 'internal'/'operator' = bypass via pipeline; achado de auditoria).
                 # RAG em pipeline (2026-06-06): busca de evidências usa a pergunta
                 # ORIGINAL e limpa — não o `current_input` prefixado com o texto do
                 # upstream. Assim o BM25/vetorial do especialista não é poluído.

@@ -970,6 +970,24 @@ class TestEvidenceAcl:
         assert r["evidence_acl_enabled"] is True
 
     @pytest.mark.asyncio
+    async def test_status_expoe_erros_de_repush(self, monkeypatch):
+        # sinal de drift: se o re-push no boot falhou, /opa/status mostra os erros
+        # (o OPA pode estar servindo o baked enquanto o DB mostra a versão editada).
+        import app.routes.governance as G
+        import app.core.opa_client as OC
+        import app.core.opa_policies as P
+        monkeypatch.setattr(G, "get_settings", lambda: FakeSettings(
+            opa_enabled=False, opa_url="", opa_failsafe_open=True, opa_timeout_seconds=2.0,
+            evidence_acl_enabled=False))
+
+        async def _h():
+            return True
+        monkeypatch.setattr(OC, "server_health", _h)
+        monkeypatch.setattr(P, "_LAST_REPUSH", {"pushed": [], "errors": ["evidence: opa down"]})
+        r = await G.opa_status(user={})
+        assert r["policy_repush_errors"] == ["evidence: opa down"]
+
+    @pytest.mark.asyncio
     async def test_config_put_liga_evidence_acl(self, monkeypatch):
         import app.routes.governance as G
         store = FakeStore()

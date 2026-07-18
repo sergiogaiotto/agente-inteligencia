@@ -29,6 +29,17 @@ class TestRoleMapping:
             assert opa_client.map_platform_role_to_opa(r) == "operator", r
 
 
+class TestSensitivityMap:
+    """Vocab de sensibilidade das tools (UI) → tiers da tool_invocation.rego (64.0.0)."""
+    def test_map_tool_sensitivity_to_tier(self):
+        m = opa_client.map_tool_sensitivity_to_tier
+        assert m("public") == "low" and m("internal") == "low"
+        assert m("confidential") == "medium"
+        assert m("restricted") == "high"
+        assert m("High") == "high" and m("MEDIUM") == "medium"  # já-tier + casing
+        assert m(None) == "low" and m("") == "low" and m("bogus") == "low"  # desconhecido → low
+
+
 # ─── Resolução do usuário atuante (o coração do fix do engine) ───────────────
 class _FakeUsers:
     def __init__(self, row):
@@ -194,3 +205,21 @@ class TestEngineWiring:
         src = self.ENGINE.read_text(encoding="utf-8")
         assert 'user_role = "operator"' not in src
         assert '"user": {"status": "active"}' not in src
+
+    def test_prompt_guard_permanece_autoritativo(self):
+        # auditoria holística: com OPA ligado, o bloqueio do prompt_guard é ANDado
+        # (não sobrescrito pela rego de limiar hardcoded / failsafe-open).
+        src = self.ENGINE.read_text(encoding="utf-8")
+        assert 'policy_ok_raw = opa_decision["allow"] and not guard_blocked' in src
+
+    def test_pipeline_propaga_owner(self):
+        # o passo do pipeline passa owner_user_id → clearance/papel REAIS (sem isto,
+        # Evidence ACL e gate de tools rodavam com o default via pipeline = bypass).
+        src = self.ENGINE.read_text(encoding="utf-8")
+        assert "owner_user_id=owner_user_id," in src
+
+    def test_tool_sensitivity_mapeada(self):
+        # o vocab da tool (public/internal/confidential/restricted) é mapeado p/ o
+        # tier da rego (senão ligar OPA negava TODA tool classificada).
+        src = self.ENGINE.read_text(encoding="utf-8")
+        assert "map_tool_sensitivity_to_tier(t.get(" in src
