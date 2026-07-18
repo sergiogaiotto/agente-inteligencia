@@ -86,6 +86,32 @@
 
     <!-- ─── Segurança (guarda & DLP) ─── -->
     <div x-show="tab === 'security'" class="space-y-4">
+        <div class="rounded-xl border border-surface-200 bg-white p-4" data-testid="ir-guard-config">
+            <div class="flex items-center justify-between mb-1">
+                <h2 class="text-[13px] font-semibold text-brand-900">Configuração — guarda de injeção &amp; DLP</h2>
+                <span x-show="guardDirty" class="text-[10px] text-amber-600">alterações não salvas</span>
+            </div>
+            <p class="text-[11px] text-surface-500 mb-3">Antes só ligava por env/DB (headless). Aqui, pela UI, com trilha de auditoria.</p>
+            <div class="space-y-2.5">
+                <label class="flex items-center gap-2 text-[12px] text-surface-700"><input type="checkbox" x-model="guard.prompt_guard_enabled"> Guarda de injeção de prompt (OWASP LLM01)</label>
+                <div class="pl-6 grid grid-cols-2 gap-4" x-show="guard.prompt_guard_enabled">
+                    <div>
+                        <label class="block text-[10px] text-surface-500 mb-0.5">Bloquear se score ≥ <span class="font-mono" x-text="Number(guard.prompt_guard_block_threshold).toFixed(2)"></span></label>
+                        <input type="range" min="0" max="1" step="0.05" x-model.number="guard.prompt_guard_block_threshold" class="w-full">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-surface-500 mb-0.5">Avisar se score ≥ <span class="font-mono" x-text="Number(guard.prompt_guard_warn_threshold).toFixed(2)"></span></label>
+                        <input type="range" min="0" max="1" step="0.05" x-model.number="guard.prompt_guard_warn_threshold" class="w-full">
+                    </div>
+                </div>
+                <label class="flex items-center gap-2 text-[12px] text-surface-700"><input type="checkbox" x-model="guard.dlp_enabled"> DLP — redação de PII no que é persistido</label>
+                <label class="flex items-center gap-2 text-[11.5px] text-surface-600 pl-6" x-show="guard.dlp_enabled"><input type="checkbox" x-model="guard.dlp_redact_before_llm"> redigir PII também ANTES de enviar ao LLM (perde contexto de ids reais)</label>
+            </div>
+            <div class="mt-3 flex justify-end">
+                <button @click="saveGuard()" :disabled="guardBusy || !guardDirty" data-testid="ir-guard-save" class="rounded-lg bg-brand-500 px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-40"><span x-text="guardBusy ? 'Salvando…' : 'Salvar configuração'"></span></button>
+            </div>
+        </div>
+
         <div class="grid grid-cols-3 gap-3" data-testid="ir-security-counts">
             <template x-for="s in securityTiles" :key="s.l">
                 <div class="rounded-xl border border-surface-200 bg-white p-3">
@@ -281,6 +307,8 @@ function iaResponsavel() {
         cards: [], cardDetail: null,
         risk: null,
         riskModal: { open: false, entity_type: '', entity_id: '', name: '', suggested: 'minimal', tier: 'minimal', rationale: '', mitigations: '', busy: false },
+        guard: { prompt_guard_enabled: true, prompt_guard_block_threshold: 0.7, prompt_guard_warn_threshold: 0.4, dlp_enabled: true, dlp_redact_before_llm: false },
+        guardSnapshot: '', guardBusy: false,
         skillSections: [
             { k: 'purpose', l: 'Propósito' }, { k: 'guardrails', l: 'Guardrails' },
             { k: 'evidence_policy', l: 'Política de evidência' }, { k: 'output_contract', l: 'Contrato de saída' },
@@ -290,7 +318,6 @@ function iaResponsavel() {
         forgetRef: '', forgetBusy: false, forgetResult: '',
         roadmap: [
             { t: 'Políticas (OPA)', f: 'Fase 2', d: 'Editor de regras Rego, simulador what-if e log de decisão (allow/deny). Hoje o OPA é headless.' },
-            { t: 'Guarda & DLP — configuração', f: 'Fase 2', d: 'Ligar/ajustar a guarda de injeção e o DLP pela UI (hoje só env/DB), com thresholds.' },
             { t: 'Crosswalk de frameworks', f: 'Fase 3', d: 'Mapa de controles vs. EU AI Act, NIST AI RMF, ISO 42001, LGPD e OWASP LLM Top 10.' },
             { t: 'Attestation & papéis', f: 'Fase 3', d: 'Sign-off formal de prontidão + papéis DPO / AI Officer + relatório de conformidade exportável.' },
         ],
@@ -326,6 +353,21 @@ function iaResponsavel() {
             try { this.security = await api.get('/api/v1/governance/security-events?limit=40'); } catch {}
             try { this.cards = (await api.get('/api/v1/governance/model-cards')).cards || []; } catch {}
             try { this.risk = await api.get('/api/v1/governance/risk-register'); } catch {}
+            await this.loadGuard();
+        },
+        get guardDirty() { return JSON.stringify(this.guard) !== this.guardSnapshot; },
+        async loadGuard() {
+            try { const g = await api.get('/api/v1/governance/guard-config'); this.guard = g; this.guardSnapshot = JSON.stringify(g); } catch {}
+        },
+        async saveGuard() {
+            this.guardBusy = true;
+            try {
+                await api.put('/api/v1/governance/guard-config', this.guard);
+                this.guardSnapshot = JSON.stringify(this.guard);
+                showToast('Guarda/DLP salvos');
+                try { this.summary = await api.get('/api/v1/governance/summary'); } catch {}
+            } catch (e) { showToast(e.message, 'error'); }
+            this.guardBusy = false;
         },
         tierLabel(t) { return { minimal: 'Mínimo', limited: 'Limitado', high: 'Alto', unacceptable: 'Inaceitável' }[t] || t || '—'; },
         tierCls(t) { return (t === 'high' || t === 'unacceptable') ? 'bg-rose-50 text-rose-700' : (t === 'limited' ? 'bg-amber-50 text-amber-700' : (t === 'minimal' ? 'bg-emerald-50 text-emerald-700' : 'bg-surface-100 text-surface-500')); },
