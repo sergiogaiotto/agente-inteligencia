@@ -389,3 +389,45 @@ class TestGuardConfig:
         for k in ("prompt_guard_enabled", "prompt_guard_block_threshold",
                   "prompt_guard_warn_threshold", "dlp_enabled", "dlp_redact_before_llm"):
             assert k in _UI_TO_ENV_MAP, k
+
+
+# ─── Crosswalk de conformidade (Fase 3) ──────────────────────────────────────
+class TestCrosswalk:
+    def test_controls_entregues_sao_true(self):
+        import app.routes.governance as G
+        c = G._controls()
+        for k in ("forget", "audit", "rbac", "model_cards", "risk_register",
+                  "federation_guard", "evidence_policy"):
+            assert c[k] is True
+
+    @pytest.mark.asyncio
+    async def test_5_frameworks_com_pct(self):
+        import app.routes.governance as G
+        r = await G.compliance_crosswalk(user={})
+        assert {f["framework"] for f in r["frameworks"]} == {
+            "EU AI Act", "NIST AI RMF", "ISO/IEC 42001", "LGPD", "OWASP LLM Top 10"}
+        for f in r["frameworks"]:
+            assert 0 <= f["pct"] <= 100 and f["covered"] <= f["total"]
+        assert "control_labels" in r
+
+    @pytest.mark.asyncio
+    async def test_cobertura_reflete_controle_real(self, monkeypatch):
+        import app.routes.governance as G
+        base = dict(G._controls())
+        base.update(prompt_guard=False, dlp=False, grounding=False, verifier=False, opa=False)
+        monkeypatch.setattr(G, "_controls", lambda: base)
+        r = await G.compliance_crosswalk(user={})
+        owasp = next(f for f in r["frameworks"] if f["framework"] == "OWASP LLM Top 10")
+        llm01 = next(x for x in owasp["requirements"] if x["requirement"].startswith("LLM01"))
+        assert llm01["covered"] is False and llm01["satisfied_by"] == []
+        lgpd = next(f for f in r["frameworks"] if f["framework"] == "LGPD")
+        forget = next(x for x in lgpd["requirements"] if "esquecimento" in x["requirement"].lower())
+        assert forget["covered"] is True
+
+    def test_template_conformidade(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert "{ k: 'crosswalk', l: 'Conformidade' }" in html
+        assert 'data-testid="ir-crosswalk"' in html
+        assert 'data-testid="ir-crosswalk-detail"' in html
+        assert "async loadCrosswalk()" in html
+        assert "/api/v1/governance/crosswalk" in html
