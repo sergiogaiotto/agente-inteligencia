@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from app.core.auth import require_user
 from app.models.schemas import (
     AgentCreate, AgentUpdate, AgentInvokeRequest, AgentInvokeResponse,
     PreflightReport,
@@ -1487,3 +1488,197 @@ async def agent_diagnostics(agent_id: str):
             ],
         },
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# "Conhecer o agente" — explicador que NÃO executa o agente.
+# Assistente meta que lê a DEFINIÇÃO do agente (config + SKILL.md +
+# posição no mesh + comportamento agregado) e responde perguntas sobre
+# ele. ZERO efeito colateral: nunca chama execute_interaction, não cria
+# interação/turno nem consome o orçamento do agente. Superfície de UI.
+# ═══════════════════════════════════════════════════════════════════
+
+_EXPLAINER_SYSTEM = (
+    "Você é o \"Guia do Agente\" da plataforma Maestro. Sua função é EXPLICAR um "
+    "agente para o operador humano: o que ele faz, seu propósito, quando é "
+    "acionado, como está configurado, sua posição no fluxo (AI Mesh) e como "
+    "costuma se comportar. Responda SEMPRE e SÓ com base na FICHA DO AGENTE.\n\n"
+    "Regras:\n"
+    "- Você NÃO é o agente e NÃO o executa. Nunca responda \"no papel\" dele nem "
+    "simule a resposta que ele daria a um cliente. Se pedirem para você agir como "
+    "o agente ou testá-lo, explique que este é o modo \"Conhecer\" (não executa) e "
+    "sugira o Playground ou o botão Executar para testar de verdade.\n"
+    "- Não invente nada fora da ficha. Se a informação não estiver lá, diga com "
+    "franqueza o que não dá para saber.\n"
+    "- Glossário pt-BR: Maestro (orquestrador), Triagem (roteador), Especialista; "
+    "Dono, Curador.\n"
+    "- Adapte a PROFUNDIDADE à pergunta: curta para dúvida simples; detalhada e "
+    "didática quando pedirem para aprofundar. Cite as seções da skill, os valores "
+    "de configuração, as regras condicionais e as frases-prova quando ajudarem."
+)
+
+
+def _agent_role_label(kind: str | None) -> str:
+    return {
+        "aobd": "Maestro (orquestrador)",
+        "orchestrator": "Maestro (orquestrador)",
+        "router": "Triagem (roteador)",
+        "subagent": "Especialista",
+    }.get(kind or "", kind or "agente")
+
+
+async def _build_agent_ficha(agent_id: str, agent: dict) -> str:
+    """Monta a 'ficha' textual do agente para o explicador — SÓ LEITURA.
+
+    Nunca executa o agente: lê config + SKILL.md + arestas do mesh (com regras)
+    + diagnóstico agregado (reusa `agent_diagnostics`, também só leitura)."""
+    from app.core.database import mesh_repo
+    L: list[str] = []
+    L.append(f"# {agent.get('name') or agent_id}")
+    L.append(
+        f"- Papel: {_agent_role_label(agent.get('kind'))} (kind={agent.get('kind')}) "
+        f"| Domínio: {agent.get('domain') or '—'} | Status: {agent.get('status')} "
+        f"| Versão: {agent.get('version')}"
+    )
+    L.append(
+        f"- Modelo: {agent.get('llm_provider')}/{agent.get('model')} "
+        f"| task_type: {agent.get('task_type')} | temperatura: {agent.get('temperature')} "
+        f"| reasoning_effort: {agent.get('reasoning_effort') or '—'} "
+        f"| idioma: {agent.get('response_language') or '—'}"
+    )
+    L.append(
+        f"- Exigir evidência (RAG): {'sim' if agent.get('require_evidence') else 'não'} "
+        f"| Conhecimento geral do LLM: {'sim' if agent.get('allow_general_knowledge') else 'não'} "
+        f"| Aceita documentos: {bool(agent.get('accepts_documents'))} "
+        f"| Aceita imagens: {bool(agent.get('accepts_images'))}"
+    )
+    sp = (agent.get("system_prompt") or "").strip()
+    if sp:
+        L.append("\n## System prompt do agente\n" + sp)
+    skill_raw = ""
+    if agent.get("skill_id"):
+        sk = await skills_repo.find_by_id(agent["skill_id"])
+        if sk:
+            skill_raw = (sk.get("raw_content") or "").strip()
+    L.append(
+        "\n## SKILL.md (a partitura executável do agente)\n"
+        + (skill_raw or "(agente sem skill vinculada)")
+    )
+    # Posição no mesh: quem chama e para quem roteia + as regras condicionais
+    try:
+        in_conns = await mesh_repo.find_all(target_agent_id=agent_id, limit=50) or []
+        out_conns = await mesh_repo.find_all(source_agent_id=agent_id, limit=50) or []
+    except Exception:
+        in_conns, out_conns = [], []
+    ids = {c.get("source_agent_id") for c in in_conns} | {c.get("target_agent_id") for c in out_conns}
+    ids.discard(agent_id)
+    ids.discard(None)
+    names: dict = {}
+    for _id in ids:
+        try:
+            a = await agents_repo.find_by_id(_id)
+            if a:
+                names[_id] = a.get("name") or _id
+        except Exception:
+            pass
+
+    def _edge_desc(conn: dict) -> str:
+        ctype = conn.get("connection_type") or "sequential"
+        expr = None
+        ntp = 0
+        cfg = conn.get("config")
+        try:
+            c = json.loads(cfg) if isinstance(cfg, str) else (cfg or {})
+            expr = c.get("expr")
+            ntp = len(c.get("test_phrases") or [])
+        except Exception:
+            pass
+        extra = ""
+        if ctype == "conditional" and expr:
+            extra += f" — regra: `{expr}`"
+        if ntp:
+            extra += f" ({ntp} frases-prova)"
+        return f"{ctype}{extra}"
+
+    L.append("\n## Posição no AI Mesh")
+    if in_conns:
+        L.append("Quem aciona este agente (arestas de entrada):")
+        for c in in_conns:
+            L.append(f"  - {names.get(c.get('source_agent_id'), c.get('source_agent_id'))} → este [{_edge_desc(c)}]")
+    else:
+        L.append("Sem arestas de entrada — pode ser um agente-raiz (Início) ou isolado.")
+    if out_conns:
+        L.append("Para quem este agente roteia (arestas de saída):")
+        for c in out_conns:
+            L.append(f"  - este → {names.get(c.get('target_agent_id'), c.get('target_agent_id'))} [{_edge_desc(c)}]")
+    else:
+        L.append("Sem arestas de saída — é um nó terminal (não delega adiante).")
+    # Comportamento agregado — reusa /diagnostics (só leitura, não executa nada)
+    try:
+        diag = await agent_diagnostics(agent_id)
+        slim = {k: diag.get(k) for k in ("performance", "capabilities", "health", "cost")}
+        L.append(
+            "\n## Comportamento observado (diagnóstico agregado, só leitura)\n```json\n"
+            + json.dumps(slim, ensure_ascii=False, default=str)[:2500]
+            + "\n```"
+        )
+    except Exception:
+        pass
+    return "\n".join(L)
+
+
+@router.post("/{agent_id}/explain")
+async def explain_agent(agent_id: str, payload: dict, request: Request,
+                        user: dict = Depends(require_user)):
+    """Conhecer o agente — assistente que EXPLICA o agente (NÃO executa).
+
+    Payload: ``{"message": str, "history": [{"role","content"}]?}``
+    Retorno: ``{"answer", "agent_id", "agent_name"}``
+
+    **ZERO efeito colateral**: não invoca o agente (nunca chama
+    ``execute_interaction``), não cria interação/turno nem consome o orçamento
+    do agente — só LÊ a definição e chama o LLM 'explicador' (custo sai no balde
+    ``route=agent_explain``, fora do ledger do agente). Superfície de UI: o
+    principal via X-API-Key recebe 403 acionável (gêmeo do guard de
+    suggest-conditional — sem ele qualquer chave queimaria LLM sem limite aqui).
+    """
+    if getattr(request.state, "api_key_id", None):
+        raise HTTPException(403, {
+            "error": "explain_agent_ui_only",
+            "message": "O modo 'Conhecer o agente' é da superfície de UI (sessão). "
+                       "Para consumir o agente use POST /api/v1/agents/{id}/invoke ou o pipeline.",
+        })
+    message = (payload.get("message") or "").strip()
+    if not message:
+        return {"error": "Faça uma pergunta sobre o agente (ex.: 'o que você faz?', 'quando é acionado?')."}
+
+    agent = await agents_repo.find_by_id(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agente '{agent_id}' não encontrado")
+
+    ficha = await _build_agent_ficha(agent_id, agent)
+    messages = [{"role": "system", "content": _EXPLAINER_SYSTEM + "\n\n=== FICHA DO AGENTE ===\n" + ficha}]
+    for h in (payload.get("history") or [])[-10:]:
+        role = "assistant" if str(h.get("role")) in ("assistant", "agent") else "user"
+        c = (h.get("content") or h.get("text") or "").strip()
+        if c:
+            messages.append({"role": role, "content": c[:2000]})
+    messages.append({"role": "user", "content": message[:4000]})
+
+    from app.llm_routing import resolve_llm_for_task
+    from app.routes.wizard import _wizard_llm_complete
+    try:
+        provider, model = await resolve_llm_for_task("reasoning")
+    except Exception:
+        provider, model = await resolve_llm_for_task("instruct")
+    try:
+        content, _, _ = await _wizard_llm_complete(
+            messages, provider, model, route="agent_explain", temperature=0.2,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("agent_explain falhou", exc_info=True,
+                     extra={"event": "agents.explain", "agent_id": agent_id})
+        raise HTTPException(500, f"Erro ao explicar o agente: {e}")
+    return {"answer": (content or "").strip(), "agent_id": agent_id, "agent_name": agent.get("name")}

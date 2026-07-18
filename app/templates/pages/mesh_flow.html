@@ -546,9 +546,9 @@
                          em seções colapsáveis; Skill/Prompt expandem no leitor largo. ── -->
                     <!-- Fase 2 (QA E2E): conversa REAL com o agente selecionado —
                          mesma FSM/guardrails do runtime, via /workspace/chat. -->
-                    <button @click="openChat(selected)" data-testid="dossier-chat-btn"
+                    <button @click="openChat(selected)" data-testid="dossier-chat-btn" title="Conhecer o agente — explica o que ele faz, sem executar"
                             class="mt-3 w-full inline-flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-brand-600 cursor-pointer transition-colors">
-                        <span>💬</span> Conversar com o agente
+                        <span>💬</span> Conhecer o agente
                     </button>
                     <div class="mt-4 pt-3 border-t border-surface-100" data-testid="mesh-dossier">
                         <!-- Skill -->
@@ -1364,7 +1364,7 @@
                 </div>
                 <button @click="openChat(ctxMenu.node)" data-testid="ctx-chat"
                         class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900 font-medium">
-                    <span class="w-4 text-center">💬</span> Conversar com o agente
+                    <span class="w-4 text-center">💬</span> Conhecer o agente
                 </button>
                 <button x-show="hasRoutableEdges(ctxMenu.node.id)" @click="openRouteSim(ctxMenu.node)" data-testid="ctx-route-sim"
                         class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-50 cursor-pointer text-brand-900">
@@ -1520,8 +1520,11 @@
                     <div class="flex items-center gap-2.5 min-w-0">
                         <span class="w-2.5 h-2.5 rounded-full flex-none" :style="'background:' + (chat.agent.color || '#94a3b8')"></span>
                         <div class="min-w-0">
-                            <h3 class="text-[13px] font-bold text-brand-900 truncate" x-text="chat.agent.name"></h3>
-                            <p class="text-[10px] text-surface-400" x-text="(chat.agent.roleLabel || 'Agente') + ' · conversa real com FSM e guardrails'"></p>
+                            <div class="flex items-center gap-1.5">
+                                <h3 class="text-[13px] font-bold text-brand-900 truncate" x-text="chat.agent.name"></h3>
+                                <span class="rounded-full bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 text-[9px] font-semibold flex-none" title="Este modo explica o agente; não o executa">não executa</span>
+                            </div>
+                            <p class="text-[10px] text-surface-400" x-text="(chat.agent.roleLabel || 'Agente') + ' · modo explicação (Conhecer o agente)'"></p>
                         </div>
                     </div>
                     <div class="flex items-center gap-1.5 shrink-0">
@@ -1537,7 +1540,8 @@
                     <template x-if="!chat.msgs.length">
                         <div class="h-full flex flex-col items-center justify-center text-center gap-2 text-surface-400">
                             <span class="text-[28px]">💬</span>
-                            <p class="text-[12px] max-w-xs">Converse com o <strong x-text="chat.agent.name"></strong> de verdade — skill, guardrails e evidências valem aqui. Cada resposta mostra o estado final da FSM.</p>
+                            <p class="text-[12px] max-w-xs">Tire dúvidas sobre o <strong x-text="chat.agent.name"></strong>: o que faz, seu propósito, quando é acionado, como está configurado e sua posição no fluxo. <span class="text-surface-500 font-medium">Este modo explica o agente — não o executa.</span></p>
+                            <a href="/mesh/playground" class="text-[11px] text-brand-600 hover:underline mt-1">Quer testar de verdade? Abrir o Playground →</a>
                         </div>
                     </template>
                     <template x-for="(m, i) in chat.msgs" :key="i">
@@ -1549,10 +1553,6 @@
                                 <template x-if="m.role !== 'user'">
                                     <div>
                                         <div class="text-[12.5px] text-brand-900 leading-relaxed [&_p]:mb-1.5 [&_ul]:list-disc [&_ul]:pl-4 [&_code]:text-[11px] [&_pre]:bg-surface-50 [&_pre]:rounded [&_pre]:p-2" x-html="_md(m.text)"></div>
-                                        <div class="flex items-center gap-1.5 mt-1.5">
-                                            <span class="rounded-full px-2 py-0.5 text-[9.5px] font-semibold" :class="chatStateChip(m.state)" x-text="m.state || '—'" data-testid="chat-fsm-chip"></span>
-                                            <span x-show="m.ms" class="text-[9.5px] text-surface-300" x-text="m.ms ? (m.ms/1000).toFixed(1) + 's' : ''"></span>
-                                        </div>
                                     </div>
                                 </template>
                             </div>
@@ -1572,12 +1572,12 @@
                         <textarea x-model="chat.input" rows="1" data-testid="chat-input"
                                   @keydown.enter.exact.prevent="sendChat()"
                                   :disabled="!!chat.sending"
-                                  placeholder="Escreva como um cliente escreveria… (Enter envia · Shift+Enter quebra linha)"
+                                  placeholder="Pergunte sobre o agente — o que faz, quando é acionado, configurações… (Enter envia · Shift+Enter quebra linha)"
                                   class="flex-1 resize-none rounded-xl border border-surface-200 px-3.5 py-2.5 text-[12.5px] outline-none focus:border-brand-400 disabled:bg-surface-50 max-h-28"></textarea>
                         <button @click="sendChat()" :disabled="!!chat.sending || !(chat.input || '').trim()" data-testid="chat-send"
                                 class="rounded-xl bg-brand-500 px-4 py-2.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50 cursor-pointer shrink-0">Enviar</button>
                     </div>
-                    <p class="mt-1.5 text-[9.5px] text-surface-300">Multi-turno real: a conversa mantém a sessão (memória por camada) até "Nova conversa".</p>
+                    <p class="mt-1.5 text-[9.5px] text-surface-300">Modo explicação — <strong>não executa</strong> o agente, não gasta o orçamento dele nem entra no histórico. Para testar de verdade, use o Playground / Executar.</p>
                 </div>
             </div>
         </div>
@@ -3152,20 +3152,23 @@ function meshFlowPage() {
             c.sending = true;
             this.$nextTick(() => this._chatScroll());
             try {
-                const r = await api.post('/api/v1/workspace/chat', {
-                    agent_id: c.agent.id,
+                // Modo "Conhecer o agente": EXPLICA, não executa (endpoint /explain).
+                // Envia o histórico recente (servidor stateless → zero efeito colateral:
+                // não invoca o agente, não cria interação, não gasta orçamento dele).
+                const history = c.msgs
+                    .slice(0, -1)                    // tudo menos a msg atual do user
+                    .slice(-10)                      // últimas 10 trocas
+                    .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
+                const r = await api.post('/api/v1/agents/' + c.agent.id + '/explain', {
                     message: text,
-                    session_id: c.session || null,
-                    mode: 'agent',
-                    channel: 'mesh-dossier',
+                    history,
                 });
                 // guard: se o usuário fechou/trocou o chat durante o await,
                 // não escrever numa conversa que não existe mais.
                 if (this.chat !== c) return;
-                c.session = r.interaction_id || c.session;
-                c.msgs.push({ role: 'agent', text: r.output || '(sem resposta)', state: r.final_state || '', ms: r.duration_ms || 0 });
+                c.msgs.push({ role: 'agent', text: r.answer || r.error || '(sem resposta)' });
             } catch (e) {
-                if (this.chat === c) c.msgs.push({ role: 'agent', text: '⚠ ' + e.message, state: 'Erro', ms: 0 });
+                if (this.chat === c) c.msgs.push({ role: 'agent', text: '⚠ ' + e.message });
             }
             if (this.chat === c) {
                 c.sending = false;
@@ -3177,14 +3180,6 @@ function meshFlowPage() {
             if (el) el.scrollTop = el.scrollHeight;
         },
         // Chip do estado FSM — o operador VÊ recusa/escalada, não só prosa.
-        chatStateChip(s) {
-            if (s === 'Recommend') return 'bg-emerald-50 text-emerald-700';
-            if (s === 'Refuse') return 'bg-rose-50 text-rose-700';
-            if (s === 'Escalate') return 'bg-amber-50 text-amber-700';
-            if (s === 'Erro') return 'bg-rose-100 text-rose-800';
-            return 'bg-surface-100 text-surface-500';
-        },
-
         // ── Fase 3: simulador de roteamento + Frases-Prova pela aresta ──
         // Mesmo endpoint determinístico do editor de regra e do gate de
         // publicação (test-conditional): custo zero de tokens, sem LLM.
