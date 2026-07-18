@@ -56,6 +56,18 @@ async def lifespan(app: FastAPI):
             logger.info(f"Settings UI override aplicados: {applied} env vars do banco")
     except Exception as e:
         logger.warning(f"apply_settings_to_env falhou no startup: {e}")
+    # Cockpit OPA Fase B (63.0.0): re-empurra as políticas EDITADAS pela UI
+    # (governance_policy_version — vigente por pacote) para o OPA. O DB é a fonte
+    # viva; os .rego baked são só o seed. Sem isto, edições viveriam só na memória
+    # do OPA e sumiriam no restart do container. Best-effort: OPA fora → mantém o
+    # baked e loga. Nunca derruba o boot.
+    try:
+        from app.core.opa_policies import repush_policies_on_boot
+        rp = await repush_policies_on_boot()
+        if rp.get("pushed") or rp.get("errors"):
+            logger.info(f"OPA políticas re-empurradas no boot: {rp}")
+    except Exception as e:
+        logger.warning(f"OPA repush no boot falhou: {e}")
     # Estúdio de Pipelines (PR1): migra mesh_groups → pipelines (idempotente,
     # guardada por flag). Nunca derruba o startup.
     try:

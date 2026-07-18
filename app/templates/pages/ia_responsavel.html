@@ -206,19 +206,41 @@
             </div>
         </div>
 
-        <!-- Políticas carregadas -->
+        <!-- Políticas carregadas / editor (Fase B) -->
         <div data-testid="ir-opa-policies">
-            <h2 class="text-[12px] font-semibold text-surface-600 mb-2">Políticas carregadas <span class="text-[10px] text-surface-400 font-normal" x-text="opaPoliciesSource ? ('(fonte: ' + opaPoliciesSource + ')') : ''"></span></h2>
-            <div class="space-y-2">
-                <template x-for="p in opaPolicies" :key="p.id">
-                    <details class="rounded-xl border border-surface-200 bg-white overflow-hidden">
-                        <summary class="flex items-center gap-2 px-3 py-2 cursor-pointer text-[12px]">
+            <h2 class="text-[12px] font-semibold text-surface-600 mb-1">Políticas <span class="text-[10px] text-surface-400 font-normal" x-text="opaPoliciesSource ? ('(fonte: ' + opaPoliciesSource + ')') : ''"></span></h2>
+            <p class="text-[10.5px] text-surface-400 mb-2">Editar reescreve uma regra de acesso — <strong>validado no OPA</strong>, auditado e versionado (com rollback). O <span class="font-mono">.rego</span> baked na imagem é só o seed inicial.</p>
+            <div class="space-y-2" data-testid="ir-opa-editor">
+                <template x-for="p in opaPolicies" :key="p.package">
+                    <div class="rounded-xl border border-surface-200 bg-white overflow-hidden">
+                        <div class="flex items-center gap-2 px-3 py-2 text-[12px] border-b border-surface-100">
                             <span class="font-mono font-semibold text-brand-900" x-text="p.package"></span>
                             <span class="text-[9px] uppercase rounded px-1.5 py-0.5" :class="p.wired ? 'bg-emerald-50 text-emerald-700' : 'bg-surface-100 text-surface-500'" x-text="p.wired ? 'em uso' : 'dormente'"></span>
                             <span class="ml-auto text-[10px] text-surface-400 font-mono" x-text="p.id"></span>
-                        </summary>
-                        <pre class="px-3 py-2 text-[10.5px] font-mono bg-surface-50 border-t border-surface-100 overflow-x-auto whitespace-pre" x-text="p.raw"></pre>
-                    </details>
+                        </div>
+                        <div class="p-3 space-y-2">
+                            <textarea x-model="opaBuf[p.package]" rows="12" spellcheck="false" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[10.5px] font-mono leading-snug outline-none focus:border-brand-400 whitespace-pre"></textarea>
+                            <p x-show="opaEditErr[p.package]" class="text-[11px] text-rose-600 whitespace-pre-wrap" x-text="opaEditErr[p.package]"></p>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <button @click="savePolicy(p.package)" :disabled="opaEditBusy[p.package] || opaBuf[p.package] === opaOrig[p.package]" data-testid="ir-opa-policy-save" class="rounded-lg bg-brand-500 px-3 py-1.5 text-[11.5px] font-semibold text-white hover:bg-brand-600 disabled:opacity-40"><span x-text="opaEditBusy[p.package] ? 'Validando…' : 'Validar & salvar'"></span></button>
+                                <button @click="toggleHist(p.package)" data-testid="ir-opa-hist-toggle" class="rounded-lg border border-surface-200 px-3 py-1.5 text-[11.5px] text-surface-600 hover:bg-surface-50">Histórico</button>
+                                <button @click="restoreDefault(p.package)" :disabled="opaEditBusy[p.package]" class="rounded-lg border border-surface-200 px-3 py-1.5 text-[11.5px] text-surface-500 hover:bg-surface-50 disabled:opacity-40">Restaurar padrão</button>
+                                <span x-show="opaBuf[p.package] !== opaOrig[p.package]" class="text-[10px] text-amber-600">não salvo</span>
+                            </div>
+                            <div x-show="opaHistOpen[p.package]" class="rounded-lg bg-surface-50 border border-surface-100 divide-y divide-surface-100" data-testid="ir-opa-history">
+                                <template x-for="v in (opaVersions[p.package] || [])" :key="v.version">
+                                    <div class="flex items-center gap-2 px-2.5 py-1.5 text-[11px]">
+                                        <span class="font-mono text-brand-700 flex-none">v<span x-text="v.version"></span></span>
+                                        <span class="text-surface-500 truncate" x-text="v.note"></span>
+                                        <span class="text-surface-400 text-[10px] flex-none" x-text="v.created_by"></span>
+                                        <span class="text-surface-300 text-[10px] flex-none" x-text="fmtWhen(v.created_at)"></span>
+                                        <button @click="rollbackPolicy(p.package, v.version)" class="ml-auto flex-none text-[10px] text-brand-600 hover:underline">reverter</button>
+                                    </div>
+                                </template>
+                                <p x-show="!(opaVersions[p.package] || []).length" class="px-2.5 py-2 text-[10.5px] text-surface-400">Sem versões salvas — a política vem do <span class="font-mono">.rego</span> baked (seed).</p>
+                            </div>
+                        </div>
+                    </div>
                 </template>
                 <p x-show="!opaPolicies.length" class="text-[11px] text-surface-400">Nenhuma política — o servidor OPA pode estar fora do ar.</p>
             </div>
@@ -512,6 +534,7 @@ function iaResponsavel() {
         opa: null, opaCfg: { enabled: false, failsafe_open: true, timeout_seconds: 2.0 }, opaCfgSnapshot: '', opaBusy: false, opaLoaded: false,
         opaPolicies: [], opaPoliciesSource: '', opaDecisions: [],
         opaSim: { package: 'tool_invocation', input: '', result: null, busy: false },
+        opaBuf: {}, opaOrig: {}, opaEditErr: {}, opaEditBusy: {}, opaVersions: {}, opaHistOpen: {},
         crosswalk: null, crossSel: 0,
         offices: [], officersAssigned: [], attestations: [], attUsers: [],
         officerForm: {}, attForm: { scope: 'platform', entity_id: '', office: '', statement: '' }, attBusy: false,
@@ -523,7 +546,7 @@ function iaResponsavel() {
         ],
         forgetRef: '', forgetBusy: false, forgetResult: '',
         roadmap: [
-            { t: 'Edição de políticas (OPA)', f: 'Fase B', d: 'Editar e versionar as regras Rego pela UI, com validação no OPA e persistência (re-aplicadas no boot). Hoje o cockpit já permite ver, simular e ligar/desligar.' },
+            { t: 'Ativar a política evidence', f: 'Backlog', d: 'A política evidence (acesso a evidência por confidencialidade) existe mas está dormente — falta a coluna users.clearance e a chamada no retriever. O cockpit já a mostra, simula e permite editar.' },
         ],
         get postureColor() {
             const s = this.summary ? this.summary.posture_score : 0;
@@ -625,9 +648,46 @@ function iaResponsavel() {
             // fica "sujo" com defaults e o Save segue travado por !opaLoaded — evita
             // sobrescrever settings reais com defaults num load transitório que falhou.
             this.opaCfgSnapshot = JSON.stringify(this.opaCfg);
-            try { const p = await api.get('/api/v1/governance/opa/policies'); this.opaPolicies = p.policies || []; this.opaPoliciesSource = p.source || ''; } catch {}
+            try {
+                const p = await api.get('/api/v1/governance/opa/policies');
+                this.opaPolicies = p.policies || []; this.opaPoliciesSource = p.source || '';
+                const buf = {}, orig = {};
+                this.opaPolicies.forEach(pol => {
+                    orig[pol.package] = pol.raw;
+                    // preserva edição não-salva de OUTROS pacotes; senão sincroniza com o servidor
+                    const prev = this.opaBuf[pol.package];
+                    const dirty = prev !== undefined && prev !== this.opaOrig[pol.package];
+                    buf[pol.package] = dirty ? prev : pol.raw;
+                });
+                this.opaBuf = buf; this.opaOrig = orig;
+            } catch {}
             try { this.opaDecisions = (await api.get('/api/v1/governance/opa/decisions?limit=50')).decisions || []; } catch {}
             if (!this.opaSim.input) this.opaSim.input = this.opaExample(this.opaSim.package);
+        },
+        async savePolicy(pkg) {
+            this.opaEditBusy[pkg] = true; this.opaEditErr[pkg] = '';
+            try {
+                const r = await api.put('/api/v1/governance/opa/policies/' + pkg, { rego: this.opaBuf[pkg] });
+                showToast('Política salva e aplicada (v' + r.version + ')');
+                await this.loadOpa();
+                if (this.opaHistOpen[pkg]) await this.loadVersions(pkg);
+            } catch (e) { this.opaEditErr[pkg] = e.message; showToast('Política rejeitada — ver detalhe', 'error'); }
+            this.opaEditBusy[pkg] = false;
+        },
+        async loadVersions(pkg) {
+            try { this.opaVersions[pkg] = (await api.get('/api/v1/governance/opa/policies/' + pkg + '/versions')).versions || []; } catch {}
+        },
+        async toggleHist(pkg) {
+            this.opaHistOpen[pkg] = !this.opaHistOpen[pkg];
+            if (this.opaHistOpen[pkg]) await this.loadVersions(pkg);
+        },
+        async rollbackPolicy(pkg, version) {
+            try { await api.post('/api/v1/governance/opa/policies/' + pkg + '/rollback', { version }); showToast('Revertido para v' + version); await this.loadOpa(); await this.loadVersions(pkg); }
+            catch (e) { showToast(e.message, 'error'); }
+        },
+        async restoreDefault(pkg) {
+            try { await api.post('/api/v1/governance/opa/policies/' + pkg + '/restore-default', {}); showToast('Padrão baked restaurado'); await this.loadOpa(); if (this.opaHistOpen[pkg]) await this.loadVersions(pkg); }
+            catch (e) { showToast(e.message, 'error'); }
         },
         async saveOpa() {
             this.opaBusy = true;

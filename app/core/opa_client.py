@@ -328,6 +328,50 @@ async def simulate(package: str, rule: str = "allow", input_doc: Optional[dict] 
         }
 
 
+async def push_policy(policy_id: str, rego: str) -> dict:
+    """Cria/substitui uma política no OPA: PUT /v1/policies/{id} (63.0.0 Fase B).
+
+    O OPA COMPILA no PUT — Rego inválido → 400 com {code, message, errors}. Usar
+    o MESMO id do baked substitui a política (não duplica). Independe de opa_enabled
+    (é gestão, não avaliação) e nunca propaga exceção. Retorna {ok, kind, error}
+    com kind ∈ {"ok","rejected","unreachable"} — o caller distingue Rego inválido
+    (rejected) de OPA fora do ar (unreachable), que exigem mensagens diferentes.
+    """
+    try:
+        client = await _get_client()
+        r = await client.put(
+            f"/v1/policies/{policy_id}",
+            content=rego.encode("utf-8"),
+            headers={"Content-Type": "text/plain"},
+        )
+        if r.status_code == 200:
+            return {"ok": True, "kind": "ok", "error": None}
+        try:
+            body = r.json()
+            msg = body.get("message") or json.dumps(body.get("errors") or body)
+        except Exception:
+            msg = r.text[:400]
+        return {"ok": False, "kind": "rejected", "error": str(msg)[:400]}
+    except (httpx.HTTPError, ValueError) as e:
+        return {"ok": False, "kind": "unreachable", "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+
+async def get_policy(policy_id: str) -> Optional[str]:
+    """Raw da política atualmente no OPA (GET /v1/policies/{id}.result.raw).
+
+    Snapshot para compensar uma persistência falha — o OPA nunca deve ficar com
+    uma mudança não registrada. None se ausente/fora do ar. Independe de opa_enabled.
+    """
+    try:
+        client = await _get_client()
+        r = await client.get(f"/v1/policies/{policy_id}")
+        if r.status_code == 200:
+            return (r.json().get("result") or {}).get("raw")
+        return None
+    except Exception:
+        return None
+
+
 async def close():
     """Fecha o cliente HTTP. Chamado no shutdown do app."""
     global _client, _client_timeout

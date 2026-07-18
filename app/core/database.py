@@ -470,6 +470,22 @@ CREATE TABLE IF NOT EXISTS governance_attestation (
     signed_at TIMESTAMP DEFAULT now()
 );
 
+-- Políticas OPA editáveis pela UI (63.0.0 — cockpit Fase B): append-only, uma
+-- linha por versão salva por pacote. Vigente = maior `version` por `package`. O
+-- OPA recebe a vigente no PUT e no boot (git baked = seed inicial). Rollback e
+-- restore criam versão nova (histórico linear). Índices vivem em migrations, não
+-- aqui (índice no SCHEMA = boot crash em DB existente).
+CREATE TABLE IF NOT EXISTS governance_policy_version (
+    id TEXT PRIMARY KEY,
+    package TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    rego TEXT NOT NULL,
+    note TEXT,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT now(),
+    UNIQUE(package, version)
+);
+
 -- API keys para integrações externas (Zapier, n8n, scripts, mobile apps).
 -- Header `X-API-Key` é validado contra `key_hash` (SHA-256 da plaintext).
 -- `key_prefix` é gravado pra UI exibir "ag_live_a1b2…" sem revelar o resto.
@@ -2085,6 +2101,7 @@ drift_repo = Repository("drift_events")
 governance_risk_repo = Repository("governance_risk")
 governance_officer_repo = Repository("governance_officer")
 governance_attestation_repo = Repository("governance_attestation")
+governance_policy_repo = Repository("governance_policy_version")
 prompts_repo = Repository("system_prompts")
 users_repo = Repository("users")
 domains_repo = Repository("domains")
