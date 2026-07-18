@@ -4,21 +4,6 @@
 
 > Documenta a plataforma na versão **54.2.0** · Especificação Funcional §1–§24 · pt-BR
 
-> **Novidades 52.x–54.x** (destaques):
-> - **README "super livro" de referência (54.2.0)** — esta documentação ganhou o dobro de profundidade: uma Parte nova sobre **otimização automática de prompts/skills (estilo DSPy)**, uma Parte VI de qualidade com a matemática exata de cada métrica do Harness, uma Parte de segurança em **10 camadas** de defesa-em-profundidade, um **glossário ilustrado para leigos** e a narrativa "a vida de uma pergunta".
-> - **Respostas de API sem emoji (54.1.0)** — nenhuma resposta de API (`output` do invoke/explain, prefixos de recusa/escalonamento, diagnósticos do envelope) contém emoji ou símbolos decorativos: um sanitizador determinístico no limite da API garante isso mesmo se o LLM desobedecer (`app/core/text_sanitize.py`).
-> - **"Conhecer o agente" no Fluxo (54.0.0)** — o botão direito no nó abre um assistente que **explica** o agente (o que faz, propósito, config, posição no mesh, comportamento) ancorado na definição real — e **não o executa** (sem interação, sem gasto, sem histórico). Testar de verdade fica no Playground/Executar ([4.8](#48-fluxo-de-agentes-meshflow--o-estúdio-de-pipelines)).
-> - **Recusa/escalonamento viram estado da FSM (opt-in)** — uma recusa redigida pelo agente (dado de terceiro, injeção de prompt) ou um escalonamento transicionam para `Refuse`/`Escalate` via a flag `verifier_signals_drive_fsm`, em **qualquer** caminho de verificação (Parte I, §8).
-> - **Fundamentação por RAG mais honesta** — declarar `## Evidence Policy` só fundamenta com **"Exigir evidência" ligado** e `min_relevance` baixo (~0,0); o diagnóstico aponta a **causa real** quando o RAG é pulado (Parte I, §7).
-> - **Métrica de alucinação do Harness honesta** — medida só sobre os casos com factualidade avaliada (`N/A` quando não medida), sem punir pipeline corretamente fundamentado ([4.13](#413-harness-de-avaliação-harness)).
-
-> **Novidades 40.x–42.x** (destaques detalhados nas seções indicadas):
-> - **Cobertura per-tool + depreciação visível** — métrica-gate de prontidão da frota MCP, chip "legado" e dry-run per-tool completo ([4.6](#46-mcp--tool-registry-mcp)).
-> - **Fluxo de agentes muito mais vivo** — Menu de Regência (botão direito), Dossiê do Agente com Skill expandível, **"Converse com seu agente"** (chat real com FSM), **simulador de roteamento no canvas**, isolar vizinhança, e painel do pipeline com selo/domínio/ajuda em "?" ([4.8](#48-fluxo-de-agentes-meshflow--o-estúdio-de-pipelines)).
-> - **Golden Dataset editável** — editar e excluir casos pela UI, com integridade histórica preservada ([4.13](#413-harness-de-avaliação-harness)).
-> - **"Quem é o usuário?"** — dono/ator com nome nas telas de Observabilidade, Histórico, Auditoria e Qualidade, e filtro por usuário ([4.15](#415-observabilidade-observability-infra-infra-e-histórico-history)).
-> - **Codegen ensina a anexar** — o código gerado no Playground mostra o bloco `attachments` em base64 ([Parte V](#anexos-dois-transportes)).
-
 ---
 
 ## Para quem nunca viu isso: o que é o Maestro?
