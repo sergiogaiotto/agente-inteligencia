@@ -10,13 +10,16 @@ inclui o perfil "governanca" (herda os poderes de Admin).
 """
 from __future__ import annotations
 
+import uuid
 from collections import Counter
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.core.auth import require_role
 from app.core.config import get_settings
-from app.core.database import audit_repo, agents_repo, skills_repo
+from app.core.database import audit_repo, agents_repo, skills_repo, governance_risk_repo
 from app.skill_parser.parser import parse_skill_md
 
 router = APIRouter(prefix="/api/v1/governance", tags=["governance"])
@@ -229,3 +232,84 @@ async def model_card_detail(agent_id: str, user=Depends(_gate)):
         "skill": skill,
         "risk_signals": _risk_signals(a, skill),
     }
+
+
+# ── Registro de risco (classificação estilo EU AI Act) ───────────────────────
+_TIERS = ("unacceptable", "high", "limited", "minimal")
+
+
+class RiskClassify(BaseModel):
+    tier: str
+    rationale: str = ""
+    mitigations: str = ""
+
+
+def _suggested_tier(agent: dict) -> str:
+    """Sugestão (humano decide) a partir dos sinais de risco derivados dos campos
+    reais do agente — sem parsear a skill (os sinais de ATENÇÃO não dependem dela)."""
+    warns = 0
+    if _truthy(agent.get("allow_general_knowledge")):
+        warns += 1
+    if not _truthy(agent.get("require_evidence")):
+        warns += 1
+    if not agent.get("skill_id"):
+        warns += 1
+    if warns >= 3:
+        return "high"
+    if warns >= 1:
+        return "limited"
+    return "minimal"
+
+
+@router.get("/risk-register")
+async def risk_register(user=Depends(_gate)):
+    agents = await agents_repo.find_all(limit=500)
+    classifications = {
+        c.get("entity_id"): c
+        for c in await governance_risk_repo.find_all(limit=1000, entity_type="agent")
+    }
+    items = []
+    counts: Counter = Counter()
+    for a in agents:
+        cls = classifications.get(a.get("id"))
+        tier = cls.get("tier") if cls else None
+        counts[tier or "unclassified"] += 1
+        items.append({
+            "entity_type": "agent", "entity_id": a.get("id"), "name": a.get("name"),
+            "kind": a.get("kind"), "domain": a.get("domain") or "",
+            "suggested_tier": _suggested_tier(a),
+            "tier": tier,
+            "rationale": cls.get("rationale") if cls else "",
+            "mitigations": cls.get("mitigations") if cls else "",
+            "classified_by": cls.get("classified_by") if cls else "",
+            "classified_at": str(cls.get("classified_at")) if cls else "",
+        })
+    # não-classificados primeiro (pendência), depois por risco (alto→mínimo)
+    order = {None: 0, "unacceptable": 1, "high": 2, "limited": 3, "minimal": 4}
+    items.sort(key=lambda x: (order.get(x["tier"], 9), (x["name"] or "").lower()))
+    return {"items": items, "counts": dict(counts), "tiers": list(_TIERS)}
+
+
+@router.put("/risk/{entity_type}/{entity_id}")
+async def classify_risk(entity_type: str, entity_id: str, data: RiskClassify, user=Depends(_gate)):
+    if entity_type not in ("agent", "pipeline"):
+        raise HTTPException(422, "entity_type inválido (agent|pipeline)")
+    if data.tier not in _TIERS:
+        raise HTTPException(422, "tier inválido")
+    who = (user or {}).get("username") or (user or {}).get("display_name") or "?"
+    payload = {
+        "entity_type": entity_type, "entity_id": entity_id, "tier": data.tier,
+        "rationale": data.rationale or "", "mitigations": data.mitigations or "",
+        "classified_by": who,
+    }
+    existing = await governance_risk_repo.find_all(limit=1, entity_type=entity_type, entity_id=entity_id)
+    if existing:
+        await governance_risk_repo.update(existing[0]["id"], {**payload, "classified_at": datetime.utcnow()})
+    else:
+        payload["id"] = str(uuid.uuid4())
+        await governance_risk_repo.create(payload)
+    await audit_repo.create({
+        "entity_type": "governance_risk", "entity_id": entity_id,
+        "action": f"risk_classified:{data.tier}", "actor": who,
+    })
+    return {"message": "Classificação de risco salva"}

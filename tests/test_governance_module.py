@@ -238,3 +238,88 @@ class TestModelCards:
         assert 'data-testid="ir-card-detail"' in html
         assert "async selectCard(" in html
         assert "/api/v1/governance/model-cards" in html
+
+
+# ─── Registro de risco (Fase 2) ──────────────────────────────────────────────
+class FakeRWRepo:
+    def __init__(self, rows=None):
+        self.rows = [dict(r) for r in (rows or [])]
+
+    async def find_all(self, limit=100, offset=0, **f):
+        out = [r for r in self.rows if all(r.get(k) == v for k, v in f.items())]
+        return out[:limit]
+
+    async def create(self, row):
+        self.rows.append(dict(row))
+        return row.get("id")
+
+    async def update(self, i, patch):
+        for r in self.rows:
+            if r.get("id") == i:
+                r.update(patch)
+                return True
+        return False
+
+
+class TestRiskRegister:
+    def test_suggested_tier(self):
+        import app.routes.governance as G
+        assert G._suggested_tier({"allow_general_knowledge": 1, "require_evidence": 0, "skill_id": None}) == "high"
+        assert G._suggested_tier({"allow_general_knowledge": 1, "require_evidence": 1, "skill_id": "s"}) == "limited"
+        assert G._suggested_tier({"allow_general_knowledge": 0, "require_evidence": 1, "skill_id": "s"}) == "minimal"
+
+    @pytest.mark.asyncio
+    async def test_register_merge_e_counts(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "agents_repo", FakeRepo2([
+            {"id": "a1", "name": "X", "kind": "subagent", "require_evidence": 1, "skill_id": "s", "allow_general_knowledge": 0},
+            {"id": "a2", "name": "Y", "kind": "subagent", "require_evidence": 0, "skill_id": None, "allow_general_knowledge": 1},
+        ]))
+        monkeypatch.setattr(G, "governance_risk_repo", FakeRWRepo([
+            {"id": "r1", "entity_type": "agent", "entity_id": "a1", "tier": "minimal", "rationale": "ok"},
+        ]))
+        r = await G.risk_register(user={})
+        by = {it["entity_id"]: it for it in r["items"]}
+        assert by["a1"]["tier"] == "minimal"
+        assert by["a2"]["tier"] is None and by["a2"]["suggested_tier"] == "high"
+        assert r["counts"]["minimal"] == 1 and r["counts"]["unclassified"] == 1
+
+    @pytest.mark.asyncio
+    async def test_classify_cria_e_audita(self, monkeypatch):
+        import app.routes.governance as G
+        gr, au = FakeRWRepo([]), FakeRWRepo([])
+        monkeypatch.setattr(G, "governance_risk_repo", gr)
+        monkeypatch.setattr(G, "audit_repo", au)
+        r = await G.classify_risk("agent", "a9", G.RiskClassify(tier="high", rationale="decisão de crédito"), user={"username": "gov"})
+        assert "salva" in r["message"].lower()
+        assert gr.rows[0]["tier"] == "high" and gr.rows[0]["classified_by"] == "gov"
+        assert any("risk_classified:high" in x["action"] for x in au.rows)
+
+    @pytest.mark.asyncio
+    async def test_classify_atualiza_sem_duplicar(self, monkeypatch):
+        import app.routes.governance as G
+        gr = FakeRWRepo([{"id": "r1", "entity_type": "agent", "entity_id": "a9", "tier": "minimal"}])
+        monkeypatch.setattr(G, "governance_risk_repo", gr)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        await G.classify_risk("agent", "a9", G.RiskClassify(tier="limited"), user={"username": "g"})
+        assert len(gr.rows) == 1 and gr.rows[0]["tier"] == "limited"
+
+    @pytest.mark.asyncio
+    async def test_classify_valida_tier_e_entity(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "governance_risk_repo", FakeRWRepo([]))
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        with pytest.raises(HTTPException) as e:
+            await G.classify_risk("agent", "a", G.RiskClassify(tier="bogus"), user={})
+        assert e.value.status_code == 422
+        with pytest.raises(HTTPException) as e:
+            await G.classify_risk("nope", "a", G.RiskClassify(tier="high"), user={})
+        assert e.value.status_code == 422
+
+    def test_aba_risco_template(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert "{ k: 'risk', l: 'Risco' }" in html
+        for t in ("ir-risk-counts", "ir-risk-list", "ir-risk-modal", "ir-risk-save"):
+            assert f'data-testid="{t}"' in html, t
+        assert "async loadRisk()" in html
+        assert "/api/v1/governance/risk-register" in html

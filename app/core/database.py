@@ -432,6 +432,21 @@ CREATE TABLE IF NOT EXISTS domains (
     created_at TIMESTAMP DEFAULT now()
 );
 
+-- Registro de risco (IA Responsável, 58.0.0): classificação estilo EU AI Act
+-- por ativo (agente/pipeline). tier sugerido pela heurística, decisão humana.
+-- UNIQUE(entity_type, entity_id) → uma classificação vigente por ativo.
+CREATE TABLE IF NOT EXISTS governance_risk (
+    id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    rationale TEXT,
+    mitigations TEXT,
+    classified_by TEXT,
+    classified_at TIMESTAMP DEFAULT now(),
+    UNIQUE(entity_type, entity_id)
+);
+
 -- API keys para integrações externas (Zapier, n8n, scripts, mobile apps).
 -- Header `X-API-Key` é validado contra `key_hash` (SHA-256 da plaintext).
 -- `key_prefix` é gravado pra UI exibir "ag_live_a1b2…" sem revelar o resto.
@@ -2044,6 +2059,7 @@ class AuditRepository(Repository):
 
 audit_repo = AuditRepository("audit_log")
 drift_repo = Repository("drift_events")
+governance_risk_repo = Repository("governance_risk")
 prompts_repo = Repository("system_prompts")
 users_repo = Repository("users")
 domains_repo = Repository("domains")
