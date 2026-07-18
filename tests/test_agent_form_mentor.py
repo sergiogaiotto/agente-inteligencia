@@ -5,8 +5,8 @@ interativo — um mentor na própria página que ajuda qualquer iniciante a
 criar seu super agente. O MVP tem três peças que se costuram:
 
 1. CARDS DE CAMADA — substituem o <select> de Tipo por 3 cards ricos
-   (🎯 Especialista / 🧭 Triagem / 🎼 Maestro): metáfora + quando usar +
-   exemplo dos DADOS do próprio usuário (availableAgents). Clicar seta
+   (🎯 Especialista / 🧭 Triagem / 🎼 Maestro): título-frase + quando usar +
+   selo de escopo + um "?" (popover) com orientações. Clicar seta
    form.kind e re-contextualiza o Mentor.
 
 2. PAINEL MENTOR (rail lateral, recolhível) — "Você está criando um …"
@@ -86,7 +86,7 @@ class TestLayerCardsReplaceSelect:
     def test_card_renders_all_fields(self, html):
         for binding in (
             'x-text="card.icon"', 'x-text="card.title"', 'x-text="card.tech"',
-            'x-text="card.metaphor"', 'x-text="card.when"', 'x-text="card.example"',
+            'x-text="card.scope"', 'x-text="card.metaphor"', 'x-text="card.when"',
         ):
             assert binding in html, f"card sem binding {binding!r}"
 
@@ -105,7 +105,7 @@ class TestLayerMetaData:
         "get layerMeta() {",
         "get currentLayer() {",
         "get layerCards() {",
-        "cardExample(kind) {",
+        "toggleGuide(kind) {",
     ])
     def test_method_defined(self, html, method):
         assert method in html, f"método {method!r} ausente no x-data()"
@@ -122,9 +122,12 @@ class TestLayerMetaData:
         ):
             assert token in html, f"layerMeta sem {token!r}"
 
-    def test_example_grounded_in_user_agents(self, html):
-        """O exemplo do card é aterrado nos dados reais (availableAgents)."""
-        assert "this.availableAgents || []" in html
+    def test_cards_have_scope_and_guide(self, html):
+        """O selo de escopo + o '?' de orientações substituíram o 'Ex.' dinâmico
+        (que era aterrado em availableAgents e virava ruído)."""
+        assert 'x-text="card.scope"' in html
+        assert "toggleGuide(card.kind)" in html
+        assert "card.example" not in html
 
 
 # ────────────────────────────────────────────────────────────────
