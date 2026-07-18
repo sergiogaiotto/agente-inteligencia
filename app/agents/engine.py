@@ -544,6 +544,34 @@ def _pipeline_should_self_retrieve(
     return has_pipeline_context and declared_sources and not skip_evidence
 
 
+def _no_evidence_diagnostic(*, sources_ignored: list | None) -> dict:
+    """Diagnóstico honesto para o caso "zero evidência" no fim da interação.
+
+    Quando o agente DECLARA fontes em ``## Evidence Policy`` (lista populada) mas
+    o RAG foi PULADO — porque ``require_evidence`` está desligado ou o
+    ``Execution Profile`` inferido é ``fast`` —, essas fontes são silenciosamente
+    ignoradas. É um footgun clássico: o especialista responde "sem evidência"
+    apesar de KBs corretas e populadas, e o operador recebe o conselho GENÉRICO
+    ("registre bases") que não corresponde à causa real. Aqui, quando o chamador
+    sinaliza fontes ignoradas, devolvemos um aviso ACIONÁVEL apontando a causa
+    (require_evidence off) e a correção. Função pura → testável isoladamente.
+    """
+    if sources_ignored:
+        return {
+            "level": "warning",
+            "text": (
+                f"As {len(sources_ignored)} fonte(s) declaradas em ## Evidence Policy "
+                "NÃO foram consultadas porque 'Exigir evidência' (require_evidence) está "
+                "desligado neste agente. Ligue 'Exigir evidência' para fundamentar as "
+                "respostas nessas bases."
+            ),
+        }
+    return {
+        "level": "info",
+        "text": "Nenhuma evidência encontrada. Registre bases de conhecimento em Evidência para habilitar RAG.",
+    }
+
+
 # ═══════════════════════════════════════════════════
 # Helpers — Pre-check de configuração do LLM provider
 # ═══════════════════════════════════════════════════
@@ -2441,6 +2469,13 @@ async def execute_interaction(
         skip_evidence=bool(skip_evidence),
     )
 
+    # Footgun honesto (2026-07-17): a skill DECLARA fontes em ## Evidence Policy,
+    # porém o retrieval será pulado (require_evidence off ou profile 'fast') → as
+    # fontes serão silenciosamente ignoradas. Registra p/ o _build_result emitir
+    # um aviso ACIONÁVEL (ver _no_evidence_diagnostic) em vez do genérico.
+    if _declares_sources and skip_evidence:
+        ctx.metadata["evidence_sources_ignored"] = list(_allowed_sources)
+
     evidences = []
     if (pipeline_context and not _pipeline_own_rag) or skip_evidence:
         await fsm.run_retrieve_evidence([])
@@ -3175,7 +3210,11 @@ async def _build_result(
     _diag_threshold_label = f"{_diag_min_relevance:.2f} ({_diag_threshold_source})"
 
     if evidence_count == 0:
-        diagnostics.append({"level": "info", "text": "Nenhuma evidência encontrada. Registre bases de conhecimento em Evidência para habilitar RAG."})
+        diagnostics.append(
+            _no_evidence_diagnostic(
+                sources_ignored=ctx.metadata.get("evidence_sources_ignored")
+            )
+        )
     elif ctx.evidence_score < _diag_min_relevance:
         diagnostics.append({
             "level": "warning",
