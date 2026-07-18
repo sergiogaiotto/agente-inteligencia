@@ -2,9 +2,10 @@
 
 **Plataforma de Gestão e Desenvolvimento de Multi-Agentes de IA, orientada a SKILL.md, sobre AI Mesh**
 
-> Documenta a plataforma na versão **53.0.2** · Especificação Funcional §1–§24 · pt-BR
+> Documenta a plataforma na versão **54.0.0** · Especificação Funcional §1–§24 · pt-BR
 
-> **Novidades 52.x–53.x** (destaques):
+> **Novidades 52.x–54.x** (destaques):
+> - **"Conhecer o agente" no Fluxo (54.0.0)** — o botão direito no nó abre um assistente que **explica** o agente (o que faz, propósito, config, posição no mesh, comportamento) ancorado na definição real — e **não o executa** (sem interação, sem gasto, sem histórico). Testar de verdade fica no Playground/Executar ([4.8](#48-fluxo-de-agentes-meshflow--o-estúdio-de-pipelines)).
 > - **Recusa/escalonamento viram estado da FSM (opt-in)** — uma recusa redigida pelo agente (dado de terceiro, injeção de prompt) ou um escalonamento transicionam para `Refuse`/`Escalate` via a flag `verifier_signals_drive_fsm`, em **qualquer** caminho de verificação (Parte I, §8).
 > - **Fundamentação por RAG mais honesta** — declarar `## Evidence Policy` só fundamenta com **"Exigir evidência" ligado** e `min_relevance` baixo (~0,0); o diagnóstico aponta a **causa real** quando o RAG é pulado (Parte I, §7).
 > - **Métrica de alucinação do Harness honesta** — medida só sobre os casos com factualidade avaliada (`N/A` quando não medida), sem punir pipeline corretamente fundamentado ([4.13](#413-harness-de-avaliação-harness)).
@@ -358,9 +359,9 @@ Cada módulo abaixo segue o mesmo esqueleto: **O que é · Fundamento · Quando 
 
 ### O que o canvas ganhou (41.x)
 
-- **🖱️ Menu de Regência (botão direito):** cada nó abre um menu contextual próprio (nada de menu nativo do navegador) com ações reais — **Conversar com o agente**, Definir como Início, Abrir Skill no dossiê, Ver execuções recentes, **Isolar vizinhança** (esmaece tudo que não conecta ao nó, para ler grafos grandes) e Editar agente. As **conexões** também têm menu: rodar Frases-Prova, editar regra, excluir.
+- **🖱️ Menu de Regência (botão direito):** cada nó abre um menu contextual próprio (nada de menu nativo do navegador) com ações reais — **Conhecer o agente**, Definir como Início, Abrir Skill no dossiê, Ver execuções recentes, **Isolar vizinhança** (esmaece tudo que não conecta ao nó, para ler grafos grandes) e Editar agente. As **conexões** também têm menu: rodar Frases-Prova, editar regra, excluir.
 - **📋 Dossiê do Agente (clique esquerdo):** o painel direito mostra a **Skill** vinculada em cascata — nome, selos e um botão "Ver SKILL.md" que abre um **leitor expandido** (markdown legível, botão copiar); o mesmo para o prompt do sistema. Traz também as **execuções recentes** do agente. Cursor vira pointer em tudo que é clicável.
-- **💬 Converse com seu agente:** um chat estilo ChatGPT embutido no dossiê — e é o **agente real** (mesma FSM, guardrails e evidências do runtime), com o **chip do estado final** (Recommend/Refuse/Escalate) em cada resposta e **multi-turno** de verdade (a sessão continua até "Nova conversa"). Honestidade primeiro: o operador vê quando o agente recusou, não só a prosa.
+- **💬 Conhecer o agente (54.0.0):** um chat que **explica** o agente — o que faz, seu propósito, quando é acionado, como está configurado e sua posição no fluxo — ancorado na definição real (config + SKILL.md + arestas do mesh com as regras + diagnóstico agregado). É um assistente *sobre* o agente, **não é o agente**: não executa, não cria interação, não gasta o orçamento dele nem entra no histórico (endpoint `POST /agents/{id}/explain`, superfície de UI). Para testar de verdade, o painel aponta o **Playground / Executar**.
 - **🧭 Simulador de roteamento no canvas:** no menu de um roteador, digite uma frase de cliente e **as arestas acendem** — a que casou fica sólida, as demais esmaecem. Determinístico, pelo **mesmo motor do publish e do harness** (`test-conditional`): custo **zero de tokens**. Cada resultado pode virar **Frase-Prova** da aresta com um clique (o veredito observado vira o `expect`), e o menu da aresta roda as Frases-Prova existentes na hora.
 - **Painel do pipeline:** os textos de "Roteamento rápido" e "Auditoria da resposta" viraram popovers atrás de um **"?"** (menos paredão de prosa); o **selo do contrato** aparece explícito (🔒 selado · vN / 🔓 não selado) com um "?" explicando que **publicar sela**; e o **domínio** do pipeline (a etiqueta que vira chip na lista) é editável ali mesmo.
 
