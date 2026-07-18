@@ -421,3 +421,18 @@ class UserLogin(BaseModel):
 class DomainCreate(BaseModel):
     name: str
     description: Optional[str] = ""
+    owner_user_id: Optional[str] = None
+    color: Optional[str] = None
+    icon: Optional[str] = None
+    status: Optional[str] = "active"
+
+
+class DomainUpdate(BaseModel):
+    # Tudo opcional: o PUT aplica só os campos enviados. O nome, quando presente,
+    # não pode ser vazio (regra "só o nome é obrigatório" vale na criação/edição).
+    name: Optional[str] = None
+    description: Optional[str] = None
+    owner_user_id: Optional[str] = None
+    color: Optional[str] = None
+    icon: Optional[str] = None
+    status: Optional[str] = None

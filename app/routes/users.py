@@ -6,11 +6,15 @@ Auth hardening (Onda 1):
 - Cookies: HttpOnly + SameSite + Secure (em prod via setting).
 - CSRF token gerado em /me e /login; validação opt-in via setting.
 """
+import json
 import uuid
 import logging
 from fastapi import APIRouter, HTTPException, Request, Response
-from app.models.schemas import UserCreate, UserUpdate, UserLogin, DomainCreate
-from app.core.database import users_repo, domains_repo
+from app.models.schemas import UserCreate, UserUpdate, UserLogin, DomainCreate, DomainUpdate
+from app.core.database import (
+    users_repo, domains_repo, agents_repo, skills_repo, pipelines_repo,
+    journeys_repo, catalog_entries_repo, car_repo,
+)
 from app.core.auth import (
     hash_password, verify_password, needs_rehash,
     make_csrf_token, cookie_kwargs, sign_session, read_session_uid,
@@ -275,22 +279,119 @@ def _is_privileged(caller) -> bool:
 
 
 # ═══ Domains ═══
+# Um domínio é carimbado por NOME (texto livre) em várias entidades. O "Raio-X"
+# cruza essas referências; a caça a órfãos acha strings usadas mas não registradas.
+_DOMAIN_INV_REPOS = [
+    ("agentes", agents_repo),
+    ("skills", skills_repo),
+    ("pipelines", pipelines_repo),
+    ("jornadas", journeys_repo),
+    ("catalogo", catalog_entries_repo),
+    ("car", car_repo),
+]
+
+
+def _sample_label(r: dict) -> str:
+    return r.get("name") or r.get("skill_urn") or r.get("title") or r.get("id") or "—"
+
+
+async def _domain_members(name: str) -> list[dict]:
+    """Usuários cujo `domains` (lista JSON) inclui este domínio."""
+    out = []
+    for u in await users_repo.find_all(limit=500):
+        try:
+            doms = json.loads(u.get("domains") or "[]")
+        except Exception:
+            doms = []
+        if isinstance(doms, list) and name in doms:
+            out.append({"id": u.get("id"), "name": u.get("display_name") or u.get("username") or u.get("id")})
+    return out
+
+
 @domains_router.get("")
 async def list_domains():
     return {"domains": await domains_repo.find_all(limit=200)}
 
 
+@domains_router.get("/orphans")
+async def domain_orphans():
+    """Domínios-fantasma: strings de domínio citadas por ativos mas NÃO registradas."""
+    registered = {(d.get("name") or "").strip().lower() for d in await domains_repo.find_all(limit=500)}
+    usage: dict[str, dict] = {}
+    for key, repo in _DOMAIN_INV_REPOS:
+        for r in await repo.find_all(limit=1000):
+            dv = (r.get("domain") or "").strip()
+            if not dv or dv.lower() in registered:
+                continue
+            e = usage.setdefault(dv.lower(), {"name": dv, "used_by": {}, "total": 0})
+            e["used_by"][key] = e["used_by"].get(key, 0) + 1
+            e["total"] += 1
+    return {"orphans": sorted(usage.values(), key=lambda x: -x["total"])}
+
+
+@domains_router.get("/{domain_id}/inventory")
+async def domain_inventory(domain_id: str):
+    """Raio-X: contagem + amostra de tudo que cita o domínio, por categoria."""
+    dom = await domains_repo.find_by_id(domain_id)
+    if not dom:
+        raise HTTPException(404)
+    name = dom["name"]
+    inv: dict[str, dict] = {}
+    total = 0
+    for key, repo in _DOMAIN_INV_REPOS:
+        cnt = await repo.count(domain=name)
+        rows = await repo.find_all(limit=6, domain=name)
+        inv[key] = {"count": cnt, "sample": [{"id": r.get("id"), "name": _sample_label(r)} for r in rows]}
+        total += cnt
+    members = await _domain_members(name)
+    inv["membros"] = {"count": len(members), "sample": members[:6]}
+    total += len(members)
+    return {"domain": dom, "inventory": inv, "total": total}
+
+
 @domains_router.post("", status_code=201)
 async def create_domain(data: DomainCreate, request: Request):
-    # RBAC: domínios são estrutura de governança — só root/admin criam/removem.
+    # RBAC: domínios são estrutura de governança — só root/admin criam/editam/removem.
     if not _is_privileged(await _get_caller(request)):
         raise HTTPException(403, "Apenas Root/Admin podem criar domínios")
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(422, "Nome do domínio é obrigatório")
     existing = await domains_repo.find_all(limit=200)
-    if any(d["name"].lower() == data.name.lower() for d in existing):
+    if any((d.get("name") or "").lower() == name.lower() for d in existing):
         raise HTTPException(409, "Domínio já existe")
     did = str(uuid.uuid4())
-    await domains_repo.create({"id": did, "name": data.name, "description": data.description or ""})
+    await domains_repo.create({
+        "id": did, "name": name, "description": data.description or "",
+        "owner_user_id": data.owner_user_id or None, "color": data.color or None,
+        "icon": data.icon or None, "status": data.status or "active",
+    })
     return {"id": did, "message": "Domínio criado"}
+
+
+@domains_router.put("/{domain_id}")
+async def update_domain(domain_id: str, data: DomainUpdate, request: Request):
+    if not _is_privileged(await _get_caller(request)):
+        raise HTTPException(403, "Apenas Root/Admin podem editar domínios")
+    dom = await domains_repo.find_by_id(domain_id)
+    if not dom:
+        raise HTTPException(404)
+    patch: dict = {}
+    if data.name is not None:
+        nm = data.name.strip()
+        if not nm:
+            raise HTTPException(422, "Nome do domínio não pode ser vazio")
+        others = await domains_repo.find_all(limit=500)
+        if any(o.get("id") != domain_id and (o.get("name") or "").lower() == nm.lower() for o in others):
+            raise HTTPException(409, "Já existe um domínio com esse nome")
+        patch["name"] = nm
+    for field in ("description", "owner_user_id", "color", "icon", "status"):
+        val = getattr(data, field)
+        if val is not None:
+            patch[field] = val
+    if patch:
+        await domains_repo.update(domain_id, patch)
+    return {"message": "Domínio atualizado"}
 
 
 @domains_router.delete("/{domain_id}")
