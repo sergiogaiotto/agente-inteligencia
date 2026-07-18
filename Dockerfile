@@ -77,6 +77,12 @@ COPY --chown=app:app app ./app
 # Scripts operacionais (ex.: seed do usuário E2E, rodado via `docker exec`).
 COPY --chown=app:app scripts ./scripts
 
+# Políticas Rego do OPA (62.0.0) — baked na imagem do OPA, mas o cockpit de
+# governança as lê do disco como FALLBACK quando o servidor OPA está fora do ar
+# (GET /opa/policies). Sem isto o fallback resolve /app/infra/opa/policies vazio
+# no container (o dir só existe no host). São 3 arquivos pequenos.
+COPY --chown=app:app infra/opa/policies ./infra/opa/policies
+
 # Alembic — config + migrações versionadas (33.6.0). Aplicadas no boot pelo
 # init_db (alembic upgrade head, em thread, fail-open). WORKDIR=/app → aqui ficam
 # /app/alembic.ini e /app/alembic (env.py resolve via raiz de app.core.database).

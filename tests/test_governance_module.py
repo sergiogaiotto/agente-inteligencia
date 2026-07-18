@@ -680,6 +680,36 @@ class TestOpaCockpit:
         r = await G.opa_config_put(G.OpaConfig(), user={})
         assert r["env_applied"] == 0
 
+    @pytest.mark.asyncio
+    async def test_config_put_apply_falha_nao_quebra(self, monkeypatch):
+        # se apply_settings_to_env explodir, o PUT ainda retorna (env_applied=0).
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "settings_store", FakeStore())
+
+        async def _boom():
+            raise RuntimeError("db down")
+        monkeypatch.setattr(G, "apply_settings_to_env", _boom)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        r = await G.opa_config_put(G.OpaConfig(opa_enabled=True), user={"username": "x"})
+        assert r["env_applied"] == 0
+
+    @pytest.mark.asyncio
+    async def test_decisions_details_malformado_nao_quebra(self, monkeypatch):
+        # details não-JSON não derruba o log (campos ficam vazios).
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "audit_repo", FakeAudit([
+            {"id": 1, "action": "allow", "entity_id": "x", "details": "{nao-json"},
+        ]))
+        r = await G.opa_decisions(limit=5, user={})
+        assert r["decisions"][0]["id"] == 1 and r["decisions"][0]["package"] == ""
+
+    def test_dockerfile_copia_politicas_para_fallback(self):
+        # o fallback de disco de GET /opa/policies precisa dos .rego DENTRO da
+        # imagem do app; sem esta COPY o dir /app/infra/opa/policies fica vazio no
+        # container (o dir só existe no host) e o fallback vira lista vazia.
+        df = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text(encoding="utf-8")
+        assert "infra/opa/policies" in df
+
     def test_aba_policies_no_template(self):
         html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
         assert "{ k: 'policies', l: 'Políticas' }" in html
