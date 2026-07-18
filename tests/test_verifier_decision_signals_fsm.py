@@ -100,3 +100,49 @@ def test_engine_wrapper_on_returns_signals(monkeypatch):
         "policy_refusal": True,
         "needs_escalation": False,
     }
+
+
+# ─── fast-follow: FSM deriva do rascunho nos caminhos heurísticos/fallback ───
+def _flag(monkeypatch, value: bool):
+    import app.core.config as config
+
+    class _S:
+        verifier_signals_drive_fsm = value
+
+    monkeypatch.setattr(config, "get_settings", lambda: _S())
+
+
+@pytest.mark.asyncio
+async def test_fsm_derives_refuse_from_draft_when_dict_lacks_signals(monkeypatch):
+    _flag(monkeypatch, True)
+    ctx = InteractionContext(
+        current_state=State.VERIFY_EVIDENCE,
+        draft="Desculpe, nao posso fornecer dados de outro cliente como CPF ou senha.",
+    )
+    sm = InteractionStateMachine(ctx)
+    await sm.run_verify_evidence({"ok": True, "confidence": 1.0})  # SEM os sinais (heurístico)
+    assert ctx.current_state == State.REFUSE
+
+
+@pytest.mark.asyncio
+async def test_fsm_derives_escalate_from_draft(monkeypatch):
+    _flag(monkeypatch, True)
+    ctx = InteractionContext(
+        current_state=State.VERIFY_EVIDENCE,
+        draft="Vou escalar para a supervisao e encaminhar ao NOC com protocolo.",
+    )
+    sm = InteractionStateMachine(ctx)
+    await sm.run_verify_evidence({"ok": True, "confidence": 1.0})
+    assert ctx.current_state == State.ESCALATE
+
+
+@pytest.mark.asyncio
+async def test_fsm_off_flag_does_not_derive_from_draft(monkeypatch):
+    _flag(monkeypatch, False)
+    ctx = InteractionContext(
+        current_state=State.VERIFY_EVIDENCE,
+        draft="Desculpe, nao posso fornecer dados de outro cliente.",
+    )
+    sm = InteractionStateMachine(ctx)
+    await sm.run_verify_evidence({"ok": True, "confidence": 1.0})
+    assert ctx.current_state == State.RECOMMEND  # flag OFF → não deriva

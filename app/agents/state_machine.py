@@ -282,6 +282,19 @@ class InteractionStateMachine:
         # IDÊNTICO ao histórico (zero mudança de comportamento em produção).
         policy_refusal = verification_result.get("policy_refusal", False)
         needs_escalation = verification_result.get("needs_escalation", False)
+        # Fast-follow #684: o engine só injeta os sinais nos ramos do Verifier v2.
+        # Nos caminhos HEURÍSTICOS/fallback (inclui quando o juiz LLM falha e o
+        # engine cai na verificação heurística) o dict chega sem eles — aqui
+        # derivamos do PRÓPRIO rascunho, de forma INDEPENDENTE do juiz. Mesma
+        # flag; sem ela, nada muda (detect só roda com a flag ON).
+        if not policy_refusal and not needs_escalation and self.ctx.draft:
+            try:
+                from app.core.config import get_settings
+                if get_settings().verifier_signals_drive_fsm:
+                    from app.verifier.runtime import detect_decision_signals
+                    policy_refusal, needs_escalation = detect_decision_signals(self.ctx.draft)
+            except Exception:
+                pass
         self.ctx.evidence_score = score
 
         if policy_refusal:
