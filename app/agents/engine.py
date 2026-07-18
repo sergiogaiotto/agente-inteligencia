@@ -57,6 +57,7 @@ from app.skill_parser.decisions_schema import (
 )
 from app.skill_parser.parser import parse_skill_md
 from app.core.otel import get_tracer
+from app.core.text_sanitize import strip_emoji, scrub_diagnostics
 
 logger = logging.getLogger(__name__)
 _tracer = get_tracer(__name__)
@@ -274,7 +275,8 @@ def _build_response_language_directive(lang_tag: str, *, preserve_decision_line:
         f"em {label}, nunca copiados crus do tool result. "
         "Preserve no idioma original APENAS: URLs, identificadores técnicos "
         "(IDs, slugs, chaves), código-fonte, e nomes de marcas/produtos/"
-        "pessoas (ex: 'Uber', 'GPT-4', 'João Silva')."
+        "pessoas (ex: 'Uber', 'GPT-4', 'João Silva'). "
+        "NUNCA use emoji, emoticons nem símbolos decorativos na resposta."
     )
     if preserve_decision_line:
         base += (
@@ -1970,7 +1972,7 @@ async def _run_declarative_as_interaction(
     return {
         "interaction_id": decl.get("interaction_id") or interaction_id,
         "agent_id": agent.get("id", ""),
-        "output": output_text,
+        "output": strip_emoji(output_text),  # sem emoji em resposta de API
         "final_state": decl.get("final_state", "completed"),
         "evidence_score": 0.0,
         "transitions": [],
@@ -3141,11 +3143,16 @@ async def _build_result(
         try:
             parsed = json.loads(output)
             if parsed.get("type") == "refusal":
-                output = f"⚠ Recusa controlada: {parsed.get('reason', '')}\n\nPróximo passo: {parsed.get('next_step', '')}"
+                output = f"Recusa controlada: {parsed.get('reason', '')}\n\nPróximo passo: {parsed.get('next_step', '')}"
             elif parsed.get("type") == "escalation":
-                output = f"🔺 Escalação: {parsed.get('reason', '')}"
+                output = f"Escalação: {parsed.get('reason', '')}"
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
+
+    # Regra do produto: NENHUMA resposta de API pode conter emoji (garantia
+    # determinística no limite da API, mesmo se o LLM desobedecer). Cobre o
+    # invoke de agente e — via reancoragem no output do step — o de pipeline.
+    output = strip_emoji(output)
 
     duration = round((time.time() - start_time) * 1000, 2)
     total_steps = len(ctx.transition_log)
@@ -3383,7 +3390,7 @@ async def _build_result(
             # métricas (context_relevancy, context_precision, faithfulness,
             # answer_relevancy). UI renderiza grid 2x2 logo abaixo do score.
             "ragas_metrics": ragas_metrics,
-            "diagnostics": diagnostics,
+            "diagnostics": scrub_diagnostics(diagnostics),
             "journey": ctx.journey or "—",
             "channel": ctx.channel,
             "mesh_chain": mesh_chain or [],
@@ -4974,7 +4981,7 @@ async def execute_pipeline(
         logger.warning("pipeline.step_display_failed", exc_info=True)
     final_result = {
         "mode": "pipeline",
-        "output": final_output,
+        "output": strip_emoji(final_output),
         # Contrato de Decisão estruturado (36.1.0, ADITIVO): {campo: valor} do
         # agente que produziu a resposta, ou None. O texto apresentado não tem
         # mais a linha — este campo é a via de máquina.
@@ -4999,7 +5006,7 @@ async def execute_pipeline(
             "total_steps": sum(len(s.get("transitions",[])) for s in steps),
             "evidence_count": total_evidence,
             "evidence_sources": list(set(all_evidence_sources)),
-            "diagnostics": all_diagnostics,
+            "diagnostics": scrub_diagnostics(all_diagnostics),
             "mesh_chain": pipeline_mesh,
             "attachments": [],
             "channel": channel,

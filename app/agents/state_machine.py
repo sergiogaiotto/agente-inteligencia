@@ -328,12 +328,12 @@ class InteractionStateMachine:
     async def run_refuse(self, reason: str, next_step: str = ""):
         """Estado Refuse: emite recusa controlada com próximo passo."""
         ns = next_step or "Escalar para supervisor ou solicitar dado adicional."
-        self.ctx.final_output = f"⚠ Recusa controlada: {reason}\n\nPróximo passo: {ns}"
+        self.ctx.final_output = f"Recusa controlada: {reason}\n\nPróximo passo: {ns}"
         await self.transition(State.LOG_AND_CLOSE)
 
     async def run_escalate(self, reason: str):
         """Estado Escalate: delegação a supervisor humano."""
-        self.ctx.final_output = f"🔺 Escalação: {reason}\n\nContexto: rascunho gerado com {len(self.ctx.evidences)} evidência(s). Requer revisão humana."
+        self.ctx.final_output = f"Escalação: {reason}\n\nContexto: rascunho gerado com {len(self.ctx.evidences)} evidência(s). Requer revisão humana."
         await self.transition(State.LOG_AND_CLOSE)
 
     async def run_log_and_close(self):
