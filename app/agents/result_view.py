@@ -100,6 +100,9 @@ def _summary_step(step: dict) -> dict:
         "agent_kind": step.get("agent_kind", ""),
         "status": step.get("status", ""),
         "status_message": step.get("status_message", ""),
+        # duração por-step: a UI (Playground) mostra o tempo de execução ao lado
+        # da narrativa 💬. None quando o engine não mediu (ex.: step pulado).
+        "duration_ms": step.get("duration_ms"),
         "output": step.get("output", ""),
     }
     # Step que falhou (engine: {status:'error', error:...}). Sem isto o consumidor

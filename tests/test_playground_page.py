@@ -176,6 +176,19 @@ def test_conversa_ao_vivo_multiturno():
     # 35.16.0: o turno também leva os anexos capturados (attachments: turnAtts)
     assert "await this._stream(this.selectedId, this.chatVerbosity, turn, { message: msg, sessionId: this.chatSessionId, attachments: turnAtts })" in src
     assert 'data-testid="pg-chat-steps"' in src   # passo-a-passo por agente renderizado no balão
+    # chips PERSISTENTES: ícone + nome + 💬 mensagem de status + tempo, 1 por linha,
+    # com tooltip e fallback quando a mensagem está vazia. Helpers agnósticos ao
+    # formato do step (liveSteps OU result.steps).
+    for helper in ("stepName(s)", "stepMsg(s)", "stepMs(s)", "stepIcon(s)", "stepTip(s)", "chatSteps(m)"):
+        assert helper in src, helper
+    assert "'Sem mensagem status'" in src            # fallback exigido
+    assert "'💬 ' + stepMsg(s)" in src               # a narrativa por step
+    assert "fmtMs(stepMs(s))" in src                 # o tempo de execução no fim da linha
+    assert 'data-testid="pg-result-steps"' in src    # bloco de steps do resultado
+    # o chat renderiza da fonte persistente (result) quando existe, senão liveSteps
+    assert "m.result && (m.result.steps || m.result.pipeline_steps)" in src
+    # "quebrar por linha": os 3 blocos de chips trocaram flex-wrap por coluna
+    assert 'x-for="(s, si) in chatSteps(m)"' in src
     # REATIVIDADE (footgun Alpine): o turno é mutado via a referência REATIVA
     # (this.chat[i]), não o objeto cru — senão o balão fica preso em "respondendo…"
     assert "const turn = this.chat[this.chat.length - 1];" in src
