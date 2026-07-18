@@ -21,7 +21,6 @@ from typing import Optional
 import asyncpg
 
 from app.core import opa_client
-from app.core.config import get_settings
 from app.core.database import governance_policy_repo
 
 # Pacotes conhecidos e quais estão de fato ligados no PEP (evidence é dormente).
@@ -119,8 +118,10 @@ async def evidence_allows(clearance: Optional[str], confidentiality: Optional[st
     """True se o usuário (clearance) pode ver a evidência (confidentiality), pela
     evidence.rego (rank[clearance] >= rank[confidentiality]). Avalia DIRETO no OPA —
     independe de opa_enabled (é o toggle `evidence_acl_enabled` quem liga o filtro no
-    retriever). Defaults 'internal' (nível default das fontes). OPA fora do ar → segue
-    o failsafe configurável (mesmo knob do gate de interação: opa_failsafe_open)."""
+    retriever). Defaults 'internal' (nível default das fontes). OPA fora do ar / erro →
+    FAIL-CLOSED (oculta): "no read up" é um controle de SIGILO, então decisão
+    indeterminada esconde a evidência (vazar > esconder). NÃO segue opa_failsafe_open —
+    esse é o failsafe de DISPONIBILIDADE do gate de interação, semântica oposta à de sigilo."""
     # Normaliza (casing/espaço) — o rank[] da rego é lookup EXATO. Rótulo fora do
     # vocabulário (typo/legado) NÃO casa no rank → a rego mantém allow=false = oculta
     # a evidência (fail-closed conservador, coerente com um controle de sigilo).
@@ -131,13 +132,26 @@ async def evidence_allows(clearance: Optional[str], confidentiality: Optional[st
         "evidence": {"confidentiality": _co},
     })
     if d.get("source") == "error":
-        return bool(get_settings().opa_failsafe_open)
+        return False  # fail-CLOSED: controle de sigilo esconde na dúvida (auditoria holística)
     return bool(d.get("allow"))
+
+
+# Resultado do último re-push no boot — sinal de saúde queryável (64.0.0, auditoria
+# holística): se o re-push falha, o OPA serve o baked enquanto o DB/cockpit mostram a
+# versão editada como vigente → divergência silenciosa. `/opa/status` expõe os errors.
+_LAST_REPUSH: dict = {"pushed": [], "errors": []}
+
+
+def last_repush() -> dict:
+    """Snapshot do último `repush_policies_on_boot` (para o /opa/status)."""
+    return dict(_LAST_REPUSH)
 
 
 async def repush_policies_on_boot() -> dict:
     """Re-empurra a vigente de cada pacote (DB) para o OPA. Best-effort: pacote
-    sem override → mantém o baked; OPA fora do ar → registra erro e segue."""
+    sem override → mantém o baked; OPA fora do ar → registra erro e segue. O
+    resultado fica em `_LAST_REPUSH` (exposto no /opa/status como sinal de drift)."""
+    global _LAST_REPUSH
     pushed, errors = [], []
     for package in PACKAGES:
         try:
@@ -152,4 +166,5 @@ async def repush_policies_on_boot() -> dict:
             pushed.append(f"{package}@v{cur.get('version')}")
         else:
             errors.append(f"{package}: {res.get('error')}")
-    return {"pushed": pushed, "errors": errors}
+    _LAST_REPUSH = {"pushed": pushed, "errors": errors}
+    return dict(_LAST_REPUSH)

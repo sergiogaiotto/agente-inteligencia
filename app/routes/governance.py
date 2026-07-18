@@ -393,6 +393,9 @@ async def opa_status(user=Depends(_gate)):
         "timeout_seconds": float(getattr(s, "opa_timeout_seconds", 2.0)),
         "evidence_acl_enabled": bool(getattr(s, "evidence_acl_enabled", False)),
         "server_ok": await opa_client.server_health(),
+        # 64.0.0: erros do último re-push no boot — se não-vazio, o OPA pode estar
+        # servindo o baked enquanto o DB mostra a versão editada (drift silencioso).
+        "policy_repush_errors": opa_pol.last_repush().get("errors", []),
     }
 
 

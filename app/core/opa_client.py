@@ -232,6 +232,22 @@ _ROLE_TO_OPA = {
 }
 
 
+# Vocabulário de sensibilidade das tools (UI: public/internal/confidential/restricted,
+# igual à confidencialidade das fontes) → tiers da tool_invocation.rego (low/medium/high).
+# Sem este mapa, ligar o OPA nega TODA tool classificada (a rego só conhece low/medium/high).
+# Valores já-tier (low/medium/high) passam direto (retrocompat).
+_SENSITIVITY_TO_TIER = {
+    "public": "low", "internal": "low", "confidential": "medium", "restricted": "high",
+    "low": "low", "medium": "medium", "high": "high",
+}
+
+
+def map_tool_sensitivity_to_tier(sensitivity: Optional[str]) -> str:
+    """Sensibilidade da tool → tier da tool_invocation.rego. Desconhecido/ausente
+    → 'low' (não quebra tools legadas sem rótulo). Ver [[project_opa_cockpit_handoff]]."""
+    return _SENSITIVITY_TO_TIER.get((sensitivity or "").strip().lower(), "low")
+
+
 def map_platform_role_to_opa(role: Optional[str]) -> str:
     """Mapeia o papel RBAC da plataforma para o vocabulário do OPA.
 

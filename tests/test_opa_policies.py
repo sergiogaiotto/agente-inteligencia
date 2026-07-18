@@ -174,16 +174,15 @@ class TestEvidenceAllows:
         assert await P.evidence_allows("public", "internal") is False         # 0<1
 
     @pytest.mark.asyncio
-    async def test_opa_fora_segue_failsafe(self, monkeypatch):
-        import types
-
+    async def test_opa_fora_fail_closed(self, monkeypatch):
+        # Controle de SIGILO: OPA fora/erro → SEMPRE oculta (fail-closed), independe do
+        # opa_failsafe_open (failsafe de DISPONIBILIDADE do gate de interação, semântica
+        # oposta). Vazar restricted/secret num hiccup do OPA seria pior que esconder.
         async def _sim(pkg, rule="allow", input_doc=None):
             return {"allow": None, "source": "error"}
         monkeypatch.setattr(P.opa_client, "simulate", _sim)
-        monkeypatch.setattr(P, "get_settings", lambda: types.SimpleNamespace(opa_failsafe_open=True))
-        assert await P.evidence_allows("public", "secret") is True   # failsafe aberto → allow
-        monkeypatch.setattr(P, "get_settings", lambda: types.SimpleNamespace(opa_failsafe_open=False))
-        assert await P.evidence_allows("public", "secret") is False  # failsafe fechado → deny
+        assert await P.evidence_allows("restricted", "secret") is False
+        assert await P.evidence_allows("public", "public") is False
 
 
 class TestRepushOnBoot:
@@ -214,3 +213,5 @@ class TestRepushOnBoot:
         monkeypatch.setattr(P.opa_client, "push_policy", _push)
         rp = await P.repush_policies_on_boot()
         assert rp["pushed"] == [] and any("opa down" in e for e in rp["errors"])
+        # sinal de saúde: o resultado fica em last_repush() (exposto no /opa/status)
+        assert P.last_repush()["errors"] == rp["errors"]
