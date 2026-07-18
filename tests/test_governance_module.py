@@ -323,3 +323,69 @@ class TestRiskRegister:
             assert f'data-testid="{t}"' in html, t
         assert "async loadRisk()" in html
         assert "/api/v1/governance/risk-register" in html
+
+
+# ─── Guarda de injeção & DLP — configuração (Fase 2) ─────────────────────────
+class FakeStore:
+    def __init__(self):
+        self.saved = {}
+
+    async def set_many(self, d):
+        self.saved.update(d)
+
+
+class TestGuardConfig:
+    @pytest.mark.asyncio
+    async def test_get_traz_as_5_chaves(self):
+        import app.routes.governance as G
+        r = await G.guard_config_get(user={})
+        for k in ("prompt_guard_enabled", "prompt_guard_block_threshold",
+                  "prompt_guard_warn_threshold", "dlp_enabled", "dlp_redact_before_llm"):
+            assert k in r
+
+    @pytest.mark.asyncio
+    async def test_put_persiste_e_aplica(self, monkeypatch):
+        import app.routes.governance as G
+        store = FakeStore()
+        monkeypatch.setattr(G, "settings_store", store)
+
+        async def _apply():
+            return 3
+        monkeypatch.setattr(G, "apply_settings_to_env", _apply)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        r = await G.guard_config_put(G.GuardConfig(prompt_guard_enabled=False, dlp_enabled=True), user={"username": "gov"})
+        assert r["env_applied"] == 3
+        assert store.saved["prompt_guard_enabled"] == "False"
+
+    @pytest.mark.asyncio
+    async def test_put_422_threshold_fora_de_0_1(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "settings_store", FakeStore())
+        with pytest.raises(HTTPException) as e:
+            await G.guard_config_put(G.GuardConfig(prompt_guard_block_threshold=1.5), user={})
+        assert e.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_put_422_aviso_maior_que_bloqueio(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "settings_store", FakeStore())
+        with pytest.raises(HTTPException) as e:
+            await G.guard_config_put(
+                G.GuardConfig(prompt_guard_block_threshold=0.3, prompt_guard_warn_threshold=0.6), user={})
+        assert e.value.status_code == 422
+
+    def test_template_guard_config(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        for t in ("ir-guard-config", "ir-guard-save"):
+            assert f'data-testid="{t}"' in html, t
+        assert "async loadGuard()" in html and "async saveGuard()" in html
+        assert "get guardDirty()" in html
+        assert "/api/v1/governance/guard-config" in html
+
+    def test_chaves_no_ui_to_env_map(self):
+        # sem isto o PUT persiste no banco mas NÃO aplica ao runtime (bug real
+        # pego no smoke: apply_settings_to_env só aplica chaves do mapa).
+        from app.core.config import _UI_TO_ENV_MAP
+        for k in ("prompt_guard_enabled", "prompt_guard_block_threshold",
+                  "prompt_guard_warn_threshold", "dlp_enabled", "dlp_redact_before_llm"):
+            assert k in _UI_TO_ENV_MAP, k

@@ -18,8 +18,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core.auth import require_role
-from app.core.config import get_settings
-from app.core.database import audit_repo, agents_repo, skills_repo, governance_risk_repo
+from app.core.config import get_settings, apply_settings_to_env
+from app.core.database import (
+    audit_repo, agents_repo, skills_repo, governance_risk_repo, settings_store,
+)
 from app.skill_parser.parser import parse_skill_md
 
 router = APIRouter(prefix="/api/v1/governance", tags=["governance"])
@@ -313,3 +315,49 @@ async def classify_risk(entity_type: str, entity_id: str, data: RiskClassify, us
         "action": f"risk_classified:{data.tier}", "actor": who,
     })
     return {"message": "Classificação de risco salva"}
+
+
+# ── Guarda de injeção & DLP — configuração (traz o headless à UI) ─────────────
+class GuardConfig(BaseModel):
+    prompt_guard_enabled: bool | None = None
+    prompt_guard_block_threshold: float | None = None
+    prompt_guard_warn_threshold: float | None = None
+    dlp_enabled: bool | None = None
+    dlp_redact_before_llm: bool | None = None
+
+
+@router.get("/guard-config")
+async def guard_config_get(user=Depends(_gate)):
+    s = get_settings()
+    return {
+        "prompt_guard_enabled": bool(getattr(s, "prompt_guard_enabled", True)),
+        "prompt_guard_block_threshold": float(getattr(s, "prompt_guard_block_threshold", 0.7)),
+        "prompt_guard_warn_threshold": float(getattr(s, "prompt_guard_warn_threshold", 0.4)),
+        "dlp_enabled": bool(getattr(s, "dlp_enabled", True)),
+        "dlp_redact_before_llm": bool(getattr(s, "dlp_redact_before_llm", False)),
+    }
+
+
+@router.put("/guard-config")
+async def guard_config_put(data: GuardConfig, user=Depends(_gate)):
+    payload = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    for k in ("prompt_guard_block_threshold", "prompt_guard_warn_threshold"):
+        if k in payload and not (0.0 <= float(payload[k]) <= 1.0):
+            raise HTTPException(422, f"{k} deve estar entre 0 e 1")
+    if ("prompt_guard_block_threshold" in payload and "prompt_guard_warn_threshold" in payload
+            and float(payload["prompt_guard_warn_threshold"]) > float(payload["prompt_guard_block_threshold"])):
+        raise HTTPException(422, "o limiar de aviso não pode ser maior que o de bloqueio")
+    if not payload:
+        return {"message": "Nada a alterar", "env_applied": 0}
+    # Persiste só estas chaves (sem tocar segredos de outras abas) + aplica em runtime.
+    await settings_store.set_many({k: str(v) for k, v in payload.items()})
+    try:
+        applied = await apply_settings_to_env()
+    except Exception:
+        applied = 0
+    who = (user or {}).get("username") or (user or {}).get("display_name") or "?"
+    await audit_repo.create({
+        "entity_type": "settings", "entity_id": "guard_dlp",
+        "action": "guard_dlp_updated", "actor": who,
+    })
+    return {"message": "Configuração de guarda/DLP salva", "keys": list(payload.keys()), "env_applied": applied}

@@ -577,6 +577,13 @@ _UI_TO_ENV_MAP = {
     # Grounded-by-default: 'true'/'false'. Desliga a recusa global de respostas
     # sem evidência (não recomendado — fura o princípio anti-alucinação).
     "grounding_strict": "GROUNDING_STRICT",
+    # Guarda de injeção & DLP (IA Responsável 59.0.0): editáveis pela UI de
+    # governança → aplicadas ao env em runtime (sem restart), como grounding_strict.
+    "prompt_guard_enabled": "PROMPT_GUARD_ENABLED",
+    "prompt_guard_block_threshold": "PROMPT_GUARD_BLOCK_THRESHOLD",
+    "prompt_guard_warn_threshold": "PROMPT_GUARD_WARN_THRESHOLD",
+    "dlp_enabled": "DLP_ENABLED",
+    "dlp_redact_before_llm": "DLP_REDACT_BEFORE_LLM",
     # MCP per-tool (D): 'true'/'false'. Liga o modo em que cada tool MCP vira sua
     # própria função com o inputSchema real (vs o legado {operation, query}).
     # Default OFF; lido a cada chamada por runtime.per_tool_enabled().
