@@ -260,6 +260,11 @@ class FakeRWRepo:
                 return True
         return False
 
+    async def delete(self, i):
+        n = len(self.rows)
+        self.rows = [r for r in self.rows if r.get("id") != i]
+        return len(self.rows) < n
+
 
 class TestRiskRegister:
     def test_suggested_tier(self):
@@ -431,3 +436,78 @@ class TestCrosswalk:
         assert 'data-testid="ir-crosswalk-detail"' in html
         assert "async loadCrosswalk()" in html
         assert "/api/v1/governance/crosswalk" in html
+
+
+# ─── Attestation + papéis DPO/AI Officer + relatório (Fase 3) ────────────────
+class TestAttestation:
+    @pytest.mark.asyncio
+    async def test_officer_assign_list_remove(self, monkeypatch):
+        import app.routes.governance as G
+        off = FakeRWRepo([])
+        monkeypatch.setattr(G, "governance_officer_repo", off)
+        monkeypatch.setattr(G, "users_repo", FakeRepo2([{"id": "u1", "display_name": "Ana"}]))
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        r = await G.officer_assign(G.OfficerAssign(office="dpo", user_id="u1"), user={"username": "gov"})
+        assert "id" in r and off.rows[0]["office"] == "dpo"
+        lst = await G.officers_list(user={})
+        assert lst["assigned"][0]["name"] == "Ana"
+        assert any(o["office"] == "dpo" for o in lst["offices"])
+        rm = await G.officer_remove(off.rows[0]["id"], user={})
+        assert "removida" in rm["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_officer_422_e_409(self, monkeypatch):
+        import app.routes.governance as G
+        off = FakeRWRepo([{"id": "o1", "office": "dpo", "user_id": "u1"}])
+        monkeypatch.setattr(G, "governance_officer_repo", off)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        with pytest.raises(HTTPException) as e:
+            await G.officer_assign(G.OfficerAssign(office="bogus", user_id="u1"), user={})
+        assert e.value.status_code == 422
+        with pytest.raises(HTTPException) as e:
+            await G.officer_assign(G.OfficerAssign(office="dpo", user_id="u1"), user={})
+        assert e.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_attestation_sign_e_lista(self, monkeypatch):
+        import app.routes.governance as G
+        att = FakeRWRepo([])
+        monkeypatch.setattr(G, "governance_attestation_repo", att)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        r = await G.attestation_sign(G.AttestationCreate(scope="platform", statement="pronto"), user={"username": "gov"})
+        assert "id" in r and att.rows[0]["signed_by"] == "gov"
+        lst = await G.attestations_list(user={})
+        assert lst["attestations"][0]["statement"] == "pronto"
+
+    @pytest.mark.asyncio
+    async def test_attestation_422(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "governance_attestation_repo", FakeRWRepo([]))
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        with pytest.raises(HTTPException) as e:
+            await G.attestation_sign(G.AttestationCreate(scope="bogus", statement="x"), user={})
+        assert e.value.status_code == 422
+        with pytest.raises(HTTPException) as e:
+            await G.attestation_sign(G.AttestationCreate(scope="platform", statement="  "), user={})
+        assert e.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_report_consolida_tudo(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "agents_repo", FakeRepo2([{"id": "a1", "require_evidence": 1, "skill_id": "s"}]))
+        monkeypatch.setattr(G, "governance_risk_repo", FakeRWRepo([]))
+        monkeypatch.setattr(G, "governance_officer_repo", FakeRWRepo([]))
+        monkeypatch.setattr(G, "governance_attestation_repo", FakeRWRepo([]))
+        monkeypatch.setattr(G, "users_repo", FakeRepo2([]))
+        r = await G.compliance_report(user={})
+        for k in ("generated_at", "posture_score", "pillars", "frameworks", "risk", "officers", "attestations"):
+            assert k in r
+        assert len(r["frameworks"]) == 5
+
+    def test_template_prontidao(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert "{ k: 'attest', l: 'Prontidão' }" in html
+        for t in ("ir-officers", "ir-attest-sign", "ir-attest-save", "ir-report-export", "ir-attest-list"):
+            assert f'data-testid="{t}"' in html, t
+        assert "async signAttestation()" in html and "async exportReport()" in html
+        assert "/api/v1/governance/report" in html

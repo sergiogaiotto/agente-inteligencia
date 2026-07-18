@@ -21,6 +21,7 @@ from app.core.auth import require_role
 from app.core.config import get_settings, apply_settings_to_env
 from app.core.database import (
     audit_repo, agents_repo, skills_repo, governance_risk_repo, settings_store,
+    users_repo, governance_officer_repo, governance_attestation_repo,
 )
 from app.skill_parser.parser import parse_skill_md
 
@@ -460,3 +461,125 @@ async def compliance_crosswalk(user=Depends(_gate)):
             "requirements": rows,
         })
     return {"frameworks": frameworks, "controls": controls, "control_labels": _CONTROL_LABELS}
+
+
+# ── Attestation (sign-off) + papéis DPO/AI Officer + relatório exportável ─────
+_OFFICES = {"dpo": "DPO — Encarregado de Dados (LGPD)", "ai_officer": "AI Officer"}
+
+
+class OfficerAssign(BaseModel):
+    office: str
+    user_id: str
+
+
+class AttestationCreate(BaseModel):
+    scope: str = "platform"      # platform | agent | pipeline
+    entity_id: str = ""
+    office: str = ""
+    statement: str
+
+
+async def _user_name(uid: str | None) -> str:
+    if not uid:
+        return "—"
+    u = await users_repo.find_by_id(uid)
+    return (u.get("display_name") or u.get("username") or uid) if u else uid
+
+
+@router.get("/officers")
+async def officers_list(user=Depends(_gate)):
+    rows = await governance_officer_repo.find_all(limit=200)
+    assigned = [{
+        "id": r.get("id"), "office": r.get("office"), "user_id": r.get("user_id"),
+        "name": await _user_name(r.get("user_id")),
+        "assigned_by": r.get("assigned_by"), "assigned_at": str(r.get("assigned_at") or ""),
+    } for r in rows]
+    return {"offices": [{"office": k, "label": v} for k, v in _OFFICES.items()], "assigned": assigned}
+
+
+@router.post("/officers", status_code=201)
+async def officer_assign(data: OfficerAssign, user=Depends(_gate)):
+    if data.office not in _OFFICES:
+        raise HTTPException(422, "papel inválido (dpo|ai_officer)")
+    if not data.user_id:
+        raise HTTPException(422, "usuário obrigatório")
+    if await governance_officer_repo.find_all(limit=1, office=data.office, user_id=data.user_id):
+        raise HTTPException(409, "usuário já designado para este papel")
+    who = (user or {}).get("username") or "?"
+    oid = str(uuid.uuid4())
+    await governance_officer_repo.create({"id": oid, "office": data.office, "user_id": data.user_id, "assigned_by": who})
+    await audit_repo.create({
+        "entity_type": "governance_officer", "entity_id": data.user_id,
+        "action": f"officer_assigned:{data.office}", "actor": who,
+    })
+    return {"id": oid, "message": "Papel designado"}
+
+
+@router.delete("/officers/{officer_id}")
+async def officer_remove(officer_id: str, user=Depends(_gate)):
+    if not await governance_officer_repo.delete(officer_id):
+        raise HTTPException(404)
+    return {"message": "Designação removida"}
+
+
+@router.get("/attestations")
+async def attestations_list(user=Depends(_gate)):
+    rows = await governance_attestation_repo.find_all(limit=100)
+    rows.sort(key=lambda r: str(r.get("signed_at") or ""), reverse=True)
+    return {"attestations": [{
+        "id": r.get("id"), "scope": r.get("scope"), "entity_id": r.get("entity_id") or "",
+        "office": r.get("office") or "", "statement": r.get("statement") or "",
+        "signed_by": r.get("signed_by"), "signed_at": str(r.get("signed_at") or ""),
+    } for r in rows]}
+
+
+@router.post("/attestations", status_code=201)
+async def attestation_sign(data: AttestationCreate, user=Depends(_gate)):
+    if data.scope not in ("platform", "agent", "pipeline"):
+        raise HTTPException(422, "escopo inválido (platform|agent|pipeline)")
+    if not (data.statement or "").strip():
+        raise HTTPException(422, "a declaração é obrigatória")
+    who = (user or {}).get("username") or (user or {}).get("display_name") or "?"
+    aid = str(uuid.uuid4())
+    await governance_attestation_repo.create({
+        "id": aid, "scope": data.scope, "entity_id": data.entity_id or None,
+        "office": data.office or None, "statement": data.statement.strip(), "signed_by": who,
+    })
+    await audit_repo.create({
+        "entity_type": "governance_attestation", "entity_id": data.entity_id or data.scope,
+        "action": "attestation_signed", "actor": who,
+    })
+    return {"id": aid, "message": "Prontidão assinada"}
+
+
+@router.get("/report")
+async def compliance_report(user=Depends(_gate)):
+    """Relatório de conformidade consolidado (para exportar ao auditor)."""
+    score, pillars = _posture()
+    controls = _controls()
+    crosswalk = []
+    for name, reqs in _FRAMEWORKS.items():
+        covered = sum(1 for _, keys in reqs if any(controls.get(k) for k in keys))
+        crosswalk.append({"framework": name, "covered": covered, "total": len(reqs),
+                          "pct": round(covered / len(reqs) * 100) if reqs else 0})
+    agents = await agents_repo.find_all(limit=500)
+    classifications = {c.get("entity_id"): c for c in await governance_risk_repo.find_all(limit=1000, entity_type="agent")}
+    risk = Counter()
+    for a in agents:
+        cls = classifications.get(a.get("id"))
+        risk[(cls.get("tier") if cls else None) or "unclassified"] += 1
+    officers = await governance_officer_repo.find_all(limit=200)
+    attests = await governance_attestation_repo.find_all(limit=20)
+    return {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "posture_score": score,
+        "pillars": pillars,
+        "capabilities": controls,
+        "frameworks": crosswalk,
+        "risk": dict(risk),
+        "officers": [{"office": o.get("office"), "user_id": o.get("user_id"),
+                      "name": await _user_name(o.get("user_id"))} for o in officers],
+        "attestations": [{"scope": a.get("scope"), "office": a.get("office"),
+                          "statement": a.get("statement"), "signed_by": a.get("signed_by"),
+                          "signed_at": str(a.get("signed_at") or "")} for a in attests],
+    }
