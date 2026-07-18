@@ -1193,6 +1193,12 @@ _IDEMPOTENT_MIGRATIONS = [
     "ALTER TABLE domains ADD COLUMN IF NOT EXISTS color TEXT",
     "ALTER TABLE domains ADD COLUMN IF NOT EXISTS icon TEXT",
     "ALTER TABLE domains ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'",
+    # Evidence ACL (64.0.0): clearance do usuário p/ o "no read up" da evidence.rego
+    # (só devolve evidência cujo confidentiality <= clearance do usuário). Default
+    # 'internal' = nível default das fontes (knowledge_sources.confidentiality_label)
+    # → ligar a flag evidence_acl_enabled NÃO zera o RAG de ninguém; só confidential/
+    # secret ficam restritos até um admin designar clearances mais altos.
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS clearance TEXT DEFAULT 'internal'",
     "ALTER TABLE interactions ADD COLUMN IF NOT EXISTS title TEXT",
     "ALTER TABLE interactions ADD COLUMN IF NOT EXISTS trace_data TEXT DEFAULT '{}'",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS version TEXT DEFAULT '1.0.0'",

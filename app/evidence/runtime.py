@@ -97,6 +97,7 @@ class Retriever:
         skill_evidence_policy: dict | None = None,
         top_n: int = 5,
         allowed_source_ids: list[str] | None = None,
+        user_clearance: str | None = None,
     ) -> list[EvidenceResult]:
         """Busca top_n evidências.
 
@@ -104,6 +105,10 @@ class Retriever:
           - None → sem filtro (todas as sources autorizadas; comportamento legacy).
           - lista vazia → bloqueado (skill declarou zero sources permitidas).
           - lista populada → BM25 + Qdrant filtram para esses IDs.
+
+        user_clearance (Evidence ACL, 64.0.0): quando `evidence_acl_enabled` está ON,
+        remove do resultado as evidências cuja confidencialidade excede o clearance do
+        usuário (evidence.rego, "no read up"). None ou flag OFF → sem filtro.
         """
         with _tracer.start_as_current_span("evidence.retrieve") as span:
             span.set_attribute("query.length", len(query or ""))
@@ -120,13 +125,13 @@ class Retriever:
             settings = get_settings()
             if not settings.rag_v2_enabled:
                 span.set_attribute("retriever.path", "legacy_disabled")
-                return await self._legacy_search(query, top_n)
+                return await self._acl_filter(await self._legacy_search(query, top_n), user_clearance)
 
             # Há chunks ingeridos? Se não, fallback.
             has_chunks = await self._has_any_chunks()
             if not has_chunks:
                 span.set_attribute("retriever.path", "legacy_no_chunks")
-                return await self._legacy_search(query, top_n)
+                return await self._acl_filter(await self._legacy_search(query, top_n), user_clearance)
 
             span.set_attribute("retriever.path", "hybrid_v2")
 
@@ -156,7 +161,30 @@ class Retriever:
                 await self._diagnose_empty_filtered_result(allowed_source_ids, span)
 
             # Hidrata: pega texto + metadados das sources
-            return await self._hydrate(top)
+            return await self._acl_filter(await self._hydrate(top), user_clearance)
+
+    async def _acl_filter(
+        self, results: list[EvidenceResult], user_clearance: str | None
+    ) -> list[EvidenceResult]:
+        """Evidence ACL (64.0.0): remove evidências que o usuário não tem clearance
+        para ver (evidence.rego, "no read up"). No-op quando `evidence_acl_enabled`
+        está OFF (default) ou sem clearance — comportamento de hoje, zero regressão."""
+        if not results or not user_clearance or not get_settings().evidence_acl_enabled:
+            return results
+        from app.core import opa_policies
+        allowed = []
+        for ev in results:
+            try:
+                if await opa_policies.evidence_allows(user_clearance, ev.confidentiality):
+                    allowed.append(ev)
+            except Exception as e:
+                # Nunca derruba o retrieval por causa do ACL; fail-closed no erro
+                # (não devolve a evidência de decisão indeterminada).
+                logger.warning("evidence_acl.eval_failed id=%s err=%s", ev.evidence_id, e)
+        if len(allowed) != len(results):
+            logger.info("evidence_acl.filtered kept=%d of=%d clearance=%s",
+                        len(allowed), len(results), user_clearance)
+        return allowed
 
     async def _diagnose_empty_filtered_result(
         self, allowed_source_ids: list[str], span

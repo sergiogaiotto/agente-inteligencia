@@ -243,17 +243,17 @@ def map_platform_role_to_opa(role: Optional[str]) -> str:
 
 
 async def resolve_opa_user(owner_user_id: Optional[str]) -> dict[str, str]:
-    """Contexto REAL do usuário atuante (status + papel OPA) para os PEPs.
+    """Contexto REAL do usuário atuante (status + papel OPA + clearance) para os PEPs.
 
-    Faz no máximo 1 lookup por PK (`users_repo.find_by_id`) e reusa o mesmo row
-    para status e papel. Sem platform-user atuante (owner None — ex.: invoke via
-    API key ou chat de cliente-final externo) OU lookup falho → default seguro e
-    NÃO-regressivo: status "active", papel "operator" (o que o engine assumia
-    antes). Nunca propaga exceção.
+    Faz no máximo 1 lookup por PK (`users_repo.find_by_id`) e reusa o mesmo row para
+    status, papel e clearance (o "no read up" de evidência — 64.0.0). Sem platform-user
+    atuante (owner None — ex.: invoke via API key ou chat de cliente-final externo) OU
+    lookup falho → default seguro e NÃO-regressivo: status "active", papel "operator",
+    clearance "internal" (= nível default das fontes). Nunca propaga exceção.
     """
     uid = (owner_user_id or "").strip()
     if not uid:
-        return {"status": "active", "role": "operator"}
+        return {"status": "active", "role": "operator", "clearance": "internal"}
     row = None
     try:
         from app.core.database import users_repo  # import tardio: evita ciclo
@@ -261,9 +261,10 @@ async def resolve_opa_user(owner_user_id: Optional[str]) -> dict[str, str]:
     except Exception as e:
         logger.warning(f"resolve_opa_user({uid[:12]}) lookup falhou: {e}")
     if not row:
-        return {"status": "active", "role": "operator"}
+        return {"status": "active", "role": "operator", "clearance": "internal"}
     status = (str(row.get("status") or "active")).strip().lower() or "active"
-    return {"status": status, "role": map_platform_role_to_opa(row.get("role"))}
+    clearance = (str(row.get("clearance") or "internal")).strip().lower() or "internal"
+    return {"status": status, "role": map_platform_role_to_opa(row.get("role")), "clearance": clearance}
 
 
 # ════════════════════════════════════════════════════════════════════

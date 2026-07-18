@@ -173,6 +173,10 @@ async def create_user(data: UserCreate, request: Request):
     if any(u["username"] == data.username for u in existing):
         raise HTTPException(409, "Username já existe")
 
+    cl = (data.clearance or "internal").strip().lower()
+    if cl not in _CLEARANCE_LEVELS:
+        raise HTTPException(422, "clearance inválido (public|internal|confidential|restricted)")
+
     uid = str(uuid.uuid4())
     await users_repo.create({
         "id": uid,
@@ -182,6 +186,7 @@ async def create_user(data: UserCreate, request: Request):
         "email": data.email or "",
         "role": data.role,
         "domains": data.domains or "[]",
+        "clearance": cl,
     })
     return {"id": uid, "message": "Usuário criado", "role": data.role}
 
@@ -231,6 +236,16 @@ async def update_user(user_id: str, data: UserUpdate, request: Request):
         upd["domains"] = data.domains
     if data.password:
         upd["password_hash"] = hash_password(data.password)
+    # Clearance (Evidence ACL, 64.0.0): controle de acesso a DADOS. Só privilegiado
+    # define — impede auto-escalonamento (um 'comum' editando a si mesmo poderia se
+    # dar clearance alto e ler tudo). Validado contra o vocabulário da evidence.rego.
+    if data.clearance is not None:
+        if not _is_privileged(caller):
+            raise HTTPException(403, "Apenas Root/Admin/Governança definem clearance")
+        cl = (data.clearance or "").strip().lower()
+        if cl not in _CLEARANCE_LEVELS:
+            raise HTTPException(422, "clearance inválido (public|internal|confidential|restricted)")
+        upd["clearance"] = cl
 
     if upd:
         await users_repo.update(user_id, upd)
@@ -269,6 +284,9 @@ async def _get_caller(request: Request):
 
 
 _PRIVILEGED_ROLES = ("root", "admin", "governanca")
+# Evidence ACL (64.0.0): níveis de clearance/confidencialidade — mesmo vocabulário
+# da classificação das fontes (evidence.html: public|internal|confidential|restricted).
+_CLEARANCE_LEVELS = ("public", "internal", "confidential", "restricted")
 
 
 def _is_privileged(caller) -> bool:

@@ -153,6 +153,39 @@ class TestValidateAndPush:
         assert res["ok"] is True and seen["pid"] == "policies/interaction.rego"
 
 
+class TestEvidenceAllows:
+    """Evidence ACL (64.0.0): 'no read up' via evidence.rego."""
+    _RANK = {"public": 0, "internal": 1, "confidential": 2, "restricted": 3, "secret": 3}
+
+    def _fake_sim(self):
+        async def _sim(pkg, rule="allow", input_doc=None):
+            c = self._RANK.get((input_doc["user"]["clearance"]), -1)
+            e = self._RANK.get((input_doc["evidence"]["confidentiality"]), 99)
+            return {"allow": c >= e, "source": "opa"}
+        return _sim
+
+    @pytest.mark.asyncio
+    async def test_no_read_up(self, monkeypatch):
+        monkeypatch.setattr(P.opa_client, "simulate", self._fake_sim())
+        assert await P.evidence_allows("confidential", "internal") is True    # 2>=1
+        assert await P.evidence_allows("internal", "confidential") is False   # 1<2
+        assert await P.evidence_allows("restricted", "secret") is True        # 3>=3 (aliases)
+        assert await P.evidence_allows(None, None) is True                    # internal>=internal (defaults)
+        assert await P.evidence_allows("public", "internal") is False         # 0<1
+
+    @pytest.mark.asyncio
+    async def test_opa_fora_segue_failsafe(self, monkeypatch):
+        import types
+
+        async def _sim(pkg, rule="allow", input_doc=None):
+            return {"allow": None, "source": "error"}
+        monkeypatch.setattr(P.opa_client, "simulate", _sim)
+        monkeypatch.setattr(P, "get_settings", lambda: types.SimpleNamespace(opa_failsafe_open=True))
+        assert await P.evidence_allows("public", "secret") is True   # failsafe aberto → allow
+        monkeypatch.setattr(P, "get_settings", lambda: types.SimpleNamespace(opa_failsafe_open=False))
+        assert await P.evidence_allows("public", "secret") is False  # failsafe fechado → deny
+
+
 class TestRepushOnBoot:
     @pytest.mark.asyncio
     async def test_reempurra_so_a_vigente_de_pacotes_com_override(self, monkeypatch):

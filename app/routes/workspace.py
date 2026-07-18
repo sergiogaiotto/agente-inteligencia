@@ -2520,11 +2520,16 @@ async def _invoke_rag_binding_direct(
     t0 = time.monotonic()
     try:
         from app.evidence.runtime import retriever as _retriever
+        from app.core import opa_client
+        # 64.0.0: aplica o Evidence ACL também neste caminho direto (o engine já
+        # aplica; sem isto o "no read up" era contornável via invoke de binding RAG).
+        _clr = (await opa_client.resolve_opa_user(owner_user_id)).get("clearance")
         results = await _retriever.search(
             query=query,
             skill_evidence_policy=policy if policy else None,
             top_n=top_n,
             allowed_source_ids=[data.binding_id],
+            user_clearance=_clr,
         )
         latency_ms = int((time.monotonic() - t0) * 1000)
     except Exception as e:

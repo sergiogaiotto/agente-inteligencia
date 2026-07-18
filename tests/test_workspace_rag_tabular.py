@@ -641,11 +641,12 @@ class TestInvokeRagBindingDirect:
             return_value = [_FakeEvidenceResult()]
         called = {"args": None}
 
-        async def fake_search(query, skill_evidence_policy=None, top_n=5, allowed_source_ids=None):
+        async def fake_search(query, skill_evidence_policy=None, top_n=5, allowed_source_ids=None, user_clearance=None):
             called["args"] = {
                 "query": query,
                 "top_n": top_n,
                 "allowed_source_ids": allowed_source_ids,
+                "user_clearance": user_clearance,  # 64.0.0: Evidence ACL propagado
             }
             return return_value
 

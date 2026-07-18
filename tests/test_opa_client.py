@@ -48,34 +48,42 @@ class _BoomUsers:
 class TestResolveOpaUser:
     @pytest.mark.asyncio
     async def test_sem_owner_default_seguro(self):
-        assert await opa_client.resolve_opa_user(None) == {"status": "active", "role": "operator"}
-        assert await opa_client.resolve_opa_user("   ") == {"status": "active", "role": "operator"}
+        assert await opa_client.resolve_opa_user(None) == {"status": "active", "role": "operator", "clearance": "internal"}
+        assert await opa_client.resolve_opa_user("   ") == {"status": "active", "role": "operator", "clearance": "internal"}
 
     @pytest.mark.asyncio
     async def test_owner_admin_destrava_high(self, monkeypatch):
         import app.core.database as DB
         fake = _FakeUsers({"id": "u1", "role": "admin", "status": "active"})
         monkeypatch.setattr(DB, "users_repo", fake)
-        assert await opa_client.resolve_opa_user("u1") == {"status": "active", "role": "admin"}
+        assert await opa_client.resolve_opa_user("u1") == {"status": "active", "role": "admin", "clearance": "internal"}
         assert fake.calls == 1  # 1 lookup por PK
+
+    @pytest.mark.asyncio
+    async def test_owner_com_clearance_no_row(self, monkeypatch):
+        # 64.0.0: o clearance sai do MESMO lookup (sem query extra).
+        import app.core.database as DB
+        monkeypatch.setattr(DB, "users_repo", _FakeUsers({"id": "u9", "role": "comum", "status": "active", "clearance": "Confidential"}))
+        r = await opa_client.resolve_opa_user("u9")
+        assert r == {"status": "active", "role": "operator", "clearance": "confidential"}
 
     @pytest.mark.asyncio
     async def test_owner_comum_suspenso(self, monkeypatch):
         import app.core.database as DB
         monkeypatch.setattr(DB, "users_repo", _FakeUsers({"id": "u2", "role": "comum", "status": "Suspended"}))
-        assert await opa_client.resolve_opa_user("u2") == {"status": "suspended", "role": "operator"}
+        assert await opa_client.resolve_opa_user("u2") == {"status": "suspended", "role": "operator", "clearance": "internal"}
 
     @pytest.mark.asyncio
     async def test_owner_inexistente_default(self, monkeypatch):
         import app.core.database as DB
         monkeypatch.setattr(DB, "users_repo", _FakeUsers(None))
-        assert await opa_client.resolve_opa_user("ghost") == {"status": "active", "role": "operator"}
+        assert await opa_client.resolve_opa_user("ghost") == {"status": "active", "role": "operator", "clearance": "internal"}
 
     @pytest.mark.asyncio
     async def test_lookup_falha_nao_propaga(self, monkeypatch):
         import app.core.database as DB
         monkeypatch.setattr(DB, "users_repo", _BoomUsers())
-        assert await opa_client.resolve_opa_user("u3") == {"status": "active", "role": "operator"}
+        assert await opa_client.resolve_opa_user("u3") == {"status": "active", "role": "operator", "clearance": "internal"}
 
 
 # ─── Helpers HTTP do cockpit (health / list / simulate) ──────────────────────

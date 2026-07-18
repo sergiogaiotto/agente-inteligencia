@@ -2504,7 +2504,7 @@ class KBQueryRequest(BaseModel):
 
 
 @router.post("/knowledge-sources/{ks_id}/query")
-async def query_knowledge_source(ks_id: str, data: KBQueryRequest):
+async def query_knowledge_source(ks_id: str, data: KBQueryRequest, request: Request):
     """Executa retrieval híbrido (BM25 + vetorial + RRF) restrito a UMA KB.
 
     Usado pela UI de inspeção pra que o operador teste se a KB está
@@ -2512,11 +2512,17 @@ async def query_knowledge_source(ks_id: str, data: KBQueryRequest):
     com scores ordenados por relevância.
     """
     from app.evidence.runtime import Retriever
+    from app.core import opa_client
     if not await knowledge_repo.find_by_id(ks_id):
         raise HTTPException(404, "knowledge_source não encontrada")
     if not data.query or not data.query.strip():
         raise HTTPException(400, "Query vazia")
 
+    # 64.0.0: aplica o Evidence ACL nesta bancada de inspeção — resolve o clearance
+    # do usuário autenticado (middleware popula request.state.auth_user); sem dono
+    # conhecido → 'internal' (default seguro). Sem isto o filtro era contornável aqui.
+    _caller = getattr(request.state, "auth_user", None) or {}
+    _clr = (await opa_client.resolve_opa_user(_caller.get("id"))).get("clearance")
     retriever = Retriever()
     # Onda Q (2026-05-30): Retriever expõe `search()` (consistente com
     # _bm25_search / _vector_search / _legacy_search internos). Caller original
@@ -2526,6 +2532,7 @@ async def query_knowledge_source(ks_id: str, data: KBQueryRequest):
         query=data.query.strip(),
         top_n=max(1, min(data.top_n, 20)),
         allowed_source_ids=[ks_id],  # filtra só nesta KB
+        user_clearance=_clr,  # 64.0.0: "no read up"
     )
     return {
         "source_id": ks_id,
