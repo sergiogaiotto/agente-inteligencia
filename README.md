@@ -2,7 +2,12 @@
 
 **Plataforma de Gestão e Desenvolvimento de Multi-Agentes de IA, orientada a SKILL.md, sobre AI Mesh**
 
-> Documenta a plataforma na versão **42.1.0** · Especificação Funcional §1–§24 · pt-BR
+> Documenta a plataforma na versão **53.0.2** · Especificação Funcional §1–§24 · pt-BR
+
+> **Novidades 52.x–53.x** (destaques):
+> - **Recusa/escalonamento viram estado da FSM (opt-in)** — uma recusa redigida pelo agente (dado de terceiro, injeção de prompt) ou um escalonamento transicionam para `Refuse`/`Escalate` via a flag `verifier_signals_drive_fsm`, em **qualquer** caminho de verificação (Parte I, §8).
+> - **Fundamentação por RAG mais honesta** — declarar `## Evidence Policy` só fundamenta com **"Exigir evidência" ligado** e `min_relevance` baixo (~0,0); o diagnóstico aponta a **causa real** quando o RAG é pulado (Parte I, §7).
+> - **Métrica de alucinação do Harness honesta** — medida só sobre os casos com factualidade avaliada (`N/A` quando não medida), sem punir pipeline corretamente fundamentado ([4.13](#413-harness-de-avaliação-harness)).
 
 > **Novidades 40.x–42.x** (destaques detalhados nas seções indicadas):
 > - **Cobertura per-tool + depreciação visível** — métrica-gate de prontidão da frota MCP, chip "legado" e dry-run per-tool completo ([4.6](#46-mcp--tool-registry-mcp)).
@@ -132,11 +137,15 @@ Esta seção explica os conceitos na ordem em que você vai encontrá-los. Cada 
 
 **Fundamento:** por padrão a plataforma é *grounded-by-default*: o agente responde **apenas** com base em evidências (anexos, bases RAG, resultados de ferramentas). Sem fundamento suficiente, a resposta correta é uma **recusa estruturada** com próximo passo — nunca uma invenção confiante. A busca de evidências é híbrida (BM25 + vetorial com fusão RRF, re-ranqueada por LLM opcional), sobre bases classificadas por confidencialidade. Um agente pode receber a exceção `allow_general_knowledge` quando conhecimento geral for desejado (ex.: brainstorming).
 
+**Ligar o RAG na prática (52.2.0):** declarar fontes no `## Evidence Policy` da skill **não basta** para fundamentar dentro de um pipeline — a busca só dispara com **"Exigir evidência" ligado** no agente. E como os scores da fusão RRF são baixos (~0,03), um `min_relevance` aparentemente razoável (ex.: 0,2) descarta **tudo** em silêncio; use ~0,0. Quando o agente declara fontes mas o RAG foi pulado (evidência desligada), o diagnóstico da resposta aponta a **causa real** em vez do genérico "registre bases".
+
 ### 8. FSM — a máquina de estados de toda interação
 
 **Analogia:** a esteira de um protocolo hospitalar: toda entrada passa pelas mesmas etapas, e tudo fica registrado.
 
 **Fundamento:** cada interação percorre 9 estados: `Intake → PolicyCheck → RetrieveEvidence → DraftAnswer → VerifyEvidence → (Recommend | Refuse | Escalate) → LogAndClose`. Invariantes: todo caminho termina em `LogAndClose` (não existe execução sem registro); nenhum rascunho chega ao usuário sem `VerifyEvidence`; toda transição é auditada. A **decisão real** (Recommend/Refuse/Escalate) fica no log de transições — é ela que o Harness compara com o esperado.
+
+**Recusa/escalonamento como estado (53.0.0, opt-in):** uma recusa redigida no texto ("não posso fornecer dados de terceiros") ou um escalonamento ("encaminhar ao NOC") normalmente terminavam em `Recommend` — a decisão ficava só na prosa. Com a flag `verifier_signals_drive_fsm` (Configurações → Parâmetros, **desligada por padrão**), o Verifier detecta esses sinais no rascunho e a FSM transiciona para `Refuse`/`Escalate` — em **qualquer** caminho de verificação, inclusive quando o juiz LLM está indisponível (independente do juiz, 53.0.1). Desligada, o mapeamento de estados é idêntico ao histórico.
 
 ### 9. LLM-as-Judge — o segundo par de olhos
 
@@ -391,6 +400,7 @@ Cada módulo abaixo segue o mesmo esqueleto: **O que é · Fundamento · Quando 
 - **Fundamento:** detalhado na Parte VI. Em resumo: casos reais (com estado esperado, categoria, peso, regex e *red flags*), avaliação por **alvo** (agente isolado ou pipeline completo), gate multi-dimensional, comparação A×B com casos divergentes, painel **Baseline por alvo**, e as **Frases-Prova rodando em todo run de pipeline**.
 - **Exemplo de ação:** monte 15 casos (5 adversariais) → baseline no pipeline → mude o prompt do especialista → rode **regressão** → o gate compara com o baseline do mesmo alvo e acusa a queda de acurácia antes de qualquer cliente.
 - **Golden Dataset editável (40.2.0):** cada caso tem **editar** (✏️) e **excluir** (🗑️) na própria linha — corrigir um typo não exige mais recriar o caso do zero. A integridade histórica é preservada por desenho: cada execução guarda o *hash* do conjunto que avaliou, então editar/excluir um caso **não reescreve resultados passados** — as próximas execuções é que passam a usar o conjunto novo (a confirmação de exclusão explica isso).
+- **Métrica de alucinação honesta (52.2.1):** a `hallucination_rate` é medida **só sobre os casos em que a factualidade foi de fato avaliada** — e fica `N/A` quando o juiz não pôde pontuar nenhuma —, espelhando `safety`/`contract`. Assim um pipeline **corretamente fundamentado** deixa de ser reprovado por uma métrica que o próprio harness não conseguiu medir (ex.: quando as evidências recuperadas não chegam ao juiz do envelope reancorado).
 
 ## 4.14 Qualidade / Auditoria (`/quality`)
 
@@ -421,7 +431,7 @@ Abas separadas por papel:
 |---|---|---|
 | **Plataforma** | Root | Credenciais dos provedores LLM (seladas), LangFuse, chaves de infraestrutura |
 | **Roteamento LLM** | Root/Admin | Modelo por tipo de tarefa + papel `judge` + fallback visível no trace |
-| **Parâmetros** | Root/Admin | ~40 parâmetros com **valor efetivo + fonte** (banco vs ambiente) e "restaurar padrão": gates do Harness, verifier, invoke assíncrono, per-tool global, RAG com gabarito, gate de Frases-Prova… Tudo vale **em runtime, sem restart** |
+| **Parâmetros** | Root/Admin | ~40 parâmetros com **valor efetivo + fonte** (banco vs ambiente) e "restaurar padrão": gates do Harness, verifier, sinais de decisão Verifier→FSM (`verifier_signals_drive_fsm`), invoke assíncrono, per-tool global, RAG com gabarito, gate de Frases-Prova… Tudo vale **em runtime, sem restart** |
 | **Preços LLM** | Root/Admin | Tabela de preço por modelo → SSOT de custo |
 | **System Prompts** | Root | Biblioteca versionada de prompts reutilizáveis |
 | **Usuários** | Root/Admin | CRUD com papéis e domínios |
