@@ -11,7 +11,7 @@
         {% endif %}
         {# Roteamento LLM: root E admin — o Admin precisa poder definir o
            "LLM como Juiz" (e demais papéis) sem depender do root. #}
-        {% if user_role in ['root', 'admin'] %}
+        {% if user_role in ['root', 'admin', 'governanca'] %}
         <button @click="tab='routing'; loadRouting()" data-testid="settings-tab-routing" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='routing' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Roteamento LLM</button>
         <button @click="tab='params'; loadParams()" data-testid="settings-tab-params" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
@@ -23,11 +23,11 @@
         <button @click="tab='prompts'; loadPrompts()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='prompts' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">System Prompts</button>
         {% endif %}
-        {% if user_role in ['root', 'admin'] %}
+        {% if user_role in ['root', 'admin', 'governanca'] %}
         <button @click="tab='users'; loadUsers()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='users' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Usuários</button>
         {% endif %}
-        {% if user_role in ['root', 'admin'] %}
+        {% if user_role in ['root', 'admin', 'governanca'] %}
         <button @click="tab='domains'; loadDomainsHub()" data-testid="settings-tab-domains" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='domains' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Domínios</button>
         {% endif %}
@@ -1020,6 +1020,7 @@
                     <option value="">Todos os tipos</option>
                     <option value="root">Root</option>
                     <option value="admin">Admin</option>
+                    <option value="governanca">Governança</option>
                     <option value="comum">Comum</option>
                 </select>
                 <span class="text-[11px] text-surface-400" x-text="userList.length + ' usuário(s)'"></span>
@@ -1091,6 +1092,7 @@
                         <select x-model="userForm.role" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none">
                             {% if user_role == 'root' %}<option value="root">Root</option>{% endif %}
                             <option value="admin">Admin</option>
+                            <option value="governanca">Governança</option>
                             <option value="comum">Comum</option>
                         </select></div>
                         <div>

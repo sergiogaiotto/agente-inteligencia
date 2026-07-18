@@ -243,6 +243,10 @@ def require_role(*roles: str):
             ...
     """
     allowed = {r.strip().lower() for r in roles if r}
+    # "Governança" (56.0.0) herda TODOS os poderes de Admin: onde admin é
+    # permitido, governanca também é. Root fica à parte — acesso irrestrito.
+    if "admin" in allowed:
+        allowed.add("governanca")
 
     async def _dep(request: Request) -> dict:
         user = await require_user(request)

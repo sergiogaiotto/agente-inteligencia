@@ -23,6 +23,7 @@ from app.routes.db_health import router as db_health_router
 from app.routes.playground import router as playground_router
 from app.routes.optimizer import router as optimizer_router
 from app.routes.privacy import router as privacy_router
+from app.routes.governance import router as governance_router
 
 BASE_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
@@ -303,6 +304,7 @@ app.include_router(logs_admin_router)
 app.include_router(db_health_router)
 app.include_router(playground_router)
 app.include_router(privacy_router)
+app.include_router(governance_router)
 # Otimização de Prompt/Skill (45.0.0, PR3b): propositor grounded de variantes.
 app.include_router(optimizer_router)
 

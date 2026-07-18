@@ -268,7 +268,7 @@ async def _get_caller(request: Request):
     return await users_repo.find_by_id(uid)
 
 
-_PRIVILEGED_ROLES = ("root", "admin")
+_PRIVILEGED_ROLES = ("root", "admin", "governanca")
 
 
 def _is_privileged(caller) -> bool:

@@ -81,6 +81,7 @@ class TestUI:
         i = html.find('data-testid="btn-backfill-discovered"')
         assert i > 0
         antes = html[max(0, i - 400):i]
-        assert "{% if user_role in ['root', 'admin'] %}" in antes, (
-            "sem gate no template o botão vira 403 morto para membro"
+        assert "{% if user_role in ['root', 'admin', 'governanca'] %}" in antes, (
+            "sem gate no template o botão vira 403 morto para membro "
+            "(Governança herda Admin desde 56.0.0)"
         )

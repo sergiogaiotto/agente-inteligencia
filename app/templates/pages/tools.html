@@ -27,7 +27,7 @@
                     <span class="text-[11px] font-semibold text-brand-900">Cobertura per-tool</span>
                     <span class="text-[10px] text-surface-400">prontidão para aposentar o modo legado</span>
                 </div>
-                {% if user_role in ['root', 'admin'] %}
+                {% if user_role in ['root', 'admin', 'governanca'] %}
                 <button @click="runBackfill()" :disabled="!!backfilling"
                         class="rounded-lg border border-surface-200 px-2.5 py-1 text-[10px] font-medium text-surface-600 hover:border-brand-300 hover:text-brand-600 disabled:opacity-50"
                         data-testid="btn-backfill-discovered"

@@ -458,7 +458,7 @@
                                     · turn_id=<span x-text="v.turn_id || '—'"></span>
                                     · created=<span x-text="tzDateTime(v.created_at) || '—'"></span>
                                 </div>
-                                {% if user_role in ['root', 'admin'] %}
+                                {% if user_role in ['root', 'admin', 'governanca'] %}
                                 <button x-show="v.draft_redacted && v.profile !== 'rejudge'" x-cloak
                                         @click.stop="rejudge(v)" :disabled="rejudging === v.id"
                                         data-testid="quality-rejudge-btn"

@@ -33,7 +33,11 @@ PAGES = {
     "/settings": {"template":"pages/settings.html","title":"Configurações","section":"settings"},
     "/api-connectors": {"template":"pages/api_connectors.html","title":"API Connectors","section":"api_connectors"},
     "/federation": {"template":"pages/federation.html","title":"Federação","section":"federation"},
+    "/ia-responsavel": {"template":"pages/ia_responsavel.html","title":"IA Responsável","section":"ia-responsavel"},
 }
+
+# Perfis que enxergam o módulo de governança (Governança herda de Admin; Root irrestrito).
+_GOVERNANCE_ROLES = ("root", "admin", "governanca")
 
 async def _get_user(request: Request):
     from app.core.auth import read_session_uid
@@ -149,3 +153,12 @@ async def pg_api_connectors(r: Request): return await _render(r, "/api-connector
 
 @router.get("/federation", response_class=HTMLResponse)
 async def pg_federation(r: Request): return await _render(r, "/federation")
+
+@router.get("/ia-responsavel", response_class=HTMLResponse)
+async def pg_ia_responsavel(r: Request):
+    # Módulo de governança: gate server-side. Não-privilegiado volta ao início;
+    # não-autenticado cai no fluxo de login do _render.
+    user = await _get_user(r)
+    if user and (user.get("role") or "").lower() not in _GOVERNANCE_ROLES:
+        return RedirectResponse("/", status_code=302)
+    return await _render(r, "/ia-responsavel")

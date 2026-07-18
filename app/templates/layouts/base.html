@@ -383,6 +383,15 @@
 
                 <div class="px-2 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-surface-400" x-show="!sidebarCollapsed">Análise</div>
 
+                {% if user_role in ['root', 'admin', 'governanca'] %}
+                <div class="relative" id="tour-nav-ia-responsavel">
+                    <a href="/ia-responsavel" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'ia-responsavel' %}active{% endif %}">
+                        <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 3l7.5 3v5.25c0 4.5-3.15 7.5-7.5 9-4.35-1.5-7.5-4.5-7.5-9V6L12 3z"/><path d="M9.5 12l1.75 1.75L15 10"/></svg>
+                        <span x-show="!sidebarCollapsed">IA Responsável</span>
+                    </a>
+                </div>
+                {% endif %}
+
                 <!-- §14.2 Verifier — visualização de scores multi-dimensionais -->
                 <div class="relative" id="tour-nav-quality">
                     <a href="/quality" class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium {% if section == 'quality' %}active{% endif %}">
