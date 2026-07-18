@@ -286,6 +286,11 @@
                 <datalist id="wizard-domain-list">
                     <template x-for="d in wizardDomains" :key="d.id"><option :value="d.name"></option></template>
                 </datalist>
+                <button type="button" x-show="wizardDomainIsNew" @click="addWizardDomain()"
+                        title="Registrar este domínio no catálogo de governança (fica reutilizável nos outros wizards). Requer permissão root/admin."
+                        data-testid="wizard-domain-new"
+                        class="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-2 text-[12px] font-medium text-red-600 hover:bg-red-50 outline-none whitespace-nowrap">+ Novo</button>
+                <span x-show="wizardDomainNote" x-text="wizardDomainNote" data-testid="wizard-domain-note" class="basis-full text-[10px] text-amber-600"></span>
                 <button @click="runWizardSkill()" :disabled="wizardLoading || !wizardPrompt.trim()"
                         class="inline-flex items-center gap-2 rounded-xl bg-red-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-red-600 disabled:opacity-40 transition-all">
                     <svg x-show="wizardLoading" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
@@ -1309,7 +1314,7 @@ function skillForm(editId) {
         // pronto), 2=modelo escrevendo (durante o await, com cronômetro vivo),
         // 3=validando/aplicando (resposta chegou). Nada de % inventada.
         wizardStage: 0, wizardElapsed: 0, _wizardTimer: null,
-        wizardKind: 'subagent', wizardDomain: '', wizardDomains: [],
+        wizardKind: 'subagent', wizardDomain: '', wizardDomains: [], wizardDomainNote: '',
         // Wave Wizard Routing: removido wizardProvider/wizardModel.
         // task_type='reasoning' fixo pra esta rota; provider+model vêm
         // do /api/v1/dashboard/llm-routing (configurado em Settings).
@@ -2139,6 +2144,26 @@ ${outMap}`;
             this.form.raw_content = content;
         },
 
+        // Domínio digitado ainda NÃO registrado no catálogo → habilita o "+ Novo".
+        get wizardDomainIsNew() {
+            const n = (this.wizardDomain || '').trim().toLowerCase();
+            return !!n && !this.wizardDomains.some(d => (d.name || '').toLowerCase() === n);
+        },
+        // Registra o domínio no catálogo de governança (espelha o "+ novo" do Agente:
+        // POST /domains best-effort + reload). Em 403 (usuário comum) ou conflito,
+        // mantém o texto como rótulo livre desta skill — igual ao Agente.
+        async addWizardDomain() {
+            const name = (this.wizardDomain || '').trim();
+            if (!name) return;
+            this.wizardDomain = name; this.wizardDomainNote = '';
+            if (this.wizardDomains.some(d => (d.name || '').toLowerCase() === name.toLowerCase())) return;
+            try {
+                await api.post('/api/v1/domains', { name });
+                this.wizardDomains = (await api.get('/api/v1/domains')).domains || [];
+            } catch (_) {
+                this.wizardDomainNote = 'Sem permissao para registrar (root/admin) — vale como rotulo desta skill.';
+            }
+        },
         async load() {
             try { this.mcpTools = (await api.get('/api/v1/tools')).tools || []; } catch {}
             // domínios existentes p/ o combobox do wizard (escolher da lista OU digitar novo)
