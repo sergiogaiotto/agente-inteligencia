@@ -27,6 +27,10 @@
         <button @click="tab='users'; loadUsers()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='users' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Usuários</button>
         {% endif %}
+        {% if user_role in ['root', 'admin'] %}
+        <button @click="tab='domains'; loadDomainsHub()" data-testid="settings-tab-domains" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
+                :class="tab==='domains' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Domínios</button>
+        {% endif %}
         <button @click="tab='apikeys'; loadAPIKeys()" class="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
                 :class="tab==='apikeys' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">API Keys</button>
     </div>
@@ -1121,6 +1125,133 @@
     </template>
 
     <!-- ══════════════════════════════════════ -->
+    <!-- TAB: DOMÍNIOS (Hub — 55.0.0)          -->
+    <!-- ══════════════════════════════════════ -->
+    <div x-show="tab==='domains'" x-cloak class="max-w-4xl" data-testid="settings-domains-tab">
+        <div class="mb-4 flex items-start justify-between gap-3">
+            <div>
+                <h3 class="text-[13px] font-semibold text-brand-900 mb-1">Domínios</h3>
+                <p class="text-[11px] text-surface-500 max-w-xl">Governe as áreas de negócio: identidade, curador e o raio-x de tudo que as usa. <strong>Só o nome é obrigatório</strong> — os domínios já criados seguem válidos.</p>
+            </div>
+            <button @click="openDomainEditor(null)" data-testid="domain-new" class="flex-none rounded-lg bg-brand-500 px-4 py-2 text-[12px] font-semibold text-white hover:bg-brand-600">+ Novo domínio</button>
+        </div>
+
+        <!-- Domínios-fantasma (órfãos): citados por ativos, mas não registrados -->
+        <div x-show="domainOrphans.length" x-cloak class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3" data-testid="domain-orphans">
+            <div class="text-[12px] font-semibold text-amber-900 mb-2">⚠ <span x-text="domainOrphans.length"></span> domínio(s)-fantasma — citados por ativos, mas não registrados</div>
+            <div class="flex flex-wrap gap-1.5">
+                <template x-for="o in domainOrphans" :key="o.name">
+                    <button @click="registerOrphan(o.name)" class="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-2 py-1 text-[11px] text-amber-800 hover:bg-amber-100">
+                        <span class="font-medium" x-text="o.name"></span><span class="text-amber-500" x-text="'· ' + o.total"></span><span class="font-semibold">+ registrar</span>
+                    </button>
+                </template>
+            </div>
+        </div>
+
+        <div class="grid lg:grid-cols-2 gap-4">
+            <!-- Lista de domínios -->
+            <div class="space-y-2">
+                <template x-for="d in domainList" :key="d.id">
+                    <div @click="selectDomain(d)" :data-testid="'domain-row-' + d.name"
+                         class="cursor-pointer rounded-lg border p-3 transition-colors"
+                         :class="selectedDomain && selectedDomain.id === d.id ? 'border-brand-400 bg-brand-50/50' : 'border-surface-200 bg-white hover:border-brand-200'">
+                        <div class="flex items-center gap-2">
+                            <span class="w-3 h-3 rounded-full flex-none" :style="'background:' + (d.color || '#94a3b8')"></span>
+                            <span class="text-[13px] font-semibold text-brand-900" x-text="d.name"></span>
+                            <span x-show="d.status === 'archived'" class="text-[9px] uppercase tracking-wide text-surface-400">arquivado</span>
+                            <span class="ml-auto flex items-center gap-1">
+                                <button @click.stop="openDomainEditor(d)" class="p-1.5 rounded-md hover:bg-surface-100 text-surface-400 hover:text-brand-600" title="Editar">✎</button>
+                                <button @click.stop="deleteDomain(d)" class="p-1.5 rounded-md hover:bg-rose-50 text-surface-400 hover:text-rose-600" title="Excluir">🗑</button>
+                            </span>
+                        </div>
+                        <p x-show="d.description" class="text-[11px] text-surface-500 mt-1" x-text="d.description"></p>
+                    </div>
+                </template>
+                <p x-show="!domainList.length" class="text-[12px] text-surface-400 p-3">Nenhum domínio ainda. Clique em "Novo domínio".</p>
+            </div>
+
+            <!-- Dossiê / Raio-X do domínio selecionado -->
+            <div x-show="selectedDomain" x-cloak class="rounded-xl border border-surface-200 bg-white p-4" data-testid="domain-dossier">
+                <div class="flex items-center gap-2 mb-3">
+                    <span class="w-3.5 h-3.5 rounded-full flex-none" :style="'background:' + ((selectedDomain && selectedDomain.color) || '#94a3b8')"></span>
+                    <span class="text-[14px] font-bold text-brand-900" x-text="selectedDomain && selectedDomain.name"></span>
+                    <span class="ml-auto text-[11px] text-surface-500" x-text="(selectedDomain && selectedDomain.owner_name) || 'sem curador'"></span>
+                </div>
+                <div class="text-[11px] font-semibold text-surface-500 mb-2">Raio-X — tudo que cita este domínio</div>
+                <div x-show="domainInventory" class="grid grid-cols-3 gap-2 mb-3">
+                    <template x-for="k in domainInvKeys" :key="k.key">
+                        <div class="rounded-lg bg-surface-50 p-2.5">
+                            <div class="text-[18px] font-bold text-brand-900" x-text="domainInventory && domainInventory.inventory[k.key] ? domainInventory.inventory[k.key].count : 0"></div>
+                            <div class="text-[10px] text-surface-500" x-text="k.label"></div>
+                        </div>
+                    </template>
+                </div>
+                <p x-show="!domainInventory" class="text-[11px] text-surface-400 py-4">carregando raio-x…</p>
+                <div x-show="domainInventory" class="rounded-lg bg-surface-50 p-3">
+                    <div class="text-[11px] font-semibold text-surface-600 mb-2">Saúde do domínio</div>
+                    <template x-for="c in domainHealth" :key="c.l">
+                        <div class="flex items-center gap-1.5 text-[11px] mb-1">
+                            <span :class="c.ok ? 'text-emerald-600' : 'text-amber-600'" x-text="c.ok ? '✓' : '⚠'"></span>
+                            <span x-text="c.l"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+            <div x-show="!selectedDomain" x-cloak class="rounded-xl border border-dashed border-surface-200 p-6 text-center text-[12px] text-surface-400 self-start">Selecione um domínio para ver o raio-x.</div>
+        </div>
+    </div>
+
+    <!-- Modal editor de domínio -->
+    <template x-if="domainEditorOpen">
+        <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
+            <div class="fixed inset-0 bg-black/40" @click="domainEditorOpen = false"></div>
+            <div class="relative z-10 w-full max-w-md rounded-2xl bg-white shadow-2xl border border-surface-200 fade-in p-5" data-testid="domain-editor">
+                <h3 class="text-[15px] font-bold text-brand-900 mb-4" x-text="editingDomainId ? 'Editar domínio' : 'Novo domínio'"></h3>
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Nome <span class="text-rose-500">*</span></label>
+                        <input x-model="domainForm.name" data-testid="domain-name" placeholder="ex.: atendimento" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Descrição <span class="font-normal text-surface-400">(opcional)</span></label>
+                        <input x-model="domainForm.description" placeholder="para que serve" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none focus:border-brand-400">
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[11px] font-semibold text-surface-500 mb-1">Curador</label>
+                            <select x-model="domainForm.owner_user_id" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none">
+                                <option value="">— nenhum —</option>
+                                <template x-for="u in allDomainsUsers" :key="u.id"><option :value="u.id" x-text="u.display_name || u.username"></option></template>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-surface-500 mb-1">Status</label>
+                            <select x-model="domainForm.status" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none">
+                                <option value="active">Ativo</option>
+                                <option value="archived">Arquivado</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-semibold text-surface-500 mb-1">Cor <span class="font-normal text-surface-400">(identidade visual)</span></label>
+                        <div class="flex gap-1.5">
+                            <template x-for="c in domainColors" :key="c">
+                                <button type="button" @click="domainForm.color = c" class="w-6 h-6 rounded-full border-2 transition-transform" :style="'background:' + c" :class="domainForm.color === c ? 'border-brand-900 scale-110' : 'border-transparent'"></button>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-5 flex justify-end gap-2">
+                    <button @click="domainEditorOpen = false" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] text-surface-600 hover:bg-surface-50">Cancelar</button>
+                    <button @click="saveDomain()" :disabled="savingDomain || !domainForm.name.trim()" data-testid="domain-save" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50">
+                        <span x-text="savingDomain ? 'Salvando...' : (editingDomainId ? 'Atualizar' : 'Criar')"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- ══════════════════════════════════════ -->
     <!-- TAB: API KEYS                          -->
     <!-- ══════════════════════════════════════ -->
     <div x-show="tab==='apikeys'" class="max-w-3xl">
@@ -1499,6 +1630,15 @@ function settingsPage() {
         userEditorOpen: false, editingUserId: null, savingUser: false,
         userForm: {username:'',display_name:'',email:'',role:'comum',password:'',domains:'[]'},
         allDomains: [], newDomainName: '',
+        domainList: [], domainOrphans: [], selectedDomain: null, domainInventory: null,
+        domainEditorOpen: false, editingDomainId: null, savingDomain: false,
+        domainForm: { name:'', description:'', owner_user_id:'', status:'active', color:'' },
+        allDomainsUsers: [],
+        domainColors: ['#378ADD','#1D9E75','#EF9F27','#D4537E','#7F77DD','#D85A30','#94a3b8'],
+        domainInvKeys: [
+            {key:'agentes',label:'Agentes'},{key:'skills',label:'Skills'},{key:'pipelines',label:'Pipelines'},
+            {key:'jornadas',label:'Jornadas'},{key:'catalogo',label:'Catálogo'},{key:'car',label:'Capacidades'},{key:'membros',label:'Membros'},
+        ],
         currentUserRole: '{{ user_role }}',
 
         /* ── API Keys ── */
@@ -1910,6 +2050,7 @@ function settingsPage() {
             this._snapshot=JSON.stringify(this.config);
             this.$watch('config',()=>{this.dirty=JSON.stringify(this.config)!==this._snapshot},{deep:true});
             if (this.tab === 'users') await this.loadUsers();
+            if (this.tab === 'domains') await this.loadDomainsHub();
             if (this.tab === 'prompts') await this.loadPrompts();
             if (this.tab === 'routing') await this.loadRouting();
             if (this.tab === 'params') await this.loadParams();
@@ -2240,6 +2381,63 @@ function settingsPage() {
         async deleteUser(u) {
             if (!await uiConfirm({message: `Remover usuário "${u.display_name || u.username}"?`, danger: true})) return;
             try { await api.del('/api/v1/users/' + u.id); showToast('Usuário removido'); await this.loadUsers(); } catch(e) { showToast(e.message, 'error'); }
+        },
+
+        // ── Hub de Domínios (55.0.0) ──────────────────────────────────────
+        async loadDomainsHub() {
+            try { this.domainList = (await api.get('/api/v1/domains')).domains || []; } catch {}
+            try { this.domainOrphans = (await api.get('/api/v1/domains/orphans')).orphans || []; } catch {}
+            try { this.allDomainsUsers = (await api.get('/api/v1/users')).users || []; } catch {}
+            const keep = this.selectedDomain && this.domainList.find(d => d.id === this.selectedDomain.id);
+            if (keep) this.selectDomain(keep);
+            else if (this.domainList.length) this.selectDomain(this.domainList[0]);
+            else this.selectedDomain = null;
+        },
+        _domNorm(s) { return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); },
+        _domOwnerName(d) { const u = this.allDomainsUsers.find(x => x.id === d.owner_user_id); return u ? (u.display_name || u.username) : ''; },
+        async selectDomain(d) {
+            this.selectedDomain = { ...d, owner_name: this._domOwnerName(d) };
+            this.domainInventory = null;
+            try { this.domainInventory = await api.get('/api/v1/domains/' + d.id + '/inventory'); } catch(e) { showToast(e.message, 'error'); }
+        },
+        get domainHealth() {
+            const d = this.selectedDomain, inv = this.domainInventory;
+            if (!d || !inv) return [];
+            const pipe = inv.inventory.pipelines ? inv.inventory.pipelines.count : 0;
+            const variant = this.domainOrphans.some(o => this._domNorm(o.name) === this._domNorm(d.name));
+            return [
+                { l: 'Curador definido', ok: !!d.owner_user_id },
+                { l: 'Descrição preenchida', ok: !!(d.description && d.description.trim()) },
+                { l: '≥1 pipeline no domínio', ok: pipe > 0 },
+                { l: variant ? 'Há variação órfã deste nome (reconcilie acima)' : 'Sem variação órfã do nome', ok: !variant },
+            ];
+        },
+        openDomainEditor(d) {
+            if (d) { this.editingDomainId = d.id; this.domainForm = { name:d.name, description:d.description||'', owner_user_id:d.owner_user_id||'', status:d.status||'active', color:d.color||'' }; }
+            else { this.editingDomainId = null; this.domainForm = { name:'', description:'', owner_user_id:'', status:'active', color:'' }; }
+            this.domainEditorOpen = true;
+        },
+        async saveDomain() {
+            if (!this.domainForm.name.trim()) { showToast('Nome do domínio é obrigatório', 'error'); return; }
+            this.savingDomain = true;
+            try {
+                const payload = { name: this.domainForm.name.trim(), description: this.domainForm.description || '', owner_user_id: this.domainForm.owner_user_id || '', status: this.domainForm.status || 'active', color: this.domainForm.color || '' };
+                if (this.editingDomainId) { await api.put('/api/v1/domains/' + this.editingDomainId, payload); showToast('Domínio atualizado'); }
+                else { await api.post('/api/v1/domains', payload); showToast('Domínio criado'); }
+                this.domainEditorOpen = false; await this.loadDomainsHub();
+            } catch(e) { showToast(e.message, 'error'); }
+            this.savingDomain = false;
+        },
+        async deleteDomain(d) {
+            if (!await uiConfirm({message: `Remover o domínio "${d.name}"? Os ativos que o citam ficarão sem domínio registrado (viram órfãos).`, danger: true})) return;
+            try {
+                await api.del('/api/v1/domains/' + d.id); showToast('Domínio removido');
+                if (this.selectedDomain && this.selectedDomain.id === d.id) this.selectedDomain = null;
+                await this.loadDomainsHub();
+            } catch(e) { showToast(e.message, 'error'); }
+        },
+        async registerOrphan(name) {
+            try { await api.post('/api/v1/domains', { name }); showToast(`Domínio "${name}" registrado`); await this.loadDomainsHub(); } catch(e) { showToast(e.message, 'error'); }
         },
     }
 }

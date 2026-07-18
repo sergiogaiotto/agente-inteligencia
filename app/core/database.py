@@ -1133,6 +1133,12 @@ CREATE TABLE IF NOT EXISTS playground_run_threads (
 
 _IDEMPOTENT_MIGRATIONS = [
     # Garante colunas adicionadas em versões posteriores ao schema base
+    # Hub de Domínios (55.0.0): identidade/governança opcional; só o nome é
+    # obrigatório, então os domínios já existentes seguem válidos sem preencher.
+    "ALTER TABLE domains ADD COLUMN IF NOT EXISTS owner_user_id TEXT",
+    "ALTER TABLE domains ADD COLUMN IF NOT EXISTS color TEXT",
+    "ALTER TABLE domains ADD COLUMN IF NOT EXISTS icon TEXT",
+    "ALTER TABLE domains ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'",
     "ALTER TABLE interactions ADD COLUMN IF NOT EXISTS title TEXT",
     "ALTER TABLE interactions ADD COLUMN IF NOT EXISTS trace_data TEXT DEFAULT '{}'",
     "ALTER TABLE agents ADD COLUMN IF NOT EXISTS version TEXT DEFAULT '1.0.0'",
