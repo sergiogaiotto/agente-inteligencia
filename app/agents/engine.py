@@ -2415,14 +2415,18 @@ async def execute_interaction(
     # ── Onda 4a: PolicyCheck via OPA (substitui o stub de "passa se prompt_guard não bloqueou") ──
     # Quando OPA_ENABLED=true, decisão vai para o motor de políticas Rego. Quando
     # false, comportamento original (allow=true se prompt_guard não bloqueou).
+    # 62.0.0: usuário atuante (status + papel) resolvido no máx. 1x por request e
+    # reusado no gate de tools abaixo — antes status/papel eram HARDCODED.
+    _opa_user: dict | None = None
     if _pg_settings.opa_enabled:
         from app.core import opa_client
+        _opa_user = await opa_client.resolve_opa_user(owner_user_id)
         opa_input = {
             "prompt_injection": {
                 "score": float(ctx.metadata.get("prompt_guard", {}).get("score", 0.0)),
             },
             "rate_limit": {"exceeded": False},  # rate_limit middleware já barra antes; defesa em profundidade
-            "user": {"status": "active"},  # iteração futura: pegar user real da session
+            "user": {"status": _opa_user["status"]},  # 62.0.0: status REAL do dono da sessão
         }
         opa_decision = await opa_client.evaluate("interaction", "allow", opa_input)
         opa_reasons = await opa_client.evaluate_value("interaction", "reasons", opa_input) or []
@@ -2567,8 +2571,12 @@ async def execute_interaction(
                 # política tool_invocation aprovou. Tool com sensitivity=null assume "low".
                 if _pg_settings.opa_enabled:
                     from app.core import opa_client
-                    # role default = "operator" — em iteração futura virá de session real
-                    user_role = "operator"
+                    # 62.0.0: papel REAL do dono (root/admin/governanca→admin destrava
+                    # tools sensitivity:high, que antes eram filtradas em silêncio pelo
+                    # hardcoded "operator"). Reusa o row resolvido no PolicyCheck acima.
+                    if _opa_user is None:
+                        _opa_user = await opa_client.resolve_opa_user(owner_user_id)
+                    user_role = _opa_user["role"]
                     is_trusted = bool(ctx.metadata.get("trusted_context", False))
                     allowed_tools = []
                     for t in mcp_tools:

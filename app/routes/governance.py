@@ -10,9 +10,11 @@ inclui o perfil "governanca" (herda os poderes de Admin).
 """
 from __future__ import annotations
 
+import json
 import uuid
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -362,6 +364,149 @@ async def guard_config_put(data: GuardConfig, user=Depends(_gate)):
         "action": "guard_dlp_updated", "actor": who,
     })
     return {"message": "Configuração de guarda/DLP salva", "keys": list(payload.keys()), "env_applied": applied}
+
+
+# ── Policy-as-code (OPA) — cockpit read/simulate (62.0.0) ─────────────────────
+# Traz o motor de políticas Rego (Onda 4a, até aqui headless) à UI: status +
+# toggle (enabled/failsafe/timeout) + visualização das políticas + simulador
+# what-if + log de decisões. Edição persistente das regras é Fase B (roadmap).
+_OPA_PACKAGES = ("interaction", "tool_invocation", "evidence")
+# `evidence` existe mas está dormente (sem call site; users.clearance não é
+# coluna) — o cockpit a marca como não-wired.
+_OPA_WIRED = ("interaction", "tool_invocation")
+_OPA_POLICIES_DIR = Path(__file__).resolve().parent.parent.parent / "infra" / "opa" / "policies"
+
+
+def _opa_pkg_from_id(pid: str) -> str:
+    """OPA devolve id tipo "policies/interaction.rego" → extrai "interaction"."""
+    base = (pid or "").rsplit("/", 1)[-1]
+    return base[:-5] if base.endswith(".rego") else base
+
+
+class OpaConfig(BaseModel):
+    opa_enabled: bool | None = None
+    opa_failsafe_open: bool | None = None
+    opa_timeout_seconds: float | None = None
+
+
+@router.get("/opa/status")
+async def opa_status(user=Depends(_gate)):
+    """Estado do OPA: flags (do settings) + saúde do servidor. Alimenta o form."""
+    from app.core import opa_client
+    s = get_settings()
+    return {
+        "enabled": bool(getattr(s, "opa_enabled", False)),
+        "url": getattr(s, "opa_url", ""),
+        "failsafe_open": bool(getattr(s, "opa_failsafe_open", True)),
+        "timeout_seconds": float(getattr(s, "opa_timeout_seconds", 2.0)),
+        "server_ok": await opa_client.server_health(),
+    }
+
+
+@router.get("/opa/policies")
+async def opa_policies(user=Depends(_gate)):
+    """Políticas Rego carregadas (via OPA); fallback lendo o disco se OPA off/down."""
+    from app.core import opa_client
+    result = await opa_client.list_policies()
+    policies = []
+    if result is not None:
+        source = "opa"
+        for p in result:
+            pkg = _opa_pkg_from_id(p.get("id", ""))
+            policies.append({
+                "id": p.get("id", ""), "package": pkg,
+                "raw": p.get("raw", ""), "wired": pkg in _OPA_WIRED,
+            })
+    else:
+        source = "disk"
+        for f in sorted(_OPA_POLICIES_DIR.glob("*.rego")):
+            try:
+                raw = f.read_text(encoding="utf-8")
+            except Exception:
+                raw = ""
+            policies.append({"id": f"policies/{f.name}", "package": f.stem,
+                             "raw": raw, "wired": f.stem in _OPA_WIRED})
+    # wired primeiro, depois alfabético.
+    policies.sort(key=lambda x: (x["package"] not in _OPA_WIRED, x["package"]))
+    return {"source": source, "policies": policies}
+
+
+class OpaSimulate(BaseModel):
+    package: str
+    rule: str = "allow"
+    input: dict = {}
+
+
+@router.post("/opa/simulate")
+async def opa_simulate(data: OpaSimulate, user=Depends(_gate)):
+    """What-if: avalia um input contra uma política SEM efeito colateral (não
+    audita, ignora o toggle opa_enabled → funciona mesmo com o OPA desligado)."""
+    if data.package not in _OPA_PACKAGES:
+        raise HTTPException(422, "pacote inválido (interaction|tool_invocation|evidence)")
+    from app.core import opa_client
+    decision = await opa_client.simulate(data.package, (data.rule or "allow"), data.input or {})
+    reasons = None
+    # Cada política expõe seus motivos numa rule própria (interaction=reasons set;
+    # tool_invocation=reason string; evidence não tem).
+    if data.package == "interaction":
+        reasons = (await opa_client.simulate("interaction", "reasons", data.input or {})).get("result")
+    elif data.package == "tool_invocation":
+        reasons = (await opa_client.simulate("tool_invocation", "reason", data.input or {})).get("result")
+    return {
+        "allow": decision.get("allow"),
+        "result": decision.get("result"),
+        "reasons": reasons,
+        "source": decision.get("source"),
+        "duration_ms": decision.get("duration_ms"),
+        "error": decision.get("error"),
+    }
+
+
+@router.get("/opa/decisions")
+async def opa_decisions(limit: int = 50, user=Depends(_gate)):
+    """Log de decisões de política (audit_log entity_type=policy_decision)."""
+    lim = min(max(limit, 1), 200)
+    rows = await audit_repo.find_all(entity_type="policy_decision", limit=1000)
+    rows = sorted(rows, key=lambda r: r.get("id") or 0, reverse=True)
+    out = []
+    for r in rows[:lim]:
+        pkg = rule = src = ""
+        dur = None
+        try:
+            d = json.loads(r.get("details") or "{}")
+            pkg, rule = d.get("package", ""), d.get("rule", "")
+            dec = d.get("decision", {})
+            src, dur = dec.get("source", ""), dec.get("duration_ms")
+        except Exception:
+            pass
+        out.append({
+            "id": r.get("id"), "action": r.get("action"), "entity_id": r.get("entity_id"),
+            "package": pkg, "rule": rule, "source": src, "duration_ms": dur,
+            "created_at": str(r.get("created_at") or ""),
+        })
+    return {"decisions": out}
+
+
+@router.put("/opa/config")
+async def opa_config_put(data: OpaConfig, user=Depends(_gate)):
+    """Liga/desliga o OPA + failsafe + timeout. Persiste em platform_settings e
+    aplica ao runtime (sem restart). Requer as 3 chaves no _UI_TO_ENV_MAP."""
+    payload = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "opa_timeout_seconds" in payload and not (0.1 <= float(payload["opa_timeout_seconds"]) <= 30.0):
+        raise HTTPException(422, "timeout deve estar entre 0.1 e 30 segundos")
+    if not payload:
+        return {"message": "Nada a alterar", "env_applied": 0}
+    await settings_store.set_many({k: str(v) for k, v in payload.items()})
+    try:
+        applied = await apply_settings_to_env()
+    except Exception:
+        applied = 0
+    who = (user or {}).get("username") or (user or {}).get("display_name") or "?"
+    await audit_repo.create({
+        "entity_type": "settings", "entity_id": "opa_policy",
+        "action": "opa_config_updated", "actor": who,
+    })
+    return {"message": "Configuração do OPA salva", "keys": list(payload.keys()), "env_applied": applied}
 
 
 # ── Crosswalk de conformidade (EU AI Act / NIST / ISO 42001 / LGPD / OWASP) ───

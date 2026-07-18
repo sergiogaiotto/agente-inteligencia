@@ -584,6 +584,15 @@ _UI_TO_ENV_MAP = {
     "prompt_guard_warn_threshold": "PROMPT_GUARD_WARN_THRESHOLD",
     "dlp_enabled": "DLP_ENABLED",
     "dlp_redact_before_llm": "DLP_REDACT_BEFORE_LLM",
+    # Policy-as-code (OPA) — cockpit de governança (62.0.0): toggle + failsafe +
+    # timeout editáveis pela UI de IA Responsável → aplicados ao env em runtime
+    # (sem restart), como grounding_strict. SEM esta entrada o PUT persiste no
+    # banco mas NÃO aplica ao processo (apply_settings_to_env só varre este mapa).
+    # NÃO-seladas (ver _NON_MODEL_UI_KEYS): o .env segue valendo como fallback.
+    # opa_url NÃO entra: é infra, fica no .env/default.
+    "opa_enabled": "OPA_ENABLED",
+    "opa_failsafe_open": "OPA_FAILSAFE_OPEN",
+    "opa_timeout_seconds": "OPA_TIMEOUT_SECONDS",
     # MCP per-tool (D): 'true'/'false'. Liga o modo em que cada tool MCP vira sua
     # própria função com o inputSchema real (vs o legado {operation, query}).
     # Default OFF; lido a cada chamada por runtime.per_tool_enabled().
@@ -737,6 +746,15 @@ _NON_MODEL_UI_KEYS = {
     "mcp_per_tool_enabled",      # flag do modo per-tool MCP (default OFF)
     "text_to_sql_enabled",       # flag do Tier 2 text-to-SQL governado (default OFF)
     "timezone",                  # timezone da plataforma (IANA); default Brasília
+    # Policy-as-code (OPA) — flags de comportamento/infra, NÃO credencial/modelo.
+    # Precisam ser NÃO-seladas para que o .env continue valendo como fallback de
+    # boot: selá-las reverteria silenciosamente uma implantação que hoje liga o
+    # OPA (ou fecha o failsafe = fail-closed) via .env para os defaults da classe
+    # no upgrade — um downgrade de segurança silencioso. O cockpit/DB ainda
+    # sobrescreve quando há valor (via apply_settings_to_env). opa_url idem.
+    "opa_enabled",
+    "opa_failsafe_open",
+    "opa_timeout_seconds",
     # Circuit-breaker do egress LLM (33.1.0) — flags de comportamento, não
     # credencial/modelo → o .env vale como fallback quando o banco não tem valor.
     "circuit_breaker_enabled",
