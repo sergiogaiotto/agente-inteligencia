@@ -452,6 +452,11 @@ class Settings(BaseSettings):
     rag_rerank_with_llm: bool = True
     # Encoding do tiktoken — cl100k_base cobre GPT-4 / GPT-3.5 / text-embedding-3-*.
     rag_tiktoken_encoding: str = "cl100k_base"
+    # Evidence ACL (64.0.0): quando True, o retriever filtra evidências pelo "no read
+    # up" da evidence.rego (clearance do usuário vs confidentiality da fonte). Default
+    # OFF = comportamento de hoje (sem filtro, zero regressão). Independe de opa_enabled
+    # (a evidence.rego é avaliada direto — este é o seu próprio toggle).
+    evidence_acl_enabled: bool = False
 
     # ── Observabilidade self-hosted (Onda 2 — OTel + Tempo + Loki + Grafana) ──
     # Default OFF: instrumentação só liga quando `OTEL_ENABLED=true` no .env e
@@ -593,6 +598,9 @@ _UI_TO_ENV_MAP = {
     "opa_enabled": "OPA_ENABLED",
     "opa_failsafe_open": "OPA_FAILSAFE_OPEN",
     "opa_timeout_seconds": "OPA_TIMEOUT_SECONDS",
+    # Evidence ACL (64.0.0): filtra evidências por clearance × confidencialidade
+    # (evidence.rego). Editável pela UI de governança; NÃO-selada (ver abaixo).
+    "evidence_acl_enabled": "EVIDENCE_ACL_ENABLED",
     # MCP per-tool (D): 'true'/'false'. Liga o modo em que cada tool MCP vira sua
     # própria função com o inputSchema real (vs o legado {operation, query}).
     # Default OFF; lido a cada chamada por runtime.per_tool_enabled().
@@ -755,6 +763,7 @@ _NON_MODEL_UI_KEYS = {
     "opa_enabled",
     "opa_failsafe_open",
     "opa_timeout_seconds",
+    "evidence_acl_enabled",      # flag do "no read up" de evidência (default OFF)
     # Circuit-breaker do egress LLM (33.1.0) — flags de comportamento, não
     # credencial/modelo → o .env vale como fallback quando o banco não tem valor.
     "circuit_breaker_enabled",

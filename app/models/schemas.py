@@ -397,6 +397,7 @@ class UserCreate(BaseModel):
     email: Optional[str] = ""
     role: str = "comum"
     domains: Optional[str] = "[]"
+    clearance: Optional[str] = "internal"   # Evidence ACL (64.0.0): "no read up"
 
 class UserUpdate(BaseModel):
     display_name: Optional[str] = None
@@ -404,6 +405,7 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     domains: Optional[str] = None
     password: Optional[str] = None
+    clearance: Optional[str] = None          # Evidence ACL (64.0.0)
 
     @field_validator("password")
     @classmethod

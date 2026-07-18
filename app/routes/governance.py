@@ -378,6 +378,7 @@ class OpaConfig(BaseModel):
     opa_enabled: bool | None = None
     opa_failsafe_open: bool | None = None
     opa_timeout_seconds: float | None = None
+    evidence_acl_enabled: bool | None = None  # 64.0.0: "no read up" de evidência
 
 
 @router.get("/opa/status")
@@ -390,6 +391,7 @@ async def opa_status(user=Depends(_gate)):
         "url": getattr(s, "opa_url", ""),
         "failsafe_open": bool(getattr(s, "opa_failsafe_open", True)),
         "timeout_seconds": float(getattr(s, "opa_timeout_seconds", 2.0)),
+        "evidence_acl_enabled": bool(getattr(s, "evidence_acl_enabled", False)),
         "server_ok": await opa_client.server_health(),
     }
 
@@ -426,8 +428,13 @@ async def opa_policies(user=Depends(_gate)):
             policies.append({"id": opa_pol.policy_id_for(package), "package": package,
                              "raw": raw, "wired": package in _OPA_WIRED})
         source = "db" if any_db else "disk"  # rótulo honesto da origem
+    # evidence só está "em uso" quando o Evidence ACL está ligado (64.0.0).
+    _ev_on = bool(getattr(get_settings(), "evidence_acl_enabled", False))
+    for pol in policies:
+        if pol["package"] == "evidence":
+            pol["wired"] = _ev_on
     # wired primeiro, depois alfabético.
-    policies.sort(key=lambda x: (x["package"] not in _OPA_WIRED, x["package"]))
+    policies.sort(key=lambda x: (not x["wired"], x["package"]))
     return {"source": source, "policies": policies}
 
 

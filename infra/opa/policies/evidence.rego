@@ -3,13 +3,14 @@
 #
 # Schema esperado de input:
 #   {
-#     "user":     {"clearance": "public"|"internal"|"confidential"|"secret"},
-#     "evidence": {"confidentiality": "public"|"internal"|"confidential"|"secret"}
+#     "user":     {"clearance": "public"|"internal"|"confidential"|"restricted"},
+#     "evidence": {"confidentiality": "public"|"internal"|"confidential"|"restricted"}
 #   }
+#   ("secret" é aceito como alias de "restricted" no rank abaixo.)
 #
-# Status nesta Onda: política existe mas NÃO é chamada pelo PEP atual.
-# `users.clearance` ainda não é coluna do banco. Quando for adicionada
-# (iteração futura), basta wirar a chamada em runtime.py:Retriever._hydrate.
+# Status (64.0.0): ATIVA. `users.clearance` é coluna do banco (default 'internal').
+# Chamada por app.core.opa_policies.evidence_allows via app.evidence.runtime.
+# Retriever._acl_filter, gated pela flag `evidence_acl_enabled` (default OFF).
 #
 # Avalia em: POST /v1/data/evidence/allow → {"result": true|false}
 # ════════════════════════════════════════════════════════════════
@@ -24,10 +25,13 @@ allow if {
     rank[input.user.clearance] >= rank[input.evidence.confidentiality]
 }
 
-# Hierarquia ordinal: maior número = mais sensível.
+# Hierarquia ordinal: maior número = mais sensível. "restricted" é o rótulo do
+# 4º nível usado na UI de Bases de Conhecimento; "secret" é o sinônimo padrão —
+# ambos rankeiam no topo para o "no read up" funcionar com os dois vocabulários.
 rank := {
     "public":       0,
     "internal":     1,
     "confidential": 2,
+    "restricted":   3,
     "secret":       3,
 }

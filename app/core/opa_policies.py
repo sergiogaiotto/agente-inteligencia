@@ -21,6 +21,7 @@ from typing import Optional
 import asyncpg
 
 from app.core import opa_client
+from app.core.config import get_settings
 from app.core.database import governance_policy_repo
 
 # Pacotes conhecidos e quais estão de fato ligados no PEP (evidence é dormente).
@@ -111,6 +112,27 @@ async def revert_opa(package: str, prev_raw: Optional[str]) -> None:
     rego = prev_raw if prev_raw is not None else read_baked(package)
     if rego:
         await opa_client.push_policy(policy_id_for(package), rego)
+
+
+# ── Evidence ACL (64.0.0): "no read up" via evidence.rego ─────────────────────
+async def evidence_allows(clearance: Optional[str], confidentiality: Optional[str]) -> bool:
+    """True se o usuário (clearance) pode ver a evidência (confidentiality), pela
+    evidence.rego (rank[clearance] >= rank[confidentiality]). Avalia DIRETO no OPA —
+    independe de opa_enabled (é o toggle `evidence_acl_enabled` quem liga o filtro no
+    retriever). Defaults 'internal' (nível default das fontes). OPA fora do ar → segue
+    o failsafe configurável (mesmo knob do gate de interação: opa_failsafe_open)."""
+    # Normaliza (casing/espaço) — o rank[] da rego é lookup EXATO. Rótulo fora do
+    # vocabulário (typo/legado) NÃO casa no rank → a rego mantém allow=false = oculta
+    # a evidência (fail-closed conservador, coerente com um controle de sigilo).
+    _cl = (str(clearance or "internal")).strip().lower() or "internal"
+    _co = (str(confidentiality or "internal")).strip().lower() or "internal"
+    d = await opa_client.simulate("evidence", "allow", {
+        "user": {"clearance": _cl},
+        "evidence": {"confidentiality": _co},
+    })
+    if d.get("source") == "error":
+        return bool(get_settings().opa_failsafe_open)
+    return bool(d.get("allow"))
 
 
 async def repush_policies_on_boot() -> dict:

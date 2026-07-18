@@ -470,7 +470,7 @@ def _patch_retriever(monkeypatch, results):
 
     hits = [_Hit(**r) for r in results]
 
-    async def fake_search(query, skill_evidence_policy=None, top_n=5, allowed_source_ids=None):
+    async def fake_search(query, skill_evidence_policy=None, top_n=5, allowed_source_ids=None, user_clearance=None):
         return hits
 
     # retriever é importado dentro do helper — patch no símbolo real

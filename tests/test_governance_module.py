@@ -923,3 +923,172 @@ class TestOpaPolicyEditing:
         for fn in ("async savePolicy(", "async loadVersions(", "async rollbackPolicy(", "async restoreDefault("):
             assert fn in html, fn
         assert "/api/v1/governance/opa/policies/' + pkg" in html
+
+
+# ─── Evidence ACL — "no read up" (64.0.0) ─────────────────────────────────────
+class _FakeUserRepo:
+    def __init__(self, rows):
+        self.rows = {k: dict(v) for k, v in rows.items()}
+
+    async def find_by_id(self, i):
+        return self.rows.get(i)
+
+    async def update(self, i, patch):
+        self.rows[i].update(patch)
+        return True
+
+    async def create(self, row):
+        self.rows[row["id"]] = dict(row)
+        return row["id"]
+
+    async def count(self):
+        return len(self.rows)
+
+    async def find_all(self, limit=1000, offset=0, **f):
+        return list(self.rows.values())[:limit]
+
+
+class TestEvidenceAcl:
+    def test_flag_no_ui_to_env_map_e_nao_selada(self):
+        from app.core.config import _UI_TO_ENV_MAP, _NON_MODEL_UI_KEYS, _SEALED_ENV_VARS
+        assert _UI_TO_ENV_MAP.get("evidence_acl_enabled") == "EVIDENCE_ACL_ENABLED"
+        assert "evidence_acl_enabled" in _NON_MODEL_UI_KEYS
+        assert "EVIDENCE_ACL_ENABLED" not in _SEALED_ENV_VARS
+
+    @pytest.mark.asyncio
+    async def test_status_traz_evidence_acl(self, monkeypatch):
+        import app.routes.governance as G
+        import app.core.opa_client as OC
+        fake = FakeSettings(opa_enabled=False, opa_url="", opa_failsafe_open=True,
+                            opa_timeout_seconds=2.0, evidence_acl_enabled=True)
+        monkeypatch.setattr(G, "get_settings", lambda: fake)
+
+        async def _h():
+            return True
+        monkeypatch.setattr(OC, "server_health", _h)
+        r = await G.opa_status(user={})
+        assert r["evidence_acl_enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_config_put_liga_evidence_acl(self, monkeypatch):
+        import app.routes.governance as G
+        store = FakeStore()
+        monkeypatch.setattr(G, "settings_store", store)
+
+        async def _apply():
+            return 1
+        monkeypatch.setattr(G, "apply_settings_to_env", _apply)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        await G.opa_config_put(G.OpaConfig(evidence_acl_enabled=True), user={"username": "gov"})
+        assert store.saved["evidence_acl_enabled"] == "True"
+
+    @pytest.mark.asyncio
+    async def test_evidence_wired_reflete_a_flag(self, monkeypatch):
+        import app.routes.governance as G
+        import app.core.opa_client as OC
+
+        async def _list():
+            return [{"id": "policies/evidence.rego", "raw": "package evidence"},
+                    {"id": "policies/interaction.rego", "raw": "package interaction"}]
+        monkeypatch.setattr(OC, "list_policies", _list)
+        monkeypatch.setattr(G, "get_settings", lambda: FakeSettings(evidence_acl_enabled=True))
+        r = await G.opa_policies(user={})
+        assert next(p for p in r["policies"] if p["package"] == "evidence")["wired"] is True
+        monkeypatch.setattr(G, "get_settings", lambda: FakeSettings(evidence_acl_enabled=False))
+        r2 = await G.opa_policies(user={})
+        assert next(p for p in r2["policies"] if p["package"] == "evidence")["wired"] is False
+
+    @pytest.mark.asyncio
+    async def test_update_clearance_privilegiado(self, monkeypatch):
+        import app.routes.users as U
+        from app.models.schemas import UserUpdate
+        repo = _FakeUserRepo({"u1": {"id": "u1", "role": "comum", "status": "active"}})
+        monkeypatch.setattr(U, "users_repo", repo)
+
+        async def _caller(req):
+            return {"id": "a1", "role": "admin"}
+        monkeypatch.setattr(U, "_get_caller", _caller)
+        await U.update_user("u1", UserUpdate(clearance="Confidential"), request=None)
+        assert repo.rows["u1"]["clearance"] == "confidential"  # normalizado
+
+    @pytest.mark.asyncio
+    async def test_update_clearance_comum_barrado_403(self, monkeypatch):
+        import app.routes.users as U
+        from app.models.schemas import UserUpdate
+        repo = _FakeUserRepo({"u1": {"id": "u1", "role": "comum", "status": "active"}})
+        monkeypatch.setattr(U, "users_repo", repo)
+
+        async def _caller(req):
+            return {"id": "u1", "role": "comum"}  # edita a si mesmo (anti auto-escalonamento)
+        monkeypatch.setattr(U, "_get_caller", _caller)
+        with pytest.raises(HTTPException) as e:
+            await U.update_user("u1", UserUpdate(clearance="restricted"), request=None)
+        assert e.value.status_code == 403
+        assert "clearance" not in repo.rows["u1"]
+
+    @pytest.mark.asyncio
+    async def test_update_clearance_invalido_422(self, monkeypatch):
+        import app.routes.users as U
+        from app.models.schemas import UserUpdate
+        repo = _FakeUserRepo({"u1": {"id": "u1", "role": "comum", "status": "active"}})
+        monkeypatch.setattr(U, "users_repo", repo)
+
+        async def _caller(req):
+            return {"id": "a1", "role": "admin"}
+        monkeypatch.setattr(U, "_get_caller", _caller)
+        with pytest.raises(HTTPException) as e:
+            await U.update_user("u1", UserUpdate(clearance="bogus"), request=None)
+        assert e.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_create_clearance_normaliza(self, monkeypatch):
+        import app.routes.users as U
+        from app.models.schemas import UserCreate
+        repo = _FakeUserRepo({"x": {"id": "x", "username": "outro", "role": "admin"}})
+        monkeypatch.setattr(U, "users_repo", repo)
+
+        async def _caller(req):
+            return {"id": "a1", "role": "admin"}
+        monkeypatch.setattr(U, "_get_caller", _caller)
+        r = await U.create_user(
+            UserCreate(username="novo", password="senha-bem-longa-123", clearance="Confidential"),
+            request=None)
+        assert repo.rows[r["id"]]["clearance"] == "confidential"  # normalizado
+
+    @pytest.mark.asyncio
+    async def test_create_clearance_invalido_422(self, monkeypatch):
+        import app.routes.users as U
+        from app.models.schemas import UserCreate
+        repo = _FakeUserRepo({"x": {"id": "x", "username": "outro", "role": "admin"}})
+        monkeypatch.setattr(U, "users_repo", repo)
+
+        async def _caller(req):
+            return {"id": "a1", "role": "admin"}
+        monkeypatch.setattr(U, "_get_caller", _caller)
+        with pytest.raises(HTTPException) as e:
+            await U.create_user(
+                UserCreate(username="novo", password="senha-bem-longa-123", clearance="bogus"),
+                request=None)
+        assert e.value.status_code == 422
+
+    def test_ui_evidence_acl_e_clearance(self):
+        ir = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert 'data-testid="ir-opa-evidence-acl"' in ir and "opaCfg.evidence_acl" in ir
+        st = (_PAGES / "settings.html").read_text(encoding="utf-8")
+        assert 'data-testid="user-clearance"' in st and "userForm.clearance" in st
+
+    def test_todos_call_sites_do_retriever_passam_clearance(self):
+        # O Evidence ACL só vale se TODO call site de retriever.search passar
+        # user_clearance. A revisão achou 2 bypasses (RAG binding direto + inspeção
+        # de KB); esta guarda quebra se um novo call site esquecer o clearance.
+        import re
+        from pathlib import Path
+        app_dir = Path(__file__).resolve().parent.parent / "app"
+        bad = []
+        for py in app_dir.rglob("*.py"):
+            txt = py.read_text(encoding="utf-8")
+            for m in re.finditer(r"await\s+_?retriever\.search\(", txt):
+                window = txt[m.end():m.end() + 400]
+                if "user_clearance" not in window:
+                    bad.append(f"{py.name}:{txt[:m.start()].count(chr(10)) + 1}")
+        assert not bad, f"retriever.search sem user_clearance (bypass do ACL): {bad}"

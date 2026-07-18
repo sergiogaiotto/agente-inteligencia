@@ -2418,9 +2418,12 @@ async def execute_interaction(
     # 62.0.0: usuário atuante (status + papel) resolvido no máx. 1x por request e
     # reusado no gate de tools abaixo — antes status/papel eram HARDCODED.
     _opa_user: dict | None = None
-    if _pg_settings.opa_enabled:
+    # 64.0.0: resolve o usuário atuante também sob evidence_acl_enabled — o clearance
+    # do row alimenta o "no read up" do retriever (não só o gate OPA de interação/tools).
+    if _pg_settings.opa_enabled or _pg_settings.evidence_acl_enabled:
         from app.core import opa_client
         _opa_user = await opa_client.resolve_opa_user(owner_user_id)
+    if _pg_settings.opa_enabled:
         opa_input = {
             "prompt_injection": {
                 "score": float(ctx.metadata.get("prompt_guard", {}).get("score", 0.0)),
@@ -2501,6 +2504,7 @@ async def execute_interaction(
                 _search_query,
                 top_n=5,
                 allowed_source_ids=_allowed_sources,
+                user_clearance=(_opa_user or {}).get("clearance"),  # 64.0.0: "no read up"
             )
             _span_r.set_attribute("evidence.retrieved_count", len(evidences))
         with _tracer.start_as_current_span("evidence.rerank") as _span_rr:

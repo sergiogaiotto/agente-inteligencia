@@ -163,6 +163,10 @@
                         <input type="number" min="0.1" max="30" step="0.1" x-model.number="opaCfg.timeout_seconds" class="w-full rounded-lg border border-surface-200 px-2 py-1.5 text-[12px] outline-none focus:border-brand-400">
                     </div>
                 </div>
+                <label class="flex items-center gap-2 text-[12px] text-surface-700 pt-2 mt-1 border-t border-surface-100"><input type="checkbox" x-model="opaCfg.evidence_acl" data-testid="ir-opa-evidence-acl"> Filtrar evidência por clearance (<span class="font-mono">no read up</span> — evidence.rego)</label>
+                <div x-show="opaCfg.evidence_acl" class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[10.5px] text-amber-700">
+                    ⚠ O RAG passa a ocultar evidências cuja confidencialidade excede o clearance do usuário. Sem clearance definido = <span class="font-mono">internal</span> (vê público+internal). Defina o clearance em <a href="/settings" class="underline">Configurações → Usuários</a> e a confidencialidade da fonte em <a href="/rag" class="underline">Bases de Conhecimento</a>.
+                </div>
             </div>
             <div class="mt-3 flex items-center justify-between">
                 <span x-show="opaDirty && opaLoaded" class="text-[10px] text-amber-600">alterações não salvas</span>
@@ -495,6 +499,7 @@
     <!-- ─── Roadmap (Fase 2/3) ─── -->
     <div x-show="tab === 'roadmap'" class="space-y-3">
         <p class="text-[11px] text-surface-500">O que vem a seguir — nada de número inventado aqui; são as próximas fases do módulo.</p>
+        <p x-show="!roadmap.length" class="rounded-xl border border-dashed border-emerald-300 bg-emerald-50/40 p-4 text-[12px] text-emerald-800">✓ Módulo completo — sem pendências no roadmap. Governança, confiança e conformidade cobertas de ponta a ponta.</p>
         <div class="grid md:grid-cols-2 gap-3" data-testid="ir-roadmap">
             <template x-for="r in roadmap" :key="r.t">
                 <div class="rounded-xl border border-dashed border-surface-300 bg-surface-50/50 p-3">
@@ -531,7 +536,7 @@ function iaResponsavel() {
         riskModal: { open: false, entity_type: '', entity_id: '', name: '', suggested: 'minimal', tier: 'minimal', rationale: '', mitigations: '', busy: false },
         guard: { prompt_guard_enabled: true, prompt_guard_block_threshold: 0.7, prompt_guard_warn_threshold: 0.4, dlp_enabled: true, dlp_redact_before_llm: false },
         guardSnapshot: '', guardBusy: false,
-        opa: null, opaCfg: { enabled: false, failsafe_open: true, timeout_seconds: 2.0 }, opaCfgSnapshot: '', opaBusy: false, opaLoaded: false,
+        opa: null, opaCfg: { enabled: false, failsafe_open: true, timeout_seconds: 2.0, evidence_acl: false }, opaCfgSnapshot: '', opaBusy: false, opaLoaded: false,
         opaPolicies: [], opaPoliciesSource: '', opaDecisions: [],
         opaSim: { package: 'tool_invocation', input: '', result: null, busy: false },
         opaBuf: {}, opaOrig: {}, opaEditErr: {}, opaEditBusy: {}, opaVersions: {}, opaHistOpen: {},
@@ -545,9 +550,7 @@ function iaResponsavel() {
             { k: 'failure_modes', l: 'Modos de falha' },
         ],
         forgetRef: '', forgetBusy: false, forgetResult: '',
-        roadmap: [
-            { t: 'Ativar a política evidence', f: 'Backlog', d: 'A política evidence (acesso a evidência por confidencialidade) existe mas está dormente — falta a coluna users.clearance e a chamada no retriever. O cockpit já a mostra, simula e permite editar.' },
-        ],
+        roadmap: [],
         get postureColor() {
             const s = this.summary ? this.summary.posture_score : 0;
             return s >= 75 ? 'text-emerald-600' : (s >= 50 ? 'text-amber-600' : 'text-rose-600');
@@ -641,7 +644,7 @@ function iaResponsavel() {
         async loadOpa() {
             try {
                 this.opa = await api.get('/api/v1/governance/opa/status');
-                this.opaCfg = { enabled: !!this.opa.enabled, failsafe_open: !!this.opa.failsafe_open, timeout_seconds: this.opa.timeout_seconds || 2.0 };
+                this.opaCfg = { enabled: !!this.opa.enabled, failsafe_open: !!this.opa.failsafe_open, timeout_seconds: this.opa.timeout_seconds || 2.0, evidence_acl: !!this.opa.evidence_acl_enabled };
                 this.opaLoaded = true;
             } catch (e) { showToast(e.message, 'error'); }
             // snapshot SEMPRE reflete o opaCfg atual: se o status falhou, o form não
@@ -696,6 +699,7 @@ function iaResponsavel() {
                     opa_enabled: this.opaCfg.enabled,
                     opa_failsafe_open: this.opaCfg.failsafe_open,
                     opa_timeout_seconds: this.opaCfg.timeout_seconds,
+                    evidence_acl_enabled: this.opaCfg.evidence_acl,
                 });
                 showToast('Configuração do OPA salva');
                 await this.loadOpa();
