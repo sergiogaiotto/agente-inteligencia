@@ -12,11 +12,12 @@ from __future__ import annotations
 
 from collections import Counter
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.auth import require_role
 from app.core.config import get_settings
-from app.core.database import audit_repo
+from app.core.database import audit_repo, agents_repo, skills_repo
+from app.skill_parser.parser import parse_skill_md
 
 router = APIRouter(prefix="/api/v1/governance", tags=["governance"])
 
@@ -48,7 +49,7 @@ def _posture() -> tuple[int, list[dict]]:
         ],
         "Transparência": [
             ("Verifier/juiz multidimensional ligado", _flag("verifier_v2_enabled", False)),
-            ("Model cards publicados (Fase 2)", False),
+            ("Fichas de transparência (model cards) disponíveis", True),
         ],
         "Robustez": [
             ("Circuit breaker ligado", _flag("circuit_breaker_enabled", True)),
@@ -135,4 +136,96 @@ async def governance_security_events(limit: int = 50, user=Depends(_gate)):
         "counts": dict(counts),
         "scanned": len(rows),
         "events": [_audit_row(r) for r in sec[:limit]],
+    }
+
+
+# ── Model / System cards (transparência) ─────────────────────────────────────
+# Ficha automática por agente, derivada 100% da definição REAL (campos do agente
+# + seções da SKILL.md). Artefato de transparência para auditores. Zero invenção.
+def _truthy(v) -> bool:
+    return v is True or v == 1 or str(v).strip().lower() in ("1", "true")
+
+
+async def _skill_sections(agent: dict) -> dict | None:
+    sid = agent.get("skill_id")
+    if not sid:
+        return None
+    row = await skills_repo.find_by_id(sid)
+    if not row or not row.get("raw_content"):
+        return None
+    p = parse_skill_md(row["raw_content"])
+    return {
+        "id": sid,
+        "purpose": p.purpose, "guardrails": p.guardrails,
+        "evidence_policy": p.evidence_policy, "output_contract": p.output_contract,
+        "inputs": p.inputs, "tool_bindings": p.tool_bindings,
+        "failure_modes": p.failure_modes, "execution_mode": p.execution_mode,
+    }
+
+
+def _risk_signals(agent: dict, skill: dict | None) -> list[dict]:
+    sig = []
+    if _truthy(agent.get("allow_general_knowledge")):
+        sig.append({"label": "Pode usar conhecimento geral (fora das evidências)", "level": "warn"})
+    if not _truthy(agent.get("require_evidence")):
+        sig.append({"label": "Não exige evidência para responder", "level": "warn"})
+    if not skill:
+        sig.append({"label": "Sem SKILL.md vinculada — comportamento não declarado", "level": "warn"})
+    else:
+        if (skill.get("guardrails") or "").strip():
+            sig.append({"label": "Guardrails declarados na skill", "level": "ok"})
+        if (skill.get("evidence_policy") or "").strip():
+            sig.append({"label": "Política de evidência declarada", "level": "ok"})
+    if _truthy(agent.get("accepts_documents")) or _truthy(agent.get("accepts_images")):
+        sig.append({"label": "Recebe anexos (documentos/imagens)", "level": "info"})
+    if (agent.get("kind") or "") == "aobd":
+        sig.append({"label": "Orquestrador — coordena outros agentes", "level": "info"})
+    return sig
+
+
+@router.get("/model-cards")
+async def model_cards_list(user=Depends(_gate)):
+    agents = await agents_repo.find_all(limit=500)
+    cards = []
+    for a in agents:
+        has_skill = bool(a.get("skill_id"))
+        warns = 0
+        if _truthy(a.get("allow_general_knowledge")):
+            warns += 1
+        if not _truthy(a.get("require_evidence")):
+            warns += 1
+        if not has_skill:
+            warns += 1
+        cards.append({
+            "agent_id": a.get("id"), "name": a.get("name"), "kind": a.get("kind"),
+            "domain": a.get("domain") or "", "status": a.get("status"),
+            "has_skill": has_skill, "warn_count": warns,
+        })
+    cards.sort(key=lambda c: (-c["warn_count"], (c["name"] or "").lower()))
+    return {"cards": cards}
+
+
+@router.get("/model-cards/{agent_id}")
+async def model_card_detail(agent_id: str, user=Depends(_gate)):
+    a = await agents_repo.find_by_id(agent_id)
+    if not a:
+        raise HTTPException(404)
+    skill = await _skill_sections(a)
+    return {
+        "agent_id": a.get("id"), "name": a.get("name"), "kind": a.get("kind"),
+        "domain": a.get("domain") or "", "status": a.get("status"),
+        "version": a.get("version"), "description": a.get("description") or "",
+        "model": {
+            "provider": a.get("llm_provider"), "model": a.get("model"),
+            "temperature": a.get("temperature"),
+        },
+        "data_handling": {
+            "accepts_images": _truthy(a.get("accepts_images")),
+            "accepts_documents": _truthy(a.get("accepts_documents")),
+            "require_evidence": _truthy(a.get("require_evidence")),
+            "allow_general_knowledge": _truthy(a.get("allow_general_knowledge")),
+            "response_language": a.get("response_language") or "",
+        },
+        "skill": skill,
+        "risk_signals": _risk_signals(a, skill),
     }
