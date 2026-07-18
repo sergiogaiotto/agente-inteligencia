@@ -10,6 +10,7 @@ from urllib.parse import quote
 logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, HTTPException, Request
 from app.core.auth import require_user
+from app.core.text_sanitize import strip_emoji
 from app.models.schemas import (
     AgentCreate, AgentUpdate, AgentInvokeRequest, AgentInvokeResponse,
     PreflightReport,
@@ -1681,4 +1682,5 @@ async def explain_agent(agent_id: str, payload: dict, request: Request,
         logger.error("agent_explain falhou", exc_info=True,
                      extra={"event": "agents.explain", "agent_id": agent_id})
         raise HTTPException(500, f"Erro ao explicar o agente: {e}")
-    return {"answer": (content or "").strip(), "agent_id": agent_id, "agent_name": agent.get("name")}
+    # Regra do produto: nenhuma resposta de API com emoji (garantia mesmo se o LLM insistir).
+    return {"answer": strip_emoji((content or "").strip()), "agent_id": agent_id, "agent_name": agent.get("name")}

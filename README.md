@@ -2,9 +2,10 @@
 
 **Plataforma de Gestão e Desenvolvimento de Multi-Agentes de IA, orientada a SKILL.md, sobre AI Mesh**
 
-> Documenta a plataforma na versão **54.0.0** · Especificação Funcional §1–§24 · pt-BR
+> Documenta a plataforma na versão **54.1.0** · Especificação Funcional §1–§24 · pt-BR
 
 > **Novidades 52.x–54.x** (destaques):
+> - **Respostas de API sem emoji (54.1.0)** — nenhuma resposta de API (`output` do invoke/explain, prefixos de recusa/escalonamento, diagnósticos do envelope) contém emoji ou símbolos decorativos: um sanitizador determinístico no limite da API garante isso mesmo se o LLM desobedecer (`app/core/text_sanitize.py`).
 > - **"Conhecer o agente" no Fluxo (54.0.0)** — o botão direito no nó abre um assistente que **explica** o agente (o que faz, propósito, config, posição no mesh, comportamento) ancorado na definição real — e **não o executa** (sem interação, sem gasto, sem histórico). Testar de verdade fica no Playground/Executar ([4.8](#48-fluxo-de-agentes-meshflow--o-estúdio-de-pipelines)).
 > - **Recusa/escalonamento viram estado da FSM (opt-in)** — uma recusa redigida pelo agente (dado de terceiro, injeção de prompt) ou um escalonamento transicionam para `Refuse`/`Escalate` via a flag `verifier_signals_drive_fsm`, em **qualquer** caminho de verificação (Parte I, §8).
 > - **Fundamentação por RAG mais honesta** — declarar `## Evidence Policy` só fundamenta com **"Exigir evidência" ligado** e `min_relevance` baixo (~0,0); o diagnóstico aponta a **causa real** quando o RAG é pulado (Parte I, §7).
