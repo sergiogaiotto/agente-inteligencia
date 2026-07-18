@@ -680,6 +680,36 @@ class TestOpaCockpit:
         r = await G.opa_config_put(G.OpaConfig(), user={})
         assert r["env_applied"] == 0
 
+    @pytest.mark.asyncio
+    async def test_config_put_apply_falha_nao_quebra(self, monkeypatch):
+        # se apply_settings_to_env explodir, o PUT ainda retorna (env_applied=0).
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "settings_store", FakeStore())
+
+        async def _boom():
+            raise RuntimeError("db down")
+        monkeypatch.setattr(G, "apply_settings_to_env", _boom)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        r = await G.opa_config_put(G.OpaConfig(opa_enabled=True), user={"username": "x"})
+        assert r["env_applied"] == 0
+
+    @pytest.mark.asyncio
+    async def test_decisions_details_malformado_nao_quebra(self, monkeypatch):
+        # details não-JSON não derruba o log (campos ficam vazios).
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "audit_repo", FakeAudit([
+            {"id": 1, "action": "allow", "entity_id": "x", "details": "{nao-json"},
+        ]))
+        r = await G.opa_decisions(limit=5, user={})
+        assert r["decisions"][0]["id"] == 1 and r["decisions"][0]["package"] == ""
+
+    def test_dockerfile_copia_politicas_para_fallback(self):
+        # o fallback de disco de GET /opa/policies precisa dos .rego DENTRO da
+        # imagem do app; sem esta COPY o dir /app/infra/opa/policies fica vazio no
+        # container (o dir só existe no host) e o fallback vira lista vazia.
+        df = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text(encoding="utf-8")
+        assert "infra/opa/policies" in df
+
     def test_aba_policies_no_template(self):
         html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
         assert "{ k: 'policies', l: 'Políticas' }" in html
@@ -692,3 +722,204 @@ class TestOpaCockpit:
         assert "/api/v1/governance/opa/simulate" in html
         # o viewer OPA saiu do roadmap (foi entregue); sobra a Fase B (edição).
         assert "'Políticas (OPA)', f: 'Fase 2'" not in html
+
+
+# ─── Edição persistente de políticas Rego (63.0.0 — cockpit Fase B) ──────────
+class TestOpaPolicyEditing:
+    def test_schema_tem_tabela_e_repo(self):
+        from app.core.database import SCHEMA, governance_policy_repo
+        assert "governance_policy_version" in SCHEMA
+        assert governance_policy_repo.table == "governance_policy_version"
+
+    @pytest.mark.asyncio
+    async def test_edit_valida_salva_audita(self, monkeypatch):
+        import app.routes.governance as G
+
+        async def _vp(pkg, rego):
+            return {"ok": True, "error": None}
+
+        async def _sv(pkg, rego, note, who):
+            return 4
+
+        async def _snap(pkg):
+            return "package interaction\n# prev"
+        monkeypatch.setattr(G.opa_pol, "validate_and_push", _vp)
+        monkeypatch.setattr(G.opa_pol, "save_version", _sv)
+        monkeypatch.setattr(G.opa_pol, "opa_current_raw", _snap)
+        au = FakeRWRepo([])
+        monkeypatch.setattr(G, "audit_repo", au)
+        r = await G.opa_policy_edit("interaction",
+                                    G.OpaPolicyEdit(rego="package interaction\nallow := true"),
+                                    user={"username": "gov"})
+        assert r["version"] == 4 and r["package"] == "interaction"
+        assert any("policy_edited:v4" in x["action"] for x in au.rows)
+
+    @pytest.mark.asyncio
+    async def test_edit_opa_fora_do_ar_503(self, monkeypatch):
+        import app.routes.governance as G
+
+        async def _vp(pkg, rego):
+            return {"ok": False, "kind": "unreachable", "error": "ConnectError"}
+
+        async def _snap(pkg):
+            return None
+        monkeypatch.setattr(G.opa_pol, "validate_and_push", _vp)
+        monkeypatch.setattr(G.opa_pol, "opa_current_raw", _snap)
+        with pytest.raises(HTTPException) as e:
+            await G.opa_policy_edit("interaction", G.OpaPolicyEdit(rego="package interaction\nx"), user={})
+        assert e.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_edit_falha_de_persistencia_compensa_e_500(self, monkeypatch):
+        # save_version explode DEPOIS do push → OPA é revertido e devolve 500.
+        import app.routes.governance as G
+        reverted = {}
+
+        async def _vp(pkg, rego):
+            return {"ok": True, "kind": "ok", "error": None}
+
+        async def _snap(pkg):
+            return "package interaction\n# PREV"
+
+        async def _sv(pkg, rego, note, who):
+            raise RuntimeError("db down")
+
+        async def _revert(pkg, prev):
+            reverted["pkg"], reverted["prev"] = pkg, prev
+        monkeypatch.setattr(G.opa_pol, "validate_and_push", _vp)
+        monkeypatch.setattr(G.opa_pol, "opa_current_raw", _snap)
+        monkeypatch.setattr(G.opa_pol, "save_version", _sv)
+        monkeypatch.setattr(G.opa_pol, "revert_opa", _revert)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        with pytest.raises(HTTPException) as e:
+            await G.opa_policy_edit("interaction", G.OpaPolicyEdit(rego="package interaction\nallow := true"), user={})
+        assert e.value.status_code == 500
+        assert reverted["pkg"] == "interaction" and "# PREV" in reverted["prev"]  # OPA revertido ao snapshot
+
+    @pytest.mark.asyncio
+    async def test_edit_pacote_invalido_422(self):
+        import app.routes.governance as G
+        with pytest.raises(HTTPException) as e:
+            await G.opa_policy_edit("bogus", G.OpaPolicyEdit(rego="x"), user={})
+        assert e.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_edit_vazio_422(self):
+        import app.routes.governance as G
+        with pytest.raises(HTTPException) as e:
+            await G.opa_policy_edit("interaction", G.OpaPolicyEdit(rego="   "), user={})
+        assert e.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_edit_rejeitado_pelo_opa_422(self, monkeypatch):
+        import app.routes.governance as G
+
+        async def _vp(pkg, rego):
+            return {"ok": False, "kind": "rejected", "error": "rego_parse_error"}
+
+        async def _snap(pkg):
+            return None
+        monkeypatch.setattr(G.opa_pol, "validate_and_push", _vp)
+        monkeypatch.setattr(G.opa_pol, "opa_current_raw", _snap)
+        with pytest.raises(HTTPException) as e:
+            await G.opa_policy_edit("interaction",
+                                    G.OpaPolicyEdit(rego="package interaction\ninvalid("), user={})
+        assert e.value.status_code == 422 and "rego_parse_error" in e.value.detail
+
+    @pytest.mark.asyncio
+    async def test_versions_lista_e_current(self, monkeypatch):
+        import app.routes.governance as G
+
+        async def _lv(pkg):
+            return [
+                {"version": 2, "note": "editado", "created_by": "gov", "created_at": "t2"},
+                {"version": 1, "note": "seed", "created_by": "sys", "created_at": "t1"},
+            ]
+        monkeypatch.setattr(G.opa_pol, "list_versions", _lv)
+        r = await G.opa_policy_versions("interaction", user={})
+        assert r["current"] == 2 and len(r["versions"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_rollback_cria_versao_nova_com_rego_alvo(self, monkeypatch):
+        import app.routes.governance as G
+
+        async def _lv(pkg):
+            return [{"version": 3, "rego": "v3"}, {"version": 1, "rego": "v1"}]
+
+        async def _vp(pkg, rego):
+            return {"ok": True, "error": None}
+        saved = {}
+
+        async def _sv(pkg, rego, note, who):
+            saved.update(rego=rego, note=note)
+            return 4
+        async def _snap(pkg):
+            return None
+        monkeypatch.setattr(G.opa_pol, "list_versions", _lv)
+        monkeypatch.setattr(G.opa_pol, "validate_and_push", _vp)
+        monkeypatch.setattr(G.opa_pol, "save_version", _sv)
+        monkeypatch.setattr(G.opa_pol, "opa_current_raw", _snap)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        r = await G.opa_policy_rollback("interaction", G.OpaRollback(version=1), user={"username": "g"})
+        assert r["version"] == 4 and saved["rego"] == "v1" and "rollback de v1" in saved["note"]
+
+    @pytest.mark.asyncio
+    async def test_rollback_versao_inexistente_404(self, monkeypatch):
+        import app.routes.governance as G
+
+        async def _lv(pkg):
+            return [{"version": 1, "rego": "v1"}]
+        monkeypatch.setattr(G.opa_pol, "list_versions", _lv)
+        with pytest.raises(HTTPException) as e:
+            await G.opa_policy_rollback("interaction", G.OpaRollback(version=99), user={})
+        assert e.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_restore_default_empurra_o_baked(self, monkeypatch):
+        import app.routes.governance as G
+
+        def _baked(pkg):
+            return "package interaction\n# baked"
+
+        async def _vp(pkg, rego):
+            return {"ok": True, "error": None}
+        saved = {}
+
+        async def _sv(pkg, rego, note, who):
+            saved["rego"] = rego
+            return 5
+        async def _snap(pkg):
+            return None
+        monkeypatch.setattr(G.opa_pol, "read_baked", _baked)
+        monkeypatch.setattr(G.opa_pol, "validate_and_push", _vp)
+        monkeypatch.setattr(G.opa_pol, "save_version", _sv)
+        monkeypatch.setattr(G.opa_pol, "opa_current_raw", _snap)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        r = await G.opa_policy_restore("interaction", user={"username": "g"})
+        assert r["version"] == 5 and "baked" in saved["rego"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_rotula_db_quando_vem_do_db(self, monkeypatch):
+        # OPA fora, mas há override no DB → source='db' (não 'disk') e mostra o DB.
+        import app.routes.governance as G
+        import app.core.opa_client as OC
+
+        async def _none():
+            return None
+
+        async def _cur(pkg):
+            return {"version": 3, "rego": "package " + pkg} if pkg == "interaction" else None
+        monkeypatch.setattr(OC, "list_policies", _none)
+        monkeypatch.setattr(G.opa_pol, "current_version", _cur)
+        r = await G.opa_policies(user={})
+        assert r["source"] == "db"
+        by = {p["package"]: p for p in r["policies"]}
+        assert by["interaction"]["raw"] == "package interaction"
+
+    def test_editor_no_template(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        for t in ("ir-opa-editor", "ir-opa-policy-save", "ir-opa-history", "ir-opa-hist-toggle"):
+            assert f'data-testid="{t}"' in html, t
+        for fn in ("async savePolicy(", "async loadVersions(", "async rollbackPolicy(", "async restoreDefault("):
+            assert fn in html, fn
+        assert "/api/v1/governance/opa/policies/' + pkg" in html

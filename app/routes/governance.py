@@ -14,13 +14,13 @@ import json
 import uuid
 from collections import Counter
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core.auth import require_role
 from app.core.config import get_settings, apply_settings_to_env
+from app.core import opa_policies as opa_pol
 from app.core.database import (
     audit_repo, agents_repo, skills_repo, governance_risk_repo, settings_store,
     users_repo, governance_officer_repo, governance_attestation_repo,
@@ -366,21 +366,12 @@ async def guard_config_put(data: GuardConfig, user=Depends(_gate)):
     return {"message": "Configuração de guarda/DLP salva", "keys": list(payload.keys()), "env_applied": applied}
 
 
-# ── Policy-as-code (OPA) — cockpit read/simulate (62.0.0) ─────────────────────
-# Traz o motor de políticas Rego (Onda 4a, até aqui headless) à UI: status +
-# toggle (enabled/failsafe/timeout) + visualização das políticas + simulador
-# what-if + log de decisões. Edição persistente das regras é Fase B (roadmap).
-_OPA_PACKAGES = ("interaction", "tool_invocation", "evidence")
-# `evidence` existe mas está dormente (sem call site; users.clearance não é
-# coluna) — o cockpit a marca como não-wired.
-_OPA_WIRED = ("interaction", "tool_invocation")
-_OPA_POLICIES_DIR = Path(__file__).resolve().parent.parent.parent / "infra" / "opa" / "policies"
-
-
-def _opa_pkg_from_id(pid: str) -> str:
-    """OPA devolve id tipo "policies/interaction.rego" → extrai "interaction"."""
-    base = (pid or "").rsplit("/", 1)[-1]
-    return base[:-5] if base.endswith(".rego") else base
+# ── Policy-as-code (OPA) — cockpit (62.0.0 read/simulate · 63.0.0 edição) ─────
+# Status + toggle + visualização/EDIÇÃO das políticas + simulador what-if + log.
+# Constantes e helpers de política vivem em app.core.opa_policies (compartilhados
+# com o re-push no boot). Aliases locais por legibilidade das rotas.
+_OPA_PACKAGES = opa_pol.PACKAGES
+_OPA_WIRED = opa_pol.WIRED
 
 
 class OpaConfig(BaseModel):
@@ -405,27 +396,36 @@ async def opa_status(user=Depends(_gate)):
 
 @router.get("/opa/policies")
 async def opa_policies(user=Depends(_gate)):
-    """Políticas Rego carregadas (via OPA); fallback lendo o disco se OPA off/down."""
+    """Políticas Rego vigentes (via OPA); fallback DB→disco se o OPA estiver fora."""
     from app.core import opa_client
     result = await opa_client.list_policies()
     policies = []
     if result is not None:
         source = "opa"
         for p in result:
-            pkg = _opa_pkg_from_id(p.get("id", ""))
+            pkg = opa_pol.pkg_from_id(p.get("id", ""))
             policies.append({
                 "id": p.get("id", ""), "package": pkg,
                 "raw": p.get("raw", ""), "wired": pkg in _OPA_WIRED,
             })
     else:
-        source = "disk"
-        for f in sorted(_OPA_POLICIES_DIR.glob("*.rego")):
+        # OPA fora do ar → prefere a vigente do DB (o que DEVERIA estar no OPA),
+        # senão o baked do disco. DB indisponível (unit sem pool) → cai p/ disco.
+        any_db = False
+        for package in opa_pol.PACKAGES:
+            raw = None
             try:
-                raw = f.read_text(encoding="utf-8")
+                cur = await opa_pol.current_version(package)
+                raw = cur["rego"] if cur and cur.get("rego") else None
             except Exception:
-                raw = ""
-            policies.append({"id": f"policies/{f.name}", "package": f.stem,
-                             "raw": raw, "wired": f.stem in _OPA_WIRED})
+                raw = None
+            if raw is not None:
+                any_db = True
+            else:
+                raw = opa_pol.read_baked(package) or ""
+            policies.append({"id": opa_pol.policy_id_for(package), "package": package,
+                             "raw": raw, "wired": package in _OPA_WIRED})
+        source = "db" if any_db else "disk"  # rótulo honesto da origem
     # wired primeiro, depois alfabético.
     policies.sort(key=lambda x: (x["package"] not in _OPA_WIRED, x["package"]))
     return {"source": source, "policies": policies}
@@ -507,6 +507,95 @@ async def opa_config_put(data: OpaConfig, user=Depends(_gate)):
         "action": "opa_config_updated", "actor": who,
     })
     return {"message": "Configuração do OPA salva", "keys": list(payload.keys()), "env_applied": applied}
+
+
+# ── Edição persistente de políticas Rego (63.0.0 — cockpit Fase B) ────────────
+# Editar uma política é reescrever uma regra de segurança: validado no OPA (que
+# COMPILA), auditado e VERSIONADO (append-only) com rollback. DB = fonte viva; o
+# .rego baked é o seed. Mesmo gate root/admin/governanca das demais rotas.
+class OpaPolicyEdit(BaseModel):
+    rego: str
+    note: str = ""
+
+
+class OpaRollback(BaseModel):
+    version: int
+
+
+def _who(user) -> str:
+    return (user or {}).get("username") or (user or {}).get("display_name") or "?"
+
+
+async def _apply_and_save(package: str, rego: str, note: str, who: str, action: str) -> int:
+    """Valida+empurra no OPA, grava versão nova e audita — atômico do ponto de
+    vista da governança: se a persistência falhar DEPOIS do push, COMPENSA
+    re-empurrando o estado anterior, para o OPA nunca aplicar uma mudança que não
+    ficou registrada/auditada. 422 = Rego inválido/pacote errado; 503 = OPA fora."""
+    prev_raw = await opa_pol.opa_current_raw(package)  # snapshot ANTES (via OPA, não DB)
+    res = await opa_pol.validate_and_push(package, rego)
+    if not res.get("ok"):
+        if res.get("kind") == "unreachable":
+            raise HTTPException(503, f"OPA indisponível — política não aplicada ({res.get('error')})")
+        raise HTTPException(422, f"política rejeitada pelo OPA: {res.get('error')}")
+    try:
+        ver = await opa_pol.save_version(package, rego, note, who)
+        await audit_repo.create({
+            "entity_type": "governance_policy", "entity_id": package,
+            "action": action.format(v=ver), "actor": who,
+        })
+    except Exception:
+        await opa_pol.revert_opa(package, prev_raw)  # OPA não fica com mudança não registrada
+        raise HTTPException(500, "falha ao registrar a política; alteração revertida no OPA")
+    return ver
+
+
+@router.put("/opa/policies/{package}")
+async def opa_policy_edit(package: str, data: OpaPolicyEdit, user=Depends(_gate)):
+    if package not in opa_pol.PACKAGES:
+        raise HTTPException(422, "pacote inválido (interaction|tool_invocation|evidence)")
+    rego = (data.rego or "").strip()
+    if not rego:
+        raise HTTPException(422, "a política não pode ser vazia")
+    ver = await _apply_and_save(package, rego, data.note or "editado pela UI", _who(user), "policy_edited:v{v}")
+    return {"message": "Política salva e aplicada no OPA", "package": package, "version": ver}
+
+
+@router.get("/opa/policies/{package}/versions")
+async def opa_policy_versions(package: str, user=Depends(_gate)):
+    if package not in opa_pol.PACKAGES:
+        raise HTTPException(422, "pacote inválido")
+    rows = await opa_pol.list_versions(package)
+    return {
+        "package": package,
+        "current": rows[0]["version"] if rows else None,
+        "versions": [{
+            "version": r.get("version"), "note": r.get("note") or "",
+            "created_by": r.get("created_by") or "", "created_at": str(r.get("created_at") or ""),
+        } for r in rows],
+    }
+
+
+@router.post("/opa/policies/{package}/rollback")
+async def opa_policy_rollback(package: str, data: OpaRollback, user=Depends(_gate)):
+    if package not in opa_pol.PACKAGES:
+        raise HTTPException(422, "pacote inválido")
+    target = next((r for r in await opa_pol.list_versions(package) if r.get("version") == data.version), None)
+    if not target:
+        raise HTTPException(404, "versão não encontrada")
+    ver = await _apply_and_save(package, target["rego"], f"rollback de v{data.version}",
+                                _who(user), f"policy_rollback:v{data.version}->v{{v}}")
+    return {"message": f"Revertido para a v{data.version}", "package": package, "version": ver}
+
+
+@router.post("/opa/policies/{package}/restore-default")
+async def opa_policy_restore(package: str, user=Depends(_gate)):
+    if package not in opa_pol.PACKAGES:
+        raise HTTPException(422, "pacote inválido")
+    baked = opa_pol.read_baked(package)
+    if not baked:
+        raise HTTPException(404, "política baked não encontrada na imagem")
+    ver = await _apply_and_save(package, baked, "restaurado padrão baked", _who(user), "policy_restore_default:v{v}")
+    return {"message": "Padrão baked restaurado e aplicado", "package": package, "version": ver}
 
 
 # ── Crosswalk de conformidade (EU AI Act / NIST / ISO 42001 / LGPD / OWASP) ───
