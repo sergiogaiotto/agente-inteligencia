@@ -142,12 +142,12 @@
         .prose-chat th{background:#f1f4f6;font-weight:600;color:#003766}
     </style>
     <!-- Conteúdo do Guia dos Módulos (window.MODULE_GUIDE) -->
-    <script src="/static/js/module-guide.js"></script>
-    <script src="/static/js/help-content.js"></script>
+    <script src="/static/js/module-guide.js?v={{ app_version }}"></script>
+    <script src="/static/js/help-content.js?v={{ app_version }}"></script>
     <!-- Estação de autenticação reusável dos modais de cURL (window.curlAuthStation/buildInvokeCurl/maskApiKey) -->
-    <script src="/static/js/curl_auth.js"></script>
+    <script src="/static/js/curl_auth.js?v={{ app_version }}"></script>
     <!-- Rótulos pt-BR dos status do Catálogo (window.catalogStatusLabel/catalogReviewLabel) -->
-    <script src="/static/js/catalog_status.js"></script>
+    <script src="/static/js/catalog_status.js?v={{ app_version }}"></script>
     {% block head_extra %}{% endblock %}
 </head>
 <body class="h-full bg-surface-50 font-sans text-surface-500 antialiased"

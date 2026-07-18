@@ -941,7 +941,7 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   // ═════════════════════════════════════════════════════════════════
   harness: {
     title: 'Harness',
-    summary: 'Motor de avaliação que roda o agente contra um Golden Dataset e decide, por um gate, se a release vai para produção.',
+    summary: 'Motor de avaliação que roda o agente contra um Golden Dataset e decide, por um gate, se a release vai para produção — e casa da Otimização automática de prompts (pré-deploy).',
     sections: [
       {
         kind: 'concept',
@@ -962,9 +962,50 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
             <li><code>expected_state</code> — a DECISÃO esperada: Recommend, Refuse ou Escalate</li>
             <li><code>case_type</code> — normal ou adversarial (adversariais alimentam a recusa correta)</li>
             <li><code>category</code> (taxonomia), <code>weight</code> (peso na média ponderada), <code>red_flags</code> (strings que NÃO podem aparecer)</li>
+            <li><code>split</code> — <strong>train</strong> ou <strong>holdout</strong> (48.0.0): a fatia de treino alimenta a otimização; o holdout fica reservado para confirmar ganhos (anti-overfit). Use "Dividir treino/holdout" (adversariais vão SEMPRE ao holdout).</li>
           </ul>
           <p>Gate automático: aprovado quando acurácia ponderada, recusa correta, factuality/completeness/tone, safety e contract-compliance ficam dentro dos thresholds, e falso positivo/alucinação abaixo do limite.</p>
+          <p><strong>Navegação e massa (51–52.0.0):</strong> os dois painéis têm <em>filtros</em> (versão/tipo/split/categoria/busca no Gold; tipo/status/alvo/release nas Execuções) com contadores honestos; e o Gold tem <em>template/exportar/importar CSV</em> no escopo do filtro — export inclui a coluna <code>id</code>, e o modo "atualizar" muda SÓ células preenchidas (célula vazia mantém o valor).</p>
         `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Otimização automática',
+        body: `
+          <p><strong>O que é.</strong> Um otimizador de prompts <em>pré-deploy</em> inspirado na linhagem DSPy → MIPROv2 → GEPA: em vez de você reescrever o system prompt no tato, a plataforma <strong>propõe variantes</strong>, <strong>mede cada uma no Golden Dataset</strong> e <strong>aponta a melhor com estatística honesta</strong>. É <em>report-only</em>: nada é aplicado ao agente — a melhor variante vira uma <strong>revisão restaurável</strong> e a promoção é sempre uma decisão humana.</p>
+          <p><strong>Conceitos, na ordem em que aparecem:</strong></p>
+          <ul>
+            <li><strong>Split treino/holdout</strong> — a otimização SÓ enxerga o treino. O holdout (com os adversariais) fica invisível ao propositor e confirma o ganho no final. Sem isso, o prompt "decora" o gabarito (overfit) e o ganho é ilusão.</li>
+            <li><strong>Champion × challenger</strong> — o champion é a config ATUAL do agente medida no mesmo dataset; cada variante (challenger) roda como <code>experiment</code> segregado (não vira baseline, não gera drift, não aparece na lista por default).</li>
+            <li><strong>Veredito pareado (McNemar)</strong> — compara caso a caso: só os DISCORDANTES contam (casos onde um passou e o outro não). 1×0 discordante = ruído (p=1.0, inconclusivo); precisa de padrões como 6×0 ou 8×1 para significância a α=0.05. O compare mostra p-valor e nota explicando.</li>
+            <li><strong>Propositor grounded</strong> — a IA que propõe recebe o contexto do agente + resumo do gold (categorias, contagens) + falhas capturadas (output + motivo), mas NUNCA os gabaritos nem o holdout (anti-vazamento). Papel de LLM próprio ("optimizer") — recomendado DIFERENTE do juiz (anti-Goodhart: o mesmo modelo propondo e julgando seleciona prompts que agradam a si mesmo; a UI avisa quando isso acontece).</li>
+            <li><strong>Sonda go/no-go</strong> — mini-experimento barato num subset do treino ANTES do run completo. Empate = "paisagem plana": a literatura mostra ~49% das otimizações abaixo do baseline; a sonda evita gastar o gold inteiro nelas.</li>
+            <li><strong>Loop reflexivo (GEPA)</strong> — o modo automático roda rodadas: propõe filhas a partir do candidato da <em>frente de Pareto por caso</em> (não só o melhor score médio — quem resolve casos que os outros erram sobrevive), avalia no treino, para por paciência/teto/rodadas e confirma no holdout. Acompanhe pelo modal (botão "Acompanhar"): fila → champion → rodadas → holdout → veredito.</li>
+            <li><strong>Teto de custo (US$)</strong> — verificado entre passos; um passo em voo pode estourar o teto em até ~1 passo. 0 = usa o default da plataforma.</li>
+            <li><strong>Selo de modelo</strong> — prompt otimizado NÃO transfere entre modelos (Model Drifting). A promoção sela provider/modelo/juiz/gold_hash; se a config de LLM mudar depois, re-valide.</li>
+          </ul>
+        `
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Otimização — na prática',
+        items: [
+          { title: '0. Preparar o terreno (uma vez)', body: 'Tenha 8+ casos no Gold (ideal 20+) com categorias e adversariais. Clique "Dividir treino/holdout". Ligue optimizer_loop_enabled em Configurações → Parâmetros se for usar o modo automático (OFF por default — dispara muitos runs de LLM).' },
+          { title: '1. Caminho manual (Experimento de prompt)', body: 'Escolha agente + release e clique "Propor variantes (IA)". Leia as variantes e o racional de cada uma; rode o A/B — a plataforma executa champion (1x, reutilizado) e challenger como experiments no TREINO e mostra o veredito pareado no painel Comparar. Se o veredito apontar o challenger, o botão Promover aplica com selo (o prompt anterior vira revisão restaurável).' },
+          { title: '2. Caminho automático (Otimização automática)', body: 'Escolha agente + release, rodadas e teto US$, e clique "Otimizar automaticamente". O modal mostra a evolução ao vivo sem sair da tela: score do champion, variantes por rodada com reflexão e ✓pareto, parada honesta (paciência/teto) e confirmação no holdout. Se melhorou DE VERDADE (holdout confirma), a melhor variante está no Histórico de revisões do agente — restaurável e promovível.' },
+          { title: '3. Depois de promover', body: 'Rode um baseline novo do harness para selar a nova config como referência; o selo lembra o modelo usado — se trocar o LLM do agente, re-rode o experimento antes de confiar no ganho.' }
+        ]
+      },
+      {
+        kind: 'pegadinhas',
+        title: 'Otimização — exemplos e limites',
+        items: [
+          { title: 'Exemplo com números: quando o ganho é real', severity: 'info', body: 'Treino com 20 casos, champion 14/20 e challenger 20/20: discordantes 6×0 → p≈0.031 → "b_melhor" com significância (8×1 → p≈0.039 também passa; 6×1 → p=0.125 NÃO). Já 1×0 discordante → p=1.0 → inconclusivo, e empate total idem: mais casos no gold aumentam o poder do teste.' },
+          { title: 'Melhorou no treino ≠ melhorou', severity: 'warning', body: 'train_improved=true com holdout "empate" termina como improved=false e NENHUMA revisão é criada — é o anti-overfit funcionando, não um bug. Se o par A/B foi medido só no TREINO, a promoção avisa: confirme no holdout antes de confiar.' },
+          { title: 'Gold pequeno = otimização cega', severity: 'warning', body: 'O loop exige 4+ casos de treino, mas com tão poucos o McNemar quase nunca alcança significância. 20+ casos com categorias variadas dão poder estatístico e material de reflexão para o propositor.' },
+          { title: 'Report-only por design', severity: 'info', body: 'Nem o loop nem o propositor alteram o agente. Fechar o modal não cancela o job (segue no servidor). A única via que MUDA o agente é a promoção humana — e ela preserva o prompt anterior como revisão restaurável (rollback em 1 clique).' },
+          { title: 'Custo e cadência', severity: 'info', body: 'Cada rodada paga: propostas de LLM + (variantes × casos de treino) invocações + juiz. Use a sonda antes do run completo, comece com 2 rodadas e teto baixo (ex.: US$ 1), e acompanhe o gasto no modal (US$ corrente / teto).' }
+        ]
       },
       {
         kind: 'casos_de_uso',
