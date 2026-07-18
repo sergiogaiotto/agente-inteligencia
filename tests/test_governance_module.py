@@ -511,3 +511,184 @@ class TestAttestation:
             assert f'data-testid="{t}"' in html, t
         assert "async signAttestation()" in html and "async exportReport()" in html
         assert "/api/v1/governance/report" in html
+
+
+# ─── Policy-as-code (OPA) — cockpit read/simulate (62.0.0) ───────────────────
+class TestOpaCockpit:
+    def test_opa_keys_no_ui_to_env_map(self):
+        # sem isto o PUT /opa/config persiste no banco mas NÃO aplica ao runtime
+        # (apply_settings_to_env só varre o mapa) — mesma classe de bug do #700.
+        from app.core.config import _UI_TO_ENV_MAP
+        for k in ("opa_enabled", "opa_failsafe_open", "opa_timeout_seconds"):
+            assert k in _UI_TO_ENV_MAP, k
+
+    def test_opa_keys_nao_seladas(self):
+        # NÃO-seladas: o .env segue como fallback de boot. Selá-las reverteria
+        # silenciosamente uma implantação que liga o OPA / fecha o failsafe via
+        # .env para os defaults (fail-closed→open) num upgrade = downgrade de
+        # segurança silencioso (achado da revisão adversarial).
+        from app.core.config import _NON_MODEL_UI_KEYS, _SEALED_ENV_VARS
+        for k in ("opa_enabled", "opa_failsafe_open", "opa_timeout_seconds"):
+            assert k in _NON_MODEL_UI_KEYS, k
+        for env in ("OPA_ENABLED", "OPA_FAILSAFE_OPEN", "OPA_TIMEOUT_SECONDS"):
+            assert env not in _SEALED_ENV_VARS, env
+
+    @pytest.mark.asyncio
+    async def test_status_flags_e_saude(self, monkeypatch):
+        import app.routes.governance as G
+        import app.core.opa_client as OC
+        fake = FakeSettings(opa_enabled=True, opa_url="http://opa:8181",
+                            opa_failsafe_open=False, opa_timeout_seconds=1.5)
+        monkeypatch.setattr(G, "get_settings", lambda: fake)
+
+        async def _health():
+            return True
+        monkeypatch.setattr(OC, "server_health", _health)
+        r = await G.opa_status(user={})
+        assert r["enabled"] is True and r["failsafe_open"] is False
+        assert r["timeout_seconds"] == 1.5 and r["server_ok"] is True
+        assert r["url"] == "http://opa:8181"
+
+    @pytest.mark.asyncio
+    async def test_policies_da_opa_marca_wired(self, monkeypatch):
+        import app.routes.governance as G
+        import app.core.opa_client as OC
+
+        async def _list():
+            return [
+                {"id": "policies/interaction.rego", "raw": "package interaction"},
+                {"id": "policies/evidence.rego", "raw": "package evidence"},
+            ]
+        monkeypatch.setattr(OC, "list_policies", _list)
+        r = await G.opa_policies(user={})
+        assert r["source"] == "opa"
+        by = {p["package"]: p for p in r["policies"]}
+        assert by["interaction"]["wired"] is True
+        assert by["evidence"]["wired"] is False
+        assert r["policies"][0]["package"] == "interaction"  # wired primeiro
+
+    @pytest.mark.asyncio
+    async def test_policies_fallback_disco(self, monkeypatch):
+        import app.routes.governance as G
+        import app.core.opa_client as OC
+
+        async def _none():
+            return None
+        monkeypatch.setattr(OC, "list_policies", _none)
+        r = await G.opa_policies(user={})
+        assert r["source"] == "disk"
+        pkgs = {p["package"] for p in r["policies"]}
+        assert {"interaction", "tool_invocation", "evidence"} <= pkgs
+        inter = next(p for p in r["policies"] if p["package"] == "interaction")
+        assert "package interaction" in inter["raw"]  # lê o Rego real do disco
+
+    @pytest.mark.asyncio
+    async def test_simulate_valida_pacote(self):
+        import app.routes.governance as G
+        with pytest.raises(HTTPException) as e:
+            await G.opa_simulate(G.OpaSimulate(package="bogus"), user={})
+        assert e.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_simulate_chama_opa_e_traz_reasons(self, monkeypatch):
+        import app.routes.governance as G
+        import app.core.opa_client as OC
+        calls = []
+
+        async def _sim(package, rule="allow", input_doc=None):
+            calls.append((package, rule))
+            if rule == "allow":
+                return {"allow": False, "result": False, "source": "opa", "duration_ms": 1}
+            return {"allow": None, "result": ["user_inactive"], "source": "opa", "duration_ms": 1}
+        monkeypatch.setattr(OC, "simulate", _sim)
+        r = await G.opa_simulate(
+            G.OpaSimulate(package="interaction", input={"user": {"status": "inactive"}}), user={})
+        assert r["allow"] is False
+        assert r["reasons"] == ["user_inactive"]
+        assert ("interaction", "allow") in calls and ("interaction", "reasons") in calls
+
+    @pytest.mark.asyncio
+    async def test_simulate_tool_invocation_usa_reason_singular(self, monkeypatch):
+        # tool_invocation.rego expõe `reason` (singular string); interaction expõe
+        # `reasons` (set). Este ramo (governance.py) não estava coberto.
+        import app.routes.governance as G
+        import app.core.opa_client as OC
+        calls = []
+
+        async def _sim(package, rule="allow", input_doc=None):
+            calls.append((package, rule))
+            if rule == "allow":
+                return {"allow": False, "result": False, "source": "opa", "duration_ms": 1}
+            return {"allow": None, "result": "insufficient_role", "source": "opa", "duration_ms": 1}
+        monkeypatch.setattr(OC, "simulate", _sim)
+        r = await G.opa_simulate(G.OpaSimulate(
+            package="tool_invocation",
+            input={"tool": {"sensitivity": "high"}, "user": {"role": "operator"}}), user={})
+        assert r["allow"] is False and r["reasons"] == "insufficient_role"
+        assert ("tool_invocation", "reason") in calls
+        assert ("tool_invocation", "reasons") not in calls
+
+    @pytest.mark.asyncio
+    async def test_decisions_parse_details(self, monkeypatch):
+        import app.routes.governance as G
+        import json as _j
+        monkeypatch.setattr(G, "audit_repo", FakeAudit([
+            {"id": 2, "action": "deny", "entity_id": "tool_invocation.allow",
+             "details": _j.dumps({"package": "tool_invocation", "rule": "allow",
+                                  "decision": {"source": "opa", "duration_ms": 3}})},
+            {"id": 1, "action": "allow", "entity_id": "interaction.allow", "details": "{}"},
+        ]))
+        r = await G.opa_decisions(limit=10, user={})
+        assert [d["id"] for d in r["decisions"]] == [2, 1]  # recentes primeiro
+        assert r["decisions"][0]["package"] == "tool_invocation"
+        assert r["decisions"][0]["source"] == "opa" and r["decisions"][0]["duration_ms"] == 3
+
+    @pytest.mark.asyncio
+    async def test_config_put_persiste_e_aplica(self, monkeypatch):
+        import app.routes.governance as G
+        store = FakeStore()
+        monkeypatch.setattr(G, "settings_store", store)
+
+        async def _apply():
+            return 3
+        monkeypatch.setattr(G, "apply_settings_to_env", _apply)
+        monkeypatch.setattr(G, "audit_repo", FakeRWRepo([]))
+        r = await G.opa_config_put(
+            G.OpaConfig(opa_enabled=True, opa_failsafe_open=False, opa_timeout_seconds=2.5),
+            user={"username": "gov"})
+        assert r["env_applied"] == 3
+        assert store.saved["opa_enabled"] == "True"
+        assert store.saved["opa_failsafe_open"] == "False"
+        assert store.saved["opa_timeout_seconds"] == "2.5"
+
+    @pytest.mark.asyncio
+    async def test_config_put_422_timeout(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "settings_store", FakeStore())
+        with pytest.raises(HTTPException) as e:
+            await G.opa_config_put(G.OpaConfig(opa_timeout_seconds=99), user={})
+        assert e.value.status_code == 422
+        # limite inferior também barrado (0.1 <= t <= 30)
+        with pytest.raises(HTTPException) as e2:
+            await G.opa_config_put(G.OpaConfig(opa_timeout_seconds=0.01), user={})
+        assert e2.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_config_put_nada_a_alterar(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "settings_store", FakeStore())
+        r = await G.opa_config_put(G.OpaConfig(), user={})
+        assert r["env_applied"] == 0
+
+    def test_aba_policies_no_template(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert "{ k: 'policies', l: 'Políticas' }" in html
+        for t in ("ir-opa-config", "ir-opa-save", "ir-opa-simulator",
+                  "ir-opa-simulate", "ir-opa-policies", "ir-opa-decisions"):
+            assert f'data-testid="{t}"' in html, t
+        assert "async loadOpa()" in html and "async saveOpa()" in html and "async runOpaSim()" in html
+        assert "get opaDirty()" in html
+        assert "/api/v1/governance/opa/status" in html
+        assert "/api/v1/governance/opa/simulate" in html
+        # o viewer OPA saiu do roadmap (foi entregue); sobra a Fase B (edição).
+        assert "'Políticas (OPA)', f: 'Fase 2'" not in html

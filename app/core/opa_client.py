@@ -33,21 +33,37 @@ _tracer = get_tracer(__name__)
 
 # Singleton lazy do cliente HTTP. Reusa conexões — OPA é endpoint local frequente.
 _client: Optional[httpx.AsyncClient] = None
+_client_timeout: Optional[float] = None  # timeout com que o _client foi construído
 _client_lock = asyncio.Lock()
 
 
 async def _get_client() -> httpx.AsyncClient:
-    """Cria/retorna o AsyncClient singleton."""
-    global _client
-    if _client is not None:
+    """Cria/retorna o AsyncClient singleton.
+
+    O timeout é fixado na construção do httpx.AsyncClient. Como o cockpit pode
+    alterar `opa_timeout_seconds` em runtime (PUT /opa/config → apply_settings_to_env),
+    reconstrói o cliente quando o timeout efetivo muda — senão o valor novo só
+    valeria após restart do processo.
+    """
+    global _client, _client_timeout
+    settings = get_settings()
+    timeout = settings.opa_timeout_seconds
+    if _client is not None and _client_timeout == timeout:
         return _client
     async with _client_lock:
-        if _client is None:
-            settings = get_settings()
-            _client = httpx.AsyncClient(
-                base_url=settings.opa_url,
-                timeout=httpx.Timeout(settings.opa_timeout_seconds),
-            )
+        if _client is not None and _client_timeout == timeout:
+            return _client
+        if _client is not None:  # timeout mudou → fecha o antigo antes de recriar
+            old, _client = _client, None
+            try:
+                await old.aclose()
+            except Exception:
+                pass
+        _client = httpx.AsyncClient(
+            base_url=settings.opa_url,
+            timeout=httpx.Timeout(timeout),
+        )
+        _client_timeout = timeout
         return _client
 
 
@@ -195,11 +211,129 @@ async def _audit(package: str, rule: str, input_doc: Optional[dict], decision: d
         logger.warning(f"audit policy_decision falhou: {e}")
 
 
+# ════════════════════════════════════════════════════════════════════
+# Resolução do usuário atuante para os PEPs do engine (62.0.0).
+#
+# Substitui os valores HARDCODED que o engine passava ao OPA (user.status
+# "active" e user.role "operator"), que faziam tools sensitivity:high serem
+# filtradas em silêncio ao ligar o OPA. O vocabulário RBAC da plataforma
+# (root/admin/governanca/comum) é um namespace DIFERENTE do vocabulário OPA
+# (viewer/operator/admin) → mapeamento explícito abaixo.
+# ════════════════════════════════════════════════════════════════════
+
+# Papel RBAC da plataforma → papel do OPA (política tool_invocation.rego).
+# root/admin/governanca herdam poderes de admin (auth.require_role) → "admin".
+# comum é usuário interno autenticado → "operator" (libera tools low+medium).
+_ROLE_TO_OPA = {
+    "root": "admin",
+    "admin": "admin",
+    "governanca": "admin",
+    "comum": "operator",
+}
+
+
+def map_platform_role_to_opa(role: Optional[str]) -> str:
+    """Mapeia o papel RBAC da plataforma para o vocabulário do OPA.
+
+    Papel desconhecido/ausente → "operator" — preserva o comportamento que o
+    engine tinha hardcoded (nenhuma regressão para chamadas sem platform-user
+    real); só usuários privilegiados sobem para "admin" e destravam tools high.
+    """
+    return _ROLE_TO_OPA.get((role or "").strip().lower(), "operator")
+
+
+async def resolve_opa_user(owner_user_id: Optional[str]) -> dict[str, str]:
+    """Contexto REAL do usuário atuante (status + papel OPA) para os PEPs.
+
+    Faz no máximo 1 lookup por PK (`users_repo.find_by_id`) e reusa o mesmo row
+    para status e papel. Sem platform-user atuante (owner None — ex.: invoke via
+    API key ou chat de cliente-final externo) OU lookup falho → default seguro e
+    NÃO-regressivo: status "active", papel "operator" (o que o engine assumia
+    antes). Nunca propaga exceção.
+    """
+    uid = (owner_user_id or "").strip()
+    if not uid:
+        return {"status": "active", "role": "operator"}
+    row = None
+    try:
+        from app.core.database import users_repo  # import tardio: evita ciclo
+        row = await users_repo.find_by_id(uid)
+    except Exception as e:
+        logger.warning(f"resolve_opa_user({uid[:12]}) lookup falhou: {e}")
+    if not row:
+        return {"status": "active", "role": "operator"}
+    status = (str(row.get("status") or "active")).strip().lower() or "active"
+    return {"status": status, "role": map_platform_role_to_opa(row.get("role"))}
+
+
+# ════════════════════════════════════════════════════════════════════
+# Helpers do cockpit OPA (62.0.0) — read/simulate. Todos IGNORAM o toggle
+# opa_enabled (o servidor OPA roda no perfil default do compose, sempre de pé)
+# e NUNCA propagam exceção. `simulate` NÃO audita (é what-if, efeito zero).
+# ════════════════════════════════════════════════════════════════════
+async def server_health() -> bool:
+    """True se o servidor OPA responde em /health. Independe de opa_enabled."""
+    try:
+        client = await _get_client()
+        r = await client.get("/health")
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+async def list_policies() -> Optional[list[dict]]:
+    """Políticas carregadas no OPA (GET /v1/policies → result[].id/.raw).
+
+    Retorna a lista crua do OPA, ou None em falha (caller cai no fallback de
+    disco). Independe de opa_enabled.
+    """
+    try:
+        client = await _get_client()
+        r = await client.get("/v1/policies")
+        r.raise_for_status()
+        return r.json().get("result") or []
+    except Exception as e:
+        logger.warning(f"OPA list_policies falhou: {e}")
+        return None
+
+
+async def simulate(package: str, rule: str = "allow", input_doc: Optional[dict] = None) -> dict:
+    """What-if: avalia uma rule DIRETO no OPA, ignorando opa_enabled e SEM audit.
+
+    Retorna {allow, result, duration_ms, source}. `allow` é None e source="error"
+    quando o OPA não responde (o cockpit distingue erro de deny real).
+    """
+    started = time.perf_counter()
+    body = {"input": input_doc or {}}
+    url = f"/v1/data/{package}/{rule}"
+    try:
+        client = await _get_client()
+        r = await client.post(url, json=body)
+        r.raise_for_status()
+        result = r.json().get("result")
+        allow = result is not None and result is not False
+        return {
+            "allow": allow,
+            "result": result,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "source": "opa",
+        }
+    except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
+        return {
+            "allow": None,
+            "result": None,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "source": "error",
+            "error": str(e)[:200],
+        }
+
+
 async def close():
     """Fecha o cliente HTTP. Chamado no shutdown do app."""
-    global _client
+    global _client, _client_timeout
     if _client is not None:
         try:
             await _client.aclose()
         finally:
             _client = None
+            _client_timeout = None
