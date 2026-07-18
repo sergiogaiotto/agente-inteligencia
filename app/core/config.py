@@ -238,6 +238,13 @@ class Settings(BaseSettings):
     # Promove EvidenceChecker (Onda 0) a 1ª classe, separando RAG de Verification.
     # OFF por default → comportamento legacy preservado (_LegacyVerifier roda no lugar).
     verifier_v2_enabled: bool = False
+    # #684 (Fatia F): quando True, o Verifier emite sinais de decisão a partir do
+    # rascunho — `policy_refusal` (o agente RECUSOU: dado de terceiro, injection,
+    # política) e `needs_escalation` (o agente ESCALOU: NOC/gerência/supervisão) —
+    # e a FSM transiciona para Refuse/Escalate em vez de deixar a recusa/escala
+    # "invisível" em Recommend. OFF por default → comportamento de PRODUÇÃO
+    # inalterado (os sinais ficam False; ligar só muda o mapeamento de estado).
+    verifier_signals_drive_fsm: bool = False
     # Modelo do juiz. Anti-self-preference: idealmente um provider ≠ do gerador.
     # Formato "<provider>/<model>" ou apenas <model> (assume azure).
     verifier_judge_model: str = "azure/gpt-4o"
@@ -599,6 +606,7 @@ _UI_TO_ENV_MAP = {
     # per-tool). O modelo do juiz NÃO está aqui — é o papel `judge` do
     # Roteamento LLM (card "LLM como Juiz").
     "verifier_v2_enabled": "VERIFIER_V2_ENABLED",
+    "verifier_signals_drive_fsm": "VERIFIER_SIGNALS_DRIVE_FSM",
     "verifier_factuality_threshold": "VERIFIER_FACTUALITY_THRESHOLD",
     "verifier_completeness_threshold": "VERIFIER_COMPLETENESS_THRESHOLD",
     "verifier_tone_threshold": "VERIFIER_TONE_THRESHOLD",
@@ -657,6 +665,7 @@ _UI_TO_ENV_MAP = {
 # (valores efetivos p/ a aba) e pelos testes de contrato do mapa.
 PARAMETER_UI_KEYS = (
     "verifier_v2_enabled",
+    "verifier_signals_drive_fsm",
     "verifier_factuality_threshold",
     "verifier_completeness_threshold",
     "verifier_tone_threshold",

@@ -1707,6 +1707,7 @@ function settingsPage() {
               hint: 'Avalia cada resposta em 4 dimensões antes de aprovar. O modelo do juiz vem do Roteamento LLM (card "LLM como Juiz").',
               items: [
                 {key:'verifier_v2_enabled', type:'bool', label:'Verifier v2 ligado', desc:'Juiz multi-dimensional + validador de contrato nas interações standard/rigorous. Desligado, a plataforma usa o verificador legado (binário).'},
+                {key:'verifier_signals_drive_fsm', type:'bool', label:'Sinais do Verifier decidem a FSM', desc:'Quando ligado, uma recusa (dado de terceiro, injeção de prompt, política) redigida pelo agente vira estado Refuse e um escalonamento (NOC/gerência/supervisão) vira Escalate — em vez de ficarem invisíveis em Recommend. Desligado (padrão): comportamento inalterado.'},
                 {key:'verifier_factuality_threshold', type:'number', min:0, max:5, step:0.5, label:'Mínimo de factualidade (0–5)', desc:'Resposta com nota de suporte-em-evidências abaixo disso é reprovada.'},
                 {key:'verifier_completeness_threshold', type:'number', min:0, max:5, step:0.5, label:'Mínimo de completude (0–5)', desc:'Cobertura dos pontos pedidos na pergunta.'},
                 {key:'verifier_tone_threshold', type:'number', min:0, max:5, step:0.5, label:'Mínimo de tom (0–5)', desc:'Aderência ao tom e aos guardrails da skill.'},

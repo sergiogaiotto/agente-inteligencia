@@ -277,9 +277,21 @@ class InteractionStateMachine:
         score = verification_result.get("confidence", 0.0)
         risk = verification_result.get("risk_high", False)
         fraud = verification_result.get("fraud_suspected", False)
+        # #684 (Fatia F): sinais de decisão redigidos pelo agente. Ausentes/False
+        # sem a flag `verifier_signals_drive_fsm` → o mapeamento abaixo fica
+        # IDÊNTICO ao histórico (zero mudança de comportamento em produção).
+        policy_refusal = verification_result.get("policy_refusal", False)
+        needs_escalation = verification_result.get("needs_escalation", False)
         self.ctx.evidence_score = score
 
-        if fraud or risk:
+        if policy_refusal:
+            # Recusa controlada explícita (dado de 3º, prompt-injection, política)
+            # → Refuse. Antes ficava invisível em Recommend (recusa só no texto).
+            await self.transition(
+                State.REFUSE,
+                TransitionCondition(name="policy_refusal", policy_ok=False),
+            )
+        elif needs_escalation or fraud or risk:
             await self.transition(
                 State.ESCALATE,
                 TransitionCondition(name="risk_or_fraud", risk_high=risk, fraud_suspected=fraud),
