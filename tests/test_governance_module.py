@@ -152,3 +152,89 @@ class TestPageAndMarkup:
         assert '<option value="governanca">Governança</option>' in s
         # e as abas gated passaram a incluir governanca
         assert "user_role in ['root', 'admin', 'governanca']" in s
+
+
+# ─── Model / System cards (Fase 2) ───────────────────────────────────────────
+class FakeRepo2:
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def find_all(self, limit=100, offset=0, **f):
+        return self.rows[:limit]
+
+    async def find_by_id(self, i):
+        return next((r for r in self.rows if r.get("id") == i), None)
+
+
+_SKILL_MD = (
+    "---\nid: urn:skill:t:subagent:x\nversion: 0.1.0\nkind: subagent\n"
+    "owner: t\nstability: alpha\n---\n## Purpose\nResponder sobre garantia.\n\n"
+    "## Guardrails\nNao vazar dados de terceiros.\n"
+)
+
+
+class TestModelCards:
+    def test_truthy(self):
+        import app.routes.governance as G
+        assert G._truthy(1) and G._truthy("1") and G._truthy(True) and G._truthy("true")
+        assert not G._truthy(0) and not G._truthy("0") and not G._truthy(None)
+
+    def test_risk_signals(self):
+        import app.routes.governance as G
+        sig = G._risk_signals({"allow_general_knowledge": 1, "require_evidence": 0, "kind": "subagent"}, None)
+        blob = " ".join(x["label"] for x in sig)
+        assert "conhecimento geral" in blob
+        assert "Não exige evidência" in blob
+        assert "Sem SKILL.md" in blob
+        sig2 = G._risk_signals({"require_evidence": 1, "kind": "subagent"},
+                               {"guardrails": "x", "evidence_policy": ""})
+        assert any(x["level"] == "ok" for x in sig2)
+
+    @pytest.mark.asyncio
+    async def test_list_ordena_mais_arriscado_primeiro(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "agents_repo", FakeRepo2([
+            {"id": "a", "name": "Seguro", "kind": "subagent", "skill_id": "s1",
+             "require_evidence": 1, "allow_general_knowledge": 0},
+            {"id": "b", "name": "Arriscado", "kind": "subagent", "skill_id": None,
+             "require_evidence": 0, "allow_general_knowledge": 1},
+        ]))
+        r = await G.model_cards_list(user={})
+        assert r["cards"][0]["agent_id"] == "b"
+        assert r["cards"][0]["warn_count"] >= 2
+
+    @pytest.mark.asyncio
+    async def test_detail_deriva_da_skill_real(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "agents_repo", FakeRepo2([
+            {"id": "a", "name": "Esp", "kind": "subagent", "skill_id": "s1",
+             "require_evidence": 1, "allow_general_knowledge": 0,
+             "llm_provider": "azure", "model": "gpt-4o"},
+        ]))
+        monkeypatch.setattr(G, "skills_repo", FakeRepo2([{"id": "s1", "raw_content": _SKILL_MD}]))
+        r = await G.model_card_detail("a", user={})
+        assert r["name"] == "Esp" and r["model"]["model"] == "gpt-4o"
+        assert r["skill"] is not None
+        assert "garantia" in r["skill"]["purpose"].lower()
+
+    @pytest.mark.asyncio
+    async def test_detail_404(self, monkeypatch):
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "agents_repo", FakeRepo2([]))
+        with pytest.raises(HTTPException) as e:
+            await G.model_card_detail("nope", user={})
+        assert e.value.status_code == 404
+
+    def test_transparencia_conta_model_cards(self):
+        import app.routes.governance as G
+        _, pillars = G._posture()
+        t = next(p for p in pillars if p["pillar"] == "Transparência")
+        assert any("model card" in c["label"].lower() for c in t["checks"])
+
+    def test_aba_model_cards_no_template(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert "{ k: 'cards', l: 'Model cards' }" in html
+        assert 'data-testid="ir-cards-list"' in html
+        assert 'data-testid="ir-card-detail"' in html
+        assert "async selectCard(" in html
+        assert "/api/v1/governance/model-cards" in html
