@@ -96,6 +96,50 @@ def _mixed_inbound(edges: list[dict]) -> list[str]:
     return [t for t in cond_targets & chain_targets if t]
 
 
+def _router_nonisolated_inbound(nodes: list[dict], edges: list[dict]) -> list[str]:
+    """IDs de agentes ``kind=router`` que recebem uma aresta de ENTRADA em cadeia
+    (``sequential``/``parallel``) cujo ``context_scope`` NÃO é ``isolated``.
+
+    Um roteador classifica a INTENÇÃO ORIGINAL do usuário. Numa cadeia
+    não-isolada o downstream recebe o OUTPUT do agente anterior PREFIXADO à
+    mensagem (engine.py::execute_pipeline via `_resolve_context_scope`) — o
+    roteador acaba classificando o texto do upstream (ex.: um orquestrador),
+    não o do cliente, e desrote a intenção. Achado #4 do QA VPS 2026-07-19: com o mesh
+    `Maestro(aobd)→Triagem(router)` em `sequential`, "quero devolver o tênis por
+    arrependimento" (claramente comprador) caiu em `fora_de_escopo`; setar
+    `context_scope: isolated` na aresta corrigiu (o roteador voltou a ver só a
+    mensagem original). Fix do operador: `context_scope: isolated` na aresta de
+    entrada do roteador, ou torná-lo a ENTRADA do pipeline (router-first).
+
+    `get_topology` expõe isto pra a UI avisar no painel do nó. Sem falso-positivo:
+    só o padrão estrutural (roteador + inbound em cadeia sem `isolated`); um
+    roteador que é ENTRADA (sem inbound em cadeia) ou já `isolated` não aparece.
+    Espelha a leitura do engine: só `mode=="isolated"` isola; ausente/inherit/
+    scoped poluem.
+    """
+    router_ids = {n.get("id") for n in nodes if n.get("kind") == "router"}
+    flagged: list[str] = []
+    seen: set = set()
+    for e in edges:
+        tgt = e.get("target")
+        if tgt not in router_ids or tgt in seen:
+            continue
+        if e.get("type") not in ("sequential", "parallel"):
+            continue
+        cfg = e.get("config") or {}
+        if isinstance(cfg, str):
+            try:
+                cfg = json.loads(cfg) or {}
+            except Exception:
+                cfg = {}
+        scope_cfg = (cfg or {}).get("context_scope")
+        mode = (scope_cfg.get("mode") if isinstance(scope_cfg, dict) else None) or "inherit"
+        if str(mode).strip().lower() != "isolated":
+            seen.add(tgt)
+            flagged.append(tgt)
+    return flagged
+
+
 def _detect_roots(edges: list[dict]) -> list[str]:
     """Raízes do mesh = sources que NUNCA são target (entrada de uma cadeia).
 
@@ -166,6 +210,7 @@ async def get_topology():
         "conditional_no_expr": _conditional_without_expr(edges),
         "fanout_missing_default": _fanout_missing_default(edges),
         "mixed_inbound": _mixed_inbound(edges),
+        "router_nonisolated_inbound": _router_nonisolated_inbound(nodes, edges),
         "roots": _detect_roots(edges),
     }
 

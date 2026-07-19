@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 import app.core.database as db
 from app.routes import mesh
-from app.routes.mesh import _detect_roots
+from app.routes.mesh import _detect_roots, _router_nonisolated_inbound
 
 
 def _async(value):
@@ -51,6 +51,67 @@ class TestDetectRoots:
         assert _detect_roots([]) == []
 
 
+# ───────── _router_nonisolated_inbound (guarda #4, função pura) ─────────
+class TestRouterNonisolatedInbound:
+    ROUTER = [{"id": "r", "kind": "router"}, {"id": "o", "kind": "aobd"}]
+
+    def _edge(self, cfg="{}", ttype="sequential", src="o", tgt="r"):
+        return [{"id": "e1", "source": src, "target": tgt, "type": ttype, "config": cfg}]
+
+    def test_router_sequential_inbound_sem_scope_flagado(self):
+        assert _router_nonisolated_inbound(self.ROUTER, self._edge()) == ["r"]
+
+    def test_router_sequential_inbound_inherit_flagado(self):
+        cfg = '{"context_scope": {"mode": "inherit"}}'
+        assert _router_nonisolated_inbound(self.ROUTER, self._edge(cfg)) == ["r"]
+
+    def test_router_sequential_inbound_scoped_flagado(self):
+        cfg = '{"context_scope": {"mode": "scoped", "template": "output[:200]"}}'
+        assert _router_nonisolated_inbound(self.ROUTER, self._edge(cfg)) == ["r"]
+
+    def test_router_isolated_inbound_nao_flagado(self):
+        cfg = '{"context_scope": {"mode": "isolated"}}'
+        assert _router_nonisolated_inbound(self.ROUTER, self._edge(cfg)) == []
+
+    def test_router_parallel_inbound_flagado(self):
+        assert _router_nonisolated_inbound(self.ROUTER, self._edge(ttype="parallel")) == ["r"]
+
+    def test_router_conditional_inbound_nao_flagado(self):
+        # conditional/default NÃO são cadeia incondicional → fora do escopo do aviso
+        assert _router_nonisolated_inbound(self.ROUTER, self._edge(ttype="conditional")) == []
+
+    def test_router_como_entrada_sem_inbound_nao_flagado(self):
+        # roteador que é a ENTRADA (nenhuma aresta o tem como target) → OK
+        edges = [{"id": "e1", "source": "r", "target": "b", "type": "conditional", "config": "{}"}]
+        assert _router_nonisolated_inbound(self.ROUTER, edges) == []
+
+    def test_nao_router_sequential_inbound_nao_flagado(self):
+        # um subagente (não-router) em cadeia é o padrão normal → não avisa
+        nodes = [{"id": "s", "kind": "subagent"}, {"id": "o", "kind": "aobd"}]
+        edges = [{"id": "e1", "source": "o", "target": "s", "type": "sequential", "config": "{}"}]
+        assert _router_nonisolated_inbound(nodes, edges) == []
+
+    def test_config_dict_e_isolated(self):
+        # config já como dict (não string) + isolated → não flaga
+        edges = [{"id": "e1", "source": "o", "target": "r", "type": "sequential",
+                  "config": {"context_scope": {"mode": "isolated"}}}]
+        assert _router_nonisolated_inbound(self.ROUTER, edges) == []
+
+    def test_config_malformado_trata_como_nao_isolado(self):
+        edges = self._edge(cfg="{not json")
+        assert _router_nonisolated_inbound(self.ROUTER, edges) == ["r"]
+
+    def test_dedup_multiplas_arestas_para_mesmo_router(self):
+        edges = [
+            {"id": "e1", "source": "o", "target": "r", "type": "sequential", "config": "{}"},
+            {"id": "e2", "source": "x", "target": "r", "type": "parallel", "config": "{}"},
+        ]
+        assert _router_nonisolated_inbound(self.ROUTER, edges) == ["r"]
+
+    def test_empty(self):
+        assert _router_nonisolated_inbound([], []) == []
+
+
 # ───────────────── /topology enriquecido ─────────────────
 def _agents():
     return [
@@ -78,6 +139,30 @@ class TestTopologyEnrichment:
         # campos legados preservados
         assert "edges" in body and "fanout_roots" in body
 
+    def _router_chain(self, scope_cfg="{}"):
+        agents = [
+            {"id": "o", "name": "O", "kind": "aobd", "status": "active", "llm_provider": "azure", "model": "gpt-4o", "domain": "x", "version": "1.0.0"},
+            {"id": "r", "name": "R", "kind": "router", "status": "active", "llm_provider": "azure", "model": "gpt-4o", "domain": "x", "version": "1.0.0"},
+        ]
+        conns = [{"id": "e1", "source_agent_id": "o", "target_agent_id": "r", "connection_type": "sequential", "config": scope_cfg}]
+        return agents, conns
+
+    def test_router_nonisolated_inbound_flagged(self, monkeypatch):
+        agents, conns = self._router_chain("{}")
+        monkeypatch.setattr(db.agents_repo, "find_all", _async(agents))
+        monkeypatch.setattr(db.mesh_repo, "find_all", _async(conns))
+        monkeypatch.setattr(db.pipeline_membership, "all", _async([]))
+        body = _make_client().get("/api/v1/mesh/topology").json()
+        assert body["router_nonisolated_inbound"] == ["r"]
+
+    def test_router_nonisolated_inbound_absent_when_isolated(self, monkeypatch):
+        agents, conns = self._router_chain('{"context_scope": {"mode": "isolated"}}')
+        monkeypatch.setattr(db.agents_repo, "find_all", _async(agents))
+        monkeypatch.setattr(db.mesh_repo, "find_all", _async(conns))
+        monkeypatch.setattr(db.pipeline_membership, "all", _async([]))
+        body = _make_client().get("/api/v1/mesh/topology").json()
+        assert body["router_nonisolated_inbound"] == []
+
     def test_membership_failure_is_failsafe(self, monkeypatch):
         # Se a membership levantar (ex.: pool down), a topologia NÃO quebra:
         # segue com pipeline_id=None e ainda traz roots.
@@ -91,3 +176,15 @@ class TestTopologyEnrichment:
         body = r.json()
         assert body["roots"] == ["a"]
         assert all(n["pipeline_id"] is None for n in body["nodes"])
+
+
+# ───────── guarda #4 cabeada no Fluxograma (source smoke) ─────────
+def test_flow_editor_wires_router_nonisolated_warning():
+    from pathlib import Path
+    html = (
+        Path(__file__).resolve().parent.parent
+        / "app" / "templates" / "pages" / "mesh_flow.html"
+    ).read_text(encoding="utf-8")
+    assert "isRouterNonisolatedInbound" in html, "getter ausente no editor de fluxo"
+    assert "router_nonisolated_inbound" in html, "sinal do /topology não consumido"
+    assert "Roteador em cadeia não-isolada" in html, "aviso do roteador ausente"
