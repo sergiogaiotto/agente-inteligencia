@@ -35,9 +35,11 @@ class TestSensitivityMap:
         m = opa_client.map_tool_sensitivity_to_tier
         assert m("public") == "low" and m("internal") == "low"
         assert m("confidential") == "medium"
-        assert m("restricted") == "high"
-        assert m("High") == "high" and m("MEDIUM") == "medium"  # já-tier + casing
-        assert m(None) == "low" and m("") == "low" and m("bogus") == "low"  # desconhecido → low
+        assert m("restricted") == "high" and m("secret") == "high"  # secret=alias do topo
+        assert m("High") == "high" and m("MEDIUM") == "medium"      # já-tier + casing
+        assert m(None) == "low" and m("") == "low" and m("   ") == "low"  # AUSENTE → low (não classificada)
+        # PRESENTE mas desconhecido (typo) → high = FAIL-CLOSED (red-team)
+        assert m("sigiloso") == "high" and m("bogus") == "high" and m("critical") == "high"
 
 
 # ─── Resolução do usuário atuante (o coração do fix do engine) ───────────────
