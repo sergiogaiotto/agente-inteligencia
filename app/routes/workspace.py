@@ -459,24 +459,23 @@ async def get_session(session_id: str, user: dict = Depends(require_user)):
     # por step — usar só o agente de entrada deixava a linha do agente
     # meio-de-cadeia reaparecer; review pré-push 2026-07-15), com cache por
     # agente. Gate duplo do helper preserva prosa de agente sem contrato.
-    _has_dec = _strip_dec = _dec_schema_for = None
-    _dec_schemas: dict = {}
+    _has_dec = _present_final = _present_inter = None
     try:
         from app.skill_parser.decisions_schema import has_decision_line as _has_dec
-        from app.skill_parser.decisions_schema import strip_decision_line as _strip_dec
-        from app.agents.engine import _decisions_schema_for_agent as _dec_schema_for
+        from app.agents.engine import _present_final_output as _present_final
+        from app.agents.engine import _present_intermediate_output as _present_inter
     except Exception:
         _has_dec = None
-
-    async def _dec_schema(aid):
-        if not aid or _dec_schema_for is None:
-            return None
-        if aid not in _dec_schemas:
-            try:
-                _dec_schemas[aid] = await _dec_schema_for(aid)
-            except Exception:
-                _dec_schemas[aid] = None
-        return _dec_schemas[aid]
+    _chain_ids = [st.get("agent_id") for st in pipeline_steps if st.get("agent_id")]
+    # O balão TERMINAL (resposta final lida pelo usuário) = o ÚLTIMO turn com
+    # output na ordem cronológica; se for decision-only recebe a recusa amigável,
+    # e os routers INTERMEDIÁRIOS decision-only são suprimidos. Decidir por
+    # posição-no-tempo é ROBUSTO — NÃO depende do mapeamento posicional
+    # turn↔pipeline_steps (steps skipped/passthrough não persistem turn e
+    # desalinhariam o índice, fazendo a resposta terminal sumir; achado da 2ª
+    # revisão adversarial). `reversed(msgs)` é cronológico (repo=recente-1º).
+    _n_out = sum(1 for _t in msgs if _t.get("output_text_redacted"))
+    _out_seen = 0
 
     messages = []
     assistant_idx = 0
@@ -484,6 +483,7 @@ async def get_session(session_id: str, user: dict = Depends(require_user)):
         if t.get("user_text_redacted"):
             messages.append({"role": "user", "content": t["user_text_redacted"], "created_at": t.get("created_at", "")})
         if t.get("output_text_redacted"):
+            _out_seen += 1
             content = t["output_text_redacted"]
             if _has_dec and _has_dec(content):
                 _author = (
@@ -491,22 +491,30 @@ async def get_session(session_id: str, user: dict = Depends(require_user)):
                     if pipeline_steps and assistant_idx < len(pipeline_steps)
                     else s.get("agent_id")
                 )
-                _sch = await _dec_schema(_author)
-                if _sch:
-                    content = _strip_dec(content, _sch)
-                # Eco (36.1.0, borda do review): balão de agente SEM contrato
-                # pode espelhar a linha do upstream — tenta os schemas dos
-                # demais steps (cache por agente; só quando a linha resta).
-                if _has_dec(content) and pipeline_steps:
-                    for _st in pipeline_steps:
-                        _aid2 = _st.get("agent_id")
-                        if not _aid2 or _aid2 == _author:
-                            continue
-                        _sch2 = await _dec_schema(_aid2)
-                        if _sch2:
-                            content = _strip_dec(content, _sch2)
-                        if not _has_dec(content):
-                            break
+                # Cond-C + #4/#5: apresenta o balão como o VIVO faz, REUSANDO os
+                # helpers do engine (consistência vivo/F5; eles resolvem o schema
+                # do autor + eco pela cadeia — `_author` só ordena a busca, e
+                # `_chain_ids` cobre a corretude mesmo se o índice desalinhar). O
+                # balão TERMINAL (último output) decision-only vira a recusa
+                # amigável; um router INTERMEDIÁRIO decision-only vira "" → balão
+                # suprimido abaixo. Opera sobre o texto REDIGIDO (não reusa
+                # output_display) → não fura DLP: o fallback é constante e "" é
+                # vazio. Fail-safe: erro → texto intacto (comportamento legado).
+                try:
+                    _ids = [_author, *_chain_ids]
+                    if _present_final and _out_seen == _n_out:
+                        content = await _present_final(content, _ids)
+                    elif _present_inter:
+                        content = await _present_inter(content, _ids)
+                except Exception:
+                    pass
+            # #3/#6: router intermediário decision-only vira "" → suprime o balão
+            # (mantém o mapeamento incrementando assistant_idx), consistente com
+            # o vivo (workspace.html pula balão de conteúdo vazio).
+            if not content:
+                if pipeline_steps and assistant_idx < len(pipeline_steps):
+                    assistant_idx += 1
+                continue
             # Converter JSON legado de recusa/escalação
             if content.startswith("{") and '"type"' in content:
                 try:

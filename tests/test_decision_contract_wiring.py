@@ -320,6 +320,154 @@ class TestStripForDisplay:
         txt = "Resposta.\nDECISAO: escalar=sim"
         assert await strip_decision_line_for_display(txt, "ag-1") == txt
 
+    @pytest.mark.asyncio
+    async def test_router_terminal_so_decisao_vira_recusa(self, monkeypatch):
+        # #5: agente cujo output é SÓ a linha DECISAO (router invocado sozinho /
+        # terminal) → recusa amigável em vez de vazar a classificação crua.
+        import app.agents.engine as eng
+
+        async def _agent(_id):
+            return {"id": _id, "skill_id": "sk-1"}
+
+        async def _skill(_id):
+            return {"id": _id, "raw_content": SKILL_MD}
+
+        monkeypatch.setattr(eng, "_topo_agent", _agent)
+        monkeypatch.setattr(eng.skills_repo, "find_by_id", _skill)
+        got = await strip_decision_line_for_display(
+            "DECISAO: escalar=sim; severidade=alta", "ag-1")
+        assert got == eng._TERMINAL_DECISION_FALLBACK
+        assert "DECISAO" not in got
+
+
+# ─── 4f. _present_final_output: superfície TERMINAL do pipeline (#5) ──────────
+
+class TestPresentFinalOutput:
+    @staticmethod
+    def _mock(monkeypatch):
+        import app.agents.engine as eng
+
+        async def _agent(_id):
+            return {"id": _id, "skill_id": "sk-1"}
+
+        async def _skill(_id):
+            return {"id": _id, "raw_content": SKILL_MD}
+
+        monkeypatch.setattr(eng, "_topo_agent", _agent)
+        monkeypatch.setattr(eng.skills_repo, "find_by_id", _skill)
+        return eng
+
+    @pytest.mark.asyncio
+    async def test_terminal_so_decisao_vira_recusa(self, monkeypatch):
+        eng = self._mock(monkeypatch)
+        got = await eng._present_final_output("DECISAO: escalar=sim", ["ag-1", "ag-2"])
+        assert got == eng._TERMINAL_DECISION_FALLBACK
+
+    @pytest.mark.asyncio
+    async def test_eco_da_linha_por_agente_sem_contrato_vira_recusa(self, monkeypatch):
+        # owner SEM contrato ecoa a linha do upstream; output é só o eco → recusa
+        # (o schema que valida a linha está num agente ANTERIOR da cadeia).
+        import app.agents.engine as eng
+
+        async def _agent(_id):
+            return {"id": _id, "skill_id": ("" if _id == "owner" else "sk-1")}
+
+        async def _skill(_id):
+            return {"id": _id, "raw_content": SKILL_MD}
+
+        monkeypatch.setattr(eng, "_topo_agent", _agent)
+        monkeypatch.setattr(eng.skills_repo, "find_by_id", _skill)
+        got = await eng._present_final_output("DECISAO: escalar=sim", ["owner", "upstream"])
+        assert got == eng._TERMINAL_DECISION_FALLBACK
+
+    @pytest.mark.asyncio
+    async def test_prosa_mais_linha_estripa_normal(self, monkeypatch):
+        eng = self._mock(monkeypatch)
+        got = await eng._present_final_output(
+            "Vou te ajudar com a devolução.\nDECISAO: escalar=sim", ["ag-1"])
+        assert got == "Vou te ajudar com a devolução."
+
+    @pytest.mark.asyncio
+    async def test_sem_linha_decisao_intacto(self, monkeypatch):
+        eng = self._mock(monkeypatch)
+        got = await eng._present_final_output("Resposta simples ao cliente.", ["ag-1"])
+        assert got == "Resposta simples ao cliente."
+
+    @pytest.mark.asyncio
+    async def test_linha_nao_reconhecida_delega_legado(self, monkeypatch):
+        # sem schema que valide a linha (agente sem contrato) → comportamento
+        # legado: a linha NÃO é tocada (não é protocolo reconhecido).
+        import app.agents.engine as eng
+
+        async def _agent(_id):
+            return {"id": _id, "skill_id": ""}
+
+        monkeypatch.setattr(eng, "_topo_agent", _agent)
+        txt = "DECISAO: escalar=sim"
+        assert await eng._present_final_output(txt, ["ag-legado"]) == txt
+
+    @pytest.mark.asyncio
+    async def test_intermediario_decision_only_vira_vazio(self, monkeypatch):
+        # #3/#6: router INTERMEDIÁRIO (roteou adiante) cujo output é só a linha
+        # → "" (balão suprimido), NUNCA a recusa amigável nem a linha crua.
+        eng = self._mock(monkeypatch)
+        got = await eng._present_intermediate_output("DECISAO: escalar=sim", ["ag-1"])
+        assert got == ""
+
+    @pytest.mark.asyncio
+    async def test_intermediario_com_prosa_estripa(self, monkeypatch):
+        eng = self._mock(monkeypatch)
+        got = await eng._present_intermediate_output(
+            "Encaminhando ao especialista.\nDECISAO: escalar=sim", ["ag-1"])
+        assert got == "Encaminhando ao especialista."
+
+
+# ─── 4g. decision_and_display_output: caminho VIVO single-agent (#5, #1) ──────
+
+class TestDecisionAndDisplayOutput:
+    """O caminho REAL de /agents/invoke (agents.py:881) e do chat single-agent do
+    workspace (workspace.py:1275) — NÃO o helper morto strip_decision_line_for_display."""
+
+    @staticmethod
+    def _mock(monkeypatch):
+        import app.agents.engine as eng
+
+        async def _agent(_id):
+            return {"id": _id, "skill_id": "sk-1"}
+
+        async def _skill(_id):
+            return {"id": _id, "raw_content": SKILL_MD}
+
+        monkeypatch.setattr(eng, "_topo_agent", _agent)
+        monkeypatch.setattr(eng.skills_repo, "find_by_id", _skill)
+        return eng
+
+    @pytest.mark.asyncio
+    async def test_router_terminal_so_decisao_vira_recusa(self, monkeypatch):
+        eng = self._mock(monkeypatch)
+        decision, display = await eng.decision_and_display_output(
+            "DECISAO: escalar=sim; severidade=alta", "ag-1")
+        # a decisão estruturada é preservada (via de máquina)...
+        assert decision == {"escalar": "sim", "severidade": "alta"}
+        # ...mas o texto apresentado NÃO vaza a linha crua.
+        assert display == eng._TERMINAL_DECISION_FALLBACK
+        assert "DECISAO" not in display
+
+    @pytest.mark.asyncio
+    async def test_prosa_mais_linha_estripa_normal(self, monkeypatch):
+        eng = self._mock(monkeypatch)
+        decision, display = await eng.decision_and_display_output(
+            "Resposta ao cliente.\nDECISAO: escalar=sim", "ag-1")
+        assert decision == {"escalar": "sim"}
+        assert display == "Resposta ao cliente."
+
+    @pytest.mark.asyncio
+    async def test_sem_linha_intacto(self, monkeypatch):
+        eng = self._mock(monkeypatch)
+        decision, display = await eng.decision_and_display_output("Olá!", "ag-1")
+        assert decision is None
+        assert display == "Olá!"
+
 
 # ─── 5. API: /mesh/agents/{id}/decisions + decision no simulador ─────────────
 

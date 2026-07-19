@@ -321,6 +321,13 @@ class TestWorkspaceUiHardening:
         # O fallback `||'Concluído'` foi acoplado ao mostrar final_state
         assert "(lastTrace.final_state||'Concluído')" in src
 
+    def test_pipeline_step_bubble_skips_empty_content(self):
+        """#3/#6: um router intermediário decision-only recebe output_display=""
+        do engine → o loop de render PULA o balão vazio (em vez de mostrar bolha
+        vazia ou a linha DECISAO crua)."""
+        src = _workspace_html()
+        assert "if(!_content) continue;" in src
+
     def test_load_session_prefers_session_agent_id(self):
         """selectedAgentId prioriza session.agent_id (sempre persistido)
         sobre pipeline_steps[0].agent_id — evita ficar undefined em
@@ -485,3 +492,89 @@ class TestGetSessionDecisionLineStrip:
         assistant = [m for m in r.json()["messages"] if m["role"] == "assistant"]
         assert assistant[0]["content"] == "Caso grave."                      # autor B (contrato)
         assert assistant[1]["content"] == "Resolvido conforme triagem."      # eco em C, strippado via schema de B
+
+    def test_router_terminal_decision_only_vira_recusa(self, workspace_client, monkeypatch):
+        # #4: pipeline que termina no router (owner) cujo balão é só a linha
+        # DECISAO → recusa amigável no histórico, consistente com o vivo (F5).
+        from app.agents.engine import _TERMINAL_DECISION_FALLBACK
+        trace = {"pipeline_steps": [{"agent_id": "ag-router"}],
+                 "output_agent": {"id": "ag-router"}}
+        session = {"id": self.SESSION_ID, "agent_id": "ag-router", "title": "t",
+                   "state": "LogAndClose", "trace_data": json.dumps(trace)}
+        turns = [{"user_text_redacted": "qual a capital da França?",
+                  "output_text_redacted": "DECISAO: categoria=fora_de_escopo; risco=normal",
+                  "created_at": ""}]
+        _patch_session(monkeypatch, session_row=session, turns=turns)
+
+        async def _schema(aid):
+            return {"categoria": ["fora_de_escopo", "comprador"], "risco": ["normal", "alto"]}
+
+        monkeypatch.setattr("app.agents.engine._decisions_schema_for_agent", _schema)
+        r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        assistant = [m for m in r.json()["messages"] if m["role"] == "assistant"]
+        assert assistant[0]["content"] == _TERMINAL_DECISION_FALLBACK
+        assert "DECISAO" not in assistant[0]["content"]
+
+    def test_router_intermediario_decision_only_suprimido(self, workspace_client, monkeypatch):
+        # #3/#6: router INTERMEDIÁRIO decision-only → balão suprimido no histórico
+        # (não vaza a linha crua nem anuncia "não consegui"); o especialista
+        # (owner) responde. Consistente com o vivo (workspace.html pula vazio).
+        trace = {"pipeline_steps": [{"agent_id": "ag-router"}, {"agent_id": "ag-esp"}],
+                 "output_agent": {"id": "ag-esp"}}
+        session = {"id": self.SESSION_ID, "agent_id": "ag-router", "title": "t",
+                   "state": "LogAndClose", "trace_data": json.dumps(trace)}
+        # repo devolve mais-recente-primeiro; o handler reverte p/ cronológica
+        turns = [
+            {"user_text_redacted": None,
+             "output_text_redacted": "Vou resolver sua devolução agora.", "created_at": ""},  # esp (owner)
+            {"user_text_redacted": "quero devolver",
+             "output_text_redacted": "DECISAO: categoria=comprador; risco=normal", "created_at": ""},  # router
+        ]
+        _patch_session(monkeypatch, session_row=session, turns=turns)
+
+        async def _schema(aid):
+            return ({"categoria": ["comprador", "fora_de_escopo"], "risco": ["normal", "alto"]}
+                    if aid == "ag-router" else None)
+
+        monkeypatch.setattr("app.agents.engine._decisions_schema_for_agent", _schema)
+        r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        msgs = r.json()["messages"]
+        assistant = [m for m in msgs if m["role"] == "assistant"]
+        # só UM balão assistant (o do especialista); o router foi suprimido
+        assert len(assistant) == 1
+        assert assistant[0]["content"] == "Vou resolver sua devolução agora."
+        assert all("DECISAO" not in m["content"] for m in msgs)
+
+    def test_router_terminal_fallback_sobrevive_step_pulado_antes(self, workspace_client, monkeypatch):
+        # 2ª revisão adversarial (Trigger A): um step skipped/passthrough ANTES do
+        # owner desalinha o índice posicional turn↔pipeline_steps. A resposta
+        # terminal decision-only NÃO pode SUMIR — deve virar a recusa amigável
+        # (decidido pelo "último output cronológico", não pelo índice de step).
+        from app.agents.engine import _TERMINAL_DECISION_FALLBACK
+        trace = {
+            "pipeline_steps": [{"agent_id": "ag-B"}, {"agent_id": "ag-skip"}, {"agent_id": "ag-C"}],
+            "output_agent": {"id": "ag-C"},
+        }
+        session = {"id": self.SESSION_ID, "agent_id": "ag-B", "title": "t",
+                   "state": "LogAndClose", "trace_data": json.dumps(trace)}
+        # recent-first: C (terminal, decision-only), B (entry, prosa que roteia).
+        # ag-skip NÃO tem turn persistido (é o cenário do desalinhamento).
+        turns = [
+            {"user_text_redacted": None,
+             "output_text_redacted": "DECISAO: categoria=fora_de_escopo; risco=normal", "created_at": ""},
+            {"user_text_redacted": "pergunta fora de escopo",
+             "output_text_redacted": "Encaminhando.", "created_at": ""},
+        ]
+        _patch_session(monkeypatch, session_row=session, turns=turns)
+
+        async def _schema(aid):
+            return ({"categoria": ["fora_de_escopo", "comprador"], "risco": ["normal", "alto"]}
+                    if aid == "ag-C" else None)
+
+        monkeypatch.setattr("app.agents.engine._decisions_schema_for_agent", _schema)
+        r = workspace_client.get(f"/api/v1/workspace/sessions/{self.SESSION_ID}")
+        msgs = r.json()["messages"]
+        assistant = [m for m in msgs if m["role"] == "assistant"]
+        # a resposta terminal NÃO sumiu: virou a recusa amigável (não "" nem crua)
+        assert assistant[-1]["content"] == _TERMINAL_DECISION_FALLBACK
+        assert all("DECISAO" not in m["content"] for m in msgs)
