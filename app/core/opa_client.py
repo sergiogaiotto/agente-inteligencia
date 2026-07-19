@@ -237,15 +237,23 @@ _ROLE_TO_OPA = {
 # Sem este mapa, ligar o OPA nega TODA tool classificada (a rego só conhece low/medium/high).
 # Valores já-tier (low/medium/high) passam direto (retrocompat).
 _SENSITIVITY_TO_TIER = {
-    "public": "low", "internal": "low", "confidential": "medium", "restricted": "high",
+    "public": "low", "internal": "low", "confidential": "medium",
+    "restricted": "high", "secret": "high",  # 'secret' = alias de 'restricted' (topo, = evidence.rego)
     "low": "low", "medium": "medium", "high": "high",
 }
 
 
 def map_tool_sensitivity_to_tier(sensitivity: Optional[str]) -> str:
-    """Sensibilidade da tool → tier da tool_invocation.rego. Desconhecido/ausente
-    → 'low' (não quebra tools legadas sem rótulo). Ver [[project_opa_cockpit_handoff]]."""
-    return _SENSITIVITY_TO_TIER.get((sensitivity or "").strip().lower(), "low")
+    """Sensibilidade da tool → tier da tool_invocation.rego.
+
+    AUSENTE/vazio → 'low' (tool não-classificada = usável; retrocompat). Rótulo
+    PRESENTE mas desconhecido (typo, 'sigiloso', 'critical') → 'high' = FAIL-CLOSED:
+    o curador quis classificar; um label não-reconhecido NÃO pode virar 'liberado
+    p/ todos' (red-team: rotular de 'secret' abria a tool ao piso). Ver [[project_opa_cockpit_handoff]]."""
+    s = (sensitivity or "").strip().lower()
+    if not s:
+        return "low"                            # não classificada → usável
+    return _SENSITIVITY_TO_TIER.get(s, "high")   # presente-mas-desconhecido → fail-closed
 
 
 def map_platform_role_to_opa(role: Optional[str]) -> str:
