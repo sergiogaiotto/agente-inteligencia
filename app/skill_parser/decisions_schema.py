@@ -297,3 +297,31 @@ def strip_decision_line(text: str, schema: Optional[dict]) -> str:
         return text
     result = "\n".join(lines[:end]).rstrip()
     return result if result.strip() else text
+
+
+def is_decision_only(text: str, schema: Optional[dict]) -> bool:
+    """True quando `text` é APENAS linha(s) `DECISAO:` VÁLIDAS (contra `schema`)
+    mais espaço em branco — nenhuma prosa para o usuário.
+
+    É o caso do router/classificador quando ele é o nó TERMINAL (fora de escopo):
+    o output inteiro é o protocolo de máquina. `strip_decision_line` preserva
+    essa linha de propósito (nunca esvazia a UI), então a camada de APRESENTAÇÃO
+    usa este predicado para NÃO vazar a classificação crua — substituindo por uma
+    recusa amigável (a decisão estruturada segue no envelope `decision`).
+
+    Sem schema / sem nenhuma linha válida / qualquer conteúdo que não seja
+    protocolo válido → False (prosa legítima e linhas fora do contrato ficam por
+    conta do chamador). Diferente de `strip_decision_line`, olha TODAS as linhas
+    (não só as finais): uma linha de protocolo seguida de prosa não é "só
+    decisão"."""
+    if not text or not schema:
+        return False
+    saw_decision = False
+    for ln in text.splitlines():
+        if not ln.strip():
+            continue
+        if _DECISION_LINE_RE.match(ln) and extract_decision_line(ln, schema):
+            saw_decision = True
+            continue
+        return False
+    return saw_decision

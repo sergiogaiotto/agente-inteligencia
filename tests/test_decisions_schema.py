@@ -8,8 +8,8 @@ LLM digitou. Substitui o 'escalar=sim' in output_lower combinado por telepatia.
 """
 from app.skill_parser.decisions_schema import (
     build_decision_line, build_decisions_directive, extract_decision_line,
-    extract_decisions_schema, has_decision_line, preserve_decision_line,
-    strip_decision_line, validate_decision_value,
+    extract_decisions_schema, has_decision_line, is_decision_only,
+    preserve_decision_line, strip_decision_line, validate_decision_value,
 )
 
 SKILL = """# Agente
@@ -297,6 +297,48 @@ def test_strip_output_contract_json_volta_a_parsear():
     txt = '{"resultado": "ok"}\nDECISAO: escalar=sim'
     got = strip_decision_line(txt, SCHEMA)
     assert _json.loads(got) == {"resultado": "ok"}
+
+
+# ── is_decision_only: output que é SÓ protocolo (router terminal, #5) ─────────
+
+def test_decision_only_uma_linha():
+    # o caso do #5: router terminal cujo output é só a linha DECISAO.
+    assert is_decision_only("DECISAO: escalar=sim", SCHEMA) is True
+
+
+def test_decision_only_com_espacos_e_multiplas_linhas():
+    txt = "\n  DECISAO: escalar=sim\n\nDECISAO: severidade=alta  \n"
+    assert is_decision_only(txt, SCHEMA) is True
+
+
+def test_decision_only_falso_quando_ha_prosa_antes():
+    # prosa + linha final = resposta real → NÃO é "só decisão" (o strip cuida).
+    assert is_decision_only("Resposta ao cliente.\nDECISAO: escalar=sim", SCHEMA) is False
+
+
+def test_decision_only_falso_quando_ha_prosa_depois():
+    # linha no MEIO (prosa após) também não é "só decisão".
+    assert is_decision_only("DECISAO: escalar=sim\nE a resposta continua.", SCHEMA) is False
+
+
+def test_decision_only_falso_sem_schema():
+    assert is_decision_only("DECISAO: escalar=sim", None) is False
+
+
+def test_decision_only_falso_linha_fora_do_enum():
+    # valor fora do contrato não valida → não é protocolo reconhecido → prosa.
+    assert is_decision_only("DECISAO: escalar=talvez", SCHEMA) is False
+
+
+def test_decision_only_falso_texto_vazio():
+    assert is_decision_only("", SCHEMA) is False
+    assert is_decision_only("   \n  ", SCHEMA) is False
+
+
+def test_decision_only_falso_citacao_do_formato_no_meio():
+    # "Exemplo: DECISAO: ..." não casa a âncora ^ da linha → prosa, não protocolo.
+    txt = "Exemplo: DECISAO: escalar=sim\nE a resposta continua."
+    assert is_decision_only(txt, SCHEMA) is False
 
 
 def test_valor_com_borda_stripavel_e_rejeitado():

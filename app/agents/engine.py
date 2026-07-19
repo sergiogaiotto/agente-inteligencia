@@ -52,6 +52,7 @@ from app.skill_parser.decisions_schema import (
     extract_decision_line,
     extract_decisions_schema,
     has_decision_line,
+    is_decision_only,
     preserve_decision_line,
     strip_decision_line,
 )
@@ -4974,7 +4975,11 @@ async def execute_pipeline(
         _final_decision = await extract_decision_for_agent(
             final_output, owner_step.get("agent_id") or "")
         try:
-            final_output = await _strip_for_display_multi(
+            # Superfície TERMINAL: strip normal e, se o produtor emitiu só a
+            # linha DECISAO (router terminal / fora de escopo), recusa amigável
+            # em vez da classificação crua (#5). A decisão estruturada já foi
+            # extraída acima e vai no envelope `decision`.
+            final_output = await _present_final_output(
                 final_output,
                 [(owner_step or {}).get("agent_id") or "", *[(s or {}).get("agent_id") or "" for s in steps]],
             )
@@ -4997,8 +5002,21 @@ async def execute_pipeline(
         for _s in steps:
             _out_s = _s.get("output") or ""
             if _out_s and has_decision_line(_out_s):
-                _disp = await _strip_for_display_multi(
-                    _out_s, [(_s.get("agent_id") or ""), *_chain_ids])
+                _ids = [(_s.get("agent_id") or ""), *_chain_ids]
+                # O balão do step que PRODUZIU a resposta final (owner_step) é o
+                # que o usuário lê como resposta no chat de pipeline — se for um
+                # router terminal decision-only, recebe a recusa amigável (#5),
+                # consistente com o `output` do topo. Um router INTERMEDIÁRIO
+                # decision-only (roteou adiante) NÃO pode vazar a linha crua nem
+                # anunciar "não consegui" (falsa falha) → balão em branco ""
+                # (a UI suprime); `strip_decision_line` sozinho PRESERVA a linha
+                # decision-only (guarda "nunca esvazia"), por isso não basta o
+                # strip legado aqui (#3/#6).
+                _disp = await (
+                    _present_final_output(_out_s, _ids)
+                    if _s is owner_step
+                    else _present_intermediate_output(_out_s, _ids)
+                )
                 if _disp != _out_s:
                     _s["output_display"] = _disp
     except Exception:
@@ -5844,7 +5862,16 @@ async def decision_and_display_output(output: str, agent_id: str) -> tuple:
         schema = await _decisions_schema_for_agent(agent_id)
         if not schema:
             return None, output
-        return (extract_decision_line(output, schema) or None), strip_decision_line(output, schema)
+        decision = extract_decision_line(output, schema) or None
+        # Router/classificador invocado como agente ÚNICO cujo output é só a
+        # linha DECISAO (terminal): recusa amigável em vez de vazar a
+        # classificação crua (#5). A decisão estruturada segue no envelope.
+        # É a superfície VIVA de /agents/invoke (agents.py) e do chat single-
+        # agent do workspace (workspace.py) — não confundir com o helper morto
+        # `strip_decision_line_for_display`.
+        if is_decision_only(output, schema):
+            return decision, _TERMINAL_DECISION_FALLBACK
+        return decision, strip_decision_line(output, schema)
     except Exception:
         return None, output
 
@@ -5874,13 +5901,67 @@ async def _strip_for_display_multi(output: str, agent_ids: list) -> str:
     return out
 
 
+# Router/classificador TERMINAL (fora de escopo): quando o produtor da resposta
+# FINAL emitiu SÓ a linha DECISAO (protocolo de máquina, sem prosa), o usuário
+# não pode receber a classificação crua — `strip_decision_line` a preserva de
+# propósito p/ nunca esvaziar a UI. Substituímos por uma recusa amigável; a
+# decisão estruturada segue no envelope `decision` (via de máquina). Achado #5
+# do QA 2026-07-19 (pipeline que termina no router / default→ancestral no-op).
+_TERMINAL_DECISION_FALLBACK = (
+    "Desculpe, não consegui identificar uma resposta adequada para a sua "
+    "solicitação. Poderia reformular ou dar mais detalhes?"
+)
+
+
+async def _present_output(output: str, agent_ids: list, *, on_decision_only: str) -> str:
+    """Núcleo da APRESENTAÇÃO ao usuário. Igual a `_strip_for_display_multi` no
+    caso comum (prosa + linha → prosa), MAS quando o produtor emitiu SÓ o
+    protocolo (`is_decision_only` sob o schema de algum agente da cadeia) devolve
+    `on_decision_only` em vez de vazar a linha crua (#5) — que `strip_decision_line`
+    preserva de propósito p/ nunca esvaziar a UI. Fail-safe: erro num lookup →
+    segue tentando; nada casou → delega ao strip legado (comportamento intacto)."""
+    out = output or ""
+    if not has_decision_line(out):
+        return out
+    seen: set = set()
+    for aid in agent_ids or []:
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        try:
+            sch = await _decisions_schema_for_agent(aid)
+        except Exception:
+            continue
+        if sch and is_decision_only(out, sch):
+            return on_decision_only
+    return await _strip_for_display_multi(out, agent_ids)
+
+
+async def _present_final_output(output: str, agent_ids: list) -> str:
+    """Superfície TERMINAL (resposta FINAL lida pelo usuário): um output que é só
+    protocolo (router terminal / fora de escopo) vira a recusa amigável
+    `_TERMINAL_DECISION_FALLBACK`; a decisão estruturada segue no envelope
+    `decision` (via de máquina)."""
+    return await _present_output(output, agent_ids, on_decision_only=_TERMINAL_DECISION_FALLBACK)
+
+
+async def _present_intermediate_output(output: str, agent_ids: list) -> str:
+    """Superfície INTERMEDIÁRIA (balão de um router que roteou adiante; preview
+    de stream `agent_done`): um output que é só protocolo vira "" (balão em
+    branco, suprimido na UI). NÃO usa a recusa amigável — um router intermediário
+    NÃO falhou, apenas roteou; anunciar "não consegui" seria falsa falha (#3/#6).
+    A linha crua NUNCA é apresentada em nenhum dos casos."""
+    return await _present_output(output, agent_ids, on_decision_only="")
+
+
 async def _display_preview(output: str, agent_id: str, limit: int = 300, fallback_agent_ids: list | None = None) -> str:
     """Preview do output para EVENTOS de stream (`agent_done`): a linha DECISAO
     é protocolo de máquina e não aparece ao vivo (Backlog 4, 36.2.1) — uma
-    resposta curta de classificador cabe inteira nos 300 chars, linha inclusa.
-    steps/trace seguem CRUS; o gate lê o output completo. Eco coberto via
-    `fallback_agent_ids` (agentes anteriores da cadeia)."""
-    out = await _strip_for_display_multi(output or "", [agent_id, *(fallback_agent_ids or [])])
+    resposta curta de classificador cabe inteira nos 300 chars. Um output que é
+    SÓ protocolo (router decision-only) vira "" — o preview NUNCA vaza a linha
+    crua a consumidores SSE externos (#5); o `result.output` final carrega a
+    recusa amigável. Eco coberto via `fallback_agent_ids`."""
+    out = await _present_intermediate_output(output or "", [agent_id, *(fallback_agent_ids or [])])
     return out[:limit]
 
 
@@ -5897,6 +5978,10 @@ async def strip_decision_line_for_display(output: str, agent_id: str) -> str:
         schema = await _decisions_schema_for_agent(agent_id)
         if not schema:
             return output
+        # Router invocado SOZINHO cujo output é só a linha DECISAO: recusa
+        # amigável em vez da classificação crua (#5), simétrico ao pipeline.
+        if is_decision_only(output, schema):
+            return _TERMINAL_DECISION_FALLBACK
         return strip_decision_line(output, schema)
     except Exception:
         return output
