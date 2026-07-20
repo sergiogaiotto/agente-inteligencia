@@ -2,10 +2,6 @@
 
 **Plataforma de Gestão e Desenvolvimento de Multi-Agentes de IA, orientada a SKILL.md, sobre AI Mesh**
 
-> Documenta a plataforma na versão **64.0.2** · Especificação Funcional §1–§24 · pt-BR
->
-> _Novidade desta faixa (55.x–64.x): a [**Parte VIII**](#parte-viii--segurança-governança-e-qualidade-das-respostas) ganhou a camada de **governança como política de código** — o módulo **IA Responsável** (`/ia-responsavel`, [Parte IV](#parte-iv--tour-completo-módulo-a-módulo) §4.18), o **cockpit OPA** (motor Rego vivo, editável e versionado pela tela, §7.11) e o **Evidence ACL** ("no read up" por confidencialidade, §7.11–§7.12)._
-
 ---
 
 ## Para quem nunca viu isso: o que é o Maestro?
