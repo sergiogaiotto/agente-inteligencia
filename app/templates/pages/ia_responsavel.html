@@ -89,7 +89,7 @@
                 <h2 class="text-[13px] font-semibold text-brand-900">Configuração — guarda de injeção &amp; DLP</h2>
                 <span x-show="guardDirty" class="text-[10px] text-amber-600">alterações não salvas</span>
             </div>
-            <p class="text-[11px] text-surface-500 mb-3">A guarda de injeção analisa as mensagens dirigidas aos agentes LLM e atribui um score de risco de prompt injection (OWASP LLM01): no limiar de <strong>bloqueio</strong> a mensagem é recusada; no de <strong>aviso</strong> ela segue, mas com alerta registrado. O DLP redige PII (CPF, e-mail, telefone…) antes de persistir as conversas. Alterações salvas aqui são aplicadas em runtime e registradas na trilha de auditoria.</p>
+            <p class="text-[11px] text-surface-500 mb-3">A guarda de injeção analisa as mensagens dirigidas aos agentes LLM e atribui um score de risco de prompt injection (OWASP LLM01): no limiar de <strong>bloqueio</strong> a mensagem é recusada; no de <strong>aviso</strong> ela segue, mas com alerta registrado. O DLP redige PII (CPF, e-mail, telefone…) antes de persistir as conversas — e, com a opção abaixo ligada, também no que o turno envia ao provedor LLM (mensagem, anexos, evidências, histórico e a pergunta passada ao juiz). Exceções: a consulta de embeddings da busca vetorial usa o texto cru (necessário ao recall) e imagens não são redigidas. Alterações salvas aqui são aplicadas em runtime e registradas na trilha de auditoria.</p>
             <div class="space-y-2.5">
                 <label class="flex items-center gap-2 text-[12px] text-surface-700"><input type="checkbox" x-model="guard.prompt_guard_enabled"> Guarda de injeção de prompt (OWASP LLM01)</label>
                 <div class="pl-6 grid grid-cols-2 gap-4" x-show="guard.prompt_guard_enabled">
@@ -103,7 +103,7 @@
                     </div>
                 </div>
                 <label class="flex items-center gap-2 text-[12px] text-surface-700"><input type="checkbox" x-model="guard.dlp_enabled"> DLP — redação de PII no que é persistido</label>
-                <label class="flex items-center gap-2 text-[11.5px] text-surface-600 pl-6" x-show="guard.dlp_enabled"><input type="checkbox" x-model="guard.dlp_redact_before_llm"> redigir PII também ANTES de enviar ao LLM (perde contexto de ids reais) <span class="text-[10px] text-amber-600">— opção ainda não aplicada pelo runtime; hoje a redação ocorre na persistência</span></label>
+                <label class="flex items-center gap-2 text-[11.5px] text-surface-600 pl-6" x-show="guard.dlp_enabled"><input type="checkbox" x-model="guard.dlp_redact_before_llm"> redigir PII também ANTES de enviar ao LLM (perde contexto de ids reais — o modelo vê [CPF]/[EMAIL] no lugar do valor)</label>
             </div>
             <div class="mt-3 flex justify-end">
                 <button @click="saveGuard()" :disabled="guardBusy || !guardDirty" data-testid="ir-guard-save" class="rounded-lg bg-brand-500 px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-40"><span x-text="guardBusy ? 'Salvando…' : 'Salvar configuração'"></span></button>

@@ -2023,6 +2023,42 @@ def _verify_autopass(
     return exec_profile != "rigorous" or not v2_enabled
 
 
+def _pre_llm_dlp_enabled(settings) -> bool:
+    """Gate da redação DLP pré-LLM (65.0.0): exige dlp_enabled E
+    dlp_redact_before_llm. A flag pré-LLM sozinha não redige — DLP geral
+    desligado significa que o operador optou por não redigir nada. Atributo
+    ausente conta como OFF (fail para o comportamento pré-existente)."""
+    return bool(
+        getattr(settings, "dlp_enabled", False)
+        and getattr(settings, "dlp_redact_before_llm", False)
+    )
+
+
+def _redact_evidences_for_llm(evidences: list) -> int:
+    """Redige PII dos snippets IN-PLACE — chamado SÓ com o gate pré-LLM ON.
+
+    Redigir na fonte (e não só no enriched_input) mantém consistência: o MESMO
+    objeto segue pro rerank, pro prompt principal, pro juiz (verifier) e pra
+    persistência de evidências — [EMAIL] no draft casa com [EMAIL] na
+    evidência, então a checagem de grounding não degrada. Tolerante a
+    dataclass ou dict. Retorna o nº de ocorrências redigidas (telemetria
+    honesta — achado de revisão: contar só o enriched_input subnotificava)."""
+    from app.core.dlp import count_pii, redact
+    n = 0
+    for e in evidences or []:
+        if isinstance(e, dict):
+            txt = e.get("snippet_text")
+            if txt:
+                n += count_pii(txt).total
+                e["snippet_text"] = redact(txt)
+        else:
+            txt = getattr(e, "snippet_text", None)
+            if txt:
+                n += count_pii(txt).total
+                e.snippet_text = redact(txt)
+    return n
+
+
 def _apply_experiment_overrides(agent: dict,
                                 config_overrides: dict | None) -> dict:
     """Seam de EXPERIMENTO (44.0.0, PR3a do arco Otimização de Prompt/Skill).
@@ -2389,6 +2425,23 @@ async def execute_interaction(
     # médio (warn) só anota em metadata; score alto (block) força Refuse.
     from app.core.config import get_settings as _gs_pg
     _pg_settings = _gs_pg()
+    # DLP pré-LLM (65.0.0): decidido AQUI, uma vez por interação. O guard acima/
+    # abaixo vê o texto CRU de propósito (detecção de injeção não pode ser
+    # mascarada pela redação). _vf_question = pergunta passada ao juiz; vira a
+    # versão redigida quando o gate liga (bloco pós-montagem do enriched_input).
+    _dlp_pre_llm = _pre_llm_dlp_enabled(_pg_settings)
+    _vf_question = user_input
+    _pii_ev_n = 0
+    if _dlp_pre_llm and history_messages:
+        # Cinto-e-suspensório (achado de revisão): as colunas *_redacted são a
+        # fonte do histórico e DEVEM vir redigidas da persistência, mas houve
+        # writers gravando cru (workspace — corrigidos em 65.0.0) e turnos
+        # antigos persistidos com DLP off nunca são retro-redigidos. Com o
+        # gate ON, nada cru entra no seed do grafo.
+        from app.core.dlp import redact as _dlp_redact_h
+        for _hm in history_messages:
+            if isinstance(getattr(_hm, "content", None), str) and _hm.content:
+                _hm.content = _dlp_redact_h(_hm.content)
     guard_blocked = False
     guard_reason = ""
     if _pg_settings.prompt_guard_enabled:
@@ -2513,9 +2566,20 @@ async def execute_interaction(
                 user_clearance=(_opa_user or {}).get("clearance"),  # 64.0.0: "no read up"
             )
             _span_r.set_attribute("evidence.retrieved_count", len(evidences))
+        # DLP pré-LLM: redige snippets e query ANTES do rerank — o reranker
+        # default é uma chamada LLM REAL (rag_rerank_with_llm=True →
+        # Reranker._llm_rerank monta "QUERY: …" + snippets e chama o provedor;
+        # achado HIGH de revisão). Só a BUSCA acima (BM25/pgvector) usa o texto
+        # cru — matching local, com a exceção documentada do embed_query.
+        # Redigir os DOIS lados preserva o ranking relativo.
+        _rerank_query = _search_query
+        if _dlp_pre_llm and evidences:
+            from app.core.dlp import redact as _dlp_redact_q
+            _pii_ev_n = _redact_evidences_for_llm(evidences)
+            _rerank_query = _dlp_redact_q(_search_query)
         with _tracer.start_as_current_span("evidence.rerank") as _span_rr:
             _span_rr.set_attribute("evidence.input_count", len(evidences))
-            evidences = await reranker.rerank(_search_query, evidences, top_n=5)
+            evidences = await reranker.rerank(_rerank_query, evidences, top_n=5)
             _span_rr.set_attribute("evidence.output_count", len(evidences))
         await fsm.run_retrieve_evidence([asdict(e) if hasattr(e, '__dataclass_fields__') else e for e in evidences])
 
@@ -2524,6 +2588,23 @@ async def execute_interaction(
         ) if evidences else "Nenhuma evidência encontrada nas bases autorizadas."
 
         enriched_input = f"{user_input}{attachment_context}\n\n## Evidências Disponíveis\n{evidence_context}"
+
+    # ── DLP pré-LLM (65.0.0) — dlp_enabled + dlp_redact_before_llm ──────────
+    # Redige o conteúdo do turno que SAI ao provedor: mensagem + anexos (as
+    # evidências já foram redigidas na fonte, antes do rerank; o histórico foi
+    # redigido no seed — cinto-e-suspensório sobre as colunas *_redacted). O
+    # juiz recebe _vf_question redigida + as MESMAS evidências. Exceção
+    # documentada (UI/docs): embed_query da busca vetorial usa o texto cru
+    # (recall); imagens não são redigidas. Flag OFF (default) = caminho
+    # byte-idêntico ao anterior. Trade-off na UI: o LLM perde o contexto de
+    # ids reais ([CPF]/[EMAIL] no lugar do valor). `redactions` soma evidências
+    # (_pii_ev_n) + turno (telemetria honesta, achado de revisão).
+    if _dlp_pre_llm:
+        from app.core.dlp import count_pii as _dlp_count, redact as _dlp_redact
+        _pii_n = _dlp_count(enriched_input).total
+        enriched_input = _dlp_redact(enriched_input)
+        _vf_question = _dlp_redact(user_input)
+        ctx.metadata["dlp_pre_llm"] = {"applied": True, "redactions": _pii_ev_n + _pii_n}
 
     from app.core.config import get_settings
     settings = get_settings()
@@ -2917,7 +2998,7 @@ async def execute_interaction(
                 draft=draft, evidences=evidences,
                 output_contract=skill_data.get("output_contract"),
                 guardrails=skill_data.get("guardrails", ""),
-                user_question=user_input, profile=exec_profile,
+                user_question=_vf_question, profile=exec_profile,
                 turn_id=None, interaction_id=ctx.interaction_id,
                 llm_provider_name=agent.get("llm_provider"), llm_model=agent.get("model"),
                 agent_id=agent_id, pipeline_id=pipeline_id,
@@ -2948,7 +3029,7 @@ async def execute_interaction(
             draft=draft, evidences=evidences,
             output_contract=skill_data.get("output_contract") or "",
             guardrails=skill_data.get("guardrails") or "",
-            user_question=user_input, profile=exec_profile,
+            user_question=_vf_question, profile=exec_profile,
             interaction_id=_audit_iid,
             max_concurrent=_pg_settings.verifier_max_concurrent_jobs,
             agent_id=agent_id, pipeline_id=pipeline_id,
@@ -2986,7 +3067,7 @@ async def execute_interaction(
                 evidences=evidences,
                 output_contract=skill_data.get("output_contract") or "",
                 guardrails=skill_data.get("guardrails") or "",
-                user_question=user_input,
+                user_question=_vf_question,
                 profile=exec_profile,
                 interaction_id=ctx.interaction_id,
                 max_concurrent=_pg_settings.verifier_max_concurrent_jobs,
@@ -3006,7 +3087,7 @@ async def execute_interaction(
                 evidences=evidences,
                 output_contract=skill_data.get("output_contract"),
                 guardrails=skill_data.get("guardrails", ""),
-                user_question=user_input,
+                user_question=_vf_question,
                 profile=exec_profile,
                 turn_id=None,  # turn é criado em LogAndClose; verifier persiste sem turn_id
                 interaction_id=ctx.interaction_id,
@@ -4837,17 +4918,13 @@ async def execute_pipeline(
                 continue
             if step.get("status") == "completed" and step.get("output"):
                 from app.core.database import turns_repo
-                from app.core.dlp import redact_for_persist
-                from app.core.config import get_settings as _gs_dlp
+                from app.agents.state_machine import _maybe_redact as _step_redact
                 import uuid as _uuid
-                _step_out = step["output"]
-                if _gs_dlp().dlp_enabled:
-                    _step_out = redact_for_persist(_step_out)
                 from app.core.interaction_access import turn_customer_hash_fragment
                 await turns_repo.create({
                     "id": str(_uuid.uuid4()),
                     "turn_number": turn_number,
-                    "output_text_redacted": _step_out,
+                    "output_text_redacted": _step_redact(step["output"]),
                     "interaction_id": master_interaction_id,
                     # FIN-3 (35.12.0): grão por step — tokens/latência REAIS
                     # já calculados no step (custo auto-wire PR7).
