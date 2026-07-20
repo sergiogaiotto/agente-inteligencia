@@ -540,15 +540,15 @@ O registro completo de opções está em [`docs/configuracoes-plataforma.md`](do
 
   | Aba | O que mostra / faz |
   |---|---|
-  | **Visão geral** | Postura computada das camadas — cada flag real (grounding, prompt guard, DLP, verifier, breaker, OPA…) com o estado ON/OFF de verdade |
-  | **Privacidade** | LGPD operacional: direito ao esquecimento por titular e retenção por idade (§7.10) |
-  | **Segurança** | **Configuração da guarda de injeção & DLP** pela UI — os thresholds do prompt guard e o toggle de DLP que antes só existiam no `.env` |
-  | **Políticas** | O **cockpit OPA** (§7.11): status/saúde do motor, liga/desliga, simulador *what-if*, editor de Rego com histórico de versões e rollback, e o log de decisões |
   | **Model cards** | Ficha técnica por agente (propósito, modelo, dados, limites) derivada do SKILL.md + config — a "documentação técnica" que o EU AI Act pede |
-  | **Registro de risco** | Classificação de risco (inaceitável/alto/limitado/mínimo, no vocabulário do **EU AI Act**) por agente/pipeline |
-  | **Crosswalk** | Cobertura **honesta** contra EU AI Act, NIST AI RMF, ISO/IEC 42001, LGPD e OWASP LLM Top 10 (§7.12) |
+  | **Políticas** | O **cockpit OPA** (§7.11): status/saúde do motor, liga/desliga, simulador *what-if*, editor de Rego com histórico de versões e rollback, e o log de decisões |
+  | **Segurança** | **Configuração da guarda de injeção & DLP** pela UI — os thresholds do prompt guard e o toggle de DLP |
   | **Prontidão** | **Papéis de governança** (officers) + **attestation**: assinar formalmente que um escopo está pronto (com o crosswalk anexado ao registro) |
-  | **Auditoria** | A trilha do `audit_log` filtrável — quem fez o quê, quando |
+  | **Conformidade** | Cobertura **honesta** (crosswalk) contra EU AI Act, NIST AI RMF, ISO/IEC 42001, LGPD e OWASP LLM Top 10 (§7.12), com tooltip explicando cada framework |
+  | **Risco** | Classificação de risco (inaceitável/alto/limitado/mínimo, no vocabulário do **EU AI Act**) por agente/pipeline |
+  | **Auditoria** | A trilha do `audit_log` — quem fez o quê, quando e de onde, com o **usuário resolvido** (id → nome) |
+  | **Privacidade & LGPD** | LGPD operacional: direito ao esquecimento por titular e retenção por idade (§7.10) |
+  | **Visão geral** | Postura computada das camadas — cada flag real (grounding, prompt guard, DLP, verifier, breaker, OPA…) com o estado ON/OFF de verdade |
 - **Quando usar:** antes de colocar um sistema de IA em produção regulada; nas revisões periódicas de conformidade; e sempre que precisar responder "que controles estão *de fato* ligados agora?".
 - **Exemplo de ação:** aba **Políticas** → ligue o `opa_enabled` no cartão de status → rode o **simulador** com `{tool: {sensitivity: high}, user: {role: operator}}` → veja o **deny** com a razão `insufficient_role` → edite a `tool_invocation.rego` no editor, salve (validação + push) → confira a nova versão no histórico → o log de decisões passa a registrar cada avaliação.
 - **Dica:** o `GET /api/v1/governance/report` consolida postura + crosswalk + attestations num único payload — a base de um relatório de conformidade para o comitê.

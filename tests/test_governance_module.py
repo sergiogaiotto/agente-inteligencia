@@ -136,7 +136,7 @@ class TestPageAndMarkup:
 
     def test_template_modulo(self):
         html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
-        for t in ("ia-responsavel", "ir-posture", "ir-forget", "ir-audit", "ir-capabilities", "ir-roadmap"):
+        for t in ("ia-responsavel", "ir-posture", "ir-forget", "ir-audit", "ir-capabilities"):
             assert f'data-testid="{t}"' in html, t
         assert "function iaResponsavel()" in html
         assert "/api/v1/governance/summary" in html
@@ -1110,3 +1110,135 @@ class TestEvidenceAcl:
                 if "user_clearance" not in window:
                     bad.append(f"{py.name}:{txt[:m.start()].count(chr(10)) + 1}")
         assert not bad, f"retriever.search sem user_clearance (bypass do ACL): {bad}"
+
+
+# ─── Melhorias de UI 64.2.0 (ordem das abas, textos, tooltips, ator) ─────────
+class TestUiMelhorias6420:
+    def test_ordem_das_abas_e_sem_roadmap(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        order = [
+            "{ k: 'cards', l: 'Model cards' }",
+            "{ k: 'policies', l: 'Políticas' }",
+            "{ k: 'security', l: 'Segurança' }",
+            "{ k: 'attest', l: 'Prontidão' }",
+            "{ k: 'crosswalk', l: 'Conformidade' }",
+            "{ k: 'risk', l: 'Risco' }",
+            "{ k: 'audit', l: 'Auditoria' }",
+            "{ k: 'privacy', l: 'Privacidade & LGPD' }",
+            "{ k: 'overview', l: 'Visão geral' }",
+        ]
+        idx = [html.index(t) for t in order]  # index() explode se algum sumir
+        assert idx == sorted(idx), "abas fora da ordem definida com o usuário"
+        assert "'roadmap'" not in html and "ir-roadmap" not in html
+        assert "tab: 'cards'" in html  # aba inicial = primeira da nova ordem
+
+    def test_textos_de_fase_e_headless_removidos(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        for gone in (
+            "traz à luz e será a casa",
+            "Antes só existia via API",
+            "Fase 2: fila completa de pedidos do titular",
+            "Antes só ligava por env/DB",
+            "Até aqui só ligava por env/DB",
+            "Clique num framework.",
+            "headless",
+        ):
+            assert gone not in html, gone
+
+    def test_novos_textos_explicativos(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert "estado <strong>real e atual</strong>" in html            # Visão geral
+        assert "score de risco de prompt injection" in html              # Segurança
+        assert "linguagem declarativa de políticas do OPA" in html       # Rego
+        assert "Selecione um card abaixo" in html                        # Conformidade
+
+    def test_tooltips_de_conformidade(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert ':title="fwTip(f.framework)"' in html
+        for fw in ("EU AI Act", "NIST AI RMF", "ISO/IEC 42001", "LGPD", "OWASP LLM Top 10"):
+            assert f"'{fw}':" in html, fw
+        assert "Controles que atendem este requisito" in html
+
+    def test_auditoria_exibe_usuario(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert "e.actor_name || e.actor || '—'" in html
+
+    @pytest.mark.asyncio
+    async def test_audit_resolve_actor_para_nome(self, monkeypatch):
+        # a resolução é BATELADA (reusa _resolve_user_names do dashboard) —
+        # N+1 sequencial foi achado de revisão adversarial.
+        import app.routes.governance as G
+        import app.routes.dashboard as D
+        monkeypatch.setattr(G, "audit_repo", FakeAudit([
+            {"id": 2, "action": "a", "actor": "u1"},   # user_id cru (fallback do repo)
+            {"id": 1, "action": "b", "actor": "gov"},  # username explícito
+            {"id": 0, "action": "c"},                  # sem actor
+        ]))
+        calls = []
+
+        async def _names(ids):
+            calls.append(sorted(ids))
+            return {"u1": "Ana Souza"}
+        monkeypatch.setattr(D, "_resolve_user_names", _names)
+        r = await G.governance_audit(limit=10, user={"role": "root"})
+        by = {e["id"]: e for e in r["events"]}
+        assert by[2]["actor_name"] == "Ana Souza" and by[2]["actor"] == "u1"
+        assert by[1]["actor_name"] == "gov"   # não-id: cai no valor cru
+        assert by[0]["actor_name"] is None
+        assert calls == [["gov", "u1"]]       # 1 chamada batelada, actors distintos
+
+    @pytest.mark.asyncio
+    async def test_audit_lookup_falha_nao_quebra(self, monkeypatch):
+        import app.routes.governance as G
+        import app.routes.dashboard as D
+
+        async def _boom(ids):
+            raise RuntimeError("db down")
+        monkeypatch.setattr(G, "audit_repo", FakeAudit([
+            {"id": 1, "action": "a", "actor": "u1"},
+        ]))
+        monkeypatch.setattr(D, "_resolve_user_names", _boom)
+        r = await G.governance_audit(limit=5, user={})
+        assert r["events"][0]["actor_name"] == "u1"  # cai no cru, nunca 500
+
+    @pytest.mark.asyncio
+    async def test_security_events_tambem_resolvem_actor(self, monkeypatch):
+        import app.routes.governance as G
+        import app.routes.dashboard as D
+        monkeypatch.setattr(G, "audit_repo", FakeAudit([
+            {"id": 1, "action": "prompt_injection_blocked", "actor": "u1"},
+        ]))
+
+        async def _names(ids):
+            return {"u1": "ana"}
+        monkeypatch.setattr(D, "_resolve_user_names", _names)
+        r = await G.governance_security_events(limit=10, user={})
+        assert r["events"][0]["actor_name"] == "ana"
+
+    @pytest.mark.asyncio
+    async def test_security_events_clampa_limit(self, monkeypatch):
+        # sem clamp, limit=100000 na query string viraria até 1000 linhas com
+        # resolução de actor por linha (achado da revisão adversarial).
+        import app.routes.governance as G
+        import app.routes.dashboard as D
+        monkeypatch.setattr(G, "audit_repo", FakeAudit([
+            {"id": i, "action": "prompt_injection_blocked", "actor": f"u{i}"}
+            for i in range(300)
+        ]))
+
+        async def _names(ids):
+            return {}
+        monkeypatch.setattr(D, "_resolve_user_names", _names)
+        r = await G.governance_security_events(limit=100000, user={})
+        assert len(r["events"]) == 200  # clamp igual ao /audit
+
+    def test_textos_honestos_sobre_runtime(self):
+        # revisão adversarial: (a) dlp_redact_before_llm é flag sem consumidor no
+        # runtime — o texto não pode afirmar o comportamento e o checkbox avisa;
+        # (b) a decisão do OPA NÃO é "apenas aplicada": guarda local é AND
+        # autoritativo e o failsafe decide com o OPA fora.
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert "também antes do envio ao LLM" not in html
+        assert "opção ainda não aplicada pelo runtime" in html
+        assert "apenas aplica a decisão" not in html
+        assert "a guarda de injeção continua autoritativa" in html
