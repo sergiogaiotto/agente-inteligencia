@@ -1233,12 +1233,13 @@ class TestUiMelhorias6420:
         assert len(r["events"]) == 200  # clamp igual ao /audit
 
     def test_textos_honestos_sobre_runtime(self):
-        # revisão adversarial: (a) dlp_redact_before_llm é flag sem consumidor no
-        # runtime — o texto não pode afirmar o comportamento e o checkbox avisa;
-        # (b) a decisão do OPA NÃO é "apenas aplicada": guarda local é AND
-        # autoritativo e o failsafe decide com o OPA fora.
+        # revisão adversarial do 64.2.0: a decisão do OPA NÃO é "apenas
+        # aplicada" (guarda local é AND autoritativo; failsafe decide com o OPA
+        # fora). Desde 65.0.0 dlp_redact_before_llm É aplicada pelo runtime —
+        # o aviso de "não aplicada" precisa ter SUMIDO (senão a UI mente ao
+        # contrário) e o texto pode afirmar o comportamento pré-LLM.
         html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
-        assert "também antes do envio ao LLM" not in html
-        assert "opção ainda não aplicada pelo runtime" in html
+        assert "opção ainda não aplicada pelo runtime" not in html
+        assert "envia ao provedor LLM" in html
         assert "apenas aplica a decisão" not in html
         assert "a guarda de injeção continua autoritativa" in html

@@ -1249,16 +1249,20 @@ async def chat(data: ChatMessage, request: Request, user: dict = Depends(require
                         "ended_at": naive_utc_now(),
                     })
 
+                # 65.0.0 (achado de revisão): as colunas *_redacted PRECISAM
+                # cumprir o nome — gravar cru aqui vazava PII pro histórico
+                # multi-turno (que o engine injeta no prompt) e pra UI.
+                from app.agents.state_machine import _maybe_redact as _wr_redact
                 await turns_repo.create({
                     "id": str(uuid.uuid4()),
                     "turn_number": next_turn,
-                    "user_text_redacted": data.message,
+                    "user_text_redacted": _wr_redact(data.message),
                     "interaction_id": interaction_id,
                 })
                 await turns_repo.create({
                     "id": str(uuid.uuid4()),
                     "turn_number": next_turn + 1,
-                    "output_text_redacted": output_text,
+                    "output_text_redacted": _wr_redact(output_text),
                     "interaction_id": interaction_id,
                     # FIN-3 (35.12.0): declarativo → tokens 0; latência do result.
                     "tokens_used": 0,
@@ -1778,10 +1782,13 @@ async def _persist_invoke_turn(
                 "state": "LogAndClose",
                 "ended_at": naive_utc_now(),
             })
+        # 65.0.0 (achado de revisão): coluna *_redacted cumpre o nome — ver
+        # comentário-gêmeo no persist do chat declarativo acima.
+        from app.agents.state_machine import _maybe_redact as _wr_redact
         await turns_repo.create({
             "id": str(uuid.uuid4()),
             "turn_number": next_turn,
-            "user_text_redacted": message,
+            "user_text_redacted": _wr_redact(message),
             "interaction_id": sid,
         })
         # FIN-3 (35.12.0): grão do turno de saída derivado do trace_data
@@ -1799,7 +1806,7 @@ async def _persist_invoke_turn(
         await turns_repo.create({
             "id": str(uuid.uuid4()),
             "turn_number": next_turn + 1,
-            "output_text_redacted": output_text,
+            "output_text_redacted": _wr_redact(output_text),
             "interaction_id": sid,
             "tokens_used": _tok,
             "latency_ms": _lat,

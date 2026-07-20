@@ -1,13 +1,16 @@
 """Redação de PII (Brasil-first) — proteção LLM06 Sensitive Information Disclosure.
 
-Aplicado em DOIS pontos:
+Aplicado em TRÊS pontos:
 1. Antes da persistência em `turns.user_text_redacted` / `output_text_redacted`
    (a coluna já tinha o nome — agora cumpre o que promete).
 2. Em `audit_log.details` quando o registro vem de input de usuário.
-
-Não redacta antes do LLM por padrão (ver `dlp_redact_before_llm` em config).
-Operadores que tratam dados sensíveis devem ativar essa flag — o trade-off
-é o LLM perder contexto de identificadores reais.
+3. ANTES do LLM, opt-in via `dlp_redact_before_llm` (65.0.0, engine.py): o
+   conteúdo do turno enviado ao provedor (mensagem + anexos + evidências —
+   inclusive no prompt do reranker LLM — + histórico injetado) e a pergunta
+   passada ao juiz saem redigidos. OFF por padrão — o trade-off é o LLM perder
+   contexto de identificadores reais ([CPF]/[EMAIL] no lugar do valor).
+   Exceções deliberadas: embed_query da busca vetorial usa o texto cru
+   (redigir degradaria o recall); texto apenas — imagens não são redigidas.
 
 Estratégia:
 - Regex priorizando formatos com pontuação (CPF "123.456.789-00") sobre

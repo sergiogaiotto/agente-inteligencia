@@ -119,7 +119,7 @@ Configurado por ambiente (alguns também na UI). Defaults pensados para zero-ris
 | Variável | Default | Efeito |
 |---|---|---|
 | `DLP_ENABLED` | true | Redação de PII (CPF/email/telefone) ao persistir. |
-| `DLP_REDACT_BEFORE_LLM` | false | Se true, redige também no prompt (perde contexto de IDs reais). |
+| `DLP_REDACT_BEFORE_LLM` | false | Se true (e DLP ligado), redige também o que o turno envia ao provedor LLM — mensagem, anexos, evidências (inclusive no prompt do reranker LLM), histórico injetado e a pergunta passada ao juiz (perde contexto de IDs reais). Exceções: embed_query da busca vetorial usa texto cru (recall); imagens não são redigidas. |
 | `PROMPT_GUARD_ENABLED` | true | Detecção de prompt injection (LLM01). |
 | `PROMPT_GUARD_BLOCK_THRESHOLD` / `_WARN_THRESHOLD` | 0.7 / 0.4 | Score de bloqueio / warning. |
 | `PROMPT_LEAK_GUARD_ENABLED` | true | Mostra hash+preview do system_prompt nas traces. |

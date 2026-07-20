@@ -133,9 +133,15 @@ class TestRetrievalQueryThreading:
         assert "user_input=current_input," in ENGINE_SRC
 
     def test_busca_e_rerank_usam_a_mesma_query_limpa(self):
-        """retrieve e rerank compartilham _search_query (consistência)."""
+        """retrieve e rerank compartilham _search_query (consistência).
+
+        Desde 65.0.0 o rerank recebe `_rerank_query`, que É a `_search_query`
+        — idêntica com DLP pré-LLM OFF (default) e a versão REDIGIDA dela com
+        o gate ON (o reranker default é chamada LLM real; PII não pode sair).
+        A consistência de threading permanece: nunca uma query diferente."""
         assert "retriever.search(" in ENGINE_SRC
-        assert "reranker.rerank(_search_query," in ENGINE_SRC
+        assert "_rerank_query = _search_query" in ENGINE_SRC
+        assert "reranker.rerank(_rerank_query," in ENGINE_SRC
 
 
 # ═══════════════════════════════════════════════════════════════════
