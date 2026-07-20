@@ -51,11 +51,10 @@
                     <span class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px]"
                           :class="c.on ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-surface-200 bg-surface-50 text-surface-500'">
                         <span x-text="c.on ? '●' : '○'"></span><span x-text="c.l"></span>
-                        <span x-show="c.headless" class="text-[9px] uppercase text-amber-600">headless</span>
                     </span>
                 </template>
             </div>
-            <p class="text-[10.5px] text-surface-400 mt-2">OPA, guarda de injeção e DLP hoje só ligam por env/DB (headless) — este módulo os traz à luz e será a casa da configuração deles (Fase 2).</p>
+            <p class="text-[10.5px] text-surface-400 mt-2">Cada chip mostra o estado <strong>real e atual</strong> de um controle de governança, lido das configurações vigentes da plataforma — nada aspiracional: ● = ativo, ○ = inativo. A guarda de injeção e o DLP se configuram na aba <strong>Segurança</strong>; o OPA e o Evidence ACL na aba <strong>Políticas</strong>; a retenção em <a href="/settings" class="text-brand-600 underline">Configurações → Parâmetros</a>. A postura acima é computada destes mesmos estados.</p>
         </div>
     </div>
 
@@ -63,7 +62,7 @@
     <div x-show="tab === 'privacy'" class="space-y-4 max-w-2xl">
         <div class="rounded-xl border border-rose-200 bg-rose-50/40 p-4" data-testid="ir-forget">
             <h2 class="text-[13px] font-semibold text-rose-900 mb-1">Direito ao esquecimento (LGPD Art. 18)</h2>
-            <p class="text-[11.5px] text-surface-600 mb-3">Apaga <strong>todas as conversas</strong> de um titular (por CPF/id/e-mail — hasheado no servidor). Ação irreversível e auditada. Antes só existia via API; agora é auditável com um clique.</p>
+            <p class="text-[11.5px] text-surface-600 mb-3">Apaga <strong>todas as conversas</strong> de um titular (por CPF/id/e-mail — hasheado no servidor). Ação irreversível e auditada.</p>
             <div class="flex gap-2">
                 <input x-model="forgetRef" data-testid="ir-forget-ref" placeholder="CPF / id / e-mail do titular"
                        class="flex-1 rounded-lg border border-surface-200 px-3 py-2 text-[13px] outline-none focus:border-rose-400">
@@ -81,7 +80,6 @@
                       x-text="capRetention > 0 ? (capRetention + ' dias') : 'desligada (0)'"></span>.
                 Configurável em <a href="/settings" class="text-brand-600 underline">Configurações → Parâmetros</a>.</p>
         </div>
-        <p class="text-[10.5px] text-surface-400">Fase 2: fila completa de pedidos do titular (acesso, retificação) além do esquecimento.</p>
     </div>
 
     <!-- ─── Segurança (guarda & DLP) ─── -->
@@ -91,7 +89,7 @@
                 <h2 class="text-[13px] font-semibold text-brand-900">Configuração — guarda de injeção &amp; DLP</h2>
                 <span x-show="guardDirty" class="text-[10px] text-amber-600">alterações não salvas</span>
             </div>
-            <p class="text-[11px] text-surface-500 mb-3">Antes só ligava por env/DB (headless). Aqui, pela UI, com trilha de auditoria.</p>
+            <p class="text-[11px] text-surface-500 mb-3">A guarda de injeção analisa as mensagens dirigidas aos agentes LLM e atribui um score de risco de prompt injection (OWASP LLM01): no limiar de <strong>bloqueio</strong> a mensagem é recusada; no de <strong>aviso</strong> ela segue, mas com alerta registrado. O DLP redige PII (CPF, e-mail, telefone…) antes de persistir as conversas. Alterações salvas aqui são aplicadas em runtime e registradas na trilha de auditoria.</p>
             <div class="space-y-2.5">
                 <label class="flex items-center gap-2 text-[12px] text-surface-700"><input type="checkbox" x-model="guard.prompt_guard_enabled"> Guarda de injeção de prompt (OWASP LLM01)</label>
                 <div class="pl-6 grid grid-cols-2 gap-4" x-show="guard.prompt_guard_enabled">
@@ -105,7 +103,7 @@
                     </div>
                 </div>
                 <label class="flex items-center gap-2 text-[12px] text-surface-700"><input type="checkbox" x-model="guard.dlp_enabled"> DLP — redação de PII no que é persistido</label>
-                <label class="flex items-center gap-2 text-[11.5px] text-surface-600 pl-6" x-show="guard.dlp_enabled"><input type="checkbox" x-model="guard.dlp_redact_before_llm"> redigir PII também ANTES de enviar ao LLM (perde contexto de ids reais)</label>
+                <label class="flex items-center gap-2 text-[11.5px] text-surface-600 pl-6" x-show="guard.dlp_enabled"><input type="checkbox" x-model="guard.dlp_redact_before_llm"> redigir PII também ANTES de enviar ao LLM (perde contexto de ids reais) <span class="text-[10px] text-amber-600">— opção ainda não aplicada pelo runtime; hoje a redação ocorre na persistência</span></label>
             </div>
             <div class="mt-3 flex justify-end">
                 <button @click="saveGuard()" :disabled="guardBusy || !guardDirty" data-testid="ir-guard-save" class="rounded-lg bg-brand-500 px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-40"><span x-text="guardBusy ? 'Salvando…' : 'Salvar configuração'"></span></button>
@@ -126,7 +124,7 @@
                 <div class="flex items-center gap-2 px-3 py-2 border-t border-surface-100 text-[11.5px] first:border-t-0">
                     <span class="font-mono text-[10px] text-rose-600 flex-none" x-text="e.action"></span>
                     <span class="text-surface-500 truncate" x-text="(e.entity_type || '') + ' ' + (e.entity_id || '')"></span>
-                    <span class="ml-auto text-surface-400 flex-none" x-text="e.actor || '—'"></span>
+                    <span class="ml-auto text-surface-400 flex-none" x-text="e.actor_name || e.actor || '—'"></span>
                     <span class="text-surface-300 flex-none text-[10px]" x-text="fmtWhen(e.created_at)"></span>
                 </div>
             </template>
@@ -144,7 +142,7 @@
                       :class="opa && opa.server_ok ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'"
                       x-text="opa ? (opa.server_ok ? 'servidor no ar' : 'servidor fora') : '…'"></span>
             </div>
-            <p class="text-[11px] text-surface-500 mb-3">Decisões de acesso (PolicyCheck e gate de tools) por regras Rego. Até aqui só ligava por env/DB (headless) — aqui, pela UI, com trilha de auditoria.</p>
+            <p class="text-[11px] text-surface-500 mb-3">Decisões de acesso (PolicyCheck e gate de tools) avaliadas pelo Open Policy Agent. <strong>Rego</strong> é a linguagem declarativa de políticas do OPA: em vez de código imperativo, cada política descreve regras ("permita se…") sobre os atributos da requisição — papel do usuário, sensibilidade da tool, score de injeção — e o OPA devolve <span class="font-mono">allow</span>/<span class="font-mono">deny</span> com os motivos. A decisão vale em conjunto com as defesas locais — a guarda de injeção continua autoritativa (ambas precisam permitir) — e, se o servidor OPA estiver fora do ar, quem decide é o failsafe configurado abaixo. Isso separa a regra de segurança do código da aplicação (policy as code): dá para ler, versionar, simular e trocar a política sem redeploy.</p>
             <div class="space-y-2.5">
                 <label class="flex items-center gap-2 text-[12px] text-surface-700"><input type="checkbox" x-model="opaCfg.enabled"> Consultar o OPA nas decisões sensíveis (PolicyCheck + gate de tools)</label>
                 <div x-show="opaCfg.enabled" class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[10.5px] text-amber-700">
@@ -391,13 +389,13 @@
 
     <!-- ─── Conformidade (crosswalk de frameworks) ─── -->
     <div x-show="tab === 'crosswalk'" class="space-y-4">
-        <p class="text-[11px] text-surface-500">Cobertura por framework — <strong>computada dos controles reais</strong> da plataforma. Um requisito é coberto se algum controle que o atende está ativo. Clique num framework.</p>
+        <p class="text-[11px] text-surface-500">Cobertura por framework — <strong>computada dos controles reais</strong> da plataforma. Um requisito é coberto se algum controle que o atende está ativo. Selecione um card abaixo para ver, requisito a requisito, o que está coberto e por qual controle (passe o mouse sobre um card para saber do que trata cada framework).</p>
         <div class="grid grid-cols-2 sm:grid-cols-5 gap-2" data-testid="ir-crosswalk">
             <template x-for="(f, i) in (crosswalk ? crosswalk.frameworks : [])" :key="f.framework">
-                <button @click="crossSel = i" class="text-left rounded-lg border p-2.5 transition-colors" :class="crossSel === i ? 'border-brand-400 bg-brand-50/50' : 'border-surface-200 bg-white hover:border-brand-200'">
+                <button @click="crossSel = i" :title="fwTip(f.framework)" class="text-left rounded-lg border p-2.5 transition-colors" :class="crossSel === i ? 'border-brand-400 bg-brand-50/50' : 'border-surface-200 bg-white hover:border-brand-200'">
                     <div class="text-[11px] font-semibold text-brand-900 leading-tight mb-1.5" x-text="f.framework"></div>
-                    <div class="h-1.5 rounded-full bg-surface-100 overflow-hidden mb-1"><div class="h-full" :class="f.pct >= 75 ? 'bg-emerald-500' : (f.pct >= 50 ? 'bg-amber-500' : 'bg-rose-500')" :style="'width:' + f.pct + '%'"></div></div>
-                    <div class="text-[10px] text-surface-500" x-text="f.pct + '% · ' + f.covered + '/' + f.total"></div>
+                    <div class="h-1.5 rounded-full bg-surface-100 overflow-hidden mb-1" :title="'Cobertura: ' + f.covered + ' de ' + f.total + ' requisitos atendidos por algum controle ativo'"><div class="h-full" :class="f.pct >= 75 ? 'bg-emerald-500' : (f.pct >= 50 ? 'bg-amber-500' : 'bg-rose-500')" :style="'width:' + f.pct + '%'"></div></div>
+                    <div class="text-[10px] text-surface-500" :title="'Cobertura: ' + f.covered + ' de ' + f.total + ' requisitos atendidos por algum controle ativo'" x-text="f.pct + '% · ' + f.covered + '/' + f.total"></div>
                 </button>
             </template>
         </div>
@@ -405,11 +403,11 @@
             <div class="text-[13px] font-semibold text-brand-900 mb-2" x-text="curFw ? curFw.framework : ''"></div>
             <template x-for="r in (curFw ? curFw.requirements : [])" :key="r.requirement">
                 <div class="flex items-start gap-2 py-1.5 border-t border-surface-100 first:border-t-0 text-[11.5px]">
-                    <span class="flex-none mt-0.5" :class="r.covered ? 'text-emerald-600' : 'text-rose-600'" x-text="r.covered ? '✓' : '✗'"></span>
-                    <span class="text-surface-700 flex-1" x-text="r.requirement"></span>
+                    <span class="flex-none mt-0.5" :class="r.covered ? 'text-emerald-600' : 'text-rose-600'" :title="r.covered ? 'Requisito coberto: pelo menos um controle que o atende está ativo' : 'Requisito descoberto: nenhum controle que o atende está ativo'" x-text="r.covered ? '✓' : '✗'"></span>
+                    <span class="text-surface-700 flex-1" :title="'Controles que atendem este requisito: ' + r.controls.map(k => ctrlLabel(k)).join(', ')" x-text="r.requirement"></span>
                     <span class="flex flex-wrap gap-1 justify-end flex-none max-w-[55%]">
-                        <template x-for="k in r.satisfied_by" :key="k"><span class="rounded bg-emerald-50 text-emerald-700 px-1.5 py-0.5 text-[9.5px]" x-text="ctrlLabel(k)"></span></template>
-                        <template x-if="!r.satisfied_by.length"><span class="text-[9.5px] text-rose-500" x-text="'sem controle ativo (' + r.controls.map(k => ctrlLabel(k)).join(', ') + ')'"></span></template>
+                        <template x-for="k in r.satisfied_by" :key="k"><span class="rounded bg-emerald-50 text-emerald-700 px-1.5 py-0.5 text-[9.5px]" :title="'Controle ativo na plataforma que atende este requisito'" x-text="ctrlLabel(k)"></span></template>
+                        <template x-if="!r.satisfied_by.length"><span class="text-[9.5px] text-rose-500" :title="'Ligue um destes controles para cobrir o requisito'" x-text="'sem controle ativo (' + r.controls.map(k => ctrlLabel(k)).join(', ') + ')'"></span></template>
                     </span>
                 </div>
             </template>
@@ -487,7 +485,7 @@
                 <div class="flex items-center gap-2 px-3 py-2 border-t border-surface-100 text-[11.5px] first:border-t-0">
                     <span class="font-mono text-[10px] text-brand-600 flex-none" x-text="e.action"></span>
                     <span class="text-surface-500 truncate" x-text="(e.entity_type || '') + ' ' + (e.entity_id || '')"></span>
-                    <span class="ml-auto text-surface-400 flex-none" x-text="e.actor || '—'"></span>
+                    <span class="ml-auto text-surface-600 font-medium flex-none" :title="e.actor && e.actor_name !== e.actor ? ('id: ' + e.actor) : 'usuário que executou a ação'" x-text="e.actor_name || e.actor || '—'"></span>
                     <span class="text-surface-300 flex-none font-mono text-[10px]" x-text="e.ip || ''"></span>
                     <span class="text-surface-300 flex-none text-[10px]" x-text="fmtWhen(e.created_at)"></span>
                 </div>
@@ -496,39 +494,22 @@
         </div>
     </div>
 
-    <!-- ─── Roadmap (Fase 2/3) ─── -->
-    <div x-show="tab === 'roadmap'" class="space-y-3">
-        <p class="text-[11px] text-surface-500">O que vem a seguir — nada de número inventado aqui; são as próximas fases do módulo.</p>
-        <p x-show="!roadmap.length" class="rounded-xl border border-dashed border-emerald-300 bg-emerald-50/40 p-4 text-[12px] text-emerald-800">✓ Módulo completo — sem pendências no roadmap. Governança, confiança e conformidade cobertas de ponta a ponta.</p>
-        <div class="grid md:grid-cols-2 gap-3" data-testid="ir-roadmap">
-            <template x-for="r in roadmap" :key="r.t">
-                <div class="rounded-xl border border-dashed border-surface-300 bg-surface-50/50 p-3">
-                    <div class="flex items-center justify-between mb-1">
-                        <span class="text-[12px] font-semibold text-brand-900" x-text="r.t"></span>
-                        <span class="text-[9px] uppercase tracking-wide text-brand-500 bg-brand-50 rounded px-1.5 py-0.5" x-text="r.f"></span>
-                    </div>
-                    <p class="text-[11px] text-surface-500" x-text="r.d"></p>
-                </div>
-            </template>
-        </div>
-    </div>
 </div>
 
 <script>
 function iaResponsavel() {
     return {
-        tab: 'overview',
+        tab: 'cards',
         tabs: [
-            { k: 'overview', l: 'Visão geral' },
-            { k: 'privacy', l: 'Privacidade & LGPD' },
-            { k: 'security', l: 'Segurança' },
-            { k: 'policies', l: 'Políticas' },
             { k: 'cards', l: 'Model cards' },
-            { k: 'risk', l: 'Risco' },
-            { k: 'crosswalk', l: 'Conformidade' },
+            { k: 'policies', l: 'Políticas' },
+            { k: 'security', l: 'Segurança' },
             { k: 'attest', l: 'Prontidão' },
+            { k: 'crosswalk', l: 'Conformidade' },
+            { k: 'risk', l: 'Risco' },
             { k: 'audit', l: 'Auditoria' },
-            { k: 'roadmap', l: 'Roadmap' },
+            { k: 'privacy', l: 'Privacidade & LGPD' },
+            { k: 'overview', l: 'Visão geral' },
         ],
         summary: null, audit: [], security: null,
         cards: [], cardDetail: null,
@@ -550,7 +531,6 @@ function iaResponsavel() {
             { k: 'failure_modes', l: 'Modos de falha' },
         ],
         forgetRef: '', forgetBusy: false, forgetResult: '',
-        roadmap: [],
         get postureColor() {
             const s = this.summary ? this.summary.posture_score : 0;
             return s >= 75 ? 'text-emerald-600' : (s >= 50 ? 'text-amber-600' : 'text-rose-600');
@@ -559,13 +539,13 @@ function iaResponsavel() {
         get capChips() {
             const c = this.summary ? this.summary.capabilities : {};
             return [
-                { k: 'guard', l: 'Guarda de injeção (LLM01)', on: !!c.prompt_guard_enabled, headless: true },
-                { k: 'dlp', l: 'DLP / redação de PII', on: !!c.dlp_enabled, headless: true },
-                { k: 'opa', l: 'Policy-as-code (OPA)', on: !!c.opa_enabled, headless: true },
-                { k: 'grounding', l: 'Grounding estrito', on: !!c.grounding_strict, headless: false },
-                { k: 'breaker', l: 'Circuit breaker', on: !!c.circuit_breaker_enabled, headless: false },
-                { k: 'verifier', l: 'Verifier / juiz', on: !!c.verifier_v2_enabled, headless: false },
-                { k: 'retention', l: 'Retenção (' + (c.interactions_retention_days || 0) + 'd)', on: (c.interactions_retention_days || 0) > 0, headless: false },
+                { k: 'guard', l: 'Guarda de injeção (LLM01)', on: !!c.prompt_guard_enabled },
+                { k: 'dlp', l: 'DLP / redação de PII', on: !!c.dlp_enabled },
+                { k: 'opa', l: 'Policy-as-code (OPA)', on: !!c.opa_enabled },
+                { k: 'grounding', l: 'Grounding estrito', on: !!c.grounding_strict },
+                { k: 'breaker', l: 'Circuit breaker', on: !!c.circuit_breaker_enabled },
+                { k: 'verifier', l: 'Verifier / juiz', on: !!c.verifier_v2_enabled },
+                { k: 'retention', l: 'Retenção (' + (c.interactions_retention_days || 0) + 'd)', on: (c.interactions_retention_days || 0) > 0 },
             ];
         },
         get securityTiles() {
@@ -617,6 +597,15 @@ function iaResponsavel() {
         },
         get curFw() { return this.crosswalk ? this.crosswalk.frameworks[this.crossSel] : null; },
         ctrlLabel(k) { return (this.crosswalk && this.crosswalk.control_labels[k]) || k; },
+        fwTip(name) {
+            return {
+                'EU AI Act': 'Regulamento europeu de IA (2024): obrigações proporcionais ao risco do sistema — classificação de risco, transparência e documentação técnica, supervisão humana, governança de dados, logs, robustez e cibersegurança. Referência global, mesmo fora da UE.',
+                'NIST AI RMF': 'AI Risk Management Framework do NIST (EUA), voluntário: organiza a gestão de risco de IA em 4 funções — Govern (políticas e papéis), Map (contexto e risco), Measure (avaliação e métricas) e Manage (mitigação e monitoramento).',
+                'ISO/IEC 42001': 'Norma internacional certificável de Sistema de Gestão de IA (AIMS): exige política de IA, papéis e responsabilidades, avaliação de risco, controles operacionais e ciclo de monitoramento e melhoria contínua.',
+                'LGPD': 'Lei Geral de Proteção de Dados (Brasil, Lei 13.709/2018): direitos do titular (como o esquecimento, Art. 18), minimização e retenção de dados, segurança do tratamento e registro das operações.',
+                'OWASP LLM Top 10': 'Lista da OWASP com os 10 riscos de segurança mais críticos em aplicações com LLM: prompt injection (LLM01), saída insegura, vazamento de dados sensíveis, excesso de agência, dependência excessiva/alucinação, entre outros.',
+            }[name] || '';
+        },
         async loadCrosswalk() { try { this.crosswalk = await api.get('/api/v1/governance/crosswalk'); } catch (e) { showToast(e.message, 'error'); } },
         get guardDirty() { return JSON.stringify(this.guard) !== this.guardSnapshot; },
         async loadGuard() {

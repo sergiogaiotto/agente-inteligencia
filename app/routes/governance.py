@@ -1,9 +1,9 @@
 """Módulo IA Responsável (56.0.0) — governança, confiança e conformidade.
 
-Fase 1: consolida num painel único o que hoje está espalhado ou headless —
-postura computada das flags REAIS, trilha de auditoria e eventos de segurança
-do `audit_log`. Model cards, registro de risco e crosswalk de frameworks são
-Fase 2/3 (marcados como roadmap na UI; nada de número inventado aqui).
+Painel único: postura computada das flags REAIS, trilha de auditoria e eventos
+de segurança do `audit_log`, model cards, registro de risco, crosswalk de
+frameworks, guarda/DLP e cockpit OPA — todas as fases entregues (nada de
+número inventado aqui).
 
 Todas as rotas são gated por require_role("root","admin"), que — desde 56.0.0 —
 inclui o perfil "governanca" (herda os poderes de Admin).
@@ -86,7 +86,7 @@ async def governance_summary(user=Depends(_gate)):
     return {
         "posture_score": score,
         "pillars": pillars,
-        # status das capacidades (algumas hoje só env/DB — o painel as revela).
+        # estado REAL das capacidades — alimenta os chips da Visão geral.
         "capabilities": {
             "opa_enabled": _flag("opa_enabled", False),
             "prompt_guard_enabled": _flag("prompt_guard_enabled", True),
@@ -99,24 +99,45 @@ async def governance_summary(user=Depends(_gate)):
     }
 
 
-def _audit_row(r: dict) -> dict:
+def _audit_row(r: dict, actor_names: dict | None = None) -> dict:
+    actor = r.get("actor")
     return {
         "id": r.get("id"),
         "action": r.get("action"),
         "entity_type": r.get("entity_type"),
         "entity_id": r.get("entity_id"),
-        "actor": r.get("actor"),
+        "actor": actor,
+        "actor_name": (actor_names or {}).get(actor, actor),
         "ip": r.get("ip"),
         "created_at": str(r.get("created_at") or ""),
     }
 
 
+async def _actor_names(rows: list[dict]) -> dict:
+    """actor no audit_log é às vezes o USERNAME (call sites explícitos) e às
+    vezes o USER_ID cru (fallback do AuditRepository via user_id_var) — a UI
+    acabava exibindo UUID. Resolve os actors distintos em 1 query batelada
+    (reusa _resolve_user_names do dashboard; N+1 aqui foi achado de revisão);
+    actor que não é id conhecido fica de fora do mapa e o consumidor cai no
+    valor cru. Best-effort: a trilha nunca quebra por falha de lookup."""
+    actors = {(r.get("actor") or "").strip() for r in rows} - {""}
+    if not actors:
+        return {}
+    try:
+        from app.routes.dashboard import _resolve_user_names
+        return await _resolve_user_names(list(actors))
+    except Exception:
+        return {}
+
+
 @router.get("/audit")
 async def governance_audit(limit: int = 50, user=Depends(_gate)):
     """Trilha de auditoria (audit_log) — mais recentes primeiro."""
-    rows = await audit_repo.find_all(limit=min(max(limit, 1), 200))
-    rows = sorted(rows, key=lambda r: r.get("id") or 0, reverse=True)
-    return {"events": [_audit_row(r) for r in rows[:limit]]}
+    lim = min(max(limit, 1), 200)
+    rows = await audit_repo.find_all(limit=lim)
+    rows = sorted(rows, key=lambda r: r.get("id") or 0, reverse=True)[:lim]
+    names = await _actor_names(rows)
+    return {"events": [_audit_row(r, names) for r in rows]}
 
 
 def _is_security_action(action: str | None) -> bool:
@@ -128,6 +149,9 @@ def _is_security_action(action: str | None) -> bool:
 async def governance_security_events(limit: int = 50, user=Depends(_gate)):
     """Eventos de segurança derivados do audit_log: injeções bloqueadas,
     recusas e escalonamentos (sinais da defesa-em-profundidade em ação)."""
+    # clamp igual ao /audit — sem ele, limit=100000 na query string viraria até
+    # 1000 linhas com resolução de actor (achado de revisão adversarial).
+    lim = min(max(limit, 1), 200)
     rows = await audit_repo.find_all(limit=1000)
     counts: Counter = Counter()
     for r in rows:
@@ -139,11 +163,12 @@ async def governance_security_events(limit: int = 50, user=Depends(_gate)):
         if "->escalate" in a:
             counts["escalonamentos"] += 1
     sec = [r for r in rows if _is_security_action(r.get("action"))]
-    sec = sorted(sec, key=lambda r: r.get("id") or 0, reverse=True)
+    sec = sorted(sec, key=lambda r: r.get("id") or 0, reverse=True)[:lim]
+    names = await _actor_names(sec)
     return {
         "counts": dict(counts),
         "scanned": len(rows),
-        "events": [_audit_row(r) for r in sec[:limit]],
+        "events": [_audit_row(r, names) for r in sec],
     }
 
 
