@@ -3727,6 +3727,12 @@ class SettingsSave(BaseModel):
     # do .env/classe não viram linha no banco por acidente (lição do save por
     # delta do Roteamento LLM, 24.8.0). Ranges validados aqui → 422 nomeado.
     verifier_v2_enabled: Optional[bool] = None
+    # 66.4.2 (achado E2E 2026-07-21): a chave estava em PARAMETER_UI_KEYS e na
+    # aba Parâmetros desde o #686, mas SEM campo aqui — pydantic (extra=ignore)
+    # descartava o valor em silêncio no PUT: a flag era IMPOSSÍVEL de ligar
+    # pela plataforma ("Parâmetros salvos" mentia para ela). Paridade agora
+    # selada por teste (test_settings_parameters_parity).
+    verifier_signals_drive_fsm: Optional[bool] = None
     verifier_factuality_threshold: Optional[float] = Field(default=None, ge=0, le=5)
     verifier_completeness_threshold: Optional[float] = Field(default=None, ge=0, le=5)
     verifier_tone_threshold: Optional[float] = Field(default=None, ge=0, le=5)
