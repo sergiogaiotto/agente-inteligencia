@@ -27,13 +27,26 @@
                 <option value="beta">Beta</option>
                 <option value="stable">Stable</option>
             </select>
+            <select x-model="filterUser" @change="applyFilters()" data-testid="skills-filter-user" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none max-w-[180px]" title="Filtra por quem criou ou fez a última alteração na skill">
+                <option value="">Todos usuários</option>
+                <template x-for="u in distinctUsers" :key="u"><option :value="u" x-text="u"></option></template>
+            </select>
             <input x-model="searchText" @input="applyFilters()" placeholder="Buscar..." class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none w-40">
-            <span class="text-[10px] text-surface-400" x-text="filtered.length + '/' + allSkills.length + ' skill(s)'"></span>
+            <span class="text-[10px] text-surface-400" x-text="filtered.length + '/' + allSkills.length + ' skill(s)' + (serverTotal > allSkills.length ? ' · ' + serverTotal + ' no servidor' : '')" :title="serverTotal > allSkills.length ? 'A tela carrega até 500 skills — refine com os filtros' : ''"></span>
+            <span class="flex items-center gap-1.5 ml-auto text-[11px]" data-testid="skills-pagination">
+                <span class="text-surface-400">Exibir</span>
+                <select x-model.number="skSize" @change="skPage = 1" data-testid="skills-pagesize" class="rounded border border-surface-200 bg-white px-1.5 py-1 text-[11px] outline-none">
+                    <template x-for="p in pageSizes" :key="p.v"><option :value="p.v" x-text="p.l"></option></template>
+                </select>
+                <span class="text-surface-400" x-text="filtered.length ? ('página ' + Math.min(skPage, skPageCount) + ' de ' + skPageCount) : ''"></span>
+                <button @click="skPage = Math.max(1, skPage - 1)" :disabled="skPage <= 1" class="rounded border border-surface-200 px-2 py-0.5 hover:bg-surface-50 disabled:opacity-30">‹</button>
+                <button @click="skPage = Math.min(skPageCount, skPage + 1)" :disabled="skPage >= skPageCount" class="rounded border border-surface-200 px-2 py-0.5 hover:bg-surface-50 disabled:opacity-30">›</button>
+            </span>
         </div>
 
         <!-- Skills list -->
         <div class="flex-1 overflow-y-auto scrollbar-thin space-y-1.5 pr-1">
-            <template x-for="skill in filtered" :key="skill.id">
+            <template x-for="skill in pagedSkills" :key="skill.id">
                 <div class="group flex items-center gap-3 rounded-lg border bg-white px-4 py-2.5 cursor-pointer transition-all"
                      :class="previewId === skill.id ? 'border-brand-400 bg-brand-50/30 shadow-sm' : 'border-surface-200 hover:border-brand-200 hover:shadow-sm'"
                      @click="openPreview(skill)">
@@ -43,9 +56,15 @@
                          x-text="(skill.name||'SK').substring(0,2).toUpperCase()"></div>
                     <!-- Info -->
                     <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-1.5">
+                        <div class="flex items-center gap-1.5 overflow-hidden">
                             <span class="text-[13px] font-semibold text-brand-900 truncate" data-testid="skill-row-name" x-text="skill.name"></span>
                             <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-400 shrink-0" x-text="'v' + (skill.version || '0.1.0')"></span>
+                            <!-- 66.3.0: em uso + declarativa na linha -->
+                            <span x-show="skill.in_use" class="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[8px] font-bold text-emerald-600 shrink-0"
+                                  :title="'Vinculada a ' + (skill.used_by || []).length + ' agente(s): ' + (skill.used_by || []).map(a => a.name).join(', ')"
+                                  x-text="'EM USO (' + (skill.used_by || []).length + ')'"></span>
+                            <span x-show="skill.used_by !== undefined && !skill.in_use" class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[8px] font-bold text-surface-400 shrink-0" title="Nenhum agente vincula esta skill">SEM USO</span>
+                            <span x-show="isDeclarative(skill)" class="rounded-full bg-brand-50 px-1.5 py-0.5 text-[8px] font-bold text-brand-600 shrink-0" title="execution_mode: declarative — executa bindings HTTP sem gastar LLM">DECLARATIVA</span>
                         </div>
                         <div class="flex items-center gap-1.5 mt-0.5">
                             <span x-show="skill.kind" class="text-[9px] font-bold uppercase" :class="skill.kind==='router'?'text-orange-500':skill.kind==='orchestrator'?'text-slate-700':'text-teal-500'" x-text="agentKindLabel(skill.kind)"></span>
@@ -53,6 +72,9 @@
                                   :class="skill.stability==='stable'?'text-emerald-500':skill.stability==='beta'?'text-amber-500':'text-surface-400'"
                                   x-text="skill.stability"></span>
                             <span x-show="skill.domain" class="text-[9px] text-red-500" x-text="skill.domain"></span>
+                            <span x-show="skill.updated_by_name || skill.created_by_name" class="text-[9px] text-surface-400 truncate max-w-[160px]"
+                                  :title="'Criado por: ' + (skill.created_by_name || '—') + ' · Última alteração: ' + (skill.updated_by_name || '—')"
+                                  x-text="'por ' + (skill.updated_by_name || skill.created_by_name)"></span>
                         </div>
                     </div>
                     <!-- Actions -->
@@ -129,6 +151,60 @@
                     <div><span class="text-surface-400">stability:</span> <span x-text="previewSkill?.stability || '—'"></span></div>
                 </div>
             </div>
+            <!-- ══ 66.3.0 — GOVERNANÇA & AUTORIA ══ -->
+            <div data-testid="skill-preview-governance">
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Governança & Autoria</h4>
+                <div class="rounded-lg bg-surface-50 border border-surface-100 p-3 space-y-2 text-[11px]">
+                    <div class="flex justify-between">
+                        <span class="text-surface-400">Criado por</span>
+                        <span class="font-medium text-brand-900 truncate max-w-[200px]" :title="previewSkill?.created_by || ''" x-text="previewSkill?.created_by_name || '—'"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-surface-400">Última alteração</span>
+                        <span class="font-medium text-brand-900 truncate max-w-[230px]" :title="previewSkill?.last_change_action || ''"
+                              x-text="(previewSkill?.updated_by_name || '—') + (previewSkill?.last_change_at ? (' · ' + fmtWhen(previewSkill?.last_change_at)) : '')"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-surface-400">Modo de execução</span>
+                        <span class="font-medium" :class="isDeclarative(previewSkill) ? 'text-brand-700' : 'text-brand-900'" x-text="isDeclarative(previewSkill) ? 'Declarativo (HTTP, sem LLM)' : 'LLM'"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Em uso por (agentes vinculados) -->
+            <div data-testid="skill-preview-usedby">
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Em uso por</h4>
+                <template x-if="previewSkill?.used_by && previewSkill.used_by.length">
+                    <div class="flex flex-wrap gap-1.5">
+                        <template x-for="a in previewSkill.used_by" :key="a.id">
+                            <a :href="'/agents/' + a.id + '/edit'" class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] hover:shadow-sm transition-all"
+                               :class="a.status === 'active' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-surface-200 bg-surface-50 text-surface-500'"
+                               :title="a.status === 'active' ? 'Agente ativo' : 'Agente inativo'">
+                                <span class="h-1.5 w-1.5 rounded-full" :class="a.status === 'active' ? 'bg-emerald-400' : 'bg-surface-300'"></span>
+                                <span x-text="a.name"></span>
+                            </a>
+                        </template>
+                    </div>
+                </template>
+                <p x-show="previewSkill?.used_by && !previewSkill?.used_by.length" class="text-[11px] text-surface-400">Nenhum agente vincula esta skill — ela existe mas não roda em lugar nenhum.</p>
+                <p x-show="previewSkill?.used_by === undefined" class="text-[11px] text-surface-400">Uso indisponível no momento (falha ao consultar os agentes) — recarregue a página.</p>
+            </div>
+
+            <!-- Seções declaradas (completude da SKILL.md num relance) -->
+            <div data-testid="skill-preview-sections">
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Seções declaradas</h4>
+                <div class="flex flex-wrap gap-1">
+                    <template x-for="sec in skillSections(previewSkill)" :key="sec.name">
+                        <span class="rounded px-1.5 py-0.5 text-[9.5px]"
+                              :class="sec.present ? 'bg-emerald-50 text-emerald-700' : (sec.requiredMissing ? 'bg-rose-50 text-rose-600 font-semibold' : 'bg-surface-100 text-surface-400 line-through')"
+                              :title="sec.present ? 'Seção presente (reconhecida pelo parser canônico)' : (sec.requiredMissing ? 'Seção OBRIGATÓRIA ausente — a skill é inválida para o parser' : 'Seção opcional ausente')"
+                              x-text="sec.name"></span>
+                    </template>
+                </div>
+                <p x-show="previewSkill?.declared_sections !== undefined" class="text-[9.5px] text-surface-400 mt-1">Presença pela gramática do parser canônico. Nada existe fora do declarado: seção ausente = capacidade que o agente NÃO tem; <span class="text-rose-500">vermelho</span> = obrigatória faltando.</p>
+                <p x-show="previewSkill?.declared_sections === undefined" class="text-[10px] text-surface-400">Informação indisponível (recarregue a página).</p>
+            </div>
+
             <!-- Raw content -->
             <div>
                 <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-1">Conteúdo SKILL.md</h4>
@@ -144,12 +220,17 @@
 <script>
 function skillsPage() {
     return {
-        allSkills: [], filtered: [], loading: true,
-        filterKind: '', filterStability: '', searchText: '',
+        allSkills: [], filtered: [], loading: true, serverTotal: 0,
+        filterKind: '', filterStability: '', searchText: '', filterUser: '',
+        skPage: 1, skSize: 10,
+        pageSizes: [{ v: 10, l: '10' }, { v: 20, l: '20' }, { v: 50, l: '50' }, { v: 0, l: 'Todos' }],
         previewId: null, previewSkill: null,
 
         async load() {
-            try { const d = await api.get('/api/v1/skills'); this.allSkills = d.skills || []; } catch {}
+            try { const d = await api.get('/api/v1/skills?enriched=1&limit=500'); this.allSkills = d.skills || []; this.serverTotal = d.total || this.allSkills.length; } catch {}
+            // filtro-fantasma (padrão da tela de agentes): usuário selecionado
+            // que sumiu do conjunto novo não pode continuar filtrando invisível
+            if (this.filterUser && !this.distinctUsers.includes(this.filterUser)) this.filterUser = '';
             this.applyFilters();
             this.loading = false;
         },
@@ -158,12 +239,46 @@ function skillsPage() {
             let result = this.allSkills;
             if (this.filterKind) result = result.filter(s => s.kind === this.filterKind);
             if (this.filterStability) result = result.filter(s => s.stability === this.filterStability);
+            if (this.filterUser) result = result.filter(s => s.created_by_name === this.filterUser || s.updated_by_name === this.filterUser);
             if (this.searchText.trim()) {
-                const q = this.searchText.toLowerCase();
-                result = result.filter(s => (s.name||'').toLowerCase().includes(q) || (s.purpose||'').toLowerCase().includes(q) || (s.domain||'').toLowerCase().includes(q));
+                const q = this.searchText.trim().toLowerCase();
+                result = result.filter(s => (s.name||'').toLowerCase().includes(q) || (s.purpose||'').toLowerCase().includes(q) || (s.domain||'').toLowerCase().includes(q)
+                    || (s.owner||'').toLowerCase().includes(q)
+                    || (s.created_by_name||'').toLowerCase().includes(q) || (s.updated_by_name||'').toLowerCase().includes(q)
+                    || (s.used_by||[]).some(a => (a.name||'').toLowerCase().includes(q)));
             }
             this.filtered = result;
+            this.skPage = 1;
         },
+        get distinctUsers() {
+            const s = new Set();
+            for (const sk of this.allSkills) {
+                if (sk.created_by_name) s.add(sk.created_by_name);
+                if (sk.updated_by_name) s.add(sk.updated_by_name);
+            }
+            return [...s].sort((x, y) => x.localeCompare(y));
+        },
+        get skPageCount() { return this.skSize ? Math.max(1, Math.ceil(this.filtered.length / this.skSize)) : 1; },
+        get pagedSkills() {
+            if (!this.skSize) return this.filtered;
+            const p = Math.min(this.skPage, this.skPageCount);  // clamp pós-exclusão
+            return this.filtered.slice((p - 1) * this.skSize, p * this.skSize);
+        },
+        // verdade PARSEADA do servidor (achado de revisão: as regex client-side
+        // divergiam da gramática do parser — case, âncora, boundary, aspas YAML)
+        isDeclarative(s) { return (s?.execution_mode || '') === 'declarative'; },
+        skillSections(s) {
+            if (!s || s.declared_sections === undefined) return [];
+            const canon = ['Purpose', 'Activation Criteria', 'Inputs', 'Workflow', 'Tool Bindings',
+                           'Output Contract', 'Failure Modes', 'Guardrails', 'Evidence Policy',
+                           'Decisions', 'API Bindings', 'Data Tables'];
+            const declared = s.declared_sections || [];
+            const missingReq = s.missing_required || [];
+            const extras = declared.filter(n => !canon.includes(n));
+            return canon.map(name => ({ name, present: declared.includes(name), requiredMissing: missingReq.includes(name) }))
+                .concat(extras.map(name => ({ name, present: true, requiredMissing: false })));
+        },
+        fmtWhen(s) { try { return (window.tzDateTime && s) ? window.tzDateTime(s) : (s || ''); } catch { return s || ''; } },
 
         openPreview(skill) {
             this.previewId = skill.id;
@@ -174,8 +289,15 @@ function skillsPage() {
             if (!await uiConfirm({message: `Remover skill "${name}"?`, danger: true})) return;
             try {
                 await api.del(`/api/v1/skills/${id}`);
+                // filtra as DUAS listas direto (sem applyFilters) — preserva a
+                // página atual em exclusões em série; o clamp cobre o overflow
                 this.allSkills = this.allSkills.filter(s => s.id !== id);
-                this.applyFilters();
+                this.filtered = this.filtered.filter(s => s.id !== id);
+                // filtro-fantasma: se o excluído era o único do usuário filtrado
+                if (this.filterUser && !this.distinctUsers.includes(this.filterUser)) {
+                    this.filterUser = '';
+                    this.applyFilters();
+                }
                 if (this.previewId === id) { this.previewId = null; this.previewSkill = null; }
                 showToast('Skill removida');
             } catch { showToast('Erro', 'error'); }

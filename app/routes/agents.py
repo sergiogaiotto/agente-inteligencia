@@ -125,42 +125,10 @@ _CHANGE_ACTIONS = ["created", "updated", "status_changed", "prompt_rollback", "p
 
 
 async def _agents_authorship(ids: list[str]) -> dict:
-    """agent_id → autoria via audit_log, em 2 queries bateladas: quem criou
-    (action='created') e a última ALTERAÇÃO (whitelist _CHANGE_ACTIONS).
-    Best-effort: falha → {} (a lista nunca quebra por decoração)."""
-    if not ids:
-        return {}
-    try:
-        from app.core.database import _get_pool
-        async with _get_pool().acquire() as con:
-            created = await con.fetch(
-                "SELECT DISTINCT ON (entity_id) entity_id, actor "
-                "FROM audit_log WHERE entity_type='agent' AND action='created' "
-                "AND entity_id = ANY($1::text[]) ORDER BY entity_id, id ASC", ids)
-            changed = await con.fetch(
-                "SELECT DISTINCT ON (entity_id) entity_id, actor, action, created_at "
-                "FROM audit_log WHERE entity_type='agent' AND action = ANY($2::text[]) "
-                "AND entity_id = ANY($1::text[]) ORDER BY entity_id, id DESC",
-                ids, _CHANGE_ACTIONS)
-        out: dict = {}
-        for r in created:
-            out.setdefault(r["entity_id"], {})["created_by"] = r["actor"]
-        for r in changed:
-            d = out.setdefault(r["entity_id"], {})
-            d["updated_by"] = r["actor"]
-            d["last_change_action"] = r["action"]
-            d["last_change_at"] = str(r["created_at"] or "")
-        # actor pode ser username OU user_id cru (fallback do AuditRepository) —
-        # resolve nomes em 1 query batelada (mesmo helper da governança).
-        actors = {v.get(k) for v in out.values() for k in ("created_by", "updated_by") if v.get(k)}
-        from app.routes.dashboard import _resolve_user_names
-        names = await _resolve_user_names(list(actors))
-        for d in out.values():
-            d["created_by_name"] = names.get(d.get("created_by"), d.get("created_by"))
-            d["updated_by_name"] = names.get(d.get("updated_by"), d.get("updated_by"))
-        return out
-    except Exception:
-        return {}
+    """agent_id → autoria (criou / última alteração da whitelist) — 66.3.0:
+    delega ao helper genérico compartilhado com skills."""
+    from app.core.authorship import audit_entity_authorship
+    return await audit_entity_authorship("agent", ids, _CHANGE_ACTIONS)
 
 
 async def _agents_seal_info(ids: list[str]) -> dict:

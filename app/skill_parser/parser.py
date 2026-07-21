@@ -643,6 +643,15 @@ def _infer_execution_mode(parsed: ParsedSkill) -> str:
     return 'fast'
 
 
+def extract_section_names(content: str) -> list[str]:
+    """Nomes EXATOS das seções ## do corpo, pela MESMA gramática/limpeza do
+    parse_skill_md. 66.3.0: alimenta os chips de completude da lista de skills
+    — a UI NÃO pode duplicar a regex do parser (achado de revisão: a versão
+    client-side divergia em case/âncora/boundary e marcava presente o que o
+    engine não reconhece)."""
+    return list(_extract_sections(strip_code_fence(content or "")).keys())
+
+
 def _extract_sections(content: str) -> dict[str, str]:
     """Extrai todas seções H2 do markdown."""
     pattern = r"^##\s+(.+)$"
