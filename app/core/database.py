@@ -1482,6 +1482,12 @@ _IDEMPOTENT_MIGRATIONS = [
     # Índice DEPOIS da coluna (mesma lista → ordem garantida): em DB existente a
     # coluna só nasce aqui, então o índice NÃO pode estar no SCHEMA (boot crash).
     "CREATE INDEX IF NOT EXISTS idx_invoke_jobs_customer ON invoke_jobs (customer_hash) WHERE customer_hash IS NOT NULL",
+    # ── Autoria de agentes + trilhas de governança (66.2.0) ──
+    # audit_log não tinha NENHUM índice (achado de revisão): as queries de
+    # autoria (DISTINCT ON por entity) e os filtros da governança
+    # (entity_type=policy_decision etc.) faziam seq scan numa tabela
+    # append-heavy. Cobre (entity_type, entity_id, id DESC).
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log (entity_type, entity_id, id DESC)",
     # ── Pivô LGPD por-turno + arquivos de upload (35.15.0, decisão do dono D/G) ──
     # A coluna nasce aqui em DB EXISTENTE (no SCHEMA base p/ DB fresco/CI). O índice
     # DEPOIS da coluna (nunca no SCHEMA — coluna inexistente = boot crash).

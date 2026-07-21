@@ -25,16 +25,30 @@
                 <option value="">Todos domínios</option>
                 <template x-for="d in allDomains" :key="d.id"><option :value="d.name" x-text="d.name"></option></template>
             </select>
+            <select x-model="filterUser" @change="applyFilters()" data-testid="agents-filter-user" class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none max-w-[180px]" title="Filtra por quem criou ou fez a última alteração no agente">
+                <option value="">Todos usuários</option>
+                <template x-for="u in distinctUsers" :key="u"><option :value="u" x-text="u"></option></template>
+            </select>
+            <input x-model="searchText" @input="applyFilters()" data-testid="agents-search" placeholder="Buscar..." class="rounded-lg border border-surface-200 bg-white px-2.5 py-1.5 text-[11px] outline-none w-40">
             <label class="flex items-center gap-1.5 text-[11px] text-surface-500 cursor-pointer select-none">
                 <input type="checkbox" x-model="showInactive" @change="load()" class="rounded border-surface-300">
                 Inativos
             </label>
-            <span class="text-[10px] text-surface-400" x-text="agents.length + ' agente(s)'"></span>
+            <span class="text-[10px] text-surface-400" x-text="agents.length + ' agente(s)' + (serverTotal > allAgents.length ? ' · ' + serverTotal + ' no servidor' : '')" :title="serverTotal > allAgents.length ? 'A tela carrega até 500 agentes — refine com os filtros' : ''"></span>
+            <span class="flex items-center gap-1.5 ml-auto text-[11px]" data-testid="agents-pagination">
+                <span class="text-surface-400">Exibir</span>
+                <select x-model.number="agSize" @change="agPage = 1" data-testid="agents-pagesize" class="rounded border border-surface-200 bg-white px-1.5 py-1 text-[11px] outline-none">
+                    <template x-for="p in pageSizes" :key="p.v"><option :value="p.v" x-text="p.l"></option></template>
+                </select>
+                <span class="text-surface-400" x-text="agents.length ? ('página ' + agPage + ' de ' + agPageCount) : ''"></span>
+                <button @click="agPage = Math.max(1, agPage - 1)" :disabled="agPage <= 1" class="rounded border border-surface-200 px-2 py-0.5 hover:bg-surface-50 disabled:opacity-30">‹</button>
+                <button @click="agPage = Math.min(agPageCount, agPage + 1)" :disabled="agPage >= agPageCount" class="rounded border border-surface-200 px-2 py-0.5 hover:bg-surface-50 disabled:opacity-30">›</button>
+            </span>
         </div>
 
         <!-- Agent rows -->
         <div class="flex-1 overflow-y-auto scrollbar-thin space-y-1.5 pr-1">
-            <template x-for="agent in agents" :key="agent.id">
+            <template x-for="agent in pagedAgents" :key="agent.id">
                 <div class="group flex items-center gap-3 rounded-lg border px-4 py-2.5 cursor-pointer transition-all"
                      :class="[
                          previewId === agent.id ? 'border-brand-400 bg-brand-50/30 shadow-sm' : 'border-surface-200 hover:border-brand-200 hover:shadow-sm',
@@ -47,17 +61,26 @@
                          x-text="agent.name?.substring(0,2).toUpperCase()"></div>
                     <!-- Info -->
                     <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-1.5">
+                        <div class="flex items-center gap-1.5 overflow-hidden">
                             <span class="text-[13px] font-semibold text-brand-900 truncate" data-testid="agent-row-name" x-text="agent.name"></span>
                             <span class="rounded-full bg-surface-100 px-1.5 py-0.5 text-[9px] font-mono text-surface-400 shrink-0" x-text="'v' + (agent.version || '1.0.0')"></span>
                             <span class="h-1.5 w-1.5 rounded-full shrink-0" :class="agent.status==='active'?'bg-emerald-400':'bg-surface-300'"></span>
                             <!-- Pass-through badge in list -->
                             <span x-show="isAgentPassthrough(agent)" class="rounded-full bg-amber-50 px-1.5 py-0.5 text-[8px] font-bold text-amber-600 shrink-0">PASS-THROUGH</span>
+                            <!-- 66.2.0: selo do pipeline + risco na linha -->
+                            <span x-show="agent.sealed" class="rounded-full bg-brand-50 px-1.5 py-0.5 text-[8px] font-bold text-brand-600 shrink-0" :title="'Parte do pipeline publicado (contrato selado): ' + (agent.pipeline_name || '')">SELADO</span>
+                            <span x-show="agent.risk_tier" class="rounded-full px-1.5 py-0.5 text-[8px] font-bold shrink-0"
+                                  :class="(agent.risk_tier==='high'||agent.risk_tier==='unacceptable')?'bg-rose-50 text-rose-600':(agent.risk_tier==='limited'?'bg-amber-50 text-amber-600':'bg-emerald-50 text-emerald-600')"
+                                  :title="'Classificação de risco (IA Responsável → Risco)'"
+                                  x-text="riskTierLabel(agent.risk_tier)"></span>
                         </div>
                         <div class="flex items-center gap-1.5 mt-0.5">
                             <span class="text-[9px] font-bold uppercase" :class="agent.kind==='aobd'?'text-slate-700':agent.kind==='router'?'text-orange-500':'text-teal-500'" x-text="agentKindLabel(agent.kind)"></span>
                             <span class="text-[9px] text-surface-400" x-text="agent.model"></span>
                             <span x-show="agent._skill_name" class="text-[9px] text-teal-500 truncate max-w-[120px]" x-text="agent._skill_name"></span>
+                            <span x-show="agent.updated_by_name || agent.created_by_name" class="text-[9px] text-surface-400 truncate max-w-[160px]"
+                                  :title="'Criado por: ' + (agent.created_by_name || '—') + ' · Última alteração: ' + (agent.updated_by_name || '—')"
+                                  x-text="'por ' + (agent.updated_by_name || agent.created_by_name)"></span>
                         </div>
                     </div>
                     <!-- Actions -->
@@ -129,6 +152,10 @@
                     <span x-text="previewAgent?.status==='active'?'Ativo':'Inativo'"></span>
                 </span>
                 <span class="rounded-full bg-surface-100 px-2.5 py-0.5 text-[10px] font-mono text-surface-500" x-text="'v' + (previewAgent?.version || '1.0.0')"></span>
+                <span x-show="previewAgent?.sealed" class="rounded-full bg-brand-50 px-2.5 py-0.5 text-[10px] font-bold text-brand-600" :title="'Contrato de entrada congelado na publicação do pipeline: ' + (previewAgent?.pipeline_name || '')">SELADO</span>
+                <span x-show="previewAgent?.risk_tier" class="rounded-full px-2.5 py-0.5 text-[10px] font-bold"
+                      :class="(previewAgent?.risk_tier==='high'||previewAgent?.risk_tier==='unacceptable')?'bg-rose-50 text-rose-600':(previewAgent?.risk_tier==='limited'?'bg-amber-50 text-amber-600':'bg-emerald-50 text-emerald-600')"
+                      x-text="riskTierLabel(previewAgent?.risk_tier)"></span>
             </div>
 
             <!-- ══ PASS-THROUGH INDICATOR ══ -->
@@ -160,6 +187,51 @@
                     <div class="flex justify-between">
                         <span class="text-surface-400">Pipeline</span>
                         <span class="font-medium" :class="isAgentPassthrough(previewAgent) ? 'text-amber-600' : 'text-emerald-600'" x-text="isAgentPassthrough(previewAgent) ? 'Pass-through (0ms)' : 'Execução ativa (LLM)'"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-surface-400" title="Escape hatch do grounded-by-default: pode responder fora das evidências">Conhecimento geral</span>
+                        <span class="font-medium" :class="previewAgent?.allow_general_knowledge?'text-amber-600':'text-emerald-600'" x-text="previewAgent?.allow_general_knowledge ? 'Permitido' : 'Bloqueado'"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-surface-400">Anexos</span>
+                        <span class="font-medium text-brand-900" x-text="[previewAgent?.accepts_documents ? 'documentos' : null, previewAgent?.accepts_images ? 'imagens' : null].filter(Boolean).join(' + ') || 'não aceita'"></span>
+                    </div>
+                    <div class="flex justify-between" x-show="previewAgent?.response_language">
+                        <span class="text-surface-400">Idioma da resposta</span>
+                        <span class="font-medium text-brand-900" x-text="previewAgent?.response_language"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-surface-400">Temperatura</span>
+                        <span class="font-medium font-mono text-brand-900" x-text="(previewAgent?.temperature ?? 0.7) + (previewAgent?.reasoning_effort ? (' · effort ' + previewAgent?.reasoning_effort) : '')"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══ 66.2.0 — GOVERNANÇA & AUTORIA ══ -->
+            <div data-testid="agent-preview-governance">
+                <h4 class="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">Governança & Autoria</h4>
+                <div class="rounded-lg bg-surface-50 border border-surface-100 p-3 space-y-2 text-[11px]">
+                    <div class="flex justify-between">
+                        <span class="text-surface-400">Criado por</span>
+                        <span class="font-medium text-brand-900 truncate max-w-[200px]" :title="previewAgent?.created_by || ''" x-text="previewAgent?.created_by_name || '—'"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-surface-400">Última alteração</span>
+                        <span class="font-medium text-brand-900 truncate max-w-[220px]" :title="(previewAgent?.last_change_action || '') + (previewAgent?.updated_by ? (' · id: ' + previewAgent?.updated_by) : '')"
+                              x-text="(previewAgent?.updated_by_name || '—') + (previewAgent?.last_change_at ? (' · ' + fmtWhen(previewAgent?.last_change_at)) : '')"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-surface-400" title="Membership exclusiva (pipeline_agents) — publicado com contrato congelado = selado">Pipeline / selo</span>
+                        <span class="font-medium truncate max-w-[200px]"
+                              :class="previewAgent?.sealed ? 'text-brand-700' : 'text-surface-500'"
+                              x-text="previewAgent?.pipeline_name ? (previewAgent.pipeline_name + ' — ' + (previewAgent.sealed ? 'SELADO' : (previewAgent.pipeline_status || ''))) : 'não pertence a pipeline'"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-surface-400">Risco (EU AI Act)</span>
+                        <a href="/ia-responsavel" class="font-medium hover:underline"
+                           :class="(previewAgent?.risk_tier==='high'||previewAgent?.risk_tier==='unacceptable')?'text-rose-600':(previewAgent?.risk_tier==='limited'?'text-amber-600':(previewAgent?.risk_tier?'text-emerald-600':'text-amber-600'))"
+                           :title="previewAgent?.risk_tier ? 'Classificado no IA Responsável → Risco' : 'Pendente de classificação — IA Responsável → Risco'"
+                           x-text="previewAgent?.risk_tier ? riskTierLabel(previewAgent?.risk_tier) : 'não classificado →'"></a>
                     </div>
                 </div>
             </div>
@@ -424,6 +496,9 @@ function agentsPage() {
     return {
         agents: [], allAgents: [], loading: true,
         filterKind: '', filterDomain: '', showInactive: false,
+        filterUser: '', searchText: '', serverTotal: 0,
+        agPage: 1, agSize: 10,
+        pageSizes: [{ v: 10, l: '10' }, { v: 20, l: '20' }, { v: 50, l: '50' }, { v: 0, l: 'Todos' }],
         allDomains: [],
         previewId: null, previewAgent: null,
         allSkills: [],
@@ -464,6 +539,10 @@ function agentsPage() {
                 const params = new URLSearchParams();
                 if (this.filterKind) params.set('kind', this.filterKind);
                 if (!this.showInactive) params.set('status', 'active');
+                // 66.2.0: autoria + risco + selo (batelado no servidor) e teto
+                // alto — a paginação agora é client-side.
+                params.set('enriched', '1');
+                params.set('limit', '500');
                 const data = await api.get('/api/v1/agents?' + params);
                 const skillsData = await api.get('/api/v1/skills').catch(() => ({skills:[]}));
                 const skillMap = {};
@@ -502,16 +581,57 @@ function agentsPage() {
                     };
                 });
                 this.agents = this.allAgents;
-                this.filterByDomain();
+                this.serverTotal = data.total || this.allAgents.length;
+                // filtro-fantasma (revisão): se o usuário selecionado sumiu do
+                // conjunto novo (troca de tipo/enrichment indisponível), o select
+                // renderiza vazio mas o filtro continuaria ativo — reseta.
+                if (this.filterUser && !this.distinctUsers.includes(this.filterUser)) this.filterUser = '';
+                this.applyFilters();
             } catch(e) { showToast('Erro ao carregar agentes', 'error'); }
             this.loading = false;
             try { this.allDomains = (await api.get('/api/v1/domains')).domains || []; } catch {}
         },
 
-        filterByDomain() {
-            if (!this.filterDomain) { this.agents = this.allAgents; return; }
-            this.agents = this.allAgents.filter(a => (a.domain||'').split(',').map(d=>d.trim()).includes(this.filterDomain));
+        // 66.2.0: filtros combinados (domínio + usuário + busca) — mesma ideia
+        // da tela de Skills. filterByDomain mantido como alias (handler antigo).
+        applyFilters() {
+            let list = this.allAgents;
+            if (this.filterDomain) list = list.filter(a => (a.domain||'').split(',').map(d=>d.trim()).includes(this.filterDomain));
+            if (this.filterUser) list = list.filter(a => a.created_by_name === this.filterUser || a.updated_by_name === this.filterUser);
+            if (this.searchText.trim()) {
+                const q = this.searchText.trim().toLowerCase();
+                list = list.filter(a =>
+                    (a.name || '').toLowerCase().includes(q) ||
+                    (a.description || '').toLowerCase().includes(q) ||
+                    (a.domain || '').toLowerCase().includes(q) ||
+                    (a.model || '').toLowerCase().includes(q) ||
+                    (a._skill_name || '').toLowerCase().includes(q) ||
+                    (a.pipeline_name || '').toLowerCase().includes(q) ||
+                    (a.created_by_name || '').toLowerCase().includes(q) ||
+                    (a.updated_by_name || '').toLowerCase().includes(q));
+            }
+            this.agents = list;
+            this.agPage = 1;
         },
+        filterByDomain() { this.applyFilters(); },
+        get distinctUsers() {
+            const s = new Set();
+            for (const a of this.allAgents) {
+                if (a.created_by_name) s.add(a.created_by_name);
+                if (a.updated_by_name) s.add(a.updated_by_name);
+            }
+            return [...s].sort((x, y) => x.localeCompare(y));
+        },
+        get agPageCount() { return this.agSize ? Math.max(1, Math.ceil(this.agents.length / this.agSize)) : 1; },
+        get pagedAgents() {
+            if (!this.agSize) return this.agents;
+            // clamp: excluir/desativar o último item de uma página deixava
+            // agPage além do total → slice vazio = lista "some" (revisão)
+            const p = Math.min(this.agPage, this.agPageCount);
+            return this.agents.slice((p - 1) * this.agSize, p * this.agSize);
+        },
+        riskTierLabel(t) { return { minimal: 'RISCO MÍN', limited: 'RISCO LIM', high: 'RISCO ALTO', unacceptable: 'INACEITÁVEL' }[t] || t; },
+        fmtWhen(s) { try { return (window.tzDateTime && s) ? window.tzDateTime(s) : (s || ''); } catch { return s || ''; } },
 
         openPreview(agent) {
             this.previewId = agent.id;
@@ -655,6 +775,9 @@ function agentsPage() {
                 agent.status = newStatus;
                 showToast(`Agente ${newStatus === 'active' ? 'ativado' : 'desativado'}`);
                 if (!this.showInactive && newStatus === 'inactive') {
+                    // remover TAMBÉM de allAgents — senão o próximo applyFilters
+                    // (cada tecla da busca) "ressuscita" o desativado (revisão)
+                    this.allAgents = this.allAgents.filter(a => a.id !== agent.id);
                     this.agents = this.agents.filter(a => a.id !== agent.id);
                     if (this.previewId === agent.id) { this.previewId = null; this.previewAgent = null; }
                 }
