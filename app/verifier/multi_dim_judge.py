@@ -187,16 +187,33 @@ class MultiDimJudge:
                 "judge_cost_usd": judge_cost,
             }
 
+    # Orçamento TOTAL de chars do bloco de evidências do juiz (~6k tokens):
+    # folga para top-5 chunks no tamanho default (~500 tokens ≈ 2000 chars
+    # cada). Proteção contra chunk patológico — o caso comum passa INTEIRO.
+    _EVIDENCE_BUDGET_CHARS = 24000
+
     @staticmethod
     def _format_evidences(evidences: list) -> str:
+        # SIMETRIA draft×juiz (66.4.3, achado E2E 2026-07-21): o draft recebe
+        # cada snippet INTEGRAL, mas aqui cortávamos em 500 chars POR evidência
+        # — com o chunk default (~2000 chars) o juiz via ~25% do que o draft
+        # viu e marcava como unsupported fatos logo após o corte (caso real:
+        # fatos nas posições 607/841/1108 do chunk → factuality=0 → falsa
+        # "Recusa controlada" ao usuário). O juiz vê a MESMA evidência que
+        # fundamentou o rascunho; o teto vira orçamento TOTAL, com corte
+        # AVISADO no próprio bloco (o juiz sabe que não viu tudo).
         if not evidences:
             return "(nenhuma evidência fornecida)"
         lines = []
+        remaining = MultiDimJudge._EVIDENCE_BUDGET_CHARS
         for i, e in enumerate(evidences):
             score = getattr(e, "relevance_score", 0)
             source = getattr(e, "source_name", "?")
             text = getattr(e, "snippet_text", str(e))
-            lines.append(f"[E{i+1}] (fonte: {source}, score: {score:.2f}): {text[:500]}")
+            if len(text) > remaining:
+                text = text[:remaining] + " …[corte pelo orçamento total do juiz]"
+            remaining = max(0, remaining - len(text))
+            lines.append(f"[E{i+1}] (fonte: {source}, score: {score:.2f}): {text}")
         return "\n".join(lines)
 
     @staticmethod
