@@ -345,6 +345,11 @@ class Verifier:
 
             # ─── 3. Agregação ────────────────────────────────────
             scores = self._extract_scores(dimensions)
+            # Guarda anti-desobediência da rubrica (66.4.3): SEM evidências a
+            # rubrica manda factuality=null (SYSTEM_PROMPT do juiz); um juiz
+            # que devolve 0 num caso inavaliável não pode reprovar o draft —
+            # 0 vira None (None não pontua no _compute_ok; 0 reprova sozinho).
+            scores = self._null_unverifiable_factuality(scores, evidences)
             confidence = self._compute_confidence(scores)
             ok = self._compute_ok(scores, contract_compliant, settings)
 
@@ -510,6 +515,19 @@ class Verifier:
         if not scored:
             return 0.0
         return min(1.0, sum(scored) / (len(scored) * 5))
+
+    @staticmethod
+    def _null_unverifiable_factuality(scores: dict, evidences) -> dict:
+        """SEM evidências, factuality=0 do juiz vira None (66.4.3).
+
+        A rubrica (multi_dim_judge.SYSTEM_PROMPT) manda null quando não há
+        evidências; o _compute_ok ignora None mas reprova 0 sozinho — um juiz
+        desobediente derrubava o run inteiro por uma dimensão inavaliável.
+        Só factuality: as demais dimensões não dependem de evidência."""
+        if not evidences and scores.get("factuality") == 0:
+            scores = dict(scores)
+            scores["factuality"] = None
+        return scores
 
     @staticmethod
     def _compute_ok(scores: dict, contract_compliant: bool, settings) -> bool:
