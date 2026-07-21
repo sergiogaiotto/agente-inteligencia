@@ -75,7 +75,11 @@
             <!-- Filtros do Gold (item 4, 51.0.0): client-side sobre os casos
                  carregados; opções de versão/categoria derivadas dos dados. -->
             <div class="flex items-center gap-1.5 flex-wrap border-b border-surface-100 bg-surface-50/60 px-3 py-2" data-testid="gold-filter-bar">
-                <select x-model="goldFilter.version" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none" title="Versão do dataset">
+                <!-- Espelho filtro→run (66.4.0, achado E2E 2026-07-21): este select é
+                     só FILTRO da lista, mas o usuário lia como "o gold que vai rodar" —
+                     e o run disparava com 'latest' (TODOS os datasets) em silêncio.
+                     O change espelha no runForm; o seletor do form segue editável. -->
+                <select x-model="goldFilter.version" @change="runForm.gold_version = goldFilter.version || 'latest'" class="rounded-md border border-surface-200 bg-white px-2 py-1 text-[10px] outline-none" title="Versão do dataset">
                     <option value="">— versão —</option>
                     <template x-for="v in goldVersions" :key="v"><option :value="v" x-text="v"></option></template>
                 </select>
@@ -228,7 +232,15 @@
                     <option value="">Selecione release</option>
                     <template x-for="r in releases" :key="r.id"><option :value="r.id" x-text="r.name || r.id.substring(0,8)"></option></template>
                 </select>
-                <div class="flex gap-2">
+                <div class="flex gap-2 flex-wrap">
+                    <!-- Gold do RUN explícito (66.4.0, achado E2E 2026-07-21): antes o
+                         form disparava SEMPRE gold_version:'latest' (todos os datasets,
+                         teto 500 casos) sem nenhum controle visível — o seletor herda o
+                         filtro da coluna Golden e deixa o escopo do run à vista. -->
+                    <select x-model="runForm.gold_version" data-testid="harness-goldversion" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none" title="Dataset gold avaliado neste run — 'todos' roda TODOS os datasets (até 500 casos)">
+                        <option value="latest">todos os datasets</option>
+                        <template x-for="v in goldVersions" :key="v"><option :value="v" x-text="v"></option></template>
+                    </select>
                     <select x-model="runForm.run_type" data-testid="harness-runtype" class="rounded-lg border border-surface-200 bg-white px-3 py-2 text-[12px] outline-none">
                         <option value="baseline">Baseline</option><option value="regression">Regressão</option>
                     </select>
@@ -1245,7 +1257,9 @@ function harnessPage(){return{
             (!f.target || r.agent_id===f.target || r.pipeline_id===f.target) &&
             (!f.release || r.release_id===f.release)));
     },
-    clearGoldFilter(){this.goldFilter={version:'',case_type:'',split:'',category:'',q:''}},
+    // Limpar o filtro também desfaz o espelho no run (66.4.0): o seletor
+    // visível do form é a única fonte que o usuário lê antes de disparar.
+    clearGoldFilter(){this.goldFilter={version:'',case_type:'',split:'',category:'',q:''};this.runForm.gold_version='latest'},
     clearRunFilter(){this.runFilter={run_type:'',status:'',target:'',release:''}},
     // ── CSV do Golden Dataset no escopo do filtro (item 5, 52.0.0) ──
     importOpen:false,importMode:'novos',importPartial:false,importBusy:false,importReport:null,
@@ -1602,6 +1616,16 @@ function harnessPage(){return{
     async executeHarness(){
     // Pacote C: alvo = agente OU pipeline (exatamente um) + release.
     if((!this.runForm.agent_id&&!this.runForm.pipeline_id)||!this.runForm.release_id){showToast('Selecione um alvo (agente ou pipeline) e a release','error');return}
+    // Guarda do 'latest' (66.4.0, achado E2E 2026-07-21): com 2+ datasets no
+    // Golden, 'latest' avalia TODOS contra um alvo de UM domínio — caro, lento
+    // (síncrono, sem cancelamento) e o resultado mistura domínios. Confirma
+    // com o tamanho real carregado antes de pagar o run.
+    if(this.runForm.gold_version==='latest'&&this.goldVersions.length>1){
+        const ok=await uiConfirm({title:'Rodar TODOS os datasets?',
+            message:'O dataset do run está em "todos os datasets" ('+this.goldCases.length+' casos carregados, de '+this.goldVersions.length+' datasets; teto 500 no servidor). Runs são pagos e não têm cancelamento. Para escopar, escolha uma versão no seletor de dataset do formulário.',
+            confirmLabel:'Rodar tudo'});
+        if(!ok)return;
+    }
     this.running=true;try{const r=await api.post('/api/v1/eval-runs/execute',this.runForm);
     // Harness assíncrono (43.0.0): 202 = run enfileirado (job durável) —
     // solta o botão na hora e acompanha por polling até o terminal.
