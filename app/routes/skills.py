@@ -4,9 +4,11 @@ import re
 import uuid, hashlib
 from fastapi import APIRouter, HTTPException, Request
 from app.models.schemas import SkillCreateRaw, SkillCreateManual
-from app.core.database import skills_repo, _get_pool
+import json as _json
+from app.core.database import skills_repo, audit_repo, _get_pool
 from app.skill_parser.parser import (
-    parse_skill_md, skill_to_db_dict, REQUIRED_SECTIONS, OPTIONAL_SECTIONS,
+    parse_skill_md, skill_to_db_dict, extract_section_names,
+    REQUIRED_SECTIONS, OPTIONAL_SECTIONS,
 )
 from app.skill_parser.linter import lint_skill
 
@@ -144,13 +146,72 @@ def _raise_for_db_error(e: Exception, urn: str) -> None:
     logger.exception("skills.create.unhandled_db_error", extra={"event": "skills.create.failed", "urn": urn})
     raise
 
+_SKILL_CHANGE_ACTIONS = ["created", "updated"]  # whitelist (nunca blacklist — ver authorship.py)
+
+
+async def _audit_skill(action: str, skill_id: str, details: dict):
+    """Auditoria BEST-EFFORT de skills (66.3.0): quando roda, a skill JÁ foi
+    persistida — falha de auditoria vira log, nunca 500 (mesma lição do warn
+    da guarda na revisão do 66.0.0). actor via fallback do AuditRepository."""
+    try:
+        await audit_repo.create({
+            "entity_type": "skill", "entity_id": skill_id, "action": action,
+            "details": _json.dumps(details),
+        })
+    except Exception:
+        logger.warning(
+            "auditoria de skill falhou (operação já persistida; segue)",
+            extra={"event": "skill.audit_failed", "action": action, "skill_id": skill_id},
+            exc_info=True,
+        )
+
+
 @router.get("")
-async def list_skills(limit: int = 50, offset: int = 0, kind: str = None, domain: str = None, stability: str = None):
+async def list_skills(limit: int = 50, offset: int = 0, kind: str = None, domain: str = None,
+                      stability: str = None, enriched: bool = False):
     f = {}
     if kind: f["kind"] = kind
     if domain: f["domain"] = domain
     if stability: f["stability"] = stability
-    return {"skills": await skills_repo.find_all(limit=limit, offset=offset, **f), "total": await skills_repo.count(**f)}
+    skills = await skills_repo.find_all(limit=limit, offset=offset, **f)
+    if enriched and skills:
+        # 66.3.0 — opt-in da UI (mesmo padrão da lista de agentes): autoria via
+        # audit_log (batelada) + "em uso" (agentes vinculados) + verdade
+        # PARSEADA (execution_mode e seções — a UI não duplica a gramática).
+        from app.core.authorship import audit_entity_authorship
+        authorship = await audit_entity_authorship(
+            "skill", [s["id"] for s in skills], _SKILL_CHANGE_ACTIONS)
+        by_skill: dict | None
+        try:
+            from app.core.database import agents_repo
+            # sem teto silencioso: busca TODOS os agentes (achado de revisão —
+            # acima de 1000, skills usadas pelos mais antigos virariam "SEM USO")
+            total_agents = await agents_repo.count()
+            by_skill = {}
+            for a in await agents_repo.find_all(limit=max(1000, total_agents)):
+                sid = a.get("skill_id")
+                if sid:
+                    by_skill.setdefault(sid, []).append(
+                        {"id": a.get("id"), "name": a.get("name"), "status": a.get("status")})
+        except Exception:
+            # indisponível ≠ "sem uso": chaves FICAM AUSENTES e a UI mostra
+            # estado neutro (achado: falha virava badge SEM USO confiante)
+            by_skill = None
+        for s in skills:
+            s.update(authorship.get(s["id"], {}))
+            if by_skill is not None:
+                used = by_skill.get(s["id"], [])
+                s["used_by"] = used
+                s["in_use"] = bool(used)
+            try:
+                parsed = parse_skill_md(s.get("raw_content") or "")
+                s["execution_mode"] = parsed.execution_mode
+                declared = extract_section_names(s.get("raw_content") or "")
+                s["declared_sections"] = declared
+                s["missing_required"] = [x for x in REQUIRED_SECTIONS if x not in declared]
+            except Exception:
+                pass  # parse é decoração aqui — nunca derruba a lista
+    return {"skills": skills, "total": await skills_repo.count(**f)}
 
 @router.get("/{skill_id}")
 async def get_skill(skill_id: str):
@@ -303,6 +364,8 @@ async def create_skill(data: SkillCreateRaw):
         content=db_data.get("raw_content") or data.raw_content,
         version=db_data.get("version"), source="create",
     )
+    # 66.3.0 (governança): skills não auditavam NADA — autoria não existia.
+    await _audit_skill("created", sid, {"name": parsed.name, "kind": parsed.frontmatter.kind})
     warnings = (parsed.validation_errors if not parsed.is_valid else [])
     warnings += await _warn_unknown_evidence_sources(parsed)
     return {
@@ -332,6 +395,7 @@ async def create_skill_manual(data: SkillCreateManual):
         entity_type=_rev.ENTITY_SKILL, entity_id=sid,
         content=data.raw_content, version=d.get("version"), source="create",
     )
+    await _audit_skill("created", sid, {"name": d.get("name"), "source": "manual"})
     return {"id": sid, "message": "Skill criada manualmente"}
 
 def _sync_frontmatter_version(raw: str, new_version: str) -> str:
@@ -398,6 +462,8 @@ async def _persist_skill_update(skill_id: str, raw_content: str,
     warnings += await _warn_unknown_evidence_sources(parsed)
     if isinstance(updated, dict) and warnings:
         updated = {**updated, "warnings": warnings}
+    # 66.3.0: TODA alteração (PUT e rollback passam por aqui) entra na trilha.
+    await _audit_skill("updated", skill_id, {"source": source, "version": new_version})
     return updated
 
 

@@ -97,11 +97,15 @@ class TestChangeActionsWhitelist:
             "created", "updated", "status_changed", "prompt_rollback", "prompt_promoted"}
         assert "invoked" not in A._CHANGE_ACTIONS
         assert "tool_strategy_degraded" not in A._CHANGE_ACTIONS
-        # a query usa a whitelist (ANY), não blacklist
+        # a query usa a whitelist (ANY), não blacklist — vive no helper
+        # genérico (66.3.0: app/core/authorship.py, compartilhado com skills)
         import inspect
-        src = inspect.getsource(A._agents_authorship)
+        import app.core.authorship as AU
+        src = inspect.getsource(AU.audit_entity_authorship)
         assert "action = ANY($2::text[])" in src
         assert "<> 'invoked'" not in src
+        wrapper = inspect.getsource(A._agents_authorship)
+        assert "audit_entity_authorship(\"agent\", ids, _CHANGE_ACTIONS)" in wrapper
 
     def test_indice_do_audit_log_existe(self):
         # achado de revisão: audit_log era append-heavy SEM nenhum índice —
