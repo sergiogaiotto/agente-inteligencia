@@ -117,13 +117,104 @@ def _schedule_agent_invoke_cost(request: Request, agent_id: str, result: dict) -
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
+# Ações que CONTAM como alteração humana do agente. WHITELIST de propósito
+# (achado HIGH de revisão): blacklist de 'invoked' deixava passar eventos de
+# RUNTIME como 'tool_strategy_degraded' (gravado a cada invoke de modelo sem
+# function calling nativo) — e "última alteração por" virava o último INVOCADOR.
+_CHANGE_ACTIONS = ["created", "updated", "status_changed", "prompt_rollback", "prompt_promoted"]
+
+
+async def _agents_authorship(ids: list[str]) -> dict:
+    """agent_id → autoria via audit_log, em 2 queries bateladas: quem criou
+    (action='created') e a última ALTERAÇÃO (whitelist _CHANGE_ACTIONS).
+    Best-effort: falha → {} (a lista nunca quebra por decoração)."""
+    if not ids:
+        return {}
+    try:
+        from app.core.database import _get_pool
+        async with _get_pool().acquire() as con:
+            created = await con.fetch(
+                "SELECT DISTINCT ON (entity_id) entity_id, actor "
+                "FROM audit_log WHERE entity_type='agent' AND action='created' "
+                "AND entity_id = ANY($1::text[]) ORDER BY entity_id, id ASC", ids)
+            changed = await con.fetch(
+                "SELECT DISTINCT ON (entity_id) entity_id, actor, action, created_at "
+                "FROM audit_log WHERE entity_type='agent' AND action = ANY($2::text[]) "
+                "AND entity_id = ANY($1::text[]) ORDER BY entity_id, id DESC",
+                ids, _CHANGE_ACTIONS)
+        out: dict = {}
+        for r in created:
+            out.setdefault(r["entity_id"], {})["created_by"] = r["actor"]
+        for r in changed:
+            d = out.setdefault(r["entity_id"], {})
+            d["updated_by"] = r["actor"]
+            d["last_change_action"] = r["action"]
+            d["last_change_at"] = str(r["created_at"] or "")
+        # actor pode ser username OU user_id cru (fallback do AuditRepository) —
+        # resolve nomes em 1 query batelada (mesmo helper da governança).
+        actors = {v.get(k) for v in out.values() for k in ("created_by", "updated_by") if v.get(k)}
+        from app.routes.dashboard import _resolve_user_names
+        names = await _resolve_user_names(list(actors))
+        for d in out.values():
+            d["created_by_name"] = names.get(d.get("created_by"), d.get("created_by"))
+            d["updated_by_name"] = names.get(d.get("updated_by"), d.get("updated_by"))
+        return out
+    except Exception:
+        return {}
+
+
+async def _agents_seal_info(ids: list[str]) -> dict:
+    """agent_id → {pipeline_id, pipeline_name, pipeline_status, sealed}, 1 query.
+    Membership exclusiva = pipeline_agents (PK agent_id). SELADO usa o MESMO
+    critério do runtime (_resolve_invoke_schema em pipelines.py): status
+    'publicado' E contract_hash presente — publicado sem hash NÃO é selado.
+    Best-effort: falha → {} (decoração nunca derruba a lista)."""
+    if not ids:
+        return {}
+    try:
+        from app.core.database import _get_pool
+        async with _get_pool().acquire() as con:
+            rows = await con.fetch(
+                "SELECT pa.agent_id, p.id AS pid, p.name, p.status, p.contract_hash "
+                "FROM pipeline_agents pa JOIN pipelines p ON p.id = pa.pipeline_id "
+                "WHERE pa.agent_id = ANY($1::text[])", ids)
+        return {r["agent_id"]: {
+            "pipeline_id": r["pid"], "pipeline_name": r["name"],
+            "pipeline_status": r["status"],
+            "sealed": bool(r["status"] == "publicado" and r["contract_hash"]),
+        } for r in rows}
+    except Exception:
+        return {}
+
+
 @router.get("")
-async def list_agents(limit: int = 50, offset: int = 0, kind: str = None, status: str = None, domain: str = None):
+async def list_agents(limit: int = 50, offset: int = 0, kind: str = None, status: str = None,
+                      domain: str = None, enriched: bool = False):
     f = {}
     if kind: f["kind"] = kind
     if status: f["status"] = status
     if domain: f["domain"] = domain
     agents = await agents_repo.find_all(limit=limit, offset=offset, **f)
+    if enriched and agents:
+        # 66.2.0 — opt-in da UI (lista + painel): autoria (audit_log), tier de
+        # risco (registro de governança) e selo/pipeline. Tudo batelado e
+        # best-effort; consumidores de API sem `enriched` não pagam nada.
+        ids = [a["id"] for a in agents]
+        authorship = await _agents_authorship(ids)
+        try:
+            from app.core.database import governance_risk_repo
+            risk = {c.get("entity_id"): c.get("tier")
+                    for c in await governance_risk_repo.find_all(limit=1000, entity_type="agent")}
+        except Exception:
+            risk = {}
+        seals = await _agents_seal_info(ids)
+        for a in agents:
+            a.update(authorship.get(a["id"], {}))
+            a["risk_tier"] = risk.get(a["id"])
+            a.update(seals.get(a["id"], {}))
+            # a UI não usa `config` (blob JSON) — fora do payload enriquecido;
+            # system_prompt FICA (pass-through detection + drawer o exibem).
+            a.pop("config", None)
     return {"agents": agents, "total": await agents_repo.count(**f)}
 
 async def _is_callable_externally(agent: dict) -> tuple[bool, str]:
@@ -323,6 +414,12 @@ async def update_agent(agent_id: str, data: AgentUpdate):
             version=upd.get("version") or existing.get("version"),
             source="update",
         )
+    # 66.2.0 (governança): o PUT não auditava — "última alteração por" era
+    # invisível na trilha. actor vem do fallback do AuditRepository (user_id_var).
+    await audit_repo.create({
+        "entity_type": "agent", "entity_id": agent_id, "action": "updated",
+        "details": json.dumps({"fields": sorted(upd.keys())}),
+    })
     return result
 
 
