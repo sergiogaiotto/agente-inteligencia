@@ -783,6 +783,14 @@ async def _run_evaluation_impl(
     judge_used_count = 0
     all_unsupported_claims: list[str] = []
     judge_model_observed: str | None = None
+    # Cobertura de evidência (66.4.4, achado E2E 2026-07-21): a coluna
+    # evidence_coverage existia no schema (DEFAULT 0) mas NUNCA teve writer —
+    # todo run exibia 0 fabricado, mesmo com grounding perfeito ao vivo. O
+    # sinal já existe por caso: evidence_score do dono do output (envelope
+    # top-level nos dois modos). Denominador = casos que EXECUTARAM (erro de
+    # invoke fica fora — não dá para saber se teria evidência).
+    grounded_cases = 0
+    coverage_evaluated = 0
 
     # ── Custo no ledger + teto por run (43.0.0, PR2 do arco Otimização) ──
     # O harness chama o engine DIRETO (sem a camada HTTP) e o gasto ficava
@@ -927,6 +935,10 @@ async def _run_evaluation_impl(
                         "final_state": _last_done.get("final_state") or result.get("final_state"),
                         "transitions": _last_done.get("transitions") or [],
                         "verification": _last_done.get("verification"),
+                        # Grounding do dono do output (66.4.4) — mesma defesa-
+                        # em-profundidade dos campos acima p/ envelopes antigos.
+                        "evidence_score": _last_done.get(
+                            "evidence_score", result.get("evidence_score")),
                     }
 
             # Estado de DECISÃO (Recommend/Refuse/Escalate) — não o terminal cru
@@ -976,6 +988,15 @@ async def _run_evaluation_impl(
                     await stamp_interaction_owner(result.get("interaction_id"), owner_user_id)
                 except Exception:
                     pass
+
+            # Cobertura de evidência por caso (66.4.4): o caso executou; conta
+            # como groundeado quando o dono do output tem evidence_score > 0.
+            _ev_score = result.get("evidence_score")
+            if not isinstance(_ev_score, (int, float)):
+                _ev_score = None
+            coverage_evaluated += 1
+            if _ev_score is not None and _ev_score > 0:
+                grounded_cases += 1
 
             dims = _extract_dim_scores(verification)
             dim_skipped = [k for k in ("factuality", "completeness", "tone", "safety")
@@ -1055,6 +1076,9 @@ async def _run_evaluation_impl(
                 "contract_compliant": dims["contract_compliant"],
                 "unsupported_claims_count": len(dims["unsupported_claims"]),
                 "dim_skipped": dim_skipped,
+                # Drill-down honesto da cobertura (66.4.4): o mesmo sinal que
+                # alimenta o evidence_coverage do run, por caso.
+                "evidence_score": _ev_score,
             }
             if failure_reasons:
                 entry["failure_reasons"] = failure_reasons
@@ -1428,9 +1452,18 @@ async def _run_evaluation_impl(
     while len(_details_json) > 32000 and _details_n > 10:
         _details_n = max(10, _details_n // 2)
         _details_json = json.dumps(details[:_details_n])
+    # Cobertura de evidência do run (66.4.4): fração dos casos EXECUTADOS cujo
+    # dono do output veio groundeado (evidence_score > 0). 0.0 legítimo quando
+    # nenhum caso executou ou nenhum tinha RAG — antes era 0 FABRICADO (coluna
+    # sem writer desde o schema).
+    evidence_coverage = (
+        round(grounded_cases / coverage_evaluated, 4) if coverage_evaluated else 0.0
+    )
+
     await eval_runs_repo.update(eval_id, {
         "total_cases": total, "passed": passed, "failed": failed,
         "accuracy": round(accuracy, 4),
+        "evidence_coverage": evidence_coverage,
         # accuracy_unweighted era calculada e retornada mas NUNCA persistida →
         # a linha "Acurácia bruta" do Comparar Execuções vinha sempre "—/—/—".
         "accuracy_unweighted": round(accuracy_unweighted, 4),
@@ -1466,6 +1499,7 @@ async def _run_evaluation_impl(
         "eval_id": eval_id, "release_id": release_id,
         "accuracy": round(accuracy, 4),
         "accuracy_unweighted": round(accuracy_unweighted, 4),
+        "evidence_coverage": evidence_coverage,
         "passed": passed, "failed": failed, "total": total,
         "correct_refusal_rate": round(correct_refusal_rate, 4),
         "false_positive_rate": round(false_positive_rate, 4),
