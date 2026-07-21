@@ -177,6 +177,11 @@ def test_alias_is_coupled_to_real_evaluator_contract():
     do resumo REAL de run_evaluation — se alguém renomear lá, este teste
     quebra junto (senão o alias vira no-op silencioso e a paridade some)."""
     import inspect
-    src = inspect.getsource(evaluator.run_evaluation)
+    # 66.4.1: run_evaluation virou FACHADA (guarda de terminal); o resumo real
+    # vive em _run_evaluation_impl — o guard segue os literais lá e vigia que
+    # a fachada continua delegando (senão o acoplamento morre em silêncio).
+    assert "_run_evaluation_impl(" in inspect.getsource(evaluator.run_evaluation), \
+        "run_evaluation deixou de delegar ao impl"
+    src = inspect.getsource(evaluator._run_evaluation_impl)
     assert '"eval_id": eval_id' in src, "resumo do evaluator renomeou eval_id"
     assert '"total": total' in src, "resumo do evaluator renomeou total"
