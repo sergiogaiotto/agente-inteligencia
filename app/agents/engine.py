@@ -3201,6 +3201,54 @@ async def execute_interaction(
     )
 
 
+def _is_quality_refusal(step: dict) -> bool:
+    """Recusa de QUALIDADE (evidência insuficiente) — nunca de política.
+
+    F-4 (66.5.0): a distinção já vive no transition_log da FSM: recusa por
+    'evidence_insufficient' degrada com elegância; 'policy_refusal' (dado de
+    terceiro, injeção, política) e 'risk_or_fraud' VENCEM SEMPRE (fail-closed)
+    — cair para um output anterior poderia vazar o que a recusa conteve."""
+    trs = [t for t in (step.get("transitions") or []) if isinstance(t, dict)]
+    names = {t.get("condition") for t in trs}
+    return ("evidence_insufficient" in names
+            and "policy_refusal" not in names
+            and "risk_or_fraud" not in names)
+
+
+def _is_grounded_answer_step(step: dict) -> bool:
+    """Step elegível como fallback da cadeia: ESPECIALISTA que respondeu de
+    verdade com verificação aprovada ('evidence_ok'). Routers/maestro ficam de
+    fora — o output deles é protocolo/orquestração, não resposta ao cliente."""
+    if step.get("status") != "completed" or step.get("agent_kind") != "subagent":
+        return False
+    if not (step.get("output") or "").strip():
+        return False
+    return any(isinstance(t, dict) and t.get("condition") == "evidence_ok"
+               for t in (step.get("transitions") or []))
+
+
+def _chain_quality_fallback(steps: list, owner_step: dict | None) -> dict | None:
+    """F-4 opção (b) — decisão de produto 2026-07-21: quando o DONO do output
+    da cadeia recusou por QUALIDADE, devolve o último especialista ANTERIOR
+    aprovado (a resposta boa que a recusa descartaria); None = mantém a recusa
+    (sem candidato, recusa de política, ou owner sem recusa)."""
+    if owner_step is None or not _is_quality_refusal(owner_step):
+        return None
+    idx = next((i for i, s in enumerate(steps) if s is owner_step), None)
+    if idx is None:
+        return None
+    for prev in reversed(steps[:idx]):
+        if _is_grounded_answer_step(prev):
+            return prev
+    return None
+
+
+_CHAIN_FALLBACK_NOTE = (
+    "Atenção: uma etapa complementar deste atendimento não pôde ser concluída "
+    "com segurança — um atendente humano confirmará os detalhes restantes."
+)
+
+
 def _decision_signals(draft: str) -> dict:
     """#684 (Fatia F): sinais de decisão (policy_refusal/needs_escalation) para a
     FSM, atrás da flag `verifier_signals_drive_fsm`. Retorna ``{}`` quando OFF →
@@ -5069,6 +5117,29 @@ async def execute_pipeline(
     # citou evidência). Fallback steps[-1]: cadeia sem nenhum produtor (tudo
     # skip/passthrough) preserva o comportamento antigo.
     _owner_step = owner_step if owner_step is not None else (steps[-1] if steps else None)
+    # ── F-4 opção (b) (66.5.0, decisão de produto 2026-07-21) ──
+    # Numa cadeia A→B, a recusa de QUALIDADE de B descartava a resposta boa e
+    # verificada de A (caso real: Comercial groundeado → Financeiro recusou o
+    # complemento → cliente perdeu os planos). Agora: o output final volta ao
+    # último ESPECIALISTA aprovado, com rodapé honesto; o step recusado segue
+    # INTACTO em pipeline_steps (trace/auditoria). Recusa de política/segurança
+    # nunca cai aqui (fail-closed no predicado).
+    _chain_fallback_applied = False
+    try:
+        _cand = _chain_quality_fallback(steps, _owner_step)
+        if _cand is not None:
+            final_output = _cand.get("output") or ""
+            owner_step = _cand
+            _owner_step = _cand
+            _chain_fallback_applied = True
+            all_diagnostics.append({
+                "level": "warning",
+                "text": ("Cadeia: recusa de qualidade no nó final — resposta "
+                         "mantida do último especialista aprovado, com aviso "
+                         "ao cliente (F-4/opção b)."),
+            })
+    except Exception:
+        logger.warning("pipeline.chain_refusal_fallback_failed", exc_info=True)
     # Contrato de Decisão (35.19.0): a linha DECISAO é protocolo de máquina — o
     # gate já a leu e steps/trace a preservam (auditoria). Sai APENAS da resposta
     # final apresentada (decisão de design 2026-07-15). Gate duplo no helper
@@ -5101,6 +5172,10 @@ async def execute_pipeline(
             _final_decision = await _decision_from_steps(steps)
         except Exception:
             _final_decision = None
+    # Rodapé do fallback da cadeia (F-4) — APÓS o strip/apresentação, para a
+    # nota nunca ser confundida com conteúdo do agente nem passar pelo strip.
+    if _chain_fallback_applied and final_output:
+        final_output = f"{final_output}\n\n{_CHAIN_FALLBACK_NOTE}"
     # Apresentação POR STEP (Backlog 4, review pré-push 36.2.1): os balões do
     # chat AO VIVO renderizam `pipeline_steps[].output` — sem isto a linha
     # DECISAO do agente intermediário aparecia durante a execução e SUMIA no F5
