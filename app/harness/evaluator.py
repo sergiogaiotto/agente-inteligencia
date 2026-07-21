@@ -23,6 +23,7 @@ import math
 import uuid
 import json
 import time
+import asyncio
 import logging
 from collections import Counter
 
@@ -501,6 +502,74 @@ async def run_evaluation(
     pipeline_id: str | None = None,
     owner_user_id: str | None = None,
     eval_id: str | None = None,
+    config_overrides: dict | None = None,
+    gold_split: str | None = None,
+    case_ids: list[str] | None = None,
+) -> dict:
+    """Fachada com GUARDA DE TERMINAL (66.4.1, achado E2E 2026-07-21).
+
+    O caminho síncrono cria a linha de eval_runs ('running') DENTRO do impl.
+    Se o run morre em voo — cliente desconecta (Starlette cancela o handler;
+    navegar para fora da página aborta o fetch), o wait_for da sonda estoura,
+    ou uma exceção escapa do loop — a linha ficava 'running' eterna e
+    INDELETÁVEL (DELETE recusa 'running') até o resume_on_boot do PRÓXIMO
+    restart. CancelledError é BaseException: o `except Exception` da rota
+    nunca a via.
+
+    Cura SÓ as linhas que ESTA chamada CRIOU (o impl registra no holder ao
+    criar). Linha-JOB (eval_id pré-claimado) fica de fora: jobs._run/_mark e
+    o reaper são os donos do terminal dela — curar aqui roubaria a semântica
+    de 'timeout'/'failed' deles (o _mark viraria no-op no status já terminal).
+    """
+    _row: dict = {}
+    try:
+        return await _run_evaluation_impl(
+            release_id, agent_id, gold_version, run_type,
+            pipeline_id=pipeline_id, owner_user_id=owner_user_id,
+            eval_id=eval_id, config_overrides=config_overrides,
+            gold_split=gold_split, case_ids=case_ids, _row_holder=_row,
+        )
+    except asyncio.CancelledError:
+        await _cure_created_row(
+            _row.get("created_eval_id"), "interrupted", "run_cancelled",
+            "run cancelado em voo (cliente desconectou ou timeout do chamador) "
+            "— custos dos casos já avaliados permanecem no ledger")
+        raise
+    except Exception:
+        await _cure_created_row(
+            _row.get("created_eval_id"), "failed", "eval_execution_failed",
+            "falha ao executar o harness — consulte os logs "
+            "(event=eval_run_cure)")
+        raise
+
+
+async def _cure_created_row(eval_id: str | None, status: str,
+                            error: str, gate_reason: str) -> None:
+    """Terminal best-effort da linha órfã — NUNCA mascara a exceção original.
+
+    Reusa jobs._mark: UPDATE guardado por status IN ('queued','running') com
+    retry — idempotente se o impl já persistiu um terminal. shield: a cura
+    completa mesmo se um segundo cancel chegar durante o await."""
+    if not eval_id:
+        return
+    try:
+        from app.harness.jobs import _mark
+        await asyncio.shield(_mark(eval_id, status, error=error,
+                                   gate_reason=gate_reason))
+        logger.warning("event=eval_run_cure eval_id=%s status=%s", eval_id, status)
+    except BaseException:
+        logger.warning("event=eval_run_cure_failed eval_id=%s status=%s",
+                       eval_id, status)
+
+
+async def _run_evaluation_impl(
+    release_id: str,
+    agent_id: str | None = None,
+    gold_version: str = "latest",
+    run_type: str = "baseline",
+    pipeline_id: str | None = None,
+    owner_user_id: str | None = None,
+    eval_id: str | None = None,
     # Experimento (44.0.0, PR3a): overrides efêmeros do texto livre aplicados
     # via seam do engine — SÓ modo agente (a rota valida; pipeline otimiza um
     # agente por vez, decisão do plano). None = run normal.
@@ -511,6 +580,9 @@ async def run_evaluation(
     # (sonda go/no-go / minibatch — uso interno, sem superfície HTTP).
     gold_split: str | None = None,
     case_ids: list[str] | None = None,
+    # Guarda de terminal (66.4.1): a fachada cura a linha criada aqui se o
+    # run morrer em voo — o impl registra o id no holder logo após o create.
+    _row_holder: dict | None = None,
 ) -> dict:
     """Executa harness contra Golden Dataset e produz relatório multi-dim.
 
@@ -583,6 +655,10 @@ async def run_evaluation(
             # avisa quando o par foi medido só no TREINO.
             "gold_split": gold_split,
         })
+        # Linha criada por ESTA chamada = curável pela fachada se o run
+        # morrer em voo (linha-JOB pré-claimada fica com jobs._mark/reaper).
+        if _row_holder is not None:
+            _row_holder["created_eval_id"] = eval_id
     elif gold_split:
         # Linha-job pré-criada (202): carimba a fatia claimada pelo worker.
         await eval_runs_repo.update(eval_id, {"gold_split": gold_split})
