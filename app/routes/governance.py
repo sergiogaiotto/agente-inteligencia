@@ -110,6 +110,9 @@ def _audit_row(r: dict, actor_names: dict | None = None) -> dict:
         "actor_name": (actor_names or {}).get(actor, actor),
         "ip": r.get("ip"),
         "created_at": str(r.get("created_at") or ""),
+        # 66.0.0: painel de detalhe da linha (UI) — details já é redigido na
+        # escrita quando vem de input de usuário (redact_for_log).
+        "details": r.get("details") or "",
     }
 
 
@@ -156,7 +159,12 @@ async def governance_security_events(limit: int = 50, user=Depends(_gate)):
     counts: Counter = Counter()
     for r in rows:
         a = (r.get("action") or "").lower()
-        if "injection" in a:
+        # 66.0.0: warn ganhou evento próprio (prompt_injection_warned) — antes
+        # a zona cinza da guarda morria em memória; separar evita inflar o
+        # contador de bloqueios com avisos.
+        if "injection_warned" in a:
+            counts["injecoes_avisadas"] += 1
+        elif "injection" in a:
             counts["injecoes_bloqueadas"] += 1
         if "->refuse" in a:
             counts["recusas"] += 1
@@ -169,6 +177,212 @@ async def governance_security_events(limit: int = 50, user=Depends(_gate)):
         "counts": dict(counts),
         "scanned": len(rows),
         "events": [_audit_row(r, names) for r in sec],
+    }
+
+
+# ── Exportação p/ Excel (66.0.0) — CSV com BOM, padrão da plataforma ─────────
+def _audit_csv_response(rows: list[dict], names: dict, filename: str):
+    """CSV UTF-8 com BOM (Excel abre acentos pt-BR sem mojibake) + neutralização
+    de CSV-injection (células iniciadas em =+-@ viram texto) — mesmo padrão do
+    export de verifications do dashboard."""
+    import csv
+    import io
+
+    def _safe(v):
+        v = "" if v is None else str(v)
+        if v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+            return "'" + v
+        return v
+
+    cols = ["id", "created_at", "action", "entity_type", "entity_id",
+            "actor", "actor_name", "ip", "details"]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(cols)
+    for r in rows:
+        row = _audit_row(r, names)
+        w.writerow([_safe(row.get(c)) for c in cols])
+    from fastapi import Response
+    return Response(
+        "\N{ZERO WIDTH NO-BREAK SPACE}" + buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/audit/export")
+async def governance_audit_export(user=Depends(_gate)):
+    """Trilha de auditoria completa (até 1000 mais recentes) para Excel."""
+    rows = await audit_repo.find_all(limit=1000)
+    rows = sorted(rows, key=lambda r: r.get("id") or 0, reverse=True)
+    names = await _actor_names(rows)
+    return _audit_csv_response(rows, names, "auditoria-ia-responsavel.csv")
+
+
+@router.get("/security-events/export")
+async def governance_security_events_export(user=Depends(_gate)):
+    """Eventos de segurança (subset do audit_log) para Excel."""
+    rows = await audit_repo.find_all(limit=1000)
+    sec = [r for r in rows if _is_security_action(r.get("action"))]
+    sec = sorted(sec, key=lambda r: r.get("id") or 0, reverse=True)
+    names = await _actor_names(sec)
+    return _audit_csv_response(sec, names, "eventos-seguranca.csv")
+
+
+# ── Cockpit Guardrails (66.0.0 — Fase 1: visibilidade, zero enforcement) ─────
+# Mapa entrada→modelo→saída com o estado REAL de cada guarda (lido das flags
+# vivas) + cobertura honesta (inclusive gaps "não implementado"). Nada aqui
+# altera decisão de runtime: é leitura + simulação dry-run.
+@router.get("/guardrails")
+async def guardrails_map(user=Depends(_gate)):
+    s = get_settings()
+    _b = float(getattr(s, "prompt_guard_block_threshold", 0.7))
+    _w = float(getattr(s, "prompt_guard_warn_threshold", 0.4))
+    dlp_on = bool(getattr(s, "dlp_enabled", True))
+    stages = [
+        {"stage": "entrada", "label": "Entrada — antes do LLM", "guards": [
+            {"key": "prompt_guard", "label": "Guarda de injeção (OWASP LLM01)",
+             "deterministic": True, "implemented": True,
+             "on": bool(getattr(s, "prompt_guard_enabled", True)),
+             "detail": f"regex/heurística em 5 camadas (en/pt/es) · bloqueia ≥ {_b:.2f} · avisa ≥ {_w:.2f}",
+             "coverage": "caminho FSM (agentes LLM); o caminho declarativo NÃO passa pela guarda",
+             "config_tab": "security"},
+            {"key": "dlp_pre_llm", "label": "DLP pré-LLM (PII não sai ao provedor)",
+             "deterministic": True, "implemented": True,
+             "on": dlp_on and bool(getattr(s, "dlp_redact_before_llm", False)),
+             "detail": "redige mensagem, anexos, evidências (inclusive rerank), histórico e pergunta do juiz",
+             "coverage": "exceções: embed_query cru (recall) e imagens não redigidas",
+             "config_tab": "security"},
+            {"key": "opa_interaction", "label": "PolicyCheck via OPA (interaction.rego)",
+             "deterministic": True, "implemented": True,
+             "on": bool(getattr(s, "opa_enabled", False)),
+             "detail": "status do usuário + score de injeção (o sinal rate_limit é enviado fixo exceeded=false — o middleware barra antes); guarda local segue autoritativa (AND)",
+             "coverage": "decisões auditadas no log da aba Políticas",
+             "config_tab": "policies"},
+            {"key": "evidence_acl", "label": "Evidence ACL — no read up",
+             "deterministic": True, "implemented": True,
+             "on": bool(getattr(s, "evidence_acl_enabled", False)),
+             "detail": "clearance do usuário × confidencialidade da fonte no retrieval",
+             "coverage": "todos os call sites do retriever passam clearance (teste-guarda)",
+             "config_tab": "policies"},
+            {"key": "rate_limit", "label": "Rate limit por rota",
+             "deterministic": True, "implemented": True,
+             "on": bool(getattr(s, "rate_limit_enabled", True)),
+             "detail": (
+                 f"API {int(getattr(s, 'rate_limit_default_per_min', 300))}/janela · "
+                 f"rotas LLM {int(getattr(s, 'rate_limit_workspace_per_min', 20))}/janela · "
+                 f"login {int(getattr(s, 'rate_limit_auth_per_min', 10))}/janela "
+                 f"(janela {int(getattr(s, 'rate_limit_window_seconds', 60))}s) — excedente recebe 429"
+             ),
+             "coverage": "3 baldes independentes por prefixo de rota", "config_tab": ""},
+        ]},
+        {"stage": "modelo", "label": "Na LLM — durante a geração", "guards": [
+            {"key": "grounding", "label": "Grounding estrito",
+             "deterministic": False, "implemented": True,
+             "on": bool(getattr(s, "grounding_strict", True)),
+             "detail": "responde SÓ com base em evidência; escape hatch por agente (allow_general_knowledge); router isento",
+             "coverage": "diretiva + guarda de recusa no engine", "config_tab": ""},
+            {"key": "opa_tools", "label": "Gate de tools via OPA (tool_invocation.rego)",
+             "deterministic": True, "implemented": True,
+             "on": bool(getattr(s, "opa_enabled", False)),
+             "detail": "sensibilidade da tool × papel do dono da sessão; rótulo não-reconhecido = fail-closed; tool SEM classificação = low (liberada, retrocompat)",
+             "coverage": "toda chamada de tool no harness", "config_tab": "policies"},
+            {"key": "skill_guardrails", "label": "Guardrails declarativos da skill",
+             "deterministic": False, "implemented": True, "on": True,
+             "detail": "seção ## Guardrails do SKILL.md entra no system prompt do agente",
+             "coverage": "por agente; texto livre (não é política executável — candidata à Fase 3)",
+             "config_tab": ""},
+            {"key": "circuit_breaker", "label": "Circuit breaker por provedor",
+             "deterministic": True, "implemented": True,
+             "on": bool(getattr(s, "circuit_breaker_enabled", True)),
+             "detail": "abre por provedor após falhas consecutivas (Redis, cross-worker)",
+             "coverage": "geração dos agentes (cadeia de resiliência), juiz e wizard; chamadas diretas get_provider().generate() (ex.: reranker) ficam FORA",
+             "config_tab": ""},
+        ]},
+        {"stage": "saida", "label": "Saída — depois da geração", "guards": [
+            {"key": "verifier", "label": "Verifier / juiz multidimensional",
+             "deterministic": False, "implemented": True,
+             "on": bool(getattr(s, "verifier_v2_enabled", False)),
+             "detail": "grounding, contrato e risco; posturas sync/async por pipeline (fraude: reservado — só existe no verificador legado)",
+             "coverage": "persiste em verifications (auditável em /quality)", "config_tab": ""},
+            {"key": "contract", "label": "Contrato de saída + retry",
+             "deterministic": True, "implemented": True,
+             "on": bool(getattr(s, "verifier_v2_enabled", False)),
+             "detail": "valida ## Output Contract da skill via Verifier v2; retry corretivo gateado por verifier_contract_retry_enabled",
+             "coverage": "quando a skill declara contrato E o Verifier v2 está ligado; steps standard de pipeline auto-passam sem juiz",
+             "config_tab": ""},
+            {"key": "dlp_persist", "label": "DLP na persistência",
+             "deterministic": True, "implemented": True, "on": dlp_on,
+             "detail": "PII redigida nas colunas *_redacted (histórico e UI)",
+             "coverage": "todos os writers de turnos (teste-guarda repo-wide)",
+             "config_tab": "security"},
+            {"key": "output_redaction", "label": "Redação de PII na RESPOSTA ao usuário",
+             "deterministic": True, "implemented": False, "on": False,
+             "detail": "hoje a resposta entregue sai crua — só a persistência é redigida",
+             "coverage": "gap conhecido — Fase 2 do módulo de Guardrails", "config_tab": ""},
+            {"key": "leak_detector", "label": "Detector de vazamento (prompt/confidencial)",
+             "deterministic": True, "implemented": False, "on": False,
+             "detail": "checaria a resposta contra system prompt e evidência confidencial",
+             "coverage": "gap conhecido — Fase 2", "config_tab": ""},
+            {"key": "denied_topics", "label": "Tópicos negados por agente",
+             "deterministic": False, "implemented": False, "on": False,
+             "detail": "lista de temas proibidos avaliada na saída",
+             "coverage": "gap conhecido — Fase 2", "config_tab": ""},
+        ]},
+    ]
+    # contadores REAIS do audit_log (mesma varredura do security-events)
+    rows = await audit_repo.find_all(limit=1000)
+    counts: Counter = Counter()
+    for r in rows:
+        a = (r.get("action") or "").lower()
+        if "injection_warned" in a:
+            counts["injecoes_avisadas"] += 1
+        elif "injection" in a:
+            counts["injecoes_bloqueadas"] += 1
+        if r.get("entity_type") == "policy_decision" and (r.get("action") or "") == "deny":
+            counts["policy_denies"] += 1
+    return {"stages": stages, "counters": dict(counts), "scanned": len(rows)}
+
+
+class GuardrailSimulate(BaseModel):
+    text: str
+
+
+@router.post("/guardrails/simulate")
+async def guardrails_simulate(data: GuardrailSimulate, user=Depends(_gate)):
+    """What-if dos guardrails determinísticos de ENTRADA — dry-run puro: roda o
+    detector de injeção com os limiares VIGENTES e o DLP sobre o texto, sem
+    auditar, sem persistir e sem chamar LLM nenhum."""
+    text = (data.text or "")[:20000]
+    if not text.strip():
+        raise HTTPException(422, "texto vazio")
+    from app.core.prompt_guard import detect as _detect
+    from app.core.dlp import count_pii, redact
+    s = get_settings()
+    g = _detect(
+        text,
+        block_threshold=float(getattr(s, "prompt_guard_block_threshold", 0.7)),
+        warn_threshold=float(getattr(s, "prompt_guard_warn_threshold", 0.4)),
+    )
+    pii = count_pii(text)
+    return {
+        "prompt_guard": {
+            "enabled": bool(getattr(s, "prompt_guard_enabled", True)),
+            "score": round(float(g.score), 3),
+            "blocked": bool(g.blocked),
+            "warn": bool(g.warn),
+            "matched": list(g.matched_patterns)[:12],
+            "block_threshold": float(getattr(s, "prompt_guard_block_threshold", 0.7)),
+            "warn_threshold": float(getattr(s, "prompt_guard_warn_threshold", 0.4)),
+        },
+        "dlp": {
+            "enabled": bool(getattr(s, "dlp_enabled", True)),
+            "pre_llm_enabled": bool(getattr(s, "dlp_enabled", True)) and bool(getattr(s, "dlp_redact_before_llm", False)),
+            "counts": {"cpf": pii.cpf, "cnpj": pii.cnpj, "email": pii.email,
+                       "phone": pii.phone, "card": pii.card, "cep": pii.cep,
+                       "total": pii.total},
+            "redacted_preview": redact(text)[:2000],
+        },
     }
 
 
