@@ -6,10 +6,12 @@
             <h1 class="text-[16px] font-bold text-brand-900 flex items-center gap-2">IA Responsável</h1>
             <p class="text-[12px] text-surface-500 max-w-2xl mt-0.5">O painel único de governança, confiança e conformidade — reúne o que estava espalhado ou só no backend. Acesso Root/Admin/Governança.</p>
         </div>
-        <div class="flex-none text-center rounded-xl border border-surface-200 bg-white px-4 py-2" data-testid="ir-posture">
+        <button @click="tab = 'overview'" data-testid="ir-posture"
+                title="Percentual dos controles de governança realmente LIGADOS agora: média dos 5 pilares da Visão geral (Privacidade, Segurança, Transparência, Robustez e Auditabilidade), cada um medindo a fração de controles ativos. 100% = todos os controles ligados. Clique para ver o detalhe pilar a pilar."
+                class="flex-none text-center rounded-xl border border-surface-200 bg-white px-4 py-2 hover:border-brand-300 transition-colors cursor-pointer">
             <div class="text-[24px] font-bold leading-none" :class="postureColor" x-text="summary ? summary.posture_score + '%' : '—'"></div>
-            <div class="text-[10px] text-surface-400 mt-1">postura</div>
-        </div>
+            <div class="text-[10px] text-surface-400 mt-1 leading-tight">controles de<br>governança ativos</div>
+        </button>
     </div>
 
     <!-- Abas -->
@@ -469,49 +471,73 @@
                 </div>
             </template>
         </div>
-        <div class="rounded-xl border border-surface-200 bg-white overflow-hidden max-h-[52vh] overflow-y-auto" data-testid="ir-risk-list">
-            <template x-for="it in (risk ? risk.items : [])" :key="it.entity_id">
-                <div class="flex items-center gap-2 px-3 py-2 border-t border-surface-100 text-[11.5px] first:border-t-0">
-                    <span class="font-semibold text-brand-900 truncate" x-text="it.name"></span>
-                    <span class="text-[9px] uppercase tracking-wide text-surface-400 flex-none" x-text="it.kind"></span>
-                    <span class="ml-auto flex items-center gap-2 flex-none">
-                        <span class="rounded px-1.5 py-0.5 text-[10px]" :class="it.tier ? tierCls(it.tier) : 'bg-surface-100 text-surface-500'"
-                              x-text="it.tier ? tierLabel(it.tier) : ('sugerido: ' + tierLabel(it.suggested_tier))"></span>
-                        <button @click="openRiskModal(it)" class="text-[10px] text-brand-600 hover:text-brand-800">classificar</button>
-                    </span>
-                </div>
-            </template>
-            <p x-show="risk && !risk.items.length" class="px-3 py-4 text-[11px] text-surface-400">Nenhum agente para classificar.</p>
-        </div>
-
-        <template x-if="riskModal.open">
-            <div class="fixed inset-0 z-[9990] flex items-center justify-center p-4">
-                <div class="fixed inset-0 bg-black/40" @click="riskModal.open = false"></div>
-                <div class="relative z-10 w-full max-w-md rounded-2xl bg-white shadow-2xl border border-surface-200 p-5" data-testid="ir-risk-modal">
-                    <h3 class="text-[14px] font-bold text-brand-900 mb-0.5">Classificar risco</h3>
-                    <p class="text-[11px] text-surface-500 mb-3" x-text="riskModal.name"></p>
-                    <div class="space-y-3">
-                        <div>
-                            <label class="block text-[11px] font-semibold text-surface-500 mb-1">Nível de risco <span class="font-normal text-surface-400">(sugerido: <span x-text="tierLabel(riskModal.suggested)"></span>)</span></label>
-                            <select x-model="riskModal.tier" class="w-full rounded-lg border border-surface-200 px-3 py-2.5 text-[13px] outline-none">
-                                <option value="minimal">Mínimo</option>
-                                <option value="limited">Limitado (transparência)</option>
-                                <option value="high">Alto (obrigações estritas)</option>
-                                <option value="unacceptable">Inaceitável (proibido)</option>
-                            </select>
-                        </div>
-                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Justificativa</label>
-                            <textarea x-model="riskModal.rationale" rows="2" placeholder="por que este nível" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400"></textarea></div>
-                        <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Mitigações</label>
-                            <textarea x-model="riskModal.mitigations" rows="2" placeholder="controles aplicados (ex.: revisão humana obrigatória)" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400"></textarea></div>
+        <div class="grid gap-4 items-start" :class="riskSel ? 'lg:grid-cols-2' : ''">
+            <div class="rounded-xl border border-surface-200 bg-white overflow-hidden max-h-[52vh] overflow-y-auto" data-testid="ir-risk-list">
+                <template x-for="it in (risk ? risk.items : [])" :key="it.entity_id">
+                    <div @click="selectRisk(it)"
+                         class="flex items-center gap-2 px-3 py-2 border-t border-surface-100 text-[11.5px] first:border-t-0 cursor-pointer transition-colors"
+                         :class="riskSel && riskSel.entity_id === it.entity_id ? 'bg-brand-50/60' : 'hover:bg-surface-50'">
+                        <span class="font-semibold text-brand-900 truncate" x-text="it.name"></span>
+                        <span class="text-[9px] uppercase tracking-wide text-surface-400 flex-none" x-text="it.kind"></span>
+                        <span class="ml-auto flex items-center gap-2 flex-none">
+                            <span class="rounded px-1.5 py-0.5 text-[10px]" :class="it.tier ? tierCls(it.tier) : 'bg-surface-100 text-surface-500'"
+                                  x-text="it.tier ? tierLabel(it.tier) : ('sugerido: ' + tierLabel(it.suggested_tier))"></span>
+                            <button @click.stop="selectRisk(it, true)" class="text-[10px] text-brand-600 hover:text-brand-800">classificar</button>
+                        </span>
                     </div>
-                    <div class="mt-4 flex justify-end gap-2">
-                        <button @click="riskModal.open = false" class="rounded-lg border border-surface-200 px-4 py-2 text-[13px] text-surface-600 hover:bg-surface-50">Cancelar</button>
-                        <button @click="saveRisk()" :disabled="riskModal.busy" data-testid="ir-risk-save" class="rounded-lg bg-brand-500 px-5 py-2 text-[13px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50"><span x-text="riskModal.busy ? 'Salvando…' : 'Salvar classificação'"></span></button>
-                    </div>
-                </div>
+                </template>
+                <p x-show="risk && !risk.items.length" class="px-3 py-4 text-[11px] text-surface-400">Nenhum agente para classificar.</p>
             </div>
-        </template>
+
+            <div x-show="riskSel" class="rounded-xl border border-surface-200 bg-white p-4 self-start lg:sticky lg:top-4" data-testid="ir-risk-detail">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="text-[13px] font-bold text-brand-900" x-text="riskSel ? riskSel.name : ''"></span>
+                    <span class="text-[9px] uppercase tracking-wide text-surface-400" x-text="riskSel ? riskSel.kind : ''"></span>
+                    <span x-show="riskSel && riskSel.domain" class="text-[9px] text-surface-400" x-text="riskSel ? ('· ' + riskSel.domain) : ''"></span>
+                    <button @click="riskSel = null" class="ml-auto text-surface-400 hover:text-surface-600 text-[16px] leading-none flex-none">×</button>
+                </div>
+                <template x-if="riskSel">
+                    <div class="space-y-3 text-[11.5px]">
+                        <div>
+                            <div class="text-[9px] uppercase text-surface-400 mb-1">Sinais considerados pela sugestão</div>
+                            <template x-for="s in (riskSel.signals || [])" :key="s.label">
+                                <div class="flex items-center gap-1.5 py-0.5">
+                                    <span :class="s.warn ? 'text-amber-600' : 'text-emerald-600'" x-text="s.warn ? '⚠' : '✓'"></span>
+                                    <span class="text-surface-600" x-text="s.label"></span>
+                                </div>
+                            </template>
+                            <p class="text-[10.5px] text-surface-400 mt-1">Regra da sugestão: 3 sinais de atenção = <strong>Alto</strong> · 1–2 = <strong>Limitado</strong> · nenhum = <strong>Mínimo</strong>. A sugestão vem dos campos reais do agente; <strong>a decisão é humana</strong> e auditada.</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-[10px] text-surface-400">Sugerido:</span>
+                            <span class="rounded px-1.5 py-0.5 text-[10px]" :class="tierCls(riskSel.suggested_tier)" x-text="tierLabel(riskSel.suggested_tier)"></span>
+                            <template x-if="riskSel.tier">
+                                <span class="text-[10px] text-surface-400">· Classificado: <span class="rounded px-1.5 py-0.5" :class="tierCls(riskSel.tier)" x-text="tierLabel(riskSel.tier)"></span> por <span x-text="riskSel.classified_by || '—'"></span> <span x-text="riskSel.classified_at ? ('em ' + fmtWhen(riskSel.classified_at)) : ''"></span></span>
+                            </template>
+                            <template x-if="!riskSel.tier"><span class="text-[10px] text-amber-600">· ainda não classificado</span></template>
+                        </div>
+                        <div class="border-t border-surface-100 pt-3 space-y-2.5">
+                            <div>
+                                <label class="block text-[11px] font-semibold text-surface-500 mb-1">Nível de risco</label>
+                                <select x-model="riskForm.tier" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12.5px] outline-none">
+                                    <option value="minimal">Mínimo</option>
+                                    <option value="limited">Limitado (transparência)</option>
+                                    <option value="high">Alto (obrigações estritas)</option>
+                                    <option value="unacceptable">Inaceitável (proibido)</option>
+                                </select>
+                            </div>
+                            <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Justificativa</label>
+                                <textarea x-model="riskForm.rationale" rows="2" placeholder="por que este nível" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400"></textarea></div>
+                            <div><label class="block text-[11px] font-semibold text-surface-500 mb-1">Mitigações</label>
+                                <textarea x-model="riskForm.mitigations" rows="2" placeholder="controles aplicados (ex.: revisão humana obrigatória)" class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400"></textarea></div>
+                            <div class="flex justify-end">
+                                <button @click="saveRisk()" :disabled="riskBusy" data-testid="ir-risk-save" class="rounded-lg bg-brand-500 px-4 py-2 text-[12.5px] font-semibold text-white hover:bg-brand-600 disabled:opacity-50"><span x-text="riskBusy ? 'Salvando…' : 'Salvar classificação'"></span></button>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
     </div>
 
     <!-- ─── Conformidade (crosswalk de frameworks) ─── -->
@@ -519,25 +545,59 @@
         <p class="text-[11px] text-surface-500">Cobertura por framework — <strong>computada dos controles reais</strong> da plataforma. Um requisito é coberto se algum controle que o atende está ativo. Selecione um card abaixo para ver, requisito a requisito, o que está coberto e por qual controle (passe o mouse sobre um card para saber do que trata cada framework).</p>
         <div class="grid grid-cols-2 sm:grid-cols-5 gap-2" data-testid="ir-crosswalk">
             <template x-for="(f, i) in (crosswalk ? crosswalk.frameworks : [])" :key="f.framework">
-                <button @click="crossSel = i" :title="fwTip(f.framework)" class="text-left rounded-lg border p-2.5 transition-colors" :class="crossSel === i ? 'border-brand-400 bg-brand-50/50' : 'border-surface-200 bg-white hover:border-brand-200'">
+                <button @click="crossSel = i; crossReqSel = null" :title="fwTip(f.framework)" class="text-left rounded-lg border p-2.5 transition-colors" :class="crossSel === i ? 'border-brand-400 bg-brand-50/50' : 'border-surface-200 bg-white hover:border-brand-200'">
                     <div class="text-[11px] font-semibold text-brand-900 leading-tight mb-1.5" x-text="f.framework"></div>
                     <div class="h-1.5 rounded-full bg-surface-100 overflow-hidden mb-1" :title="'Cobertura: ' + f.covered + ' de ' + f.total + ' requisitos atendidos por algum controle ativo'"><div class="h-full" :class="f.pct >= 75 ? 'bg-emerald-500' : (f.pct >= 50 ? 'bg-amber-500' : 'bg-rose-500')" :style="'width:' + f.pct + '%'"></div></div>
                     <div class="text-[10px] text-surface-500" :title="'Cobertura: ' + f.covered + ' de ' + f.total + ' requisitos atendidos por algum controle ativo'" x-text="f.pct + '% · ' + f.covered + '/' + f.total"></div>
                 </button>
             </template>
         </div>
-        <div x-show="crosswalk" class="rounded-xl border border-surface-200 bg-white p-4" data-testid="ir-crosswalk-detail">
-            <div class="text-[13px] font-semibold text-brand-900 mb-2" x-text="curFw ? curFw.framework : ''"></div>
-            <template x-for="r in (curFw ? curFw.requirements : [])" :key="r.requirement">
-                <div class="flex items-start gap-2 py-1.5 border-t border-surface-100 first:border-t-0 text-[11.5px]">
-                    <span class="flex-none mt-0.5" :class="r.covered ? 'text-emerald-600' : 'text-rose-600'" :title="r.covered ? 'Requisito coberto: pelo menos um controle que o atende está ativo' : 'Requisito descoberto: nenhum controle que o atende está ativo'" x-text="r.covered ? '✓' : '✗'"></span>
-                    <span class="text-surface-700 flex-1" :title="'Controles que atendem este requisito: ' + r.controls.map(k => ctrlLabel(k)).join(', ')" x-text="r.requirement"></span>
-                    <span class="flex flex-wrap gap-1 justify-end flex-none max-w-[55%]">
-                        <template x-for="k in r.satisfied_by" :key="k"><span class="rounded bg-emerald-50 text-emerald-700 px-1.5 py-0.5 text-[9.5px]" :title="'Controle ativo na plataforma que atende este requisito'" x-text="ctrlLabel(k)"></span></template>
-                        <template x-if="!r.satisfied_by.length"><span class="text-[9.5px] text-rose-500" :title="'Ligue um destes controles para cobrir o requisito'" x-text="'sem controle ativo (' + r.controls.map(k => ctrlLabel(k)).join(', ') + ')'"></span></template>
-                    </span>
+        <div class="grid gap-4 items-start" :class="crossReqSel ? 'lg:grid-cols-2' : ''">
+            <div x-show="crosswalk" class="rounded-xl border border-surface-200 bg-white p-4" data-testid="ir-crosswalk-detail">
+                <div class="text-[13px] font-semibold text-brand-900 mb-2" x-text="curFw ? curFw.framework : ''"></div>
+                <template x-for="r in (curFw ? curFw.requirements : [])" :key="r.requirement">
+                    <div @click="crossReqSel = (crossReqSel && crossReqSel.requirement === r.requirement) ? null : r"
+                         class="flex items-start gap-2 py-1.5 border-t border-surface-100 first:border-t-0 text-[11.5px] cursor-pointer transition-colors -mx-2 px-2 rounded"
+                         :class="crossReqSel && crossReqSel.requirement === r.requirement ? 'bg-brand-50/60' : 'hover:bg-surface-50'">
+                        <span class="flex-none mt-0.5" :class="r.covered ? 'text-emerald-600' : 'text-rose-600'" x-text="r.covered ? '✓' : '✗'"></span>
+                        <span class="text-surface-700 flex-1" x-text="r.requirement"></span>
+                        <span class="flex flex-wrap gap-1 justify-end flex-none max-w-[55%]">
+                            <template x-for="k in r.satisfied_by" :key="k"><span class="rounded bg-emerald-50 text-emerald-700 px-1.5 py-0.5 text-[9.5px]" x-text="ctrlLabel(k)"></span></template>
+                            <template x-if="!r.satisfied_by.length"><span class="text-[9.5px] text-rose-500">sem controle ativo</span></template>
+                        </span>
+                    </div>
+                </template>
+            </div>
+            <div x-show="crossReqSel" class="rounded-xl border border-surface-200 bg-white p-4 self-start lg:sticky lg:top-4" data-testid="ir-crosswalk-req-detail">
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="text-[13px] font-bold text-brand-900" x-text="crossReqSel ? crossReqSel.requirement : ''"></span>
+                    <button @click="crossReqSel = null" class="ml-auto text-surface-400 hover:text-surface-600 text-[16px] leading-none flex-none">×</button>
                 </div>
-            </template>
+                <template x-if="crossReqSel">
+                    <div class="space-y-3 text-[11.5px]">
+                        <div class="flex items-center gap-2">
+                            <span class="text-[10px] text-surface-400" x-text="curFw ? curFw.framework : ''"></span>
+                            <span class="rounded px-1.5 py-0.5 text-[10px] font-semibold" :class="crossReqSel.covered ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'" x-text="crossReqSel.covered ? 'COBERTO' : 'DESCOBERTO'"></span>
+                        </div>
+                        <p class="text-[11px] text-surface-500" x-text="fwTip(curFw ? curFw.framework : '')"></p>
+                        <div>
+                            <div class="text-[9px] uppercase text-surface-400 mb-1">Regras consideradas</div>
+                            <p class="text-[10.5px] text-surface-500 mb-1.5">O requisito conta como coberto se <strong>pelo menos um</strong> dos controles abaixo estiver ativo na plataforma <strong>agora</strong> (estado lido das flags vivas — nada declaratório):</p>
+                            <template x-for="k in crossReqSel.controls" :key="k">
+                                <div class="flex items-center gap-2 py-1 border-t border-surface-100 first:border-t-0">
+                                    <span :class="ctrlActive(k) ? 'text-emerald-600' : 'text-surface-300'" x-text="ctrlActive(k) ? '●' : '○'"></span>
+                                    <span class="text-surface-700" x-text="ctrlLabel(k)"></span>
+                                    <span class="ml-auto text-[9.5px]" :class="ctrlActive(k) ? 'text-emerald-600' : 'text-surface-400'" x-text="ctrlActive(k) ? 'ativo — conta para a cobertura' : 'inativo'"></span>
+                                </div>
+                            </template>
+                        </div>
+                        <div x-show="!crossReqSel.covered" class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[10.5px] text-amber-700">
+                            Para cobrir este requisito, ligue um dos controles acima: <span x-text="crossReqSel.controls.filter(k => !ctrlActive(k)).map(k => ctrlLabel(k) + (ctrlWhere(k) ? ' (' + ctrlWhere(k) + ')' : '')).join(' · ')"></span>
+                        </div>
+                        <p class="text-[10px] text-surface-400">Mapeamento indicativo — não substitui parecer jurídico. A cobertura reflete a existência do controle técnico, não a conformidade formal do processo.</p>
+                    </div>
+                </template>
+            </div>
         </div>
         <p class="text-[10px] text-surface-400">Mapeamento indicativo (não é parecer jurídico). Ligar OPA / Verifier / retenção eleva a cobertura.</p>
     </div>
@@ -670,10 +730,10 @@ function iaResponsavel() {
             { k: 'security', l: 'Segurança' },
             { k: 'guardrails', l: 'Guardrails' },
             { k: 'attest', l: 'Prontidão' },
-            { k: 'crosswalk', l: 'Conformidade' },
             { k: 'risk', l: 'Risco' },
             { k: 'audit', l: 'Auditoria' },
             { k: 'privacy', l: 'Privacidade & LGPD' },
+            { k: 'crosswalk', l: 'Conformidade' },
             { k: 'overview', l: 'Visão geral' },
         ],
         summary: null, audit: [], security: null,
@@ -683,14 +743,14 @@ function iaResponsavel() {
         pageSizes: [{ v: 10, l: '10' }, { v: 30, l: '30' }, { v: 50, l: '50' }, { v: 0, l: 'Todos' }],
         cards: [], cardDetail: null,
         risk: null,
-        riskModal: { open: false, entity_type: '', entity_id: '', name: '', suggested: 'minimal', tier: 'minimal', rationale: '', mitigations: '', busy: false },
+        riskSel: null, riskForm: { tier: 'minimal', rationale: '', mitigations: '' }, riskBusy: false,
         guard: { prompt_guard_enabled: true, prompt_guard_block_threshold: 0.7, prompt_guard_warn_threshold: 0.4, dlp_enabled: true, dlp_redact_before_llm: false },
         guardSnapshot: '', guardBusy: false,
         opa: null, opaCfg: { enabled: false, failsafe_open: true, timeout_seconds: 2.0, evidence_acl: false }, opaCfgSnapshot: '', opaBusy: false, opaLoaded: false,
         opaPolicies: [], opaPoliciesSource: '', opaDecisions: [],
         opaSim: { package: 'tool_invocation', input: '', result: null, busy: false },
         opaBuf: {}, opaOrig: {}, opaEditErr: {}, opaEditBusy: {}, opaVersions: {}, opaHistOpen: {},
-        crosswalk: null, crossSel: 0,
+        crosswalk: null, crossSel: 0, crossReqSel: null,
         offices: [], officersAssigned: [], attestations: [], attUsers: [],
         officerForm: {}, attForm: { scope: 'platform', entity_id: '', office: '', statement: '' }, attBusy: false,
         skillSections: [
@@ -788,6 +848,15 @@ function iaResponsavel() {
         },
         get curFw() { return this.crosswalk ? this.crosswalk.frameworks[this.crossSel] : null; },
         ctrlLabel(k) { return (this.crosswalk && this.crosswalk.control_labels[k]) || k; },
+        ctrlActive(k) { return !!(this.crosswalk && this.crosswalk.controls && this.crosswalk.controls[k]); },
+        ctrlWhere(k) {
+            return {
+                prompt_guard: 'aba Segurança', dlp: 'aba Segurança',
+                opa: 'aba Políticas', retention: 'Configurações → Parâmetros',
+                verifier: 'Configurações → Parâmetros', grounding: 'Configurações → Parâmetros',
+                circuit_breaker: 'Configurações → Parâmetros',
+            }[k] || '';
+        },
         fwTip(name) {
             return {
                 'EU AI Act': 'Regulamento europeu de IA (2024): obrigações proporcionais ao risco do sistema — classificação de risco, transparência e documentação técnica, supervisão humana, governança de dados, logs, robustez e cibersegurança. Referência global, mesmo fora da UE.',
@@ -797,7 +866,17 @@ function iaResponsavel() {
                 'OWASP LLM Top 10': 'Lista da OWASP com os 10 riscos de segurança mais críticos em aplicações com LLM: prompt injection (LLM01), saída insegura, vazamento de dados sensíveis, excesso de agência, dependência excessiva/alucinação, entre outros.',
             }[name] || '';
         },
-        async loadCrosswalk() { try { this.crosswalk = await api.get('/api/v1/governance/crosswalk'); } catch (e) { showToast(e.message, 'error'); } },
+        async loadCrosswalk() {
+            try {
+                this.crosswalk = await api.get('/api/v1/governance/crosswalk');
+                // reconcilia o painel aberto com o snapshot FRESCO (badge/satisfied_by
+                // velhos contradiziam as bolinhas ctrlActive novas — achado de revisão)
+                if (this.crossReqSel) {
+                    const fresh = (this.curFw ? this.curFw.requirements : []).find(r => r.requirement === this.crossReqSel.requirement);
+                    this.crossReqSel = fresh || null;
+                }
+            } catch (e) { showToast(e.message, 'error'); }
+        },
         get guardDirty() { return JSON.stringify(this.guard) !== this.guardSnapshot; },
         async loadGuard() {
             try { const g = await api.get('/api/v1/governance/guard-config'); this.guard = g; this.guardSnapshot = JSON.stringify(g); } catch {}
@@ -809,6 +888,8 @@ function iaResponsavel() {
                 this.guardSnapshot = JSON.stringify(this.guard);
                 showToast('Guarda/DLP salvos');
                 try { this.summary = await api.get('/api/v1/governance/summary'); } catch {}
+                // Conformidade promete estado VIVO — um toggle daqui muda cobertura
+                await this.loadCrosswalk();
             } catch (e) { showToast(e.message, 'error'); }
             this.guardBusy = false;
         },
@@ -884,6 +965,7 @@ function iaResponsavel() {
                 showToast('Configuração do OPA salva');
                 await this.loadOpa();
                 try { this.summary = await api.get('/api/v1/governance/summary'); } catch {}
+                await this.loadCrosswalk();  // idem saveGuard: cobertura muda com o OPA
             } catch (e) { showToast(e.message, 'error'); }
             this.opaBusy = false;
         },
@@ -908,17 +990,33 @@ function iaResponsavel() {
             ];
         },
         async loadRisk() { try { this.risk = await api.get('/api/v1/governance/risk-register'); } catch (e) { showToast(e.message, 'error'); } },
-        openRiskModal(it) {
-            this.riskModal = { open: true, entity_type: it.entity_type, entity_id: it.entity_id, name: it.name, suggested: it.suggested_tier, tier: it.tier || it.suggested_tier, rationale: it.rationale || '', mitigations: it.mitigations || '', busy: false };
+        selectRisk(it, keepOpen, refresh) {
+            // comparação por id, nunca por identidade de objeto (proxy do Alpine)
+            if (!it) { this.riskSel = null; return; }
+            if (!keepOpen && this.riskSel && this.riskSel.entity_id === it.entity_id) { this.riskSel = null; return; }
+            // re-clique em "classificar" da linha JÁ aberta não pode descartar o
+            // que o usuário está digitando (achado de revisão); só o pós-save
+            // (refresh=true) reconstrói o form a partir do item fresco.
+            if (keepOpen && !refresh && this.riskSel && this.riskSel.entity_id === it.entity_id) return;
+            this.riskSel = it;
+            this.riskForm = { tier: it.tier || it.suggested_tier, rationale: it.rationale || '', mitigations: it.mitigations || '' };
         },
         async saveRisk() {
-            this.riskModal.busy = true;
+            if (!this.riskSel) return;
+            this.riskBusy = true;
             try {
-                await api.put('/api/v1/governance/risk/' + this.riskModal.entity_type + '/' + this.riskModal.entity_id,
-                    { tier: this.riskModal.tier, rationale: this.riskModal.rationale, mitigations: this.riskModal.mitigations });
-                showToast('Classificação de risco salva'); this.riskModal.open = false; await this.loadRisk();
+                const saved = { tier: this.riskForm.tier, rationale: this.riskForm.rationale, mitigations: this.riskForm.mitigations };
+                await api.put('/api/v1/governance/risk/' + this.riskSel.entity_type + '/' + this.riskSel.entity_id, saved);
+                showToast('Classificação de risco salva');
+                const selId = this.riskSel.entity_id;
+                await this.loadRisk();
+                // re-seleciona SÓ se o reload refletiu o save (loadRisk engole a
+                // própria falha e manteria dados pré-save — o form reverteria
+                // visualmente logo após o toast de sucesso; achado de revisão).
+                const cur = ((this.risk && this.risk.items) || []).find(i => i.entity_id === selId);
+                if (cur && cur.tier === saved.tier) this.selectRisk(cur, true, true);
             } catch (e) { showToast(e.message, 'error'); }
-            this.riskModal.busy = false;
+            this.riskBusy = false;
         },
         async selectCard(id) {
             this.cardDetail = null;

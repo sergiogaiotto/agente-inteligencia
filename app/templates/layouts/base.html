@@ -389,6 +389,7 @@
                         <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 3l7.5 3v5.25c0 4.5-3.15 7.5-7.5 9-4.35-1.5-7.5-4.5-7.5-9V6L12 3z"/><path d="M9.5 12l1.75 1.75L15 10"/></svg>
                         <span x-show="!sidebarCollapsed">IA Responsável</span>
                     </a>
+                    <button @click="openHelp('ia_responsavel')" x-show="!sidebarCollapsed" class="help-btn absolute right-2 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-50 text-brand-500 text-[10px] font-bold hover:bg-brand-100" title="Ajuda desta página">?</button>
                 </div>
                 {% endif %}
 
@@ -1070,6 +1071,7 @@
                 {el:'tour-nav-federation', title:'Federação A2A', description:'Duas instâncias Maestro descobrindo e invocando capacidades uma da outra. Como provider você publica um manifesto + ingress assinado; como consumer você puxa peers remotos e invoca com HMAC e anti-replay. Desligada por padrão (fail-closed sem MAESTRO_SECRET_KEY).', optional: true},
                 {el:'tour-nav-harness', title:'Avaliação (Harness)', description:'O ensaio geral com nota. Antes de promover uma release, o Harness roda o Golden Dataset (casos com estado esperado, peso, regex e red flags) por alvo (agente ou pipeline) e decide se passou. O Golden Dataset é editável (editar/excluir com integridade por hash do conjunto); as Frases-Prova rodam em todo run de pipeline.'},
                 {el:'tour-nav-releases', title:'Releases', description:'Versionamento atômico da configuração inteira (modelo + prompt + índice + policy), promovida staging → canary → production. O Harness referencia a release; a regressão entre versões é pega rodando em modo regression, e o drift fica registrado.'},
+                {el:'tour-nav-ia-responsavel', title:'IA Responsável', description:'A sala de governança, confiança e conformidade — acesso Root/Admin/Governança. Numa tela só: model cards por agente, cockpit de políticas OPA, guarda de injeção & DLP, o mapa de Guardrails (entrada→LLM→saída com simulador), registro de risco estilo EU AI Act, trilha de auditoria com usuário, LGPD operacional (esquecimento/retenção) e a cobertura de conformidade contra 5 frameworks. O princípio: nenhum número inventado — tudo derivado dos controles REALMENTE ligados.', optional: true},
                 {el:'tour-nav-quality', title:'Qualidade', description:'A "nota" que a plataforma dá a cada resposta em produção: o LLM-as-Judge avalia factualidade, completude, tom e segurança, mais afirmações sem respaldo. Cada verificação mostra o DONO da interação julgada e há filtro por usuário — "quais respostas do fulano falharam?".'},
                 {el:'tour-nav-observability', title:'Observabilidade', description:'O COMO executou: interações, latências, tokens, eventos de drift e logs estruturados. Cada interação e cada linha de erro mostram QUEM disparou (dono/ator resolvido pelo nome); chamada por chave aparece com o badge "via chave". Traces em LangFuse + métricas RED (Prometheus/Grafana).'},
                 {el:'tour-nav-infra', title:'Infraestrutura', description:'O motor sob o capô: estado e latência de cada serviço (Postgres, pgvector, gateway de modelos), com link para a UI nativa. Use quando algo parece lento e você quer confirmar se o problema é de infra antes de mexer nos agentes.'},
@@ -1237,6 +1239,7 @@
                 '/federation': 'federation',
                 '/harness': 'harness',
                 '/releases': 'releases',
+                '/ia-responsavel': 'ia_responsavel',
                 '/quality': 'quality',
                 '/observability': 'observability',
                 '/infra': 'infra',

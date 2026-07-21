@@ -541,11 +541,11 @@ O registro completo de opções está em [`docs/configuracoes-plataforma.md`](do
   | **Segurança** | **Configuração da guarda de injeção & DLP** pela UI — os thresholds do prompt guard e o toggle de DLP; eventos com paginação, exportação p/ Excel e detalhe por linha |
   | **Guardrails** | **Cockpit do pipeline entrada→LLM→saída**: estado real de cada guarda (inclusive gaps "não implementado"), contadores de bloqueios/avisos e **simulador dry-run** (guarda de injeção + prévia da redação DLP, sem efeito colateral) |
   | **Prontidão** | **Papéis de governança** (officers) + **attestation**: assinar formalmente que um escopo está pronto (com o crosswalk anexado ao registro) |
-  | **Conformidade** | Cobertura **honesta** (crosswalk) contra EU AI Act, NIST AI RMF, ISO/IEC 42001, LGPD e OWASP LLM Top 10 (§7.12), com tooltip explicando cada framework |
-  | **Risco** | Classificação de risco (inaceitável/alto/limitado/mínimo, no vocabulário do **EU AI Act**) por agente/pipeline |
+  | **Risco** | Classificação de risco (inaceitável/alto/limitado/mínimo, no vocabulário do **EU AI Act**) por agente/pipeline — clique na linha abre o painel com os **sinais considerados** e a classificação inline (decisão humana, auditada) |
   | **Auditoria** | A trilha do `audit_log` — quem fez o quê, quando e de onde, com o **usuário resolvido** (id → nome), paginação, exportação p/ Excel e detalhe por linha |
   | **Privacidade & LGPD** | LGPD operacional: direito ao esquecimento por titular e retenção por idade (§7.10) |
-  | **Visão geral** | Postura computada das camadas — cada flag real (grounding, prompt guard, DLP, verifier, breaker, OPA…) com o estado ON/OFF de verdade |
+  | **Conformidade** | Cobertura **honesta** (crosswalk) contra EU AI Act, NIST AI RMF, ISO/IEC 42001, LGPD e OWASP LLM Top 10 (§7.12) — clique num requisito abre o painel com as **regras consideradas** e onde ligar o controle que falta |
+  | **Visão geral** | Os 5 pilares abertos — cada flag real (grounding, prompt guard, DLP, verifier, breaker, OPA…) com o estado ON/OFF de verdade. O card **"controles de governança ativos"** (canto sup. direito, ex-"postura") é a média dos pilares e clica para cá |
 - **Quando usar:** antes de colocar um sistema de IA em produção regulada; nas revisões periódicas de conformidade; e sempre que precisar responder "que controles estão *de fato* ligados agora?".
 - **Exemplo de ação:** aba **Políticas** → ligue o `opa_enabled` no cartão de status → rode o **simulador** com `{tool: {sensitivity: high}, user: {role: operator}}` → veja o **deny** com a razão `insufficient_role` → edite a `tool_invocation.rego` no editor, salve (validação + push) → confira a nova versão no histórico → o log de decisões passa a registrar cada avaliação.
 - **Dica:** o `GET /api/v1/governance/report` consolida postura + crosswalk + attestations num único payload — a base de um relatório de conformidade para o comitê.

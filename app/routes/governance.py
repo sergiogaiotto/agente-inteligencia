@@ -488,16 +488,25 @@ class RiskClassify(BaseModel):
     mitigations: str = ""
 
 
+def _suggested_signals(agent: dict) -> list[dict]:
+    """Os sinais que a heurística de sugestão considera, item a item — a UI
+    (painel de detalhe do Risco, 66.1.0) mostra exatamente ESTAS regras, para o
+    humano entender de onde veio o tier sugerido antes de decidir."""
+    return [
+        {"label": "Pode usar conhecimento geral (fora das evidências)",
+         "warn": _truthy(agent.get("allow_general_knowledge"))},
+        {"label": "Não exige evidência para responder",
+         "warn": not _truthy(agent.get("require_evidence"))},
+        {"label": "Sem SKILL.md vinculada — comportamento não declarado",
+         "warn": not agent.get("skill_id")},
+    ]
+
+
 def _suggested_tier(agent: dict) -> str:
     """Sugestão (humano decide) a partir dos sinais de risco derivados dos campos
-    reais do agente — sem parsear a skill (os sinais de ATENÇÃO não dependem dela)."""
-    warns = 0
-    if _truthy(agent.get("allow_general_knowledge")):
-        warns += 1
-    if not _truthy(agent.get("require_evidence")):
-        warns += 1
-    if not agent.get("skill_id"):
-        warns += 1
+    reais do agente — sem parsear a skill (os sinais de ATENÇÃO não dependem dela).
+    Regra: 3 sinais = high; 1–2 = limited; 0 = minimal."""
+    warns = sum(1 for s in _suggested_signals(agent) if s["warn"])
     if warns >= 3:
         return "high"
     if warns >= 1:
@@ -522,6 +531,7 @@ async def risk_register(user=Depends(_gate)):
             "entity_type": "agent", "entity_id": a.get("id"), "name": a.get("name"),
             "kind": a.get("kind"), "domain": a.get("domain") or "",
             "suggested_tier": _suggested_tier(a),
+            "signals": _suggested_signals(a),  # 66.1.0: regras do painel de detalhe
             "tier": tier,
             "rationale": cls.get("rationale") if cls else "",
             "mitigations": cls.get("mitigations") if cls else "",
