@@ -2465,6 +2465,27 @@ async def execute_interaction(
                 "action": "prompt_injection_blocked",
                 "details": json.dumps(guard_result.to_dict()),
             })
+        elif guard_result.warn:
+            # 66.0.0 (cockpit Guardrails): a zona cinza (warn) morria em memória
+            # — só o bloqueio era auditável. Evento próprio dá visibilidade sem
+            # inflar o contador de bloqueios (a UI separa avisadas/bloqueadas).
+            # Tolerante (achado de revisão): no warn a interação CONTINUA — uma
+            # falha de auditoria não pode converter resposta OK em 500 (no
+            # bloqueio o create sem guarda é aceitável: o fluxo já vira recusa).
+            try:
+                await audit_repo.create({
+                    "entity_type": "interaction",
+                    "entity_id": ctx.interaction_id,
+                    "action": "prompt_injection_warned",
+                    "details": json.dumps(guard_result.to_dict()),
+                })
+            except Exception:
+                logger.warning(
+                    "prompt_injection_warned: falha ao auditar (interação segue)",
+                    extra={"event": "guard.warn.audit_failed",
+                           "interaction_id": ctx.interaction_id},
+                    exc_info=True,
+                )
 
     # ── Onda 4a: PolicyCheck via OPA (substitui o stub de "passa se prompt_guard não bloqueou") ──
     # Quando OPA_ENABLED=true, decisão vai para o motor de políticas Rego. Quando
@@ -3562,6 +3583,19 @@ async def _build_result(
             # event=grounding.refused. None p/ subagent/pipeline que não chegou
             # à verificação.
             "grounding": ctx.metadata.get("grounding"),
+            # Cockpit Guardrails (66.0.0): sinais que morriam em memória agora
+            # são PROJETADOS no trace (read-only; zero mudança de decisão).
+            # prompt_guard: SÓ {score, blocked, warn} — a lista `matched` fica
+            # de FORA de propósito (achado de revisão: expor quais regras
+            # casaram a qualquer invocador com verbosity=full viraria oráculo
+            # p/ calibrar payloads; o cockpit lê o dado completo do audit_log,
+            # que é gated root/admin/governança).
+            # dlp_pre_llm: {applied, redactions} quando o gate pré-LLM atuou.
+            "prompt_guard": (
+                {k: v for k, v in (ctx.metadata.get("prompt_guard") or {}).items()
+                 if k in ("score", "blocked", "warn")} or None
+            ),
+            "dlp_pre_llm": ctx.metadata.get("dlp_pre_llm"),
             "execution_log": exec_log,
         },
     }

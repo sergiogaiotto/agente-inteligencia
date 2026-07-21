@@ -110,7 +110,7 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-3" data-testid="ir-security-counts">
+        <div class="grid grid-cols-4 gap-3" data-testid="ir-security-counts">
             <template x-for="s in securityTiles" :key="s.l">
                 <div class="rounded-xl border border-surface-200 bg-white p-3">
                     <div class="text-[20px] font-bold text-brand-900" x-text="s.v"></div>
@@ -119,16 +119,143 @@
             </template>
         </div>
         <p class="text-[10.5px] text-surface-400">Derivado do <code class="bg-surface-100 px-1 rounded">audit_log</code> (últimos <span x-text="security ? security.scanned : 0"></span> eventos). Injeções bloqueadas = OWASP LLM01; recusas/escalonamentos = defesa-em-profundidade agindo.</p>
-        <div class="rounded-xl border border-surface-200 bg-white overflow-hidden">
-            <template x-for="e in (security ? security.events : [])" :key="e.id">
-                <div class="flex items-center gap-2 px-3 py-2 border-t border-surface-100 text-[11.5px] first:border-t-0">
-                    <span class="font-mono text-[10px] text-rose-600 flex-none" x-text="e.action"></span>
-                    <span class="text-surface-500 truncate" x-text="(e.entity_type || '') + ' ' + (e.entity_id || '')"></span>
-                    <span class="ml-auto text-surface-400 flex-none" x-text="e.actor_name || e.actor || '—'"></span>
-                    <span class="text-surface-300 flex-none text-[10px]" x-text="fmtWhen(e.created_at)"></span>
+        <div class="flex items-center gap-2 text-[11px]" data-testid="ir-sec-toolbar">
+            <span class="text-surface-400">Exibir</span>
+            <select x-model.number="secSize" @change="secPage = 1" data-testid="ir-sec-pagesize" class="rounded border border-surface-200 px-1.5 py-1 text-[11px] outline-none bg-white">
+                <template x-for="p in pageSizes" :key="p.v"><option :value="p.v" x-text="p.l"></option></template>
+            </select>
+            <span class="text-surface-400" x-text="secEvents.length ? ('página ' + secPage + ' de ' + pageCount(secEvents, secSize) + ' · ' + secEvents.length + ' eventos') : ''"></span>
+            <button @click="secPage = Math.max(1, secPage - 1)" :disabled="secPage <= 1" class="rounded border border-surface-200 px-2 py-0.5 hover:bg-surface-50 disabled:opacity-30">‹</button>
+            <button @click="secPage = Math.min(pageCount(secEvents, secSize), secPage + 1)" :disabled="secPage >= pageCount(secEvents, secSize)" class="rounded border border-surface-200 px-2 py-0.5 hover:bg-surface-50 disabled:opacity-30">›</button>
+            <a href="/api/v1/governance/security-events/export" data-testid="ir-sec-export" title="CSV UTF-8 com BOM — abre direto no Excel" class="ml-auto rounded-lg border border-surface-200 px-3 py-1 text-[11px] text-surface-600 hover:bg-surface-50">Exportar Excel</a>
+        </div>
+        <div class="grid gap-4 items-start" :class="secSel ? 'lg:grid-cols-2' : ''">
+            <div class="rounded-xl border border-surface-200 bg-white overflow-hidden">
+                <template x-for="e in pageSlice(secEvents, secPage, secSize)" :key="e.id">
+                    <div @click="secSel = (secSel && secSel.id === e.id) ? null : e"
+                         class="flex items-center gap-2 px-3 py-2 border-t border-surface-100 text-[11.5px] first:border-t-0 cursor-pointer transition-colors"
+                         :class="secSel && secSel.id === e.id ? 'bg-brand-50/60' : 'hover:bg-surface-50'">
+                        <span class="font-mono text-[10px] text-rose-600 flex-none" x-text="e.action"></span>
+                        <span class="text-surface-500 truncate" x-text="(e.entity_type || '') + ' ' + (e.entity_id || '')"></span>
+                        <span class="ml-auto text-surface-400 flex-none" x-text="e.actor_name || e.actor || '—'"></span>
+                        <span class="text-surface-300 flex-none text-[10px]" x-text="fmtWhen(e.created_at)"></span>
+                    </div>
+                </template>
+                <p x-show="security && !secEvents.length" class="px-3 py-4 text-[11px] text-surface-400">Nenhum evento de segurança recente — bom sinal.</p>
+            </div>
+            <div x-show="secSel" class="rounded-xl border border-surface-200 bg-white p-4 self-start lg:sticky lg:top-4" data-testid="ir-sec-detail">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="text-[13px] font-bold text-brand-900">Detalhe do evento</span>
+                    <span class="text-[10px] text-surface-400 font-mono" x-text="secSel ? ('#' + secSel.id) : ''"></span>
+                    <button @click="secSel = null" class="ml-auto text-surface-400 hover:text-surface-600 text-[16px] leading-none">×</button>
+                </div>
+                <template x-if="secSel">
+                    <div class="space-y-2.5 text-[11.5px]">
+                        <div><div class="text-[9px] uppercase text-surface-400">Ação</div><div class="font-mono text-rose-600" x-text="secSel.action"></div></div>
+                        <div class="grid grid-cols-2 gap-2.5">
+                            <div><div class="text-[9px] uppercase text-surface-400">Entidade</div><div x-text="secSel.entity_type || '—'"></div></div>
+                            <div><div class="text-[9px] uppercase text-surface-400">Id da entidade</div><div class="font-mono text-[10px] break-all" x-text="secSel.entity_id || '—'"></div></div>
+                            <div><div class="text-[9px] uppercase text-surface-400">Usuário</div><div x-text="secSel.actor_name || secSel.actor || '—'"></div><div x-show="secSel.actor && secSel.actor_name !== secSel.actor" class="text-[9px] font-mono text-surface-400 break-all" x-text="secSel.actor"></div></div>
+                            <div><div class="text-[9px] uppercase text-surface-400">IP</div><div class="font-mono text-[10px]" x-text="secSel.ip || '—'"></div></div>
+                            <div class="col-span-2"><div class="text-[9px] uppercase text-surface-400">Quando</div><div x-text="fmtWhen(secSel.created_at)"></div></div>
+                        </div>
+                        <div x-show="secSel.details && secSel.details !== '{}'">
+                            <div class="text-[9px] uppercase text-surface-400 mb-0.5">Detalhes (redigidos na origem)</div>
+                            <pre class="text-[10px] font-mono whitespace-pre-wrap break-words bg-surface-50 rounded p-2 max-h-56 overflow-y-auto" x-text="fmtDetails(secSel.details)"></pre>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── Guardrails (cockpit Fase 1 — visibilidade, zero enforcement novo) ─── -->
+    <div x-show="tab === 'guardrails'" class="space-y-4">
+        <p class="text-[11px] text-surface-500 max-w-3xl">O pipeline de guardrails da plataforma — <strong>estado real</strong> de cada guarda em cada estágio (entrada → na LLM → saída), lido das configurações vigentes. Nada aqui é aspiracional: gaps aparecem como <span class="text-[9px] uppercase rounded bg-surface-100 text-surface-500 px-1 py-0.5">não implementado</span>. Passe o mouse numa guarda para ver a cobertura exata.</p>
+
+        <div class="grid grid-cols-4 gap-2" data-testid="gr-counters">
+            <template x-for="c in grCounters" :key="c.l">
+                <div class="rounded-lg border p-2.5" :class="c.cls">
+                    <div class="text-[18px] font-bold" x-text="c.v"></div>
+                    <div class="text-[10px]" x-text="c.l"></div>
                 </div>
             </template>
-            <p x-show="security && !security.events.length" class="px-3 py-4 text-[11px] text-surface-400">Nenhum evento de segurança recente — bom sinal.</p>
+        </div>
+
+        <div class="grid lg:grid-cols-3 gap-3" data-testid="gr-stages">
+            <template x-for="st in (guardrails ? guardrails.stages : [])" :key="st.stage">
+                <div class="rounded-xl border border-surface-200 bg-white p-3">
+                    <h2 class="text-[12px] font-semibold text-brand-900 mb-2" x-text="st.label"></h2>
+                    <div class="space-y-1.5">
+                        <template x-for="g in st.guards" :key="g.key">
+                            <div class="rounded-lg border px-2.5 py-2 text-[11px]"
+                                 :class="!g.implemented ? 'border-dashed border-surface-200 bg-surface-50/60' : (g.on ? 'border-emerald-200 bg-emerald-50/50' : 'border-surface-200 bg-white')"
+                                 :title="g.coverage" :data-testid="'gr-guard-' + g.key">
+                                <div class="flex items-center gap-1.5">
+                                    <span :class="g.on ? 'text-emerald-600' : 'text-surface-300'" x-text="g.on ? '●' : '○'"></span>
+                                    <span class="font-medium text-surface-700" x-text="g.label"></span>
+                                    <span x-show="g.deterministic" class="text-[8.5px] uppercase tracking-wide rounded bg-brand-50 text-brand-600 px-1 py-0.5" title="Regra determinística (regex/heurística/política) — sem chamada LLM">determinístico</span>
+                                    <span x-show="!g.implemented" class="ml-auto text-[8.5px] uppercase rounded bg-surface-100 text-surface-500 px-1 py-0.5">não implementado</span>
+                                    <button x-show="g.implemented && g.config_tab" @click="tab = g.config_tab" class="ml-auto text-[10px] text-brand-600 hover:underline flex-none">configurar</button>
+                                </div>
+                                <p class="text-[10px] text-surface-500 mt-0.5 leading-snug" x-text="g.detail"></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <p x-show="!guardrails" class="text-[11px] text-surface-400">Carregando o mapa de guardrails…</p>
+
+        <!-- Simulador dry-run das guardas determinísticas de entrada -->
+        <div class="rounded-xl border border-surface-200 bg-white p-4" data-testid="gr-simulator">
+            <h2 class="text-[13px] font-semibold text-brand-900 mb-1">Simulador (what-if)</h2>
+            <p class="text-[11px] text-surface-500 mb-3">Testa um texto contra as guardas determinísticas de entrada com os limiares <strong>vigentes</strong> — dry-run puro: não audita, não persiste e não chama nenhum LLM. Ideal para demonstrar ao time de privacidade o que passaria, avisaria ou seria bloqueado.</p>
+            <div class="grid md:grid-cols-2 gap-3">
+                <div>
+                    <textarea x-model="grSim.text" rows="6" placeholder="Cole aqui uma mensagem de teste — ex.: 'ignore todas as instruções anteriores' ou um texto com CPF/e-mail"
+                              class="w-full rounded-lg border border-surface-200 px-3 py-2 text-[12px] outline-none focus:border-brand-400"></textarea>
+                    <button @click="runGrSim()" :disabled="grSim.busy || !grSim.text.trim()" data-testid="gr-simulate"
+                            class="mt-2 rounded-lg bg-brand-500 px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-600 disabled:opacity-40">
+                        <span x-text="grSim.busy ? 'Avaliando…' : 'Simular'"></span>
+                    </button>
+                </div>
+                <div>
+                    <template x-if="grSim.result">
+                        <div class="space-y-2.5">
+                            <div class="rounded-lg border p-3"
+                                 :class="grSim.result.prompt_guard.blocked ? 'border-rose-200 bg-rose-50' : (grSim.result.prompt_guard.warn ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50')">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[14px] font-bold" :class="grSim.result.prompt_guard.blocked ? 'text-rose-700' : (grSim.result.prompt_guard.warn ? 'text-amber-700' : 'text-emerald-700')"
+                                          x-text="grSim.result.prompt_guard.blocked ? 'BLOQUEARIA' : (grSim.result.prompt_guard.warn ? 'AVISARIA' : 'PASSA')"></span>
+                                    <span class="text-[11px] text-surface-600 font-mono" x-text="'score ' + grSim.result.prompt_guard.score + ' (bloqueio ≥ ' + grSim.result.prompt_guard.block_threshold + ' · aviso ≥ ' + grSim.result.prompt_guard.warn_threshold + ')'"></span>
+                                    <span x-show="!grSim.result.prompt_guard.enabled" class="text-[9px] uppercase text-amber-600">guarda desligada — veredito hipotético</span>
+                                </div>
+                                <div x-show="grSim.result.prompt_guard.matched.length" class="mt-1.5">
+                                    <div class="text-[9.5px] uppercase text-surface-400 mb-0.5">padrões casados</div>
+                                    <template x-for="m in grSim.result.prompt_guard.matched" :key="m">
+                                        <div class="text-[10px] font-mono text-surface-600 truncate" x-text="m"></div>
+                                    </template>
+                                </div>
+                            </div>
+                            <div class="rounded-lg border border-surface-200 bg-surface-50 p-3">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-[11px] font-semibold text-surface-700">DLP</span>
+                                    <span class="text-[10.5px] text-surface-500" x-text="grSim.result.dlp.counts.total + ' ocorrência(s) de PII'"></span>
+                                    <span x-show="!grSim.result.dlp.pre_llm_enabled" class="text-[9px] text-surface-400">(redação pré-LLM desligada — preview do que a opção faria)</span>
+                                </div>
+                                <div class="flex flex-wrap gap-1 mb-1.5">
+                                    <template x-for="[k, v] in Object.entries(grSim.result.dlp.counts).filter(([k, v]) => k !== 'total' && v > 0)" :key="k">
+                                        <span class="rounded bg-white border border-surface-200 px-1.5 py-0.5 text-[9.5px] text-surface-600" x-text="k.toUpperCase() + ': ' + v"></span>
+                                    </template>
+                                </div>
+                                <pre x-show="grSim.result.dlp.counts.total" class="text-[10.5px] text-surface-700 whitespace-pre-wrap break-words bg-white rounded p-2 max-h-32 overflow-y-auto border border-surface-100" x-text="grSim.result.dlp.redacted_preview"></pre>
+                            </div>
+                        </div>
+                    </template>
+                    <p x-show="!grSim.result" class="text-[11px] text-surface-400">Rode uma simulação para ver o veredito da guarda e a prévia da redação DLP.</p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -479,18 +606,55 @@
 
     <!-- ─── Auditoria ─── -->
     <div x-show="tab === 'audit'" class="space-y-3">
-        <p class="text-[11px] text-surface-500">Trilha imutável (append-only): quem fez o quê, quando e de onde.</p>
-        <div class="rounded-xl border border-surface-200 bg-white overflow-hidden" data-testid="ir-audit">
-            <template x-for="e in audit" :key="e.id">
-                <div class="flex items-center gap-2 px-3 py-2 border-t border-surface-100 text-[11.5px] first:border-t-0">
-                    <span class="font-mono text-[10px] text-brand-600 flex-none" x-text="e.action"></span>
-                    <span class="text-surface-500 truncate" x-text="(e.entity_type || '') + ' ' + (e.entity_id || '')"></span>
-                    <span class="ml-auto text-surface-600 font-medium flex-none" :title="e.actor && e.actor_name !== e.actor ? ('id: ' + e.actor) : 'usuário que executou a ação'" x-text="e.actor_name || e.actor || '—'"></span>
-                    <span class="text-surface-300 flex-none font-mono text-[10px]" x-text="e.ip || ''"></span>
-                    <span class="text-surface-300 flex-none text-[10px]" x-text="fmtWhen(e.created_at)"></span>
+        <p class="text-[11px] text-surface-500">Trilha imutável (append-only): quem fez o quê, quando e de onde. Clique numa linha para ver o detalhe.</p>
+        <div class="flex items-center gap-2 text-[11px]" data-testid="ir-audit-toolbar">
+            <span class="text-surface-400">Exibir</span>
+            <select x-model.number="audSize" @change="audPage = 1" data-testid="ir-audit-pagesize" class="rounded border border-surface-200 px-1.5 py-1 text-[11px] outline-none bg-white">
+                <template x-for="p in pageSizes" :key="p.v"><option :value="p.v" x-text="p.l"></option></template>
+            </select>
+            <span class="text-surface-400" x-text="audit.length ? ('página ' + audPage + ' de ' + pageCount(audit, audSize) + ' · ' + audit.length + ' eventos') : ''"></span>
+            <button @click="audPage = Math.max(1, audPage - 1)" :disabled="audPage <= 1" class="rounded border border-surface-200 px-2 py-0.5 hover:bg-surface-50 disabled:opacity-30">‹</button>
+            <button @click="audPage = Math.min(pageCount(audit, audSize), audPage + 1)" :disabled="audPage >= pageCount(audit, audSize)" class="rounded border border-surface-200 px-2 py-0.5 hover:bg-surface-50 disabled:opacity-30">›</button>
+            <a href="/api/v1/governance/audit/export" data-testid="ir-audit-export" title="CSV UTF-8 com BOM — abre direto no Excel" class="ml-auto rounded-lg border border-surface-200 px-3 py-1 text-[11px] text-surface-600 hover:bg-surface-50">Exportar Excel</a>
+        </div>
+        <div class="grid gap-4 items-start" :class="audSel ? 'lg:grid-cols-2' : ''">
+            <div class="rounded-xl border border-surface-200 bg-white overflow-hidden" data-testid="ir-audit">
+                <template x-for="e in pageSlice(audit, audPage, audSize)" :key="e.id">
+                    <div @click="audSel = (audSel && audSel.id === e.id) ? null : e"
+                         class="flex items-center gap-2 px-3 py-2 border-t border-surface-100 text-[11.5px] first:border-t-0 cursor-pointer transition-colors"
+                         :class="audSel && audSel.id === e.id ? 'bg-brand-50/60' : 'hover:bg-surface-50'">
+                        <span class="font-mono text-[10px] text-brand-600 flex-none" x-text="e.action"></span>
+                        <span class="text-surface-500 truncate" x-text="(e.entity_type || '') + ' ' + (e.entity_id || '')"></span>
+                        <span class="ml-auto text-surface-600 font-medium flex-none" :title="e.actor && e.actor_name !== e.actor ? ('id: ' + e.actor) : 'usuário que executou a ação'" x-text="e.actor_name || e.actor || '—'"></span>
+                        <span class="text-surface-300 flex-none font-mono text-[10px]" x-text="e.ip || ''"></span>
+                        <span class="text-surface-300 flex-none text-[10px]" x-text="fmtWhen(e.created_at)"></span>
+                    </div>
+                </template>
+                <p x-show="!audit.length" class="px-3 py-4 text-[11px] text-surface-400">Carregando trilha…</p>
+            </div>
+            <div x-show="audSel" class="rounded-xl border border-surface-200 bg-white p-4 self-start lg:sticky lg:top-4" data-testid="ir-audit-detail">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="text-[13px] font-bold text-brand-900">Detalhe da trilha</span>
+                    <span class="text-[10px] text-surface-400 font-mono" x-text="audSel ? ('#' + audSel.id) : ''"></span>
+                    <button @click="audSel = null" class="ml-auto text-surface-400 hover:text-surface-600 text-[16px] leading-none">×</button>
                 </div>
-            </template>
-            <p x-show="!audit.length" class="px-3 py-4 text-[11px] text-surface-400">Carregando trilha…</p>
+                <template x-if="audSel">
+                    <div class="space-y-2.5 text-[11.5px]">
+                        <div><div class="text-[9px] uppercase text-surface-400">Ação</div><div class="font-mono text-brand-600" x-text="audSel.action"></div></div>
+                        <div class="grid grid-cols-2 gap-2.5">
+                            <div><div class="text-[9px] uppercase text-surface-400">Entidade</div><div x-text="audSel.entity_type || '—'"></div></div>
+                            <div><div class="text-[9px] uppercase text-surface-400">Id da entidade</div><div class="font-mono text-[10px] break-all" x-text="audSel.entity_id || '—'"></div></div>
+                            <div><div class="text-[9px] uppercase text-surface-400">Usuário</div><div x-text="audSel.actor_name || audSel.actor || '—'"></div><div x-show="audSel.actor && audSel.actor_name !== audSel.actor" class="text-[9px] font-mono text-surface-400 break-all" x-text="audSel.actor"></div></div>
+                            <div><div class="text-[9px] uppercase text-surface-400">IP</div><div class="font-mono text-[10px]" x-text="audSel.ip || '—'"></div></div>
+                            <div class="col-span-2"><div class="text-[9px] uppercase text-surface-400">Quando</div><div x-text="fmtWhen(audSel.created_at)"></div></div>
+                        </div>
+                        <div x-show="audSel.details && audSel.details !== '{}'">
+                            <div class="text-[9px] uppercase text-surface-400 mb-0.5">Detalhes (redigidos na origem)</div>
+                            <pre class="text-[10px] font-mono whitespace-pre-wrap break-words bg-surface-50 rounded p-2 max-h-56 overflow-y-auto" x-text="fmtDetails(audSel.details)"></pre>
+                        </div>
+                    </div>
+                </template>
+            </div>
         </div>
     </div>
 
@@ -504,6 +668,7 @@ function iaResponsavel() {
             { k: 'cards', l: 'Model cards' },
             { k: 'policies', l: 'Políticas' },
             { k: 'security', l: 'Segurança' },
+            { k: 'guardrails', l: 'Guardrails' },
             { k: 'attest', l: 'Prontidão' },
             { k: 'crosswalk', l: 'Conformidade' },
             { k: 'risk', l: 'Risco' },
@@ -512,6 +677,10 @@ function iaResponsavel() {
             { k: 'overview', l: 'Visão geral' },
         ],
         summary: null, audit: [], security: null,
+        guardrails: null, grSim: { text: '', result: null, busy: false },
+        secPage: 1, secSize: 10, secSel: null,
+        audPage: 1, audSize: 10, audSel: null,
+        pageSizes: [{ v: 10, l: '10' }, { v: 30, l: '30' }, { v: 50, l: '50' }, { v: 0, l: 'Todos' }],
         cards: [], cardDetail: null,
         risk: null,
         riskModal: { open: false, entity_type: '', entity_id: '', name: '', suggested: 'minimal', tier: 'minimal', rationale: '', mitigations: '', busy: false },
@@ -552,15 +721,37 @@ function iaResponsavel() {
             const c = this.security ? this.security.counts : {};
             return [
                 { l: 'Injeções bloqueadas', v: c.injecoes_bloqueadas || 0 },
+                { l: 'Injeções avisadas', v: c.injecoes_avisadas || 0 },
                 { l: 'Recusas', v: c.recusas || 0 },
                 { l: 'Escalonamentos', v: c.escalonamentos || 0 },
             ];
         },
+        get grCounters() {
+            const c = this.guardrails ? this.guardrails.counters : {};
+            return [
+                { l: 'Injeções bloqueadas', v: c.injecoes_bloqueadas || 0, cls: 'border-rose-200 bg-rose-50 text-rose-700' },
+                { l: 'Injeções avisadas (zona cinza)', v: c.injecoes_avisadas || 0, cls: 'border-amber-200 bg-amber-50 text-amber-700' },
+                { l: 'Negações de política (OPA)', v: c.policy_denies || 0, cls: 'border-surface-200 bg-surface-50 text-surface-700' },
+                { l: 'Eventos varridos', v: this.guardrails ? this.guardrails.scanned : 0, cls: 'border-surface-200 bg-white text-surface-500' },
+            ];
+        },
         fmtWhen(s) { try { return (window.tzDateTime && s) ? window.tzDateTime(s) : (s || ''); } catch { return s || ''; } },
+        pageSlice(list, page, size) { return size ? (list || []).slice((page - 1) * size, page * size) : (list || []); },
+        pageCount(list, size) { return size ? Math.max(1, Math.ceil((list || []).length / size)) : 1; },
+        get secEvents() { return this.security ? (this.security.events || []) : []; },
+        fmtDetails(d) { try { return JSON.stringify(JSON.parse(d), null, 2); } catch { return d || ''; } },
+        async runGrSim() {
+            if (!this.grSim.text.trim()) return;
+            this.grSim.busy = true; this.grSim.result = null;
+            try { this.grSim.result = await api.post('/api/v1/governance/guardrails/simulate', { text: this.grSim.text }); }
+            catch (e) { showToast(e.message, 'error'); }
+            this.grSim.busy = false;
+        },
         async load() {
             try { this.summary = await api.get('/api/v1/governance/summary'); } catch (e) { showToast(e.message, 'error'); }
-            try { this.audit = (await api.get('/api/v1/governance/audit?limit=60')).events || []; } catch {}
-            try { this.security = await api.get('/api/v1/governance/security-events?limit=40'); } catch {}
+            try { this.audit = (await api.get('/api/v1/governance/audit?limit=200')).events || []; } catch {}
+            try { this.security = await api.get('/api/v1/governance/security-events?limit=200'); } catch {}
+            try { this.guardrails = await api.get('/api/v1/governance/guardrails'); } catch {}
             try { this.cards = (await api.get('/api/v1/governance/model-cards')).cards || []; } catch {}
             try { this.risk = await api.get('/api/v1/governance/risk-register'); } catch {}
             try { this.crosswalk = await api.get('/api/v1/governance/crosswalk'); } catch {}
@@ -746,7 +937,10 @@ function iaResponsavel() {
                 const r = await api.post('/api/v1/privacy/forget', { customer_ref: ref });
                 this.forgetResult = 'Titular esquecido. ' + (r.message || '');
                 this.forgetRef = '';
-                this.audit = (await api.get('/api/v1/governance/audit?limit=60')).events || [];
+                // mesmo limit do load() + reset de página/seleção — senão a
+                // paginação fica além do total e a lista some (achado de revisão)
+                this.audit = (await api.get('/api/v1/governance/audit?limit=200')).events || [];
+                this.audPage = 1; this.audSel = null;
                 showToast('Direito ao esquecimento executado');
             } catch (e) { showToast(e.message, 'error'); }
             this.forgetBusy = false;

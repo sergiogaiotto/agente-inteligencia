@@ -1120,6 +1120,7 @@ class TestUiMelhorias6420:
             "{ k: 'cards', l: 'Model cards' }",
             "{ k: 'policies', l: 'Políticas' }",
             "{ k: 'security', l: 'Segurança' }",
+            "{ k: 'guardrails', l: 'Guardrails' }",  # 66.0.0: cockpit após Segurança
             "{ k: 'attest', l: 'Prontidão' }",
             "{ k: 'crosswalk', l: 'Conformidade' }",
             "{ k: 'risk', l: 'Risco' }",
