@@ -821,6 +821,69 @@ Se o e-mail tiver múltiplos tons, escolha o predominante.</pre>
   },
 
   // ═════════════════════════════════════════════════════════════════
+  // /ia-responsavel — IA Responsável (governança, confiança e conformidade)
+  // ═════════════════════════════════════════════════════════════════
+  ia_responsavel: {
+    title: 'IA Responsável',
+    summary: 'O painel único de governança, confiança e conformidade — a "sala do jurídico e da segurança" da plataforma. Acesso Root, Admin e Governança.',
+
+    sections: [
+      {
+        kind: 'concept',
+        title: 'O que é',
+        body: `
+          <p><strong>IA Responsável</strong> é a sala de governança da plataforma: uma tela só que responde à pergunta "<em>que controles de proteção estão de fato ligados agora — e como eu provo isso para um auditor?</em>".</p>
+          <p>Pense num painel de disjuntores com etiqueta: cada guarda da plataforma (redação de PII, guarda de injeção, políticas de acesso, juiz de qualidade…) aparece com o estado <strong>real</strong>, lido da configuração viva — nunca de uma checklist otimista. Se algo está desligado, a tela diz que está desligado.</p>
+          <p>O princípio que atravessa todas as abas: <strong>nenhum número é inventado</strong>. Postura, cobertura de conformidade e contadores derivam dos controles realmente ativos e da trilha de auditoria real.</p>
+        `
+      },
+      {
+        kind: 'fundamentos',
+        title: 'Como funciona',
+        body: `
+          <p>O card no canto superior direito — "<strong>controles de governança ativos</strong>" — é a média de 5 pilares (Privacidade, Segurança, Transparência, Robustez e Auditabilidade). Cada pilar mede a fração dos seus controles que está LIGADA agora: se o OPA está off, Segurança cai; se a retenção está off, Privacidade cai. 100% = todos os controles ligados. Clique no card para ver o detalhe pilar a pilar na Visão geral.</p>
+          <p>As abas, na ordem da tela:</p>
+          <ul class="list-disc pl-4 mt-2 space-y-1.5">
+            <li><strong>Model cards</strong> — a "ficha técnica" de cada agente (propósito, modelo, tratamento de dados, sinais de risco), derivada 100% da definição real. É a documentação técnica que o EU AI Act pede.</li>
+            <li><strong>Políticas</strong> — o cockpit do OPA (policy as code): status do motor, liga/desliga, simulador what-if, editor de Rego com versionamento/rollback e o log de decisões ALLOW/DENY.</li>
+            <li><strong>Segurança</strong> — configuração da guarda de injeção (limiares de bloqueio/aviso) e do DLP (redação de PII na persistência e, opcionalmente, no que sai ao provedor LLM), mais os eventos de segurança com paginação, exportação para Excel e detalhe por linha.</li>
+            <li><strong>Guardrails</strong> — o mapa do pipeline entrada → na LLM → saída: cada guarda com estado real, os gaps marcados "não implementado" e um simulador dry-run (teste um texto sem gastar LLM e sem auditar).</li>
+            <li><strong>Prontidão</strong> — papéis de governança (DPO, AI Officer) + assinatura formal de prontidão (attestation) + exportação do relatório de conformidade.</li>
+            <li><strong>Risco</strong> — classificação de risco por agente no vocabulário do EU AI Act (mínimo/limitado/alto/inaceitável). O tier é <em>sugerido</em> por sinais reais do agente; a decisão é humana e auditada — clique numa linha para ver os sinais e classificar.</li>
+            <li><strong>Auditoria</strong> — a trilha imutável do audit_log: quem fez o quê, quando e de onde, com o usuário resolvido (id → nome), paginação, exportação e detalhe por linha.</li>
+            <li><strong>Privacidade & LGPD</strong> — direito ao esquecimento por titular (irreversível e auditado) e retenção por idade.</li>
+            <li><strong>Conformidade</strong> — cobertura contra EU AI Act, NIST AI RMF, ISO/IEC 42001, LGPD e OWASP LLM Top 10, computada dos controles reais; clique num requisito para ver as regras consideradas.</li>
+            <li><strong>Visão geral</strong> — os 5 pilares abertos, checagem por checagem, + o estado de cada capacidade.</li>
+          </ul>
+        `
+      },
+      {
+        kind: 'casos_de_uso',
+        title: 'Casos de uso',
+        items: [
+          { title: 'Reunião com o time de privacidade', body: 'Abra Guardrails e mostre o pipeline: o que está ativo, o que é gap declarado. Use o simulador com um texto contendo CPF para demonstrar ao vivo a redação DLP e o veredito da guarda de injeção — sem custo e sem efeito colateral.' },
+          { title: 'Preparar uma auditoria externa', body: 'Prontidão → Exportar relatório gera o JSON consolidado (postura + cobertura + attestations). Complemente com o CSV da Auditoria (Exportar Excel) e as model cards dos agentes em escopo (botão copiar ficha).' },
+          { title: 'Pedido de esquecimento LGPD', body: 'Privacidade & LGPD → informe CPF/id/e-mail do titular → Esquecer titular. A ação é irreversível, apaga todas as conversas e fica registrada na Auditoria com o seu usuário.' },
+          { title: 'Classificar o risco dos agentes novos', body: 'Risco → o contador "Não classificados" mostra a pendência. Clique em cada linha: o painel mostra os 3 sinais considerados e o porquê do tier sugerido; ajuste, justifique e salve — a decisão sai auditada.' },
+          { title: 'Responder "por que a cobertura LGPD não está em 100%?"', body: 'Conformidade → card LGPD → clique no requisito descoberto. O painel lista as regras consideradas, qual controle está inativo e onde ligá-lo.' },
+        ]
+      },
+      {
+        kind: 'pegadinhas',
+        title: 'Pegadinhas',
+        items: [
+          { title: 'O percentual não é uma "nota de conformidade"', body: 'O card "controles de governança ativos" mede quantos controles técnicos estão ligados — não é parecer jurídico nem garantia de conformidade formal de processo. Use-o como termômetro operacional.', severity: 'info' },
+          { title: 'Ligar o OPA muda o comportamento de tools sensíveis', body: 'Com o OPA ligado, tools de sensibilidade alta exigem dono de sessão com papel Admin/Governança. Suba primeiro com failsafe aberto e observe o log de decisões antes de fechar.', severity: 'warning' },
+          { title: 'Esquecimento é irreversível', body: 'O forget apaga TODAS as conversas do titular (hasheado no servidor) e não tem desfazer. Confirme o identificador antes.', severity: 'danger' },
+          { title: 'DLP pré-LLM perde contexto de ids reais', body: 'Com a opção "redigir antes de enviar ao LLM" ligada, o modelo vê [CPF]/[EMAIL] no lugar do valor — buscas e respostas que dependem do identificador real degradam. É o trade-off documentado.', severity: 'warning' },
+          { title: 'Cobertura de Conformidade é mapeamento indicativo', body: 'Um requisito "coberto" significa que existe controle técnico ativo que o atende — não substitui análise jurídica do processo completo.', severity: 'info' },
+        ]
+      }
+    ],
+    related: ['quality', 'settings', 'catalog_inventory']
+  },
+
+  // ═════════════════════════════════════════════════════════════════
   // /quality — Qualidade (Verifier multi-dimensional)
   // ═════════════════════════════════════════════════════════════════
   quality: {

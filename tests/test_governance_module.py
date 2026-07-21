@@ -324,9 +324,11 @@ class TestRiskRegister:
     def test_aba_risco_template(self):
         html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
         assert "{ k: 'risk', l: 'Risco' }" in html
-        for t in ("ir-risk-counts", "ir-risk-list", "ir-risk-modal", "ir-risk-save"):
+        # 66.1.0: modal saiu — classificação vive no painel de detalhe à direita
+        for t in ("ir-risk-counts", "ir-risk-list", "ir-risk-detail", "ir-risk-save"):
             assert f'data-testid="{t}"' in html, t
-        assert "async loadRisk()" in html
+        assert 'data-testid="ir-risk-modal"' not in html
+        assert "async loadRisk()" in html and "selectRisk(" in html
         assert "/api/v1/governance/risk-register" in html
 
 
@@ -1122,10 +1124,10 @@ class TestUiMelhorias6420:
             "{ k: 'security', l: 'Segurança' }",
             "{ k: 'guardrails', l: 'Guardrails' }",  # 66.0.0: cockpit após Segurança
             "{ k: 'attest', l: 'Prontidão' }",
-            "{ k: 'crosswalk', l: 'Conformidade' }",
             "{ k: 'risk', l: 'Risco' }",
             "{ k: 'audit', l: 'Auditoria' }",
             "{ k: 'privacy', l: 'Privacidade & LGPD' }",
+            "{ k: 'crosswalk', l: 'Conformidade' }",  # 66.1.0: entre LGPD e Visão geral
             "{ k: 'overview', l: 'Visão geral' }",
         ]
         idx = [html.index(t) for t in order]  # index() explode se algum sumir
@@ -1158,7 +1160,9 @@ class TestUiMelhorias6420:
         assert ':title="fwTip(f.framework)"' in html
         for fw in ("EU AI Act", "NIST AI RMF", "ISO/IEC 42001", "LGPD", "OWASP LLM Top 10"):
             assert f"'{fw}':" in html, fw
-        assert "Controles que atendem este requisito" in html
+        # 66.1.0: o tooltip por linha virou painel de detalhe clicável — a
+        # explicação dos controles vive na seção "Regras consideradas".
+        assert "Regras consideradas" in html
 
     def test_auditoria_exibe_usuario(self):
         html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
@@ -1216,6 +1220,7 @@ class TestUiMelhorias6420:
         r = await G.governance_security_events(limit=10, user={})
         assert r["events"][0]["actor_name"] == "ana"
 
+
     @pytest.mark.asyncio
     async def test_security_events_clampa_limit(self, monkeypatch):
         # sem clamp, limit=100000 na query string viraria até 1000 linhas com
@@ -1244,3 +1249,81 @@ class TestUiMelhorias6420:
         assert "envia ao provedor LLM" in html
         assert "apenas aplica a decisão" not in html
         assert "a guarda de injeção continua autoritativa" in html
+
+
+# ─── Painéis de detalhe + card renomeado + guia (66.1.0) ─────────────────────
+_BASE_HTML = Path(__file__).resolve().parent.parent / "app" / "templates" / "layouts" / "base.html"
+_STATIC_JS = Path(__file__).resolve().parent.parent / "app" / "static" / "js"
+
+
+class TestUiMelhorias6610:
+    @pytest.mark.asyncio
+    async def test_risk_register_expoe_sinais(self, monkeypatch):
+        # o painel de detalhe mostra as REGRAS consideradas — o backend expõe
+        # os 3 sinais da heurística item a item.
+        import app.routes.governance as G
+        monkeypatch.setattr(G, "agents_repo", FakeRepo2([
+            {"id": "a1", "name": "X", "kind": "subagent", "require_evidence": 0,
+             "skill_id": None, "allow_general_knowledge": 1},
+        ]))
+        monkeypatch.setattr(G, "governance_risk_repo", FakeRWRepo([]))
+        r = await G.risk_register(user={})
+        sig = r["items"][0]["signals"]
+        assert len(sig) == 3
+        assert all(s["warn"] for s in sig)          # 3 sinais → high
+        assert r["items"][0]["suggested_tier"] == "high"
+        blob = " ".join(s["label"] for s in sig)
+        assert "conhecimento geral" in blob and "SKILL.md" in blob
+
+    def test_sinais_consistentes_com_tier(self):
+        # a heurística de tier DERIVA dos mesmos sinais (SSOT do predicado).
+        import app.routes.governance as G
+        agent = {"allow_general_knowledge": 0, "require_evidence": 1, "skill_id": "s"}
+        assert G._suggested_tier(agent) == "minimal"
+        assert not any(s["warn"] for s in G._suggested_signals(agent))
+
+    def test_paineis_de_detalhe_no_template(self):
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        # Conformidade: clique no requisito → painel com regras consideradas
+        assert 'data-testid="ir-crosswalk-req-detail"' in html
+        assert "ctrlActive(" in html and "ctrlWhere(" in html
+        assert "Regras consideradas" in html
+        # Risco: painel com sinais + CRUD inline (sem modal)
+        assert 'data-testid="ir-risk-detail"' in html
+        assert "Sinais considerados pela sugestão" in html
+        assert "riskSel.signals" in html
+
+    def test_card_postura_renomeado_e_explicado(self):
+        # "postura" confundia o time de privacidade — o card agora diz O QUE é,
+        # tem tooltip com o cálculo e clica para a Visão geral.
+        html = (_PAGES / "ia_responsavel.html").read_text(encoding="utf-8")
+        assert "governança ativos" in html
+        assert ">postura<" not in html
+        assert 'data-testid="ir-posture"' in html      # testid preservado (e2e)
+        assert "média dos 5 pilares" in html            # tooltip explica o cálculo
+        assert '@click="tab = \'overview\'" data-testid="ir-posture"' in html
+
+    def test_menu_tem_interrogacao_e_path_map(self):
+        base = _BASE_HTML.read_text(encoding="utf-8")
+        assert "openHelp('ia_responsavel')" in base      # o "?" do item de menu
+        assert "'/ia-responsavel': 'ia_responsavel'" in base
+        # passo do tour, optional (item é gated por papel — pula se ausente)
+        assert "{el:'tour-nav-ia-responsavel'" in base
+        i = base.index("{el:'tour-nav-ia-responsavel'")
+        assert "optional: true" in base[i:i + 600]
+
+    def test_guia_interativo_cobre_o_modulo(self):
+        help_js = (_STATIC_JS / "help-content.js").read_text(encoding="utf-8")
+        assert "ia_responsavel: {" in help_js
+        # profundidade mínima do padrão v2: conceito, fundamentos, casos e pegadinhas
+        i = help_js.index("ia_responsavel: {")
+        bloco = help_js[i:i + 12000]
+        for kind in ("'concept'", "'fundamentos'", "'casos_de_uso'", "'pegadinhas'"):
+            assert kind in bloco, kind
+        assert "controles de governança ativos" in bloco  # explica o card do %
+        guide_js = (_STATIC_JS / "module-guide.js").read_text(encoding="utf-8")
+        assert "id: 'ia_responsavel'" in guide_js
+        gi = guide_js.index("id: 'ia_responsavel'")
+        gbloco = guide_js[gi:gi + 9000]
+        for sec in ("fundamento:", "aplicacao:", "ativar:", "usar:"):
+            assert sec in gbloco, sec
