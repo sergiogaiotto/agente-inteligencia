@@ -62,7 +62,7 @@ pydantic-settings==2.14.2
 pyyaml==6.0.3
 websockets==15.0.1
 passlib[bcrypt]==1.7.4
-bcrypt==4.0.1   # passlib 1.7.4 quebra com bcrypt 4.1+ (sem __about__.__version__); o pin honra o teto <4.1
+bcrypt==5.0.0   # passlib 1.7.4 quebra com bcrypt 4.1+ (sem __about__.__version__); o pin honra o teto <4.1
 cryptography==49.0.0
 itsdangerous==2.2.0
 
