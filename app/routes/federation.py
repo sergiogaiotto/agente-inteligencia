@@ -33,6 +33,7 @@ from app.core.database import (
     federation_peers_repo,
     settings_store,
 )
+from app.core.datetime_utils import naive_utc_now
 from app.core.federation_identity import (
     ENABLED_SETTING_KEY,
     WORKSPACE_SETTING_KEY,
@@ -234,14 +235,38 @@ def _peer_public(r: dict) -> dict:
     }
 
 
-async def _audit_peer(action: str, peer_id: str, actor: str, workspace: str) -> None:
+async def _audit_peer(
+    action: str, peer_id: str, actor: str, workspace: str,
+    extra: Optional[dict] = None,
+) -> None:
+    details = {"workspace": workspace}
+    if extra:
+        details.update(extra)
     await audit_repo.create({
         "entity_type": "federation_peer",
         "entity_id": peer_id,
         "action": action,
         "actor": actor,
-        "details": json.dumps({"workspace": workspace}),
+        "details": json.dumps(details),
     })
+
+
+async def _audit_sync_failed(peer_id: str, actor: str, workspace: str, cause_kind: str) -> None:
+    """Falha de sync auditada (67.0.0): antes era SÓ log — o painel de federação
+    deriva "última falha de sync" do audit_log, e sem esta linha a falha era
+    invisível (ausência de 'synced' não distingue "nunca rodou" de "falhou").
+    Best-effort: erro de auditoria nunca mascara o HTTPException da falha real.
+
+    A causa é CATEGÓRICA de propósito (ssrf|peer_error|network|internal): a
+    mensagem verbosa carrega host/IP interno (SSRFError) ou texto CONTROLADO
+    PELO PEER (detail do corpo de erro), e audit_log.details é legível por
+    qualquer usuário autenticado via /api/v1/history — a versão verbosa fica
+    só no logger e na resposta HTTP da rota de sync (root-only)."""
+    try:
+        await _audit_peer("sync_failed", peer_id, actor, workspace,
+                          extra={"cause_kind": cause_kind})
+    except Exception:
+        logger.warning("sync_peer: audit de sync_failed falhou", exc_info=True)
 
 
 @peers_router.post("", status_code=201)
@@ -316,13 +341,17 @@ async def sync_peer_route(peer_id: str, user: dict = Depends(require_user)):
     try:
         res = await egress.sync_remote_entries(peer, user["id"])
     except SSRFError as e:
+        await _audit_sync_failed(peer_id, user["id"], peer.get("workspace", ""), "ssrf")
         raise HTTPException(400, f"base_url do peer rejeitada (SSRF): {e}")
     except (ValueError, httpx.HTTPError) as e:
         # Mesmo tratamento do invoke (A2A-2): causa conhecida surfa no corpo.
         logger.warning("sync_peer: peer %s recusou/falhou: %s", peer_id, e)
+        await _audit_sync_failed(peer_id, user["id"], peer.get("workspace", ""),
+                                 "peer_error" if isinstance(e, ValueError) else "network")
         raise HTTPException(502, f"Falha ao sincronizar com o peer: {_peer_failure_cause(e)}")
     except Exception:
         logger.warning("sync_peer: falha ao sincronizar peer %s", peer_id, exc_info=True)
+        await _audit_sync_failed(peer_id, user["id"], peer.get("workspace", ""), "internal")
         raise HTTPException(502, "Falha ao sincronizar com o peer")
     await _audit_peer("synced", peer_id, user["id"], peer.get("workspace", ""))
     return res
@@ -468,3 +497,171 @@ async def list_remote_entries(user: dict = Depends(require_user)):
             "remote_urn": d.get("remote_urn"), "peer_workspace": cfg.get("peer_workspace"),
         })
     return {"entries": out}
+
+
+# ── Painel da federação (F1, 67.0.0) — visão consolidada SÓ com dados locais ─
+
+
+def _iso(v) -> Optional[str]:
+    """Timestamp de row → ISO 8601 (naive = UTC; a UI converte com tzParse)."""
+    if isinstance(v, datetime):
+        return v.isoformat()
+    return v if isinstance(v, str) else None
+
+
+_DASH_AUDIT_WINDOW = 1000    # eventos de peer varridos p/ derivar syncs (janela, não histórico)
+_DASH_ACTIVITY_LIMIT = 20    # feed "últimas invocações federadas"
+
+
+@router.get("/api/v1/federation/dashboard")
+async def federation_dashboard(user: dict = Depends(require_user)):
+    """Painel read-only da federação — agrega SÓ dados locais (peers, entries
+    federadas, catalog_costs e audit_log). ROOT-only, como o resto da gestão de
+    peers (a lista de peers é inventário sensível). NÃO é gated por
+    federation_enabled: observabilidade funciona com a federação desligada
+    (o payload diz federation_enabled=false).
+
+    Honestidades deliberadas:
+    - consumo federado vive em catalog_costs (o remote_invoke grava via
+      record_invocation_cost de catalog.queries) — NÃO em invocation_costs;
+    - custo/latência são PEER-ATTESTED (clampados na gravação); o payload
+      carrega costs_peer_attested=True para a UI rotular;
+    - last_sync_at = último sync BEM-SUCEDIDO auditado; falhas só são
+      auditadas a partir de 67.0.0 (action 'sync_failed') e as contagens
+      derivam de uma janela de auditoria, não do histórico completo.
+    """
+    _require_root(user)
+
+    peer_rows = await peers.list_peers()
+
+    # Eventos de peer — 1 fetch (created_at DESC), redução em Python.
+    peer_events = await audit_repo.find_all(
+        entity_type="federation_peer", limit=_DASH_AUDIT_WINDOW
+    )
+    last_sync: dict = {}
+    last_sync_failed: dict = {}
+    sync_failures: dict = {}
+    for ev in peer_events:  # DESC — o primeiro visto por peer é o mais recente
+        pid = ev.get("entity_id") or ""
+        action = ev.get("action")
+        if action == "synced":
+            if pid not in last_sync:
+                last_sync[pid] = _iso(ev.get("created_at"))
+        elif action == "sync_failed":
+            if pid not in last_sync_failed:
+                last_sync_failed[pid] = _iso(ev.get("created_at"))
+            sync_failures[pid] = sync_failures.get(pid, 0) + 1
+
+    pool = _get_pool()
+    async with pool.acquire() as con:
+        entry_rows = await con.fetch(
+            "SELECT id, name, kind, domain, version, remote_urn, remote_peer_id "
+            "FROM catalog_entries WHERE federated = TRUE ORDER BY name"
+        )
+        entry_ids = [r["id"] for r in entry_rows]
+        cost_rows = []
+        if entry_ids:
+            cost_rows = await con.fetch(
+                "SELECT entry_id, COUNT(*) AS invocations, "
+                "COALESCE(SUM(cost_usd), 0) AS total_cost_usd, "
+                "COALESCE(AVG(latency_ms), 0) AS avg_latency_ms, "
+                "MAX(invoked_at) AS last_invoked_at "
+                "FROM catalog_costs WHERE entry_id = ANY($1::text[]) "
+                "GROUP BY entry_id",
+                entry_ids,
+            )
+    entries = [dict(r) for r in entry_rows]
+    cost_by_entry = {r["entry_id"]: dict(r) for r in cost_rows}
+    entry_name = {e["id"]: e.get("name") for e in entries}
+
+    peer_by_id = {r["id"]: r for r in peer_rows}
+    by_peer_entries: dict = {}
+    orphans = []
+    for e in entries:
+        pid = e.get("remote_peer_id")
+        peer = peer_by_id.get(pid) if pid else None
+        if peer is None:
+            orphans.append({"id": e["id"], "name": e.get("name"),
+                            "remote_urn": e.get("remote_urn"), "reason": "peer_ausente"})
+        elif peer.get("status") != "active":
+            orphans.append({"id": e["id"], "name": e.get("name"),
+                            "remote_urn": e.get("remote_urn"), "reason": "peer_revogado"})
+        if pid:
+            by_peer_entries.setdefault(pid, []).append(e)
+
+    out_peers = []
+    for r in peer_rows:
+        mine = by_peer_entries.get(r["id"], [])
+        cons = {"invocations": 0, "total_cost_usd": 0.0,
+                "avg_latency_ms": None, "last_invoked_at": None}
+        lat_weighted = 0.0
+        for e in mine:
+            c = cost_by_entry.get(e["id"])
+            if not c:
+                continue
+            n = int(c.get("invocations") or 0)
+            cons["invocations"] += n
+            cons["total_cost_usd"] += float(c.get("total_cost_usd") or 0.0)
+            lat_weighted += float(c.get("avg_latency_ms") or 0.0) * n
+            li = _iso(c.get("last_invoked_at"))
+            if li and (cons["last_invoked_at"] is None or li > cons["last_invoked_at"]):
+                cons["last_invoked_at"] = li
+        if cons["invocations"]:
+            cons["avg_latency_ms"] = round(lat_weighted / cons["invocations"], 2)
+        cons["total_cost_usd"] = round(cons["total_cost_usd"], 6)
+        out_peers.append({
+            **_peer_public(r),   # nunca a row crua — segredos ficam fora
+            "capabilities": len(mine),
+            "last_sync_at": last_sync.get(r["id"]),
+            "last_sync_failed_at": last_sync_failed.get(r["id"]),
+            "sync_failures_recent": sync_failures.get(r["id"], 0),
+            "consumption": cons,
+        })
+
+    by_domain: dict = {}
+    for e in entries:
+        key = e.get("domain") or ""
+        by_domain[key] = by_domain.get(key, 0) + 1
+
+    activity_rows = await audit_repo.find_all(
+        entity_type="federation_remote_invoke", limit=_DASH_ACTIVITY_LIMIT
+    )
+    recent = []
+    for ev in activity_rows:
+        try:
+            det = json.loads(ev.get("details") or "{}")
+        except (ValueError, TypeError):
+            det = {}
+        eid = ev.get("entity_id")
+        recent.append({
+            "entry_id": eid,
+            "entry_name": entry_name.get(eid),  # None se a entry sumiu — sem inventar
+            "peer_workspace": det.get("peer_workspace"),
+            "status": det.get("status"),
+            "created_at": _iso(ev.get("created_at")),
+        })
+
+    # Totais de consumo sobre TODAS as entries federadas (inclui órfãs — o
+    # gasto delas existiu; somar só peers conhecidos esconderia consumo real).
+    total_inv = sum(int(c.get("invocations") or 0) for c in cost_by_entry.values())
+    total_cost = round(sum(float(c.get("total_cost_usd") or 0.0)
+                           for c in cost_by_entry.values()), 6)
+    return {
+        "generated_at": naive_utc_now().isoformat(),
+        "federation_enabled": await federation_enabled(),
+        "secret_key_present": secret_key_present(),
+        "costs_peer_attested": True,
+        "peers": out_peers,
+        "orphans": orphans,
+        "by_domain": [{"domain": k or None, "count": v}
+                      for k, v in sorted(by_domain.items(), key=lambda kv: -kv[1])],
+        "recent_invocations": recent,
+        "totals": {
+            "peers_active": sum(1 for r in peer_rows if r.get("status") == "active"),
+            "peers_revoked": sum(1 for r in peer_rows if r.get("status") == "revoked"),
+            "remote_capabilities": len(entries),
+            "orphan_capabilities": len(orphans),
+            "invocations": total_inv,
+            "total_cost_usd": total_cost,
+        },
+    }

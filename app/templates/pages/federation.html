@@ -21,12 +21,164 @@
     </div>
   </div>
 
-  <!-- Fail-closed warning -->
+  <!-- Abas (F1, 67.0.0): Painel = observabilidade read-only; Gestão = os cards originais -->
+  <div class="flex items-center gap-1.5">
+    <button @click="tab = 'painel'" data-testid="federation-tab-painel"
+            class="rounded-lg px-3 py-1.5 text-[12px] font-semibold"
+            :class="tab === 'painel' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Painel</button>
+    <button @click="tab = 'gestao'" data-testid="federation-tab-gestao"
+            class="rounded-lg px-3 py-1.5 text-[12px] font-semibold"
+            :class="tab === 'gestao' ? 'bg-brand-500 text-white' : 'bg-surface-100 text-surface-500 hover:bg-surface-200'">Gestão</button>
+  </div>
+
+  <!-- Fail-closed warning (global — vale nas duas abas) -->
   <div x-show="config.enabled && !config.secret_key_present"
        class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800">
     <strong>MAESTRO_SECRET_KEY não está setado.</strong> A federação está ligada mas os endpoints de invoke retornam 503
     (fail-closed) — sem a master key, segredos de peer usariam o fallback inseguro do crypto. Configure no ambiente antes de federar de verdade.
   </div>
+
+  <!-- ═══════ Aba Painel (F1) — SEM x-transition de propósito (automação lê) ═══════ -->
+  <div x-show="tab === 'painel'" class="space-y-6">
+
+    <!-- Erro / RBAC — persistente inline, mesma razão do remote-invoke-error -->
+    <div x-show="dash.error" role="alert" data-testid="fed-dash-error"
+         class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800" x-text="dash.error"></div>
+
+    <template x-if="dash.data">
+      <div class="space-y-6">
+
+        <!-- Linha de status -->
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="rounded-full px-2.5 py-1 text-[11px] font-semibold"
+                :class="dash.data.federation_enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-surface-100 text-surface-500'"
+                x-text="dash.data.federation_enabled ? 'Federação ativa' : 'Federação desligada'"></span>
+          <span class="rounded-full px-2.5 py-1 text-[11px] font-semibold"
+                :class="dash.data.secret_key_present ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'"
+                x-text="dash.data.secret_key_present ? 'Chave-mestra presente' : 'Chave-mestra ausente (fail-closed)'"></span>
+          <span class="text-[11px] text-surface-400" data-testid="fed-dash-updated"
+                x-text="'Atualizado às ' + tzTime(dash.data.generated_at)"></span>
+          <button @click="loadDashboard()" class="ml-auto text-[12px] font-medium text-brand-600 hover:text-brand-700">Atualizar</button>
+        </div>
+
+        <!-- Totais -->
+        <div data-testid="fed-dash-totals" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="rounded-2xl border border-surface-200 bg-white p-4">
+            <p class="text-[11px] font-semibold text-surface-500">Peers ativos</p>
+            <p class="text-[22px] font-bold text-brand-900" x-text="dash.data.totals.peers_active"></p>
+            <p x-show="dash.data.totals.peers_revoked > 0" class="text-[10px] text-surface-400"
+               x-text="dash.data.totals.peers_revoked + ' revogado(s)'"></p>
+          </div>
+          <div class="rounded-2xl border border-surface-200 bg-white p-4">
+            <p class="text-[11px] font-semibold text-surface-500">Capacidades remotas</p>
+            <p class="text-[22px] font-bold text-brand-900" x-text="dash.data.totals.remote_capabilities"></p>
+            <p x-show="dash.data.totals.orphan_capabilities > 0" class="text-[10px] text-amber-700"
+               x-text="dash.data.totals.orphan_capabilities + ' órfã(s)'"></p>
+          </div>
+          <div class="rounded-2xl border border-surface-200 bg-white p-4">
+            <p class="text-[11px] font-semibold text-surface-500">Invocações federadas</p>
+            <p class="text-[22px] font-bold text-brand-900" x-text="dash.data.totals.invocations"></p>
+          </div>
+          <div class="rounded-2xl border border-surface-200 bg-white p-4">
+            <p class="text-[11px] font-semibold text-surface-500">Custo total</p>
+            <p class="text-[22px] font-bold text-brand-900" x-text="fmtUsd(dash.data.totals.total_cost_usd)"></p>
+            <p class="text-[10px] text-surface-400">atestado pelo peer</p>
+          </div>
+        </div>
+
+        <!-- Peers -->
+        <div class="rounded-2xl border border-surface-200 bg-white p-5">
+          <h2 class="text-[14px] font-bold text-brand-900 mb-3">Peers</h2>
+          <p x-show="dash.data.peers.length === 0" class="text-[12px] text-surface-400">Nenhum peer registrado ainda — registre um na aba Gestão.</p>
+          <div class="space-y-2">
+            <template x-for="p in dash.data.peers" :key="p.id">
+              <div class="rounded-lg border border-surface-100 px-3 py-2.5" data-testid="fed-dash-peer">
+                <div class="flex items-center gap-2">
+                  <span class="text-[13px] font-semibold text-brand-900" x-text="p.workspace"></span>
+                  <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                        :class="p.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-surface-100 text-surface-500'"
+                        x-text="p.status === 'active' ? 'ativo' : 'revogado'"></span>
+                  <span x-show="p.has_prev_secret" class="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
+                        title="O segredo anterior ainda é aceito até a próxima rotação">janela de rotação aberta</span>
+                  <code class="text-[10px] text-surface-400 truncate flex-1" x-text="p.base_url || 'sem base_url'"></code>
+                </div>
+                <div class="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-2 lg:grid-cols-3 text-[11px] text-surface-500">
+                  <div><span class="font-semibold text-surface-400">Capacidades: </span><span class="text-brand-900" x-text="p.capabilities"></span></div>
+                  <div><span class="font-semibold text-surface-400">Última sync (sucesso): </span>
+                       <span class="text-brand-900" x-text="p.last_sync_at ? tzDateTime(p.last_sync_at) : 'nunca registrada'"></span></div>
+                  <div><span class="font-semibold text-surface-400">Última falha de sync: </span>
+                       <span :class="p.last_sync_failed_at ? 'text-rose-600' : 'text-brand-900'"
+                             x-text="p.last_sync_failed_at ? (tzDateTime(p.last_sync_failed_at) + ' (' + p.sync_failures_recent + ' na janela recente)') : 'nenhuma registrada'"></span></div>
+                  <div><span class="font-semibold text-surface-400">Segredo: </span>
+                       <span class="text-brand-900" x-text="secretAgeDays(p) === null ? 'sem data' : (secretAgeDays(p) + ' dia(s) desde a última troca')"></span></div>
+                  <div class="sm:col-span-2"><span class="font-semibold text-surface-400">Consumo: </span>
+                       <span class="text-brand-900" x-text="p.consumption.invocations > 0
+                             ? (p.consumption.invocations + ' invocação(ões) · ' + fmtUsd(p.consumption.total_cost_usd) + ' · ' + Math.round(p.consumption.avg_latency_ms || 0) + ' ms méd. · último uso ' + (p.consumption.last_invoked_at ? tzDateTime(p.consumption.last_invoked_at) : '?'))
+                             : 'sem consumo registrado'"></span></div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Órfãs -->
+        <div x-show="dash.data.orphans.length > 0" data-testid="fed-dash-orphans"
+             class="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+          <h2 class="text-[14px] font-bold text-amber-800 mb-2">Capacidades órfãs</h2>
+          <p class="text-[11px] text-amber-700 mb-2">Entries federadas cujo peer foi revogado ou não existe mais — não são invocáveis; avalie arquivá-las.</p>
+          <div class="space-y-1">
+            <template x-for="o in dash.data.orphans" :key="o.id">
+              <div class="flex items-center gap-2 text-[12px]">
+                <span class="font-semibold text-brand-900" x-text="o.name"></span>
+                <span class="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-amber-700"
+                      x-text="o.reason === 'peer_revogado' ? 'peer revogado' : 'peer ausente'"></span>
+                <code class="text-[10px] text-amber-700 truncate flex-1" x-text="o.remote_urn"></code>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Por domínio -->
+        <div x-show="dash.data.by_domain.length > 0" class="rounded-2xl border border-surface-200 bg-white p-5">
+          <h2 class="text-[14px] font-bold text-brand-900 mb-2">Capacidades por domínio</h2>
+          <div class="flex flex-wrap gap-1.5">
+            <template x-for="d in dash.data.by_domain" :key="d.domain || 'sem'">
+              <span class="rounded-full bg-surface-100 px-2.5 py-1 text-[11px] text-surface-600"
+                    x-text="(d.domain || 'sem domínio') + ' · ' + d.count"></span>
+            </template>
+          </div>
+        </div>
+
+        <!-- Atividade recente -->
+        <div class="rounded-2xl border border-surface-200 bg-white p-5" data-testid="fed-dash-activity">
+          <h2 class="text-[14px] font-bold text-brand-900 mb-1">Últimas invocações federadas</h2>
+          <p class="text-[10px] text-surface-400 mb-2">Máximo de 20 registros da auditoria — não é o histórico completo.</p>
+          <p x-show="dash.data.recent_invocations.length === 0" class="text-[12px] text-surface-400">Nenhuma invocação federada registrada.</p>
+          <div class="space-y-1">
+            <template x-for="(a, i) in dash.data.recent_invocations" :key="i">
+              <div class="flex items-center gap-2 text-[12px]">
+                <span class="font-semibold text-brand-900" x-text="a.entry_name || a.entry_id"></span>
+                <span class="text-[10px] text-surface-400" x-text="'@' + (a.peer_workspace || '?')"></span>
+                <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                      :class="a.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : 'bg-surface-100 text-surface-500'"
+                      x-text="a.status || '?'"></span>
+                <span class="text-[10px] text-surface-400 ml-auto" x-text="a.created_at ? tzDateTime(a.created_at) : ''"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <p class="text-[10px] text-surface-400">Custo e latência do consumo federado são informados pela instância de origem (atestados pelo peer, com teto de sanidade na gravação) — não são medidos por esta instância.</p>
+      </div>
+    </template>
+
+    <template x-if="!dash.data && !dash.error">
+      <p class="text-[12px] text-surface-400">Carregando painel…</p>
+    </template>
+  </div>
+
+  <!-- ═══════ Aba Gestão — os cards originais ═══════ -->
+  <div x-show="tab === 'gestao'" class="space-y-6">
 
   <!-- ═══════ Config ═══════ -->
   <div class="rounded-2xl border border-surface-200 bg-white p-5">
@@ -187,6 +339,8 @@
     </div>
   </div>
 
+  </div><!-- /aba Gestão -->
+
 </div>
 
 <script>
@@ -201,9 +355,35 @@ function federationPage() {
     remote: [],
     newPeer: { workspace: '', base_url: '' },
     lastSecret: null,
+    tab: 'painel',                     // Painel (F1) é a porta de entrada; Gestão = cards originais
+    dash: { data: null, error: '' },   // payload do GET /federation/dashboard + erro persistente
 
     async load() {
-      await Promise.all([this.loadConfig(), this.loadPeers(), this.loadRemote()]);
+      await Promise.all([this.loadConfig(), this.loadPeers(), this.loadRemote(), this.loadDashboard()]);
+    },
+    async loadDashboard() {
+      this.dash.error = '';
+      try { this.dash.data = await api.get('/api/v1/federation/dashboard'); }
+      catch (e) {
+        this.dash.data = null;
+        var msg = e.message || 'erro desconhecido';
+        // api.get NÃO lê o corpo do erro (só os verbos de escrita passam por
+        // _errDetail) — a mensagem é "GET url → 403 [trace]". Detectar o STATUS,
+        // não o texto do detail; o /root/i cobre o caso de o helper mudar.
+        this.dash.error = (msg.indexOf('→ 403') >= 0 || /root/i.test(msg))
+          ? 'Somente root visualiza o painel da federação — o inventário de peers é sensível.'
+          : 'Falha ao carregar o painel: ' + msg;
+      }
+    },
+    secretAgeDays(p) {
+      var base = p.rotated_at || p.created_at;
+      if (!base) return null;
+      var d = tzParse(base);            // naive = UTC (helper de base.html)
+      if (!d || isNaN(d.getTime())) return null;
+      return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+    },
+    fmtUsd(v) {
+      return 'US$ ' + (Number(v) || 0).toFixed(4);
     },
     async loadConfig() {
       try {
