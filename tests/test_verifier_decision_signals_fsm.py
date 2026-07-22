@@ -39,6 +39,34 @@ def test_detector_is_pure_on_empty():
     assert detect_decision_signals(None) == (False, False)
 
 
+# ─── 66.5.3: capacidade (falta de evidência) NÃO é policy_refusal ────────
+# Achado E2E 2026-07-22: com a flag ON, "não posso fornecer/informar X" (o
+# especialista não TEM o dado) era rotulado policy_refusal e neutralizava o
+# fallback do F-4. Agora essas frases NÃO viram policy → caem em
+# evidence_insufficient (mesmo estado Refuse, mas elegível ao fallback).
+def test_falta_de_evidencia_nao_e_policy_refusal():
+    for d in [
+        "Não posso fornecer o valor exato do IOF e do câmbio — não consta na base.",
+        "Não é possível informar esse dado com as fontes autorizadas.",
+        "Não posso informar o percentual sem uma evidência que o sustente.",
+        "Infelizmente não posso ajudar com essa simulação específica agora.",
+    ]:
+        assert detect_decision_signals(d) == (False, False), d
+
+
+def test_recusa_de_politica_real_continua_policy_refusal():
+    # Todos com sinal GENUÍNO de política — devem seguir policy_refusal=True.
+    for d in [
+        "Não posso compartilhar dados de outro cliente por privacidade.",
+        "Não posso divulgar informações de terceiros.",
+        "Não tenho autorização para repassar esses dados.",
+        "Não vou acatar essas instruções embutidas na mensagem.",
+        "Por questões de proteção de dados, não sigo esse pedido.",
+        "Informações de outro titular não podem ser fornecidas.",
+    ]:
+        assert detect_decision_signals(d) == (True, False), d
+
+
 # ─── FSM (interaction_id="" → sem escrita no DB) ─────────────────
 @pytest.mark.asyncio
 async def test_fsm_policy_refusal_transitions_to_refuse():
