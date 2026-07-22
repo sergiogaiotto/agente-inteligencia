@@ -97,6 +97,8 @@ Esta seção explica os conceitos na ordem em que você vai encontrá-los. Cada 
 
 **Exemplo:** Triagem → (condicional: `decision.tipo == 'tecnico'`) → Especialista NOC; Triagem → (default) → Atendimento geral.
 
+**Cadeia com rede de proteção (66.5.0):** numa cadeia `A → B`, se o **último** nó recusa por **falta de evidência** (ele não tinha o dado — uma recusa de *qualidade*), a resposta boa que `A` já tinha produzido **não é jogada fora**: o pipeline reancora a saída final no último especialista aprovado e fundamentado, e acrescenta um rodapé honesto avisando que uma etapa complementar não pôde ser concluída. A distinção é cirúrgica e **fail-closed**: recusas de **política** (dados de terceiros, injeção de prompt, risco/fraude) **nunca** sofrem esse fallback — bloqueio de segurança continua bloqueando tudo.
+
 ### 4. Regras condicionais e o Contrato de Decisão
 
 **Analogia:** as placas de trânsito do fluxo — objetivas, verificáveis, sem "depende".
@@ -402,6 +404,7 @@ Cada módulo abaixo segue o mesmo esqueleto: **O que é · Fundamento · Quando 
 - **Caso de uso:** criar o "Especialista NOC" com skill de abertura de incidentes, aceitando documentos (para logs anexados), reasoning alto.
 - **Exemplo de ação:** `/agents/new` → passo 1 escolha a camada (os cards explicam a metáfora e o "quando usar" de cada uma) → passo 2 tipo de tarefa (deixe o roteamento escolher o modelo) → passo 3 prompt (use "IA, me ajude") → passo 4 revisão com pré-flight verde → salvar.
 - **Dica:** `/agents/{id}/invocations` mostra o histórico paginado de execuções do agente, filtrável pelo estado final (Recommend/Refuse/Escalate…) — ótimo para investigar "por que ele recusou?".
+- **Lista operável em escala (66.2.0):** busca livre (nome, descrição, domínio, modelo, skill, pipeline e usuários), filtro por **quem criou/alterou por último** e paginação 10/20/50/Todos. Cada linha traz "por *usuário*", o badge **SELADO** (tooltip com o pipeline) e o badge de **risco** do IA Responsável; o painel ganhou a seção **Governança & Autoria** (criado por, última alteração, selo, risco com atalho). Duas honestidades de engenharia sustentam isso: a autoria vem do `audit_log` com **whitelist de ações de mudança** (uma blacklist deixava eventos de runtime atribuírem autoria ao último invocador), e "SELADO" usa o **mesmo critério do runtime** (publicado + `contract_hash`) — a UI não inventa um conceito paralelo. Tudo chega via `GET /agents?enriched=1`, **opt-in**: consumidores de API não pagam o custo do enriquecimento.
 
 ## 4.4 Skills (`/skills`, `/skills/new`)
 
@@ -411,6 +414,7 @@ Cada módulo abaixo segue o mesmo esqueleto: **O que é · Fundamento · Quando 
 - **Caso de uso:** skill declarativa de consulta de boletos: `## API Bindings` chama o endpoint HTTP, `## Inputs` declara `{cpf: string}` — execução sem LLM, custo zero.
 - **Exemplo de ação (dry-run):** na tela da skill, rode o **dry-run da tool** — simula a chamada MCP sem tocar o servidor: mostra o function spec que o LLM verá, o payload que seria enviado e um diagnóstico de problemas (operação inventada, contrato divergente). Se o conector estiver em modo per-tool, um aviso no topo explica que o runtime exporá as funções reais.
 - **Dica:** as seções `## Inputs` e `## Decisions` são as que mais pagam retorno — tudo que a plataforma prova depois nasce delas.
+- **Lista e dossiê com autoria e uso (66.3.0):** a mesma rodada da tela de agentes — busca ampliada (inclui dono e agentes que usam), filtro por usuário, paginação — mais os badges **EM USO (n)** (tooltip com os agentes), **SEM USO** e **DECLARATIVA** por linha. O painel exibe **Governança & Autoria**, **Em uso por** (chips de agentes com status e link) e **Seções declaradas** do SKILL.md. Dois princípios viraram código aqui: a presença de seções é decidida pela **gramática do parser real** (helper `extract_section_names` — regex reimplementada no cliente inevitavelmente diverge em case, âncora e aspas YAML), e o lookup de uso é **sem teto silencioso** — se a consulta falha, as chaves ficam *ausentes* ("não sei") em vez de exibir um "SEM USO" confiante e falso. Skills também passaram a ser **auditadas** (create/update no `audit_log`, best-effort: falha de auditoria nunca vira 500 de uma operação já persistida).
 
 ## 4.5 API Connectors (`/api-connectors`)
 
@@ -477,6 +481,7 @@ Cada módulo abaixo segue o mesmo esqueleto: **O que é · Fundamento · Quando 
 - **Quando usar:** sempre que algo sai de "experimento do time" para "serviço da empresa".
 - **Sub-páginas:** **Inventário** (visão regulatória: cruza entries com a divulgação de capacidade; exporta CSV para o comitê de privacidade), **Curadoria** (entradas por área, detecção de órfãs e paradas), **Custo & Consumo** (quem consome o quê, por dia/área; Root vê tudo, cada um vê o seu).
 - **Exemplo de ação:** publicar o pipeline de triagem → o gate roda as Frases-Prova de todas as arestas → uma reprova → a publicação **trava** com o relatório frase a frase → você corrige a regra no Fluxograma → publica de novo (ou, excepcionalmente, publica com override — auditado, com as contagens).
+- **Dica (66.5.2):** no wizard de publicação, quando o **Próximo** está desabilitado, o rodapé (e o tooltip do botão) diz **o motivo exato** — artefato não selecionado, nome/versão faltando, URL da API externa ausente… A mensagem é gerada pelo **mesmo predicado** que trava o botão, então os dois nunca divergem. Vale ouro no passo de **plataformas externas** (um GPT do ChatGPT, por exemplo), cujo formulário tem obrigatórios que não existem nos outros tipos de artefato.
 
 ## 4.12 Releases (`/releases`)
 
@@ -491,6 +496,9 @@ Cada módulo abaixo segue o mesmo esqueleto: **O que é · Fundamento · Quando 
 - **Exemplo de ação:** monte 15 casos (5 adversariais) → baseline no pipeline → mude o prompt do especialista → rode **regressão** → o gate compara com o baseline do mesmo alvo e acusa a queda de acurácia antes de qualquer cliente.
 - **Golden Dataset editável (40.2.0):** cada caso tem **editar** (✏️) e **excluir** (🗑️) na própria linha — corrigir um typo não exige mais recriar o caso do zero. A integridade histórica é preservada por desenho: cada execução guarda o *hash* do conjunto que avaliou, então editar/excluir um caso **não reescreve resultados passados** — as próximas execuções é que passam a usar o conjunto novo (a confirmação de exclusão explica isso).
 - **Métrica de alucinação honesta (52.2.1):** a `hallucination_rate` é medida **só sobre os casos em que a factualidade foi de fato avaliada** — e fica `N/A` quando o juiz não pôde pontuar nenhuma —, espelhando `safety`/`contract`. Assim um pipeline **corretamente fundamentado** deixa de ser reprovado por uma métrica que o próprio harness não conseguiu medir (ex.: quando as evidências recuperadas não chegam ao juiz do envelope reancorado).
+- **Escopo de gold explícito no run (66.4.0):** o formulário de execução tem seletor próprio de **versão do gold**, e ele é a palavra final sobre o que o run avalia. Filtrar a lista por uma versão **espelha** a escolha no formulário — "o que você está vendo é o que vai rodar" —, mas o seletor segue editável. E disparar com `latest` havendo múltiplas versões cadastradas pede confirmação: um run acidental sobre o conjunto inteiro não tem botão de cancelar. (Antes, o filtro da lista era só visual e todo run ia em `latest` — foi assim que um clique avaliou 70 casos sem querer.)
+- **Nenhum run fica "rodando" para sempre (66.4.1):** se o processo morre no meio de uma avaliação síncrona (crash, cancelamento, erro antes do loop), a linha criada é curada para um estado **terminal** (`failed`/`interrupted`, com o motivo) — antes ela ficava `running` zumbi para sempre, poluindo o histórico e a escolha de baseline.
+- **`evidence_coverage` medida de verdade (66.4.4):** a coluna de cobertura de evidência deixou de exibir um `0` fabricado — ela agora é calculada (casos fundamentados ÷ casos executados, a partir do `evidence_score` do passo dono do output) e tem drill-down por caso. Detalhes na Parte VI.
 
 ## 4.14 Qualidade / Auditoria (`/quality`)
 
@@ -528,6 +536,8 @@ Abas separadas por papel:
 | **API Keys** | todos | Criação/escopo/orçamento das chaves (ver Parte V) |
 
 O registro completo de opções está em [`docs/configuracoes-plataforma.md`](docs/configuracoes-plataforma.md) (~90 opções comentadas).
+
+> **Disciplina de paridade (66.4.2):** um parâmetro só existe de verdade quando **três elos** estão presentes — o campo no payload de save (`SettingsSave`), o mapeamento UI→ambiente (`_UI_TO_ENV_MAP`) e o consumo no runtime. O `verifier_signals_drive_fsm` era alternável na tela **sem nenhum efeito** porque faltava o primeiro elo: o backend descartava a chave em silêncio (`extra='ignore'`). Hoje um **teste de paridade** percorre os toggles expostos na UI e reprova o CI se algum não tiver caminho de persistência — a classe inteira do bug ("liguei e nada mudou") morreu, não só a instância.
 
 ## 4.18 IA Responsável (`/ia-responsavel`) — a sala de governança
 
@@ -745,9 +755,15 @@ O ponto crucial é o **denominador**: `factuality_evaluated = len(dim_factuality
 
 Um caso só incrementa `hallucination_count` quando `dims["unsupported_claims"]` está preenchido **E** `dims["factuality"] is not None`. O motivo real (correção #683, travada por um teste de paridade `test_harness_hallucination_factuality_parity.py`): em pipeline, steps `'standard'` não têm snapshot de verification reancorado, então caem no re-judge **sem evidência** — o que zera `factuality` (`null`) mas ainda vinha com `unsupported_claims` preenchido. Dividir essas afirmações "não fundamentadas" pelo **total** inflava artificialmente a taxa de alucinação. Retornar **`None`** quando ninguém teve fatualidade avaliada distingue "não medido" de "0.0 de alucinação" — e impede que o gate reprove um release por causa de uma métrica que ninguém mediu. É a mesma disciplina de `safety_violation_rate` e `contract_compliance_rate`: **taxa sobre avaliados**. Direção: menor é melhor.
 
-### `evidence_coverage` / RAGAS-gold — cobertura de evidência
+### `evidence_coverage` — cobertura de evidência (e o RAGAS-gold)
 
-Não existe um campo literal chamado `evidence_coverage` no evaluator. A cobertura de evidência é tratada via **RAGAS com gabarito**, que é opt-in (setting `ragas_ground_truth_enabled`, **default OFF** por custo de LLM). Quando ligado, para cada caso com `expected_output`:
+> **Analogia:** de todos os pareceres que o escritório emitiu, quantos citaram ao menos um documento do processo? Isso é cobertura de evidência. Não é nota da *qualidade* da citação — é a pergunta binária "houve lastro?", agregada sobre o run.
+
+**O campo real (66.4.4).** `evidence_coverage = casos fundamentados ÷ casos executados`. Um caso conta como *fundamentado* quando o **passo dono do output** (em pipeline, o step reancorado que produziu a resposta final; em agente, a própria execução) tem `evidence_score > 0`. O denominador são os casos que **executaram** — erro de invoke fica fora, porque não dá para saber se aquele caso teria evidência. Casos que *erraram* por outros motivos ainda entram: cobertura mede lastro, não acerto. O drill-down por caso guarda o `evidence_score` que sustentou a conta.
+
+A história desse campo é uma lição de honestidade de métrica: a coluna existia no schema (com `DEFAULT 0`) e na tela, mas **nunca teve writer** — todo run exibia um `0` fabricado que parecia medição, mesmo com grounding perfeito ao vivo. Desde a correção, `0.0` é um zero **legítimo** ("nenhum caso executado veio fundamentado" — sintoma clássico de `require_evidence` desligado ou `min_relevance` alto demais, ver §7.2), e um valor alto atesta que o RAG de fato alimentou as respostas avaliadas. Direção: maior é melhor; é **observabilidade, não gate**.
+
+Complementar a ela, a *qualidade* da cobertura é tratada via **RAGAS com gabarito**, que é opt-in (setting `ragas_ground_truth_enabled`, **default OFF** por custo de LLM). Quando ligado, para cada caso com `expected_output`:
 
 - Roda `compute_gold_ragas(answer, ground_truth, contexts)`, onde `contexts` vem de `trace.evidence_detail[].text_preview`.
 - **`dimension_breakdown.avg_context_recall`** = média de `context_recall.score` — quanto da evidência necessária o retriever de fato trouxe.
@@ -921,6 +937,7 @@ Sinais registrados: `judge_used` (se houve pelo menos um julgamento), `judge_mod
 | `contract_compliance_rate` | Conformidade de contrato sobre avaliados | `contract_compliant_count / contract_evaluated`; `None` se 0 | `< harness_min_contract_compliance` (0.95) |
 | `correct_refusal_rate` | Recusa correta a adversariais | `correct_refusals / len(adversarial_cases)`; **default 1.0 sem adversariais** (marcado `*`) | — (drift/informativo) |
 | `false_positive_rate` | Recusas indevidas (medo excessivo) | `false_positives / total` | `> 0.15` (**hardcoded**) |
+| `evidence_coverage` | Fração dos casos executados com resposta fundamentada | `grounded_cases / coverage_evaluated` (dono do output com `evidence_score > 0`; erro de invoke fora do denominador) | — (observabilidade) |
 | `avg_context_recall` | Cobertura de evidência (RAGAS-gold) | média de `context_recall.score` (opt-in) | — (observabilidade) |
 | `avg_answer_correctness` | Correção vs. gabarito (RAGAS-gold) | média de `answer_correctness.score` | — (observabilidade) |
 | `routing_phrases` pass-rate | Regressão de roteamento (determinístico) | `routing_phrases_passed / routing_phrases_total` | Só se `harness_phrases_gate` ON; senão informativo |
@@ -1281,6 +1298,8 @@ E o princípio que costura tudo:
 | Injeção de prompt / jailbreak / exfiltração do system prompt | 6 · Prompt guard | `detect()` heurístico (OWASP LLM01) + OPA | `prompt_guard_enabled` (**ON**) / `opa_enabled` (**OFF**) |
 | Acesso indevido a rota sensível | 7 · RBAC | `require_role(*roles)` → 403 | Por rota |
 | Um provider LLM travado derruba a plataforma | 8 · Circuit breaker | `_RedisBreaker` por-provider, fail-open | `circuit_breaker_enabled` (**ON**; master switch) |
+| Provider responde 5xx e o HTML cru do gateway vaza ao usuário | 8 · Contingência de LLM | `is_llm_unreachable` trata `>=500` como "não respondeu" → cadeia modelo do agente → Modelo Primário → Fallback; último recurso é mensagem amigável | Sempre (cadeia configurável no Roteamento LLM) |
+| Recusa de qualidade no fim da cadeia descarta a resposta boa anterior | engine (pipeline) | `_chain_quality_fallback` reancora no último especialista aprovado + rodapé honesto; recusa de **política** nunca sofre fallback | Sempre em pipeline (66.5.0) |
 | SSRF / peer forjado na federação | 9 · A2A | `validate_public_url` + HMAC + `MAESTRO_SECRET_KEY`→503 | `federation_enabled` (**OFF**→404) |
 | Direito ao esquecimento / retenção (LGPD) | 10 · Retenção | `forget_customer` / `purge_interactions_once` | `interactions_retention_days` (0=off); forget on-demand |
 | Decisão de política fora do código (auditável, editável) | 11 · OPA (interaction) | `interaction.rego` no `PolicyCheck`: injeção≥0.7, rate-limit, `user.status` | `opa_enabled` (**OFF**) |
@@ -1330,6 +1349,10 @@ Com **`verifier_signals_drive_fsm` ON** (#684, "Fatia F"), o `run_verify_evidenc
 - um **encaminhamento** ("acionar o NOC", "requer supervisão humana") passa a virar **`Escalate`**.
 
 `detect_decision_signals` (`runtime.py`) é **pura, determinística e conservadora** — foi calibrada para preferir **não** disparar. Ela usa `_REFUSAL_PATTERNS` e `_ESCALATION_PATTERNS` (regex de frases fortes em pt-BR), e **recusa tem precedência** sobre escalonamento.
+
+**Política ≠ capacidade (66.5.3).** O refinamento mais sutil da calibração: "não posso **fornecer/informar** o valor do IOF" quase sempre significa *o agente não tem o dado* — uma limitação de **capacidade**, não uma recusa de **política**. Os padrões de recusa foram estreitados para as formas genuínas de política ("não posso **compartilhar/divulgar/repassar**", dados de terceiros, LGPD, instruções embutidas). A consequência prática: a falta de dado cai em `evidence_insufficient` (mesmo estado `Refuse`, mas elegível ao fallback de cadeia da Parte I §3), enquanto o bloqueio de segurança segue `policy_refusal` — intocável por qualquer fallback. Sem essa distinção, ligar a flag *neutralizava* a rede de proteção da cadeia: toda recusa parecia política.
+
+Duas notas de operação: a flag só passou a ser **de fato aplicável pela tela** em 66.4.2 (ver a disciplina de paridade em §4.17 — o save descartava a chave em silêncio); e o efeito medido no E2E "Fatia F" (2026-07-21, domínio telecom com casos adversariais) foi expressivo — a acurácia de estado saltou de 1/8 para 7/8 estados corretos, com PII e prompt-injection virando `Refuse` e falha de rede virando `Escalate`. Ela permanece **OFF por default** (compatibilidade byte-idêntica), mas é candidata forte a ON em instalações novas.
 
 ### A FSM também redige e redacta
 
@@ -1400,6 +1423,10 @@ Rubrica JSON estrita, quatro dimensões mais a lista de afirmações órfãs:
 | `unsupported_claims` | lista | Afirmações concretas sem respaldo nas evidências |
 
 O parse é robusto (`_parse_json_robust`: remove cerca de markdown, acha o primeiro `{...}` balanceado); se falhar, propaga `ValueError` e o Verifier **degrada para heurística** — nunca trava a resposta.
+
+**Simetria draft × juiz (66.4.3).** Uma regra de justiça processual: o juiz precisa ver **as mesmas evidências que o redator viu**. Historicamente `_format_evidences` truncava cada evidência em 500 caracteres — com chunks de RAG de ~2000, o juiz enxergava ~25% do material, não encontrava o fato citado (que vivia na posição 600, 800, 1100…) e devolvia `factuality` baixa com `unsupported_claims` — uma **falsa recusa** de uma resposta perfeitamente fundamentada. Hoje o juiz recebe os **snippets integrais** sob um orçamento total (`_EVIDENCE_BUDGET_CHARS = 24000`); se estourar, o corte é **avisado no próprio prompt** ("…corte pelo orçamento total do juiz") — o juiz sabe que não viu tudo, em vez de julgar sem saber que estava cego.
+
+E um segundo guarda de honestidade na volta: se o juiz devolve `factuality = 0` **quando não havia evidência nenhuma**, a nota é anulada para `None` (`_null_unverifiable_factuality`) — a rubrica manda devolver `null` sem evidências, mas modelos desobedecem; "não verificável" não pode ser registrado como "verificado e péssimo".
 
 ### Agregação (`runtime.py`)
 
@@ -1501,6 +1528,8 @@ Isto **não é defesa absoluta** — é a primeira linha, reforçada pelos Guard
 **Fundamento (`app/core/llm_breaker.py`).** Breaker **por-provider** (chave = `canonical_provider(name)`, com `openai ≡ azure`), gate `circuit_breaker_enabled` (master switch — ligado por default; `False` = passthrough total). Estados `closed / open / half_open`. Detalhe fino: **abre SÓ em falha de *alcance*** (rede, timeout, URL ausente — decidido pelo caller via `is_llm_unreachable`); erros 400 ou de conteúdo **não** chamam `record_failure`. Após `cb_failure_threshold` falhas → **OPEN** por `cb_cooldown_seconds` (chamadas são curto-circuitadas, não pagam o timeout); passado o cooldown → **HALF_OPEN** com até `cb_half_open_max_probes` sondas (sucesso **fecha**, falha **reabre**).
 
 Dois backends: **`_RedisBreaker`** (cross-worker — a frota inteira para de bater no provider morto após N falhas *totais*; chaves `cb:fail/open/probe:{p}` com TTL) e **`_MemoryBreaker`** (fallback por-worker quando o Redis cai). **Invariante fail-open:** qualquer erro do próprio breaker degrada para "deixa passar" — nunca propaga ao caminho quente do invoke. `note_short_circuit` mede o ganho (timeouts de provider morto evitados). Foi isto que conteve a exaustão do pool asyncpg (5/20) que derrubava a plataforma quando um provider travava por até 300s.
+
+**5xx dispara a contingência (66.5.1).** O breaker anda de mãos dadas com a **cadeia de contingência** configurada no Roteamento LLM: quando o modelo do agente não responde, a plataforma tenta o **Modelo Primário** e depois o **Fallback**, com a troca visível na rastreabilidade. O classificador dessa cadeia é o mesmo `is_llm_unreachable` — e ele passou a tratar **qualquer HTTP `>= 500`** (no `status_code` da exceção ou do `.response`) como "não respondeu". Antes, um 503 do gateway (nginx na frente de um modelo self-hosted, por exemplo) escapava da cadeia e o **HTML cru da página de erro virava a resposta ao usuário**. Os 4xx seguem, de propósito, **fora** da contingência: 401/404/429 são erros de *configuração ou cota* — trocar de modelo mascararia o problema em vez de gerar a mensagem acionável. E há defesa em profundidade no engine: se alguma forma nova de indisponibilidade escapar, qualquer erro `>= 500` ou corpo contendo `<html` vira uma mensagem amigável de indisponibilidade — HTML de gateway **nunca** chega ao cliente.
 
 ---
 
@@ -1761,7 +1790,7 @@ Agora a pergunta entra na `InteractionStateMachine`, que garante que **todo cami
 
 **RetrieveEvidence** — aqui o RAG **pode** rodar. Mas ele só fundamenta de fato quando **as três condições** se alinham (detalhadas no FAQ abaixo): `require_evidence` ligado, `## Evidence Policy` com `sources` populada, e `min_relevance` baixo o bastante para os scores RRF reais (~0,03).
 
-**DraftAnswer** — o LLM finalmente redige. Aqui atuam as diretivas SELADAS injetadas no system prompt: grounding ("responda EXCLUSIVAMENTE com base nas evidências"), idioma, Output Shape (tamanho), e o Contrato de Decisão (`## Decisions`).
+**DraftAnswer** — o LLM finalmente redige. Aqui atuam as diretivas SELADAS injetadas no system prompt: grounding ("responda EXCLUSIVAMENTE com base nas evidências"), idioma, Output Shape (tamanho), e o Contrato de Decisão (`## Decisions`). Se o provider do agente responde **5xx** (gateway fora, modelo self-hosted caído), a **cadeia de contingência** assume — Modelo Primário, depois Fallback, com a troca anotada na rastreabilidade — e, no pior caso, o usuário recebe uma mensagem amigável de indisponibilidade, nunca o HTML cru do gateway (§7.8).
 
 **VerifyEvidence** — a segunda e mais rica bifurcação. A precedência exata é:
 
@@ -1783,7 +1812,7 @@ Durante o `VerifyEvidence` (quando `verifier_v2_enabled`), o Verifier multidimen
 | `tone_adherence` | 0–5 | Aderência à voz definida |
 | `safety` | 0 ou 1 | `safety=0` → `risk_high` → dispara **Escalate** |
 
-Mais a lista `unsupported_claims` (afirmações concretas sem respaldo). Se o contrato não bate e o retry está ligado, ele **re-chama o LLM** com um prompt cirúrgico de correção e re-valida.
+Mais a lista `unsupported_claims` (afirmações concretas sem respaldo). Se o contrato não bate e o retry está ligado, ele **re-chama o LLM** com um prompt cirúrgico de correção e re-valida. E o juiz vê **as mesmas evidências integrais que o redator viu** (simetria draft × juiz, §7.3) — julgar sobre um quarto do material gerava falsas recusas de respostas bem fundamentadas.
 
 > Analogia: o revisor formado em outra escola. Ele não gerou a resposta, então não tem apego a ela. E o Maestro registra quando o **mesmo** modelo gerou E julgou (`self_judged`) — um viés que fica auditável mesmo sem mudar o gate.
 
@@ -1793,7 +1822,9 @@ Importante: nos caminhos assíncronos, o juiz **não decide o runtime** — ele 
 
 A FSM aterrissa em um dos três estados de decisão e então em `LogAndClose`, que **redige a PII do output** (o LLM pode ter regurgitado PII das evidências). Os prefixos são redigidos pela própria FSM — por exemplo, `"Recusa controlada: {reason}\n\nPróximo passo: ..."` ou `"Escalação: {reason}\n\nContexto: ..."`.
 
-Com a flag `verifier_signals_drive_fsm` ligada (opt-in, #684), uma recusa *redigida pelo agente* ("não posso fornecer dados de terceiros") vira de fato o estado **Refuse**, e um encaminhamento ("acionar o NOC", "supervisão humana") vira **Escalate** — em vez de ficarem invisíveis dentro de um `Recommend`.
+Com a flag `verifier_signals_drive_fsm` ligada (opt-in, #684), uma recusa *redigida pelo agente* vira de fato o estado **Refuse**, e um encaminhamento ("acionar o NOC", "supervisão humana") vira **Escalate** — em vez de ficarem invisíveis dentro de um `Recommend`. Com a calibração de 66.5.3, só recusa de **política** ("não posso compartilhar dados de terceiros") dispara `policy_refusal`; "não tenho esse dado" é limitação de capacidade e cai em `evidence_insufficient`.
+
+E em **pipeline**, uma última rede de proteção (66.5.0): se o *último* nó de uma cadeia recusa por **falta de evidência**, a resposta boa e fundamentada do especialista anterior não é descartada — ela volta a ser a saída final, com um rodapé avisando que uma etapa complementar não foi concluída e será confirmada por um humano. Recusa de **política** nunca sofre esse fallback: bloqueio de segurança bloqueia tudo.
 
 ### Passo 8 — A resposta sanitizada volta
 
@@ -1861,12 +1892,32 @@ Perguntas reais que operadores fazem, com respostas honestas. Muitas apontam par
 Há exatamente três lugares na FSM onde uma pergunta pode virar `Refuse`, e cada um tem um motivo distinto:
 
 1. **PolicyCheck negou** (`policy_denied`) — a política de entrada bloqueou. Se o `prompt_guard` está ligado e detectou injeção, é aqui.
-2. **VerifyEvidence — recusa de política** (`policy_refusal`) — o próprio agente redigiu uma recusa controlada e, com `verifier_signals_drive_fsm` ligado, ela virou estado.
-3. **VerifyEvidence — evidência insuficiente** (`evidence_insufficient`) — o caso mais comum. Em modo `grounding_strict`, sem `allow_general_knowledge`, o `_grounding_guard` exige ≥1 fonte real. Sem evidência, sem anexo, sem contexto de pipeline e sem output de tool → recusa.
+2. **VerifyEvidence — recusa de política** (`policy_refusal`) — o próprio agente redigiu uma recusa controlada e, com `verifier_signals_drive_fsm` ligado, ela virou estado. Desde 66.5.3 isso exige sinal **genuíno de política** (compartilhar/divulgar/repassar dados de terceiros, LGPD, instrução embutida) — "não posso fornecer o valor X" é falta de dado, não política.
+3. **VerifyEvidence — evidência insuficiente** (`evidence_insufficient`) — o caso mais comum. Em modo `grounding_strict`, sem `allow_general_knowledge`, o `_grounding_guard` exige ≥1 fonte real. Sem evidência, sem anexo, sem contexto de pipeline e sem output de tool → recusa. É também onde caem as limitações de **capacidade** ("não tenho esse dado") — e por isso só esta condição é elegível ao fallback de cadeia em pipelines.
 
 > Analogia: um bom médico não chuta um diagnóstico sem exames. Se você não deu exame nenhum (evidência) e proibiu o "achismo" (conhecimento paramétrico), o Maestro prefere dizer "não tenho base para responder" a inventar. O motivo da recusa é sempre acionável: ele te diz o que fazer (anexar documento, vincular RAG, habilitar tool, ou ligar o conhecimento geral).
 
 O `trace` expõe `evidence_min_relevance` e sua `_source` — dá para ver exatamente por que caiu.
+
+---
+
+**O provedor de LLM caiu no meio do atendimento. O que o cliente vê?**
+
+Nunca a página de erro do provedor — esse é o contrato. A resiliência tem três andares, do mais fino ao mais bruto:
+
+1. **Contingência de modelo** (Roteamento LLM): o classificador `is_llm_unreachable` trata rede, timeout **e qualquer HTTP 5xx** como "não respondeu", e a cadeia tenta o **Modelo Primário** e depois o **Fallback** — com a troca registrada na rastreabilidade (dá para ver *qual* modelo respondeu de fato). Erros 4xx ficam fora de propósito: 401/429 são problema de chave/cota, e trocar de modelo mascararia a causa.
+2. **Circuit breaker** (§7.8): após N falhas de alcance, o provider "desarma" e as chamadas seguintes nem pagam o timeout — a frota inteira para de bater na porta morta (backend Redis, cross-worker).
+3. **Última linha no engine**: se tudo falhou, o usuário recebe uma mensagem amigável de indisponibilidade ("tente novamente em instantes"). Um `<html>` de gateway jamais vira resposta — houve um tempo em que o 503 do nginx vazava cru, e essa classe de vazamento foi fechada em 66.5.1.
+
+> Analogia: é o gerador do hospital. A queda de energia acende o gerador (contingência), o disjuntor isola o circuito em curto (breaker) — e, se nada disso bastar, a equipe avisa "voltamos já" em vez de deixar o paciente lendo o manual da subestação.
+
+---
+
+**Meu pipeline respondeu bem e terminou com um aviso de "etapa complementar não concluída". O que houve?**
+
+A **rede de proteção da cadeia** (66.5.0) agiu. Numa cadeia `Especialista A → Especialista B`, o nó final recusou por **falta de evidência** (ele não tinha o dado para a *sua* parte — ex.: A respondeu sobre o plano de roaming com base no RAG, e B não achou a taxa de câmbio do dia). Antes, essa recusa de qualidade **sobrescrevia** a resposta boa de A: o cliente perdia tudo por causa da etapa que faltou. Agora a saída final reancora no último especialista **aprovado e fundamentado**, e o rodapé avisa com honestidade que um humano confirmará o restante.
+
+O limite é deliberado e fail-closed: só recusa de **qualidade** (`evidence_insufficient`) tem fallback. Se a recusa foi de **política** (`policy_refusal` — dados de terceiros, injeção) ou risco/fraude, a recusa vence e nada é resgatado — segurança não tem segunda opinião. Essa distinção é exatamente o que a calibração "política ≠ capacidade" (66.5.3) garante quando `verifier_signals_drive_fsm` está ligada.
 
 ---
 
