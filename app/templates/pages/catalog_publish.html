@@ -359,8 +359,16 @@
                 class="px-4 py-2 text-[12px] rounded-lg border border-surface-200 text-surface-700 hover:bg-surface-50">
             <span x-text="step > 1 ? 'Voltar' : 'Cancelar'"></span>
         </button>
-        <div class="flex gap-2">
+        <div class="flex items-center gap-3">
+            <!-- Motivo do bloqueio (66.5.2, achado E2E 2026-07-22): o Próximo
+                 ficava disabled SEM dizer por quê — no cadastro de plataforma
+                 externa, "Persiste input" exige Retenção e o usuário só via o
+                 botão morto. O hint espelha o canAdvance (mesma ordem). -->
+            <span x-show="step < 4 && advanceBlockReason()" x-text="advanceBlockReason()"
+                  data-testid="pub-next-reason"
+                  class="text-[11px] text-amber-600 max-w-[280px] text-right"></span>
             <button x-show="step < 4" @click="nextStep()" :disabled="!canAdvance()" data-testid="pub-next"
+                    :title="advanceBlockReason()"
                     class="px-4 py-2 text-[12px] rounded-lg bg-brand-500 text-white font-semibold hover:bg-brand-600 disabled:opacity-50">
                 Próximo
             </button>
@@ -607,6 +615,32 @@ function publishWizard() {
                 return true;
             }
             return true;
+        },
+
+        // Motivo textual do bloqueio do Próximo (66.5.2) — string vazia quando
+        // pode avançar. ESPELHA canAdvance() na MESMA ordem (SSOT do gate);
+        // se um mudar sem o outro, o hint mente — mantê-los juntos. Vazio
+        // para os passos sem gate (o canAdvance retorna true direto).
+        advanceBlockReason() {
+            if (this.step === 1) {
+                if (this.form.kind === 'external_platform' || this.form.kind === 'recipe') return '';
+                return this.form.artifact_id ? '' : 'Selecione um agente ou skill.';
+            }
+            if (this.step === 2) {
+                if (!this.form.name) return 'Informe o nome da entry.';
+                if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(this.form.version)) return 'Versão precisa ser semver (ex.: 1.0.0).';
+                return '';
+            }
+            if (this.step === 3) {
+                if (this.form.kind === 'external_platform' && !this.form.external.vendor) return 'Informe o Vendor da plataforma.';
+                if (this.form.capability.calls_external_apis &&
+                    !this.capExternalApisText.split('\n').map(s => s.trim()).filter(Boolean).length) return 'Liste ao menos 1 URL de API externa.';
+                if (this.form.capability.stores_input &&
+                    (this.form.capability.storage_retention_days === null ||
+                     this.form.capability.storage_retention_days < 0)) return 'Persiste input: informe a retenção (dias).';
+                return '';
+            }
+            return '';
         },
 
         nextStep() {
