@@ -81,9 +81,20 @@ class VerificationResult:
 
 # Recusa controlada redigida pelo agente (dado de 3º, injection, política).
 # Frases FORTES (não fragmentos) → conservador, evita falso Refuse em produção.
+# 66.5.3 (achado E2E 2026-07-22, decisão de produto): policy_refusal é recusa
+# de POLÍTICA/SEGURANÇA (dado de terceiro, privacidade, injeção, autorização,
+# DIVULGAÇÃO de info sensível) — NÃO limitação de capacidade. "Não posso
+# FORNECER/INFORMAR o valor do IOF" é falta de EVIDÊNCIA (não tenho o dado),
+# não uma recusa por política — deixá-la aqui rotulava TODA recusa de qualidade
+# como policy_refusal e, com a flag `verifier_signals_drive_fsm` ON (#721),
+# neutralizava o fallback do F-4 (#724) para o caso que ele existe para
+# resolver (a resposta boa do especialista anterior era descartada). Verbos de
+# DIVULGAÇÃO (compartilhar/divulgar/repassar) SEGUEM política (implicam reter
+# info sensível); fornecer/informar/ajudar com saem daqui → evidence_insufficient
+# (mesmo estado final Refuse, mas agora elegível ao fallback da cadeia).
 _REFUSAL_PATTERNS = (
-    r"n[ãa]o posso (?:fornecer|compartilhar|informar|repassar|divulgar|ajudar com)",
-    r"n[ãa]o (?:é|e) poss[íi]vel (?:fornecer|compartilhar|informar)",
+    r"n[ãa]o posso (?:compartilhar|divulgar|repassar)",
+    r"n[ãa]o (?:é|e) poss[íi]vel (?:compartilhar|divulgar)",
     r"n[ãa]o (?:tenho|possuo) autoriza[çc][ãa]o",
     r"dados? de (?:outro|terceiro|3º|outra pessoa)",
     r"informa[çc][õo]es de (?:outro titular|outro cliente|terceiros?)",
