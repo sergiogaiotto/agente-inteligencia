@@ -1718,6 +1718,9 @@ function meshFlowPage() {
             this.edges = edges;
             this._computeAutoLayout();
             this._resolvePositions();
+            // Rebuild com lente ativa (ex.: conectou/incluiu agente → reload) reaplica
+            // o layout efêmero — senão o subgrafo voltaria espalhado no meio do uso.
+            if (this.selectedPipeline) this._lensLayout();
         },
 
         _mkNode(base, agent, synthetic) {
@@ -1778,12 +1781,73 @@ function meshFlowPage() {
         nodeName(id) { const n = this.nodeById()[id]; return n ? n.name : '—'; },
 
         autoLayout() {
+            // Na LENTE, o botão reorganiza SÓ a vista (efêmero) — reorganizar o mesh
+            // inteiro e salvar a partir da lente destruiria o arranjo do Mesh completo.
+            if (this.selectedPipeline) {
+                this._lensLayout();
+                this.$nextTick(() => this.fit());
+                return;
+            }
             this._computeAutoLayout();
             for (const n of this.nodes) { n.x = n._ax; n.y = n._ay; }
             this._recomputeCanvas();
             this._syncPositions();
             this.queueSave();
             this.$nextTick(() => this.fit());
+        },
+
+        // Lente sempre ABRE organizada (67.2.0, pedido do dono do produto): os membros
+        // herdavam as posições do Mesh completo (espalhados entre 130 agentes) e o
+        // subgrafo abria ilegível (~47% de zoom). Auto-layout EFÊMERO do subgrafo:
+        // colunas por profundidade (BFS da entrada da lente — mesma regra do
+        // lensStart), fora-da-cadeia numa coluna final. NUNCA persiste: as posições
+        // salvas pertencem ao Mesh completo; sair da lente restaura via
+        // _resolvePositions(). O Início da lente (lensStart) é computado das posições
+        // dos membros, então acompanha o layout de graça.
+        _lensLayout() {
+            if (!this.selectedPipeline) return;
+            const ids = new Set(this.selectedPipeline.agent_ids || []);
+            if (!ids.size) return;
+            const byId = this.nodeById();
+            const intra = this.edges.filter(e => e.type !== 'start' && ids.has(e.source) && ids.has(e.target));
+            const adj = {};
+            for (const e of intra) (adj[e.source] = adj[e.source] || []).push(e.target);
+            const entry = this.selectedPipeline.entry_agent_id;
+            let seeds;
+            if (entry && ids.has(entry)) {
+                seeds = [entry];
+            } else {
+                const incoming = new Set(intra.map(e => e.target));
+                const outgoing = new Set(intra.map(e => e.source));
+                seeds = [...ids].filter(id => outgoing.has(id) && !incoming.has(id));
+                if (!seeds.length && intra.length) seeds = [...ids].filter(id => !incoming.has(id));
+                if (!seeds.length) seeds = [...ids];   // sem conexões internas: coluna única
+            }
+            const depth = {};
+            for (const id of seeds) depth[id] = 0;
+            let frontier = seeds.slice(), guard = 0;
+            while (frontier.length && guard++ < ids.size + 2) {
+                const next = [];
+                for (const s of frontier) for (const t of (adj[s] || [])) {
+                    const d = (depth[s] || 0) + 1;
+                    if (depth[t] == null || depth[t] < d) { depth[t] = d; next.push(t); }
+                }
+                frontier = next;
+            }
+            // Fora da cadeia (sem caminho a partir da entrada): coluna final à parte —
+            // visíveis, mas sem inventar posição no meio do fluxo.
+            const maxD = Math.max(0, ...Object.values(depth));
+            for (const id of ids) if (depth[id] == null) depth[id] = maxD + 1;
+            const cols = {};
+            for (const id of ids) { const n = byId[id]; if (n) (cols[depth[id]] = cols[depth[id]] || []).push(n); }
+            Object.keys(cols).map(Number).sort((a, b) => a - b).forEach(d => {
+                cols[d].forEach((n, i) => {
+                    n.x = this.START_X + 240 + d * (184 + this.GAP_X);
+                    n.y = this.START_Y + i * (this.NODE_H + this.GAP_Y);
+                });
+            });
+            this._recomputeCanvas();
+            // SEM _syncPositions()/queueSave() — o layout da lente é efêmero por contrato.
         },
 
         get renderEdges() {
@@ -2245,7 +2309,7 @@ function meshFlowPage() {
         },
         isOutOfChain(id) { return !!this.selectedPipeline && this.unreachableInLens.has(id); },
 
-        selectMesh() { this.selectedPipeline = null; this.selected = null; this.ctxMenu = null; this.clearIsolate(); this.closeRouteSim(); this.$nextTick(() => this.fit()); },
+        selectMesh() { this.selectedPipeline = null; this.selected = null; this.ctxMenu = null; this.clearIsolate(); this.closeRouteSim(); this._resolvePositions(); /* volta ao layout SALVO — a lente era efêmera */ this.$nextTick(() => this.fit()); },
         selectPipeline(p) {
             this.selectedPipeline = p; this.selected = null;
             this.ctxMenu = null; this.clearIsolate();   // menu fixed e isolamento não sobrevivem à troca de lente
@@ -2255,6 +2319,10 @@ function meshFlowPage() {
             // Seleção programática (ex.: recém-criado via "Novo") abre o grupo do
             // status — com o trilho recolhido por padrão o card ficaria invisível.
             if (p && p.status && this.sectionOpen[p.status] === false) this.sectionOpen[p.status] = true;
+            // Lente abre ORGANIZADA (67.2.0): reset ao layout salvo (limpa resquício
+            // de lente anterior) e auto-layout efêmero do subgrafo — ver _lensLayout.
+            this._resolvePositions();
+            this._lensLayout();
             this.loadSealInfo(p);
             this.$nextTick(() => this.fit());
         },
@@ -3037,7 +3105,13 @@ function meshFlowPage() {
         },
         onUp() {
             if (this._drag) {
-                if (this._drag.moved) { this._suppressClick = true; this._recomputeCanvas(); this._syncPositions(); this.queueSave(); }
+                if (this._drag.moved) {
+                    this._suppressClick = true; this._recomputeCanvas();
+                    // Na lente o arranjo é EFÊMERO: arrastar ajusta a vista, não o
+                    // Mesh completo — persistir aqui salvaria coordenadas da lente
+                    // por cima do layout salvo de todo o mesh.
+                    if (!this.selectedPipeline) { this._syncPositions(); this.queueSave(); }
+                }
                 this._drag = null;
                 return;
             }
