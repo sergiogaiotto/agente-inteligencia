@@ -50,7 +50,7 @@ opentelemetry-exporter-otlp-proto-grpc==1.43.0
 opentelemetry-instrumentation-fastapi==0.64b0
 opentelemetry-instrumentation-asyncpg==0.64b0
 opentelemetry-instrumentation-httpx==0.64b0
-opentelemetry-instrumentation-redis==0.64b0
+opentelemetry-instrumentation-redis==0.65b0
 opentelemetry-instrumentation-logging==0.64b0
 # Métricas de 1ª classe (OBS-1) — /metrics em formato Prometheus. Sempre ativo
 # (não gated por OTEL_ENABLED): é in-memory e barato, exposto p/ scrape do Prometheus.
