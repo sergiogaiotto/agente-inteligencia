@@ -141,6 +141,18 @@ def is_llm_unreachable(exc: BaseException, _depth: int = 0) -> bool:
             return True
     except Exception:
         pass
+    # 2b) HTTP 5xx do provider/gateway (66.5.1, achado F-5 do E2E 2026-07-21):
+    #    502/503/504 (ex.: nginx do hub GPT-OSS fora do ar) É "não respondeu" —
+    #    o contrato de contingência das Configurações ("quando o modelo do
+    #    agente não responde, a plataforma cai pro Modelo Primário/Fallback")
+    #    cobre exatamente este caso. Excluí-los deixava o 503 escapar da cadeia
+    #    e o HTML cru do gateway virar draft ao usuário. 4xx segue False de
+    #    propósito (401/404/429 = config/uso → mensagem acionável ao operador,
+    #    sem fallback silencioso que mascare o problema).
+    _sc = getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "response", None), "status_code", None)
+    if isinstance(_sc, int) and _sc >= 500:
+        return True
     msg = str(exc).lower()
     # 3) provider sem URL/key configurada — inalcançável na prática.
     #    GPTOSSProvider.generate levanta "url não configurada"; Azure/OpenAI

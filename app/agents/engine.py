@@ -2855,7 +2855,20 @@ async def execute_interaction(
         elif "timeout" in err_str.lower() or "timed out" in err_str.lower():
             draft = f"⚠ Timeout na chamada ao '{provider}'. O modelo demorou demais para responder."
         else:
-            draft = f"⚠ Erro ao chamar LLM ({provider}/{agent.get('model','?')}): {err_str[:200]}"
+            # 5xx/corpo HTML (66.5.1, F-5): com is_llm_unreachable cobrindo 5xx
+            # este ramo vira defesa-em-profundidade — se alguma forma nova de
+            # indisponibilidade escapar da cadeia, o usuário NUNCA recebe o
+            # HTML cru do gateway (o caso real vazou a página 503 do nginx).
+            _sc_err = getattr(llm_err, "status_code", None) or getattr(
+                getattr(llm_err, "response", None), "status_code", None)
+            if (isinstance(_sc_err, int) and _sc_err >= 500) or "<html" in err_str.lower():
+                draft = (
+                    f"⚠ O provedor '{provider}' está indisponível no momento "
+                    "(erro do serviço). A plataforma tentou os modelos de "
+                    "contingência configurados — tente novamente em instantes."
+                )
+            else:
+                draft = f"⚠ Erro ao chamar LLM ({provider}/{agent.get('model','?')}): {err_str[:200]}"
         logger.warning(f"LLM error for agent {agent_id}: {err_str}")
 
     # Onda 1 Output Shape: truncate hard pós-LLM quando skill declara

@@ -66,6 +66,12 @@ def _openai_status(status: int) -> openai.APIStatusError:
         return openai.AuthenticationError("bad key", response=resp, body=None)
     if status == 429:
         return openai.RateLimitError("slow down", response=resp, body=None)
+    if status >= 500:
+        # Caso real F-5 (E2E 2026-07-21): nginx do hub GPT-OSS fora → 503 com
+        # corpo HTML — o SDK openai envelopa como InternalServerError.
+        return openai.InternalServerError(
+            "<html><body>503 Service Temporarily Unavailable</body></html>",
+            response=resp, body=None)
     raise AssertionError(status)
 
 
@@ -97,6 +103,35 @@ class TestIsLlmUnreachable:
         # 4xx = request/config errado → operador precisa ver, NÃO mascarar com
         # fallback silencioso.
         assert is_llm_unreachable(_openai_status(status)) is False
+
+    @pytest.mark.parametrize("status", [500, 502, 503, 504])
+    def test_5xx_do_gateway_E_inacessivel(self, status):
+        """F-5 (66.5.1, E2E 2026-07-21): 503 do nginx na frente do hub GPT-OSS
+        É "não respondeu" — o contrato de contingência das Configurações cobre
+        exatamente este caso. Antes o 503 escapava da cadeia e o HTML cru do
+        gateway virava draft ao usuário (com step completed/evidence_ok)."""
+        assert is_llm_unreachable(_openai_status(status)) is True
+
+    def test_5xx_via_response_status_code(self):
+        # Forma httpx.HTTPStatusError (path .generate direto): status vive em
+        # exc.response.status_code, não em exc.status_code.
+        resp = httpx.Response(503, request=_req())
+        exc = httpx.HTTPStatusError("Server error '503'", request=_req(), response=resp)
+        assert is_llm_unreachable(exc) is True
+
+    def test_5xx_encadeado_em_cause_e_inacessivel(self):
+        outer = RuntimeError("LangChain wrapped this")
+        outer.__cause__ = _openai_status(503)
+        assert is_llm_unreachable(outer) is True
+
+    def test_ramo_html_do_engine_nunca_vaza_o_corpo(self):
+        # Defesa-em-profundidade no except externo do engine: 5xx/HTML que
+        # escapar da cadeia vira mensagem amigável, NUNCA o corpo do gateway.
+        import inspect
+        from app.agents import engine as _eng
+        src = inspect.getsource(_eng.execute_interaction)
+        assert '"<html" in err_str.lower()' in src
+        assert "indisponível no momento" in src
 
     def test_url_nao_configurada_e_inacessivel(self):
         exc = RuntimeError("gpt-oss-120b: URL não configurada. Configure em /settings.")
