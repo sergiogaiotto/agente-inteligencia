@@ -1661,7 +1661,11 @@ function meshFlowPage() {
 
         // Estúdio de Pipelines (PR1)
         pipelines: [], selectedPipeline: null, membership: {}, pipePanel: true,
-        sectionOpen: { rascunho: true, publicado: true, aposentado: false, members: true, include: true, simulate: true },
+        // Grupos do trilho de pipelines RECOLHIDOS na entrada (67.1.0, pedido do dono
+        // do produto): com dezenas de pipelines a lista despejada empurrava "Criar a
+        // partir de um fluxo" para fora da dobra. members/include/simulate são seções
+        // do PAINEL do pipeline selecionado — continuam abertas.
+        sectionOpen: { rascunho: false, publicado: false, aposentado: false, members: true, include: true, simulate: true },
         renamingId: null, renameText: '',
         catalogModal: null,   // C5 — modal de publicação no Catálogo (versão semver)
         pipeNameModal: null,  // modal in-app de NOME de novo pipeline (substitui prompt() nativo)
@@ -2248,6 +2252,9 @@ function meshFlowPage() {
             this.closeRouteSim();                        // sim/highlight idem — a lente muda as arestas visíveis
             this.pipeFilter = { domain: '', kind: '', q: '' };
             this.helpTip = null;
+            // Seleção programática (ex.: recém-criado via "Novo") abre o grupo do
+            // status — com o trilho recolhido por padrão o card ficaria invisível.
+            if (p && p.status && this.sectionOpen[p.status] === false) this.sectionOpen[p.status] = true;
             this.loadSealInfo(p);
             this.$nextTick(() => this.fit());
         },
