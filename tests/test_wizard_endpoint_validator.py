@@ -395,6 +395,41 @@ class TestWizardVerbosityEndToEnd:
         assert r.json()["resolved"]["verbosity"] == "didatico"
         assert "Seja específico e detalhado." in captured["system"]
 
+    @pytest.mark.asyncio
+    async def test_sem_verbosity_le_o_setting_quando_difere_do_failsafe(self, app_client):
+        """Mata a mutação `verbosity = data.verbosity or "didatico"`: o teste
+        acima roda com o setting no default, que COINCIDE com o fail-safe —
+        endpoint que ignorasse o setting ficaria verde. Aqui a plataforma está
+        em 'enxuto' e o request não manda o campo: o efetivo TEM de ser o
+        setting. O stub também precisa de wizard_reasoning_effort (o endpoint
+        o lê no mesmo get_settings)."""
+        captured = {}
+
+        class _CapturingLLM:
+            async def generate(self, messages, **kwargs):
+                captured.setdefault("system", messages[0]["content"])
+                return {"content": SKILL_OK}
+
+        class _StubSettings:
+            wizard_verbosity = "enxuto"
+            wizard_reasoning_effort = ""
+
+        bindings, _, _ = _patch_wizard_internals([SKILL_OK])
+        with patch("app.routes.wizard._resolve_bindings_for_prompt",
+                   AsyncMock(return_value=bindings)), \
+             patch("app.routes.wizard._resolve_wizard_llm",
+                   AsyncMock(return_value=("openai", "gpt-4o", "reasoning"))), \
+             patch("app.routes.wizard.get_provider", return_value=_CapturingLLM()), \
+             patch("app.routes.wizard.get_settings", return_value=_StubSettings()):
+            r = app_client.post("/api/v1/wizard/skill", json={
+                "description": "skill teste",
+                "mcp_tool_ids": ["tool-1"],
+            })
+        assert r.status_code == 200
+        assert r.json()["resolved"]["verbosity"] == "enxuto"
+        assert "REGRAS DE CONCISÃO (nível ENXUTO — CRÍTICAS)" in captured["system"]
+        assert "Seja específico e detalhado." not in captured["system"]
+
     def test_verbosity_invalida_da_422(self, app_client):
         r = app_client.post("/api/v1/wizard/skill", json={
             "description": "x", "verbosity": "máximo",
