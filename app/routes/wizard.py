@@ -1279,6 +1279,9 @@ REGRAS DE CONCISÃO (nível PADRÃO):
   no prompt do juiz de qualidade. Escreva-as objetivas: sem parágrafos
   introdutórios, sem repetir o que outra seção já declara.
 - NÃO gere prosa didática/explicativa além do necessário para operar a skill.
+- NUNCA encurte os blocos YAML/JSON do bloco SEÇÕES OBRIGATÓRIAS (copie-os
+  VERBATIM, incluindo a diretiva de frontmatter `execution_mode: declarative`
+  quando presente) nem o `inputs_schema` que o sub-bloco de Tabelas exigir.
 
 Gere o SKILL.md completo em formato markdown. Seja específico e completo, mas conciso — cada seção no tamanho necessário para operar a skill, e nada mais."""
 
@@ -1329,9 +1332,13 @@ REGRAS DE CONCISÃO (nível ENXUTO — CRÍTICAS):
   recorrente: escreva o MÍNIMO que opera a skill corretamente.
 - ZERO prosa didática: sem parágrafos introdutórios, sem justificativas, sem
   repetir o que outra seção já declara.
-- NUNCA encurte à custa de: verbos imperativos nos passos do Workflow, blocos
-  YAML/JSON do bloco SEÇÕES OBRIGATÓRIAS (copie-os VERBATIM) e o rastro de
-  binding no exemplo.
+- NUNCA encurte à custa de: verbos imperativos nos passos do Workflow; blocos
+  YAML/JSON do bloco SEÇÕES OBRIGATÓRIAS (copie-os VERBATIM, incluindo a
+  diretiva de frontmatter `execution_mode: declarative` quando presente); o
+  `inputs_schema` com TODAS as propriedades que o sub-bloco de Tabelas exigir;
+  a `## Evidence Policy` COMPLETA (fence YAML) quando vier do bloco
+  obrigatório — a versão de UMA linha vale SÓ para skill só-MCP; e o rastro
+  de binding no exemplo.
 
 Gere o SKILL.md completo em formato markdown. Seja específico e enxuto."""
 
