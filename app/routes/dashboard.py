@@ -3779,7 +3779,18 @@ class SettingsSave(BaseModel):
     ragas_ground_truth_enabled: Optional[bool] = None
     # Esforço de raciocínio das gerações do Wizard (27.0.0): 'high'|'medium'|
     # 'low'|'' (desligado). Gate por modelo em get_provider. Default 'high'.
-    wizard_reasoning_effort: Optional[str] = None
+    # Pattern fechado (68.0.0): antes aceitava QUALQUER string e o runtime
+    # tratava lixo como "desligado" em silêncio — agora 422 nomeado, como os
+    # campos numéricos. O enum espelha as options do select da aba Parâmetros
+    # (paridade selada em test_parameters_module).
+    wizard_reasoning_effort: Optional[str] = Field(
+        default=None, pattern=r"^(high|medium|low|)$",
+    )
+    # Verbosidade da geração de SKILL.md no Wizard (68.0.0): tamanho do
+    # DOCUMENTO gerado (não da resposta em runtime). Enum fechado = 422.
+    wizard_verbosity: Optional[str] = Field(
+        default=None, pattern=r"^(enxuto|padrao|didatico)$",
+    )
     # P0 API externa: CORS allowlist (CSV de origens) + contenção da API Key.
     cors_allowed_origins: Optional[str] = None
     api_key_public_surface_only: Optional[bool] = None

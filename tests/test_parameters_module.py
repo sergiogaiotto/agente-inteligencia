@@ -200,6 +200,33 @@ class TestUiRangesMatchBackend:
             assert ge == ui_min, f"{key}: UI min {ui_min} != ge {ge}"
             assert le == ui_max, f"{key}: UI max {ui_max} != le {le}"
 
+    def test_selects_ui_tem_enum_fechado_no_settings_save(self):
+        """Selects escapavam da paridade (o teste acima só cobre type:'number')
+        — a manqueira do precedente wizard_reasoning_effort (27.0.0): sem
+        pattern no SettingsSave, QUALQUER string era aceita e o runtime tratava
+        lixo como default em silêncio. Sela a classe (68.0.0): toda option do
+        select da aba é aceita pelo modelo; valor fora do enum é 422."""
+        import re
+        from app.routes.dashboard import SettingsSave
+        src = Path("app/templates/pages/settings.html").read_text(encoding="utf-8")
+        pat_sel = re.compile(
+            r"\{key:'([a-z0-9_]+)',\s*type:'select'.*?options:\[(.*?)\]", re.S
+        )
+        pat_val = re.compile(r"value:'([^']*)'")
+        found = {
+            m.group(1): pat_val.findall(m.group(2))
+            for m in pat_sel.finditer(src)
+            if m.group(1) in PARAMETER_UI_KEYS  # selects de OUTRAS abas não salvam por aqui
+        }
+        # regressão do extrator: os 2 selects do grupo 🪄 existem hoje
+        assert {"wizard_reasoning_effort", "wizard_verbosity"} <= set(found)
+        for key, values in found.items():
+            assert values, f"{key}: select sem options extraídas"
+            for v in values:
+                SettingsSave(**{key: v})  # toda option da UI é aceita
+            with pytest.raises(ValidationError, match=key):
+                SettingsSave(**{key: "valor-fora-do-enum-xyz"})
+
 
 # ─── GET /settings/parameters — efetivo + fonte ─────────────────────
 

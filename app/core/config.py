@@ -420,6 +420,16 @@ class Settings(BaseSettings):
     # Parâmetros, runtime sem restart.
     wizard_reasoning_effort: str = "high"
 
+    # Verbosidade da GERAÇÃO de SKILL.md no Wizard (68.0.0). Controla o tamanho
+    # do DOCUMENTO gerado — NÃO o tamanho da resposta em runtime (isso é o
+    # length_preset/## Output Shape). Purpose/Workflow/Output Contract/Guardrails
+    # entram VERBATIM no prompt a CADA invoke, e Contract+Guardrails de novo no
+    # prompt do juiz (sem teto) — verbosidade aqui vira custo recorrente lá.
+    # 'enxuto' | 'padrao' | 'didatico'. Default 'didatico' = prompt de geração
+    # BYTE-IDÊNTICO ao comportamento anterior (golden em tests/fixtures/).
+    # Editável na aba Parâmetros, runtime sem restart.
+    wizard_verbosity: str = "didatico"
+
     # ── Policy Engine (Onda 4a — OPA Policy as Code) ──
     # Quando True, decisões sensíveis (PolicyCheck, tool invocation) consultam o
     # OPA em opa_url e seguem a decisão. Auditoria via audit_log.
@@ -683,6 +693,9 @@ _UI_TO_ENV_MAP = {
     # Esforço de raciocínio das gerações do Wizard (skill/agente) — gate por
     # modelo em get_provider. 'high'|'medium'|'low'|'' (desligado). Default 'high'.
     "wizard_reasoning_effort": "WIZARD_REASONING_EFFORT",
+    # Verbosidade da geração de SKILL.md no Wizard (68.0.0) — tamanho do
+    # DOCUMENTO gerado. 'enxuto'|'padrao'|'didatico'. Default 'didatico'.
+    "wizard_verbosity": "WIZARD_VERBOSITY",
 }
 
 # Chaves do módulo Parâmetros — usadas pelo endpoint GET /settings/parameters
@@ -731,6 +744,7 @@ PARAMETER_UI_KEYS = (
     "interactions_retention_days",
     "fx_usd_brl",
     "wizard_reasoning_effort",
+    "wizard_verbosity",
 )
 
 

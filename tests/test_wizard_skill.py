@@ -13,6 +13,7 @@ Mocks: pool asyncpg via AsyncMock. Não toca LLM nem Postgres real.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -667,6 +668,150 @@ class TestWizardReasoningEffort:
         """O default do setting preserva o comportamento anterior (high)."""
         from app.core.config import Settings
         assert Settings().wizard_reasoning_effort == "high"
+
+
+# ═════════════════════════════════════════════════════════════════
+# Verbosidade da geração (68.0.0) — _wizard_verbosity + níveis do prompt
+# ═════════════════════════════════════════════════════════════════
+#
+# O nível controla o tamanho do DOCUMENTO gerado (não da resposta em runtime).
+# Só o corpo do esqueleto varia; a armadura anti-alucinação (regras 1-7,
+# G1-G4, bloco obrigatório, Execution Profile) é idêntica nos 3 níveis.
+
+_EMPTY_BINDINGS = {
+    "mcp_tools": [], "rag_sources": [], "data_tables": [], "api_endpoints": [],
+}
+_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _prompt(verbosity, bindings=None, **req_kwargs):
+    req = WizardSkillRequest(
+        description=req_kwargs.pop("description", "Skill de teste para snapshot de prompt."),
+        kind="subagent", domain="qa", **req_kwargs,
+    )
+    system, _ = _build_wizard_prompt(
+        req, bindings or _EMPTY_BINDINGS, "standard", verbosity=verbosity,
+    )
+    return system
+
+
+class TestWizardVerbositySetting:
+    @pytest.mark.parametrize("value,expected", [
+        ("enxuto", "enxuto"),
+        ("padrao", "padrao"),
+        ("didatico", "didatico"),
+        ("DIDATICO", "didatico"),     # case-insensitive
+        ("  enxuto  ", "enxuto"),     # trim
+        ("", "didatico"),             # vazio = default (comportamento anterior)
+        ("médio", "didatico"),        # lixo (env crua) = default, fail-safe
+        (None, "didatico"),           # ausência = default
+    ])
+    def test_reads_and_sanitizes_setting(self, monkeypatch, value, expected):
+        from app.routes import wizard as _wiz
+
+        class _Stub:
+            wizard_verbosity = value
+
+        monkeypatch.setattr(_wiz, "get_settings", lambda: _Stub())
+        assert _wiz._wizard_verbosity() == expected
+
+    def test_default_setting_is_didatico(self):
+        """Default 'didatico' = prompt byte-idêntico ao pré-68.0.0."""
+        from app.core.config import Settings
+        assert Settings().wizard_verbosity == "didatico"
+
+
+class TestWizardVerbosityPrompt:
+    def test_didatico_byte_identico_ao_golden_sem_bindings(self):
+        """REGRESSÃO ZERO no default: o prompt em 'didatico' é byte-idêntico
+        ao capturado ANTES do refactor (fixture gravada na 67.2.0)."""
+        golden = (_FIXTURES / "wizard_prompt_golden_didatico_sem_bindings.txt").read_text(encoding="utf-8")
+        assert _prompt("didatico") == golden
+
+    def test_didatico_byte_identico_ao_golden_decisions(self):
+        req = WizardSkillRequest(
+            description="Skill de triagem com contrato de decisão.",
+            kind="subagent", domain="qa",
+            min_relevance=0.25, length_preset="digest",
+            decisions={"prioridade": ["alta", "baixa"]},
+        )
+        system, _ = _build_wizard_prompt(req, _EMPTY_BINDINGS, "rigorous", verbosity="didatico")
+        golden = (_FIXTURES / "wizard_prompt_golden_didatico_decisions.txt").read_text(encoding="utf-8")
+        assert system == golden
+
+    def test_sem_verbosity_explicito_le_o_setting(self, monkeypatch):
+        """verbosity=None (caminho do endpoint hoje) → setting da plataforma."""
+        from app.routes import wizard as _wiz
+
+        class _Stub:
+            wizard_verbosity = "enxuto"
+
+        monkeypatch.setattr(_wiz, "get_settings", lambda: _Stub())
+        req = WizardSkillRequest(description="x")
+        system, _ = _build_wizard_prompt(req, _EMPTY_BINDINGS, "fast")
+        assert "REGRAS DE CONCISÃO (nível ENXUTO — CRÍTICAS)" in system
+
+    def test_verbosity_explicito_sobrepoe_setting(self, monkeypatch):
+        from app.routes import wizard as _wiz
+
+        class _Stub:
+            wizard_verbosity = "enxuto"
+
+        monkeypatch.setattr(_wiz, "get_settings", lambda: _Stub())
+        golden = (_FIXTURES / "wizard_prompt_golden_didatico_sem_bindings.txt").read_text(encoding="utf-8")
+        assert _prompt("didatico") == golden
+
+    def test_armadura_identica_nos_tres_niveis(self):
+        """Regras anti-invenção + Execution Profile + bloco obrigatório não
+        variam com o nível — só o corpo do esqueleto varia."""
+        for level in ("enxuto", "padrao", "didatico"):
+            system = _prompt(level)
+            assert "REGRAS ANTI-INVENÇÃO (CRÍTICAS)" in system, level
+            assert "## Execution Profile" in system, level
+            assert "SEÇÕES OBRIGATÓRIAS A INCLUIR NO SKILL.md" in system, level
+            # placeholder de Tool Bindings (skill sem MCP não inventa tools)
+            assert "NÃO invente nomes de tools MCP" in system, level
+
+    def test_fios_de_alta_tensao_no_enxuto_com_mcp(self):
+        """G1 (verbo imperativo) e o passo 1 com `operation=` sobrevivem ao
+        nível enxuto — sem eles o wizard_validator dispararia retry."""
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "Search Tool",
+                           "description": "Busca", "operations": "docs, code"}],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+        system = _prompt("enxuto", bindings=bindings, mcp_tool_ids=["t1"])
+        assert "VERBO IMPERATIVO" in system            # G1 intacta
+        assert "operation=docs" in system              # passo 1 injetado
+        assert "REGRAS DE CONCISÃO (nível ENXUTO — CRÍTICAS)" in system
+
+    def test_enxuto_um_exemplo_e_sem_evidence_policy_no_esqueleto(self):
+        system = _prompt("enxuto")
+        assert "UM único exemplo" in system
+        # Evidence Policy sai do ESQUELETO (é inerte sem RAG) — o teste ancora
+        # na linha descritiva da seção, porque "## Evidence Policy" também
+        # aparece (corretamente) na regra anti-invenção nº 3, que é armadura
+        # presente em TODOS os níveis. Com RAG o bloco obrigatório injeta o
+        # YAML real — coberto no teste abaixo.
+        assert "Bases autorizadas e thresholds de evidência" not in system
+        assert "Seja específico e enxuto." in system
+        assert "Seja específico e detalhado." not in system
+
+    def test_enxuto_com_rag_mantem_evidence_policy_do_bloco_obrigatorio(self):
+        bindings = {
+            "mcp_tools": [],
+            "rag_sources": [{"id": "s1", "name": "Manuais",
+                             "confidentiality_label": "internal"}],
+            "data_tables": [], "api_endpoints": [],
+        }
+        system = _prompt("enxuto", bindings=bindings, source_ids=["s1"])
+        assert "## Evidence Policy" in system   # YAML real, do bloco obrigatório
+
+    def test_padrao_limita_exemplos_e_tem_contrapeso(self):
+        system = _prompt("padrao")
+        assert "NO MÁXIMO 2 exemplos" in system
+        assert "REGRAS DE CONCISÃO (nível PADRÃO)" in system
+        assert "Seja específico e detalhado." not in system
 
 
 # ═════════════════════════════════════════════════════════════════

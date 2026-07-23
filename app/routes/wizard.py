@@ -84,6 +84,29 @@ def _wizard_reasoning_effort() -> Optional[str]:
     return raw if raw in _REASONING_EFFORT_VALUES else None
 
 
+# Verbosidade da GERAÇÃO de SKILL.md (68.0.0) — tamanho do DOCUMENTO gerado,
+# não da resposta em runtime (isso é length_preset/## Output Shape). Motivo:
+# ~76% do output do Wizard era prosa induzida pelo prompt além do que o
+# validador exige — e as seções Purpose/Workflow/Output Contract/Guardrails
+# entram VERBATIM no prompt a CADA invoke (engine._build_system_prompt), com
+# Contract+Guardrails de novo no prompt do juiz, sem teto. Verbosidade na
+# geração é custo recorrente em TODA execução futura da skill.
+_WIZARD_VERBOSITY_VALUES = frozenset({"enxuto", "padrao", "didatico"})
+_WIZARD_VERBOSITY_DEFAULT = "didatico"
+
+
+def _wizard_verbosity() -> str:
+    """Nível de verbosidade configurado para a geração de SKILL.md.
+
+    Lê o setting `wizard_verbosity` e sanitiza para {enxuto,padrao,didatico}.
+    Valor fora do enum cai no default 'didatico' (= comportamento anterior,
+    fail-safe): a UI/API já rejeitam com 422 (pattern no SettingsSave), mas a
+    env var WIZARD_VERBOSITY crua ainda pode trazer lixo.
+    """
+    raw = (get_settings().wizard_verbosity or "").strip().lower()
+    return raw if raw in _WIZARD_VERBOSITY_VALUES else _WIZARD_VERBOSITY_DEFAULT
+
+
 async def _resolve_wizard_llm(data, route_name: str) -> tuple[str, str, str]:
     """Resolve (provider, model, task_type) para uma requisição de wizard.
 
@@ -1120,13 +1143,196 @@ def _build_binding_invocation_rules(bindings: dict) -> str:
     )
 
 
-def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: str) -> tuple[str, str]:
+# ─────────────────────────────────────────────────────────────────────
+# Corpos do esqueleto por nível de verbosidade (68.0.0).
+#
+# O que VARIA entre níveis é SÓ o corpo abaixo (lista de seções + regras de
+# tamanho + linha de tom). O que NUNCA varia — a armadura anti-alucinação com
+# histórico de bugs reais: anti_halluc_rules (regras 1-7), as regras G1-G4 de
+# binding_invocation_rules, o bloco SEÇÕES OBRIGATÓRIAS (YAMLs prontos,
+# passo 1 do Workflow injetado, placeholder de Tool Bindings, Execution
+# Profile explícito) e os pós-processadores _ensure_*_contract.
+#
+# 'didatico' é BYTE-IDÊNTICO ao corpo anterior a 68.0.0 — provado por golden
+# em tests/fixtures/wizard_prompt_golden_didatico_*.txt. Não reformate.
+#
+# Fios de alta tensão preservados no 'enxuto' (wizard_validator dispararia
+# retry sem eles): verbo imperativo nos passos do Workflow (G1.no_imperative)
+# e o passo 1 com `operation=` do bloco obrigatório (operation.missing).
+# ─────────────────────────────────────────────────────────────────────
+
+_WIZARD_BODY_DIDATICO = """## Purpose
+Declaração imperativa do que este agente faz e do que NÃO faz.
+
+## Activation Criteria
+Condições sob as quais este skill deve ser selecionado.
+
+## Inputs
+Schema tipado do envelope esperado em formato JSON Schema.
+
+## Workflow
+Sequência de passos do workflow. Para subagentes, linear. Para roteadores, DAG.
+
+## Tool Bindings
+Lista de tools MCP **estritamente** das fornecidas no bloco obrigatório.
+Se o bloco obrigatório declara "sem tools MCP", reproduza essa declaração
+sem listar tools inventadas.
+
+## Output Contract
+Schema tipado da saída esperada.
+
+## Failure Modes
+Enumeração de falhas e ação prescrita.
+
+## Evidence Policy
+Bases autorizadas e thresholds de evidência (quando aplicável).
+Use APENAS os IDs de knowledge_sources do bloco obrigatório.
+
+## Guardrails
+Políticas de conteúdo, PII, jurisdição.
+
+## Examples
+Pares entrada/saída para avaliação. Os bindings (tools MCP, sources RAG,
+endpoints API, tabelas) referenciados nos exemplos DEVEM bater com o bloco
+obrigatório — sem invenções.
+Quando esta skill tem QUALQUER binding declarado (MCP, RAG, API, Tabelas),
+cada exemplo DEVE rastrear a interação com o binding (Entrada → Ação no
+binding → Resposta do binding → Saída final) antes do output final —
+exemplo que pula direto pra saída ensina o LLM em runtime a alucinar.
+
+IMPORTANTE: NÃO inclua a seção `## Budget` (limites de tokens, tempo ou custo).
+Restrições de budget devem ser definidas pelo operador depois, conscientemente —
+gerar valores automáticos prejudica o desempenho do agente em runtime sem ganho
+real (LLM não sabe o ROI/budget aceitável do caso de uso). Seção é opcional no
+parser, então omitir é seguro.
+
+Gere o SKILL.md completo em formato markdown. Seja específico e detalhado."""
+
+_WIZARD_BODY_PADRAO = """## Purpose
+Declaração imperativa do que este agente faz e do que NÃO faz.
+
+## Activation Criteria
+Condições sob as quais este skill deve ser selecionado.
+
+## Inputs
+Schema tipado do envelope esperado em formato JSON Schema.
+
+## Workflow
+Sequência de passos do workflow. Para subagentes, linear. Para roteadores, DAG.
+
+## Tool Bindings
+Lista de tools MCP **estritamente** das fornecidas no bloco obrigatório.
+Se o bloco obrigatório declara "sem tools MCP", reproduza essa declaração
+sem listar tools inventadas.
+
+## Output Contract
+Schema tipado da saída esperada.
+
+## Failure Modes
+Enumeração de falhas e ação prescrita.
+
+## Evidence Policy
+Bases autorizadas e thresholds de evidência (quando aplicável).
+Use APENAS os IDs de knowledge_sources do bloco obrigatório.
+
+## Guardrails
+Políticas de conteúdo, PII, jurisdição.
+
+## Examples
+Pares entrada/saída para avaliação — NO MÁXIMO 2 exemplos. Os bindings
+(tools MCP, sources RAG, endpoints API, tabelas) referenciados nos exemplos
+DEVEM bater com o bloco obrigatório — sem invenções.
+Quando esta skill tem QUALQUER binding declarado (MCP, RAG, API, Tabelas),
+cada exemplo DEVE rastrear a interação com o binding (Entrada → Ação no
+binding → Resposta do binding → Saída final) antes do output final —
+exemplo que pula direto pra saída ensina o LLM em runtime a alucinar.
+
+IMPORTANTE: NÃO inclua a seção `## Budget` (limites de tokens, tempo ou custo).
+Restrições de budget devem ser definidas pelo operador depois, conscientemente —
+gerar valores automáticos prejudica o desempenho do agente em runtime sem ganho
+real (LLM não sabe o ROI/budget aceitável do caso de uso). Seção é opcional no
+parser, então omitir é seguro.
+
+REGRAS DE CONCISÃO (nível PADRÃO):
+- Purpose, Workflow, Output Contract e Guardrails entram VERBATIM no prompt de
+  execução a CADA invocação da skill — e Output Contract + Guardrails de novo
+  no prompt do juiz de qualidade. Escreva-as objetivas: sem parágrafos
+  introdutórios, sem repetir o que outra seção já declara.
+- NÃO gere prosa didática/explicativa além do necessário para operar a skill.
+
+Gere o SKILL.md completo em formato markdown. Seja específico e completo, mas conciso — cada seção no tamanho necessário para operar a skill, e nada mais."""
+
+_WIZARD_BODY_ENXUTO = """## Purpose
+Declaração imperativa do que este agente faz e do que NÃO faz. No máximo 2 frases.
+
+## Activation Criteria
+Condições sob as quais este skill deve ser selecionado. 2-3 bullets de UMA linha.
+
+## Inputs
+Schema tipado do envelope esperado em formato JSON Schema. Só o fence JSON, sem prosa ao redor.
+
+## Workflow
+Sequência de passos do workflow. Para subagentes, linear. Para roteadores, DAG.
+UMA linha por passo, cada passo começando com verbo imperativo.
+
+## Tool Bindings
+Lista de tools MCP **estritamente** das fornecidas no bloco obrigatório.
+Se o bloco obrigatório declara "sem tools MCP", reproduza essa declaração
+sem listar tools inventadas.
+
+## Output Contract
+Schema tipado da saída esperada. Só o schema, sem prosa ao redor.
+
+## Failure Modes
+Enumeração de falhas e ação prescrita. UMA linha por falha.
+
+## Guardrails
+Políticas de conteúdo, PII, jurisdição. Até 5 itens de UMA linha.
+
+## Examples
+UM único exemplo entrada/saída. Se a skill tem QUALQUER binding declarado
+(MCP, RAG, API, Tabelas), o exemplo DEVE rastrear a interação com o binding
+(Entrada → Ação no binding → Resposta do binding → Saída final) antes do
+output final — exemplo que pula direto pra saída ensina o LLM em runtime a
+alucinar.
+
+IMPORTANTE: NÃO inclua a seção `## Budget` nem seções além das listadas acima
+e das do bloco SEÇÕES OBRIGATÓRIAS. Restrições de budget são definidas pelo
+operador depois, conscientemente.
+
+REGRAS DE CONCISÃO (nível ENXUTO — CRÍTICAS):
+- Purpose, Workflow, Output Contract e Guardrails entram VERBATIM no prompt de
+  execução a CADA invocação da skill — e Output Contract + Guardrails de novo
+  no prompt do juiz de qualidade, sem teto. Cada caractere delas é custo
+  recorrente: escreva o MÍNIMO que opera a skill corretamente.
+- ZERO prosa didática: sem parágrafos introdutórios, sem justificativas, sem
+  repetir o que outra seção já declara.
+- NUNCA encurte à custa de: verbos imperativos nos passos do Workflow, blocos
+  YAML/JSON do bloco SEÇÕES OBRIGATÓRIAS (copie-os VERBATIM) e o rastro de
+  binding no exemplo.
+
+Gere o SKILL.md completo em formato markdown. Seja específico e enxuto."""
+
+_WIZARD_PROMPT_BODIES = {
+    "didatico": _WIZARD_BODY_DIDATICO,
+    "padrao": _WIZARD_BODY_PADRAO,
+    "enxuto": _WIZARD_BODY_ENXUTO,
+}
+
+
+def _build_wizard_prompt(
+    data: WizardSkillRequest, bindings: dict, exec_mode: str,
+    verbosity: Optional[str] = None,
+) -> tuple[str, str]:
     """Monta system + user prompts pro LLM gerar o SKILL.md.
 
     Tudo que antes ficava concatenado no frontend (mcpContext, apiContext,
     execContext) agora é construído aqui no servidor a partir de IDs
     estruturados — nomes humanos vêm do lookup, não de string passada
     pelo cliente. Mais robusto + testável.
+
+    `verbosity` (68.0.0): nível explícito {enxuto,padrao,didatico}; None ou
+    valor fora do enum = lê o setting `wizard_verbosity` da plataforma.
 
     Returns:
         (system_prompt, user_prompt)
@@ -1478,6 +1684,12 @@ def _build_wizard_prompt(data: WizardSkillRequest, bindings: dict, exec_mode: st
         + "\n=== FIM DAS SEÇÕES OBRIGATÓRIAS ==="
     ) if obligatory_sections else ""
 
+    # Nível de verbosidade: explícito (param — usado por testes e, adiante,
+    # pelo campo do request) ou o setting da plataforma. O corpo didático é
+    # byte-idêntico ao esqueleto pré-68.0.0 (golden em tests/fixtures/).
+    level = verbosity if verbosity in _WIZARD_VERBOSITY_VALUES else _wizard_verbosity()
+    corpo = _WIZARD_PROMPT_BODIES[level]
+
     system_prompt = f"""Você é um arquiteto de skills para plataforma multi-agente.
 Gere um SKILL.md completo seguindo a anatomia canônica.
 
@@ -1495,52 +1707,7 @@ stability: alpha
 
 # Nome do Skill
 
-## Purpose
-Declaração imperativa do que este agente faz e do que NÃO faz.
-
-## Activation Criteria
-Condições sob as quais este skill deve ser selecionado.
-
-## Inputs
-Schema tipado do envelope esperado em formato JSON Schema.
-
-## Workflow
-Sequência de passos do workflow. Para subagentes, linear. Para roteadores, DAG.
-
-## Tool Bindings
-Lista de tools MCP **estritamente** das fornecidas no bloco obrigatório.
-Se o bloco obrigatório declara "sem tools MCP", reproduza essa declaração
-sem listar tools inventadas.
-
-## Output Contract
-Schema tipado da saída esperada.
-
-## Failure Modes
-Enumeração de falhas e ação prescrita.
-
-## Evidence Policy
-Bases autorizadas e thresholds de evidência (quando aplicável).
-Use APENAS os IDs de knowledge_sources do bloco obrigatório.
-
-## Guardrails
-Políticas de conteúdo, PII, jurisdição.
-
-## Examples
-Pares entrada/saída para avaliação. Os bindings (tools MCP, sources RAG,
-endpoints API, tabelas) referenciados nos exemplos DEVEM bater com o bloco
-obrigatório — sem invenções.
-Quando esta skill tem QUALQUER binding declarado (MCP, RAG, API, Tabelas),
-cada exemplo DEVE rastrear a interação com o binding (Entrada → Ação no
-binding → Resposta do binding → Saída final) antes do output final —
-exemplo que pula direto pra saída ensina o LLM em runtime a alucinar.
-
-IMPORTANTE: NÃO inclua a seção `## Budget` (limites de tokens, tempo ou custo).
-Restrições de budget devem ser definidas pelo operador depois, conscientemente —
-gerar valores automáticos prejudica o desempenho do agente em runtime sem ganho
-real (LLM não sabe o ROI/budget aceitável do caso de uso). Seção é opcional no
-parser, então omitir é seguro.
-
-Gere o SKILL.md completo em formato markdown. Seja específico e detalhado.{obligatory_block}"""
+{corpo}{obligatory_block}"""
 
     return system_prompt, data.description
 

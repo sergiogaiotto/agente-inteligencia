@@ -1923,6 +1923,9 @@ function settingsPage() {
                 {key:'wizard_reasoning_effort', type:'select', label:'Esforço de raciocínio do Wizard',
                  options:[{value:'high',label:'Alto'},{value:'medium',label:'Médio'},{value:'low',label:'Baixo'},{value:'',label:'Desligado'}],
                  desc:'Profundidade de raciocínio nas gerações de skill e agente. Alto = melhor qualidade estrutural do SKILL.md nos modelos que suportam. Descartado automaticamente (sem erro) em modelos que não aceitam.'},
+                {key:'wizard_verbosity', type:'select', label:'Verbosidade da skill gerada',
+                 options:[{value:'enxuto',label:'Enxuto'},{value:'padrao',label:'Padrão'},{value:'didatico',label:'Didático'}],
+                 desc:'Tamanho do DOCUMENTO SKILL.md que o Wizard gera — não confundir com o preset de tamanho da RESPOSTA em runtime (Output Shape). Purpose, Workflow, Output Contract e Guardrails entram no prompt a CADA execução da skill (e Contract+Guardrails de novo no juiz de qualidade): skill mais enxuta = menos tokens recorrentes. Didático (padrão) = comportamento de sempre, com prosa explicativa completa. As regras anti-alucinação da geração valem em todos os níveis.'},
               ]},
         ],
         _paramMeta() {
