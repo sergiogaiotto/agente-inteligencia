@@ -835,6 +835,93 @@ class TestWizardVerbosityPrompt:
 
 
 # ═════════════════════════════════════════════════════════════════
+# Matriz bindings × verbosidade (68.1.1) — nenhum nível degrada binding
+# ═════════════════════════════════════════════════════════════════
+#
+# Pergunta do usuário selada em teste: API/RAG/Tabela/MCP/Decisões continuam
+# corretamente configurados na skill gerada em QUALQUER nível? O que configura
+# os bindings é o bloco SEÇÕES OBRIGATÓRIAS (+ regras/sub-blocos) — este teste
+# prova, por cenário, que ele é BYTE-IDÊNTICO nos 3 níveis e que os marcadores
+# de configuração de cada tipo estão presentes. Nível novo ou corpo editado
+# que vaze para o bloco obrigatório fica vermelho aqui.
+
+_MX_MCP = {"id": "t1", "name": "Search Tool", "description": "Busca docs",
+           "operations": "docs, code"}
+_MX_RAG = {"id": "s1", "name": "Manuais", "confidentiality_label": "internal"}
+_MX_TAB = {"urn": "urn:table:clientes", "name": "clientes", "row_count": 100,
+           "schema_summary": "cd_cliente BIGINT, uf VARCHAR",
+           "columns": ["cd_cliente", "uf"], "suggested_pk": "cd_cliente"}
+_MX_API = {"ep_id": "ep1", "conn_id": "c1", "ep_name": "Consulta CEP",
+           "method": "GET", "path": "/cep/{cep}", "url": "https://api.exemplo/cep"}
+
+_MX_CENARIOS = {
+    "mcp": (
+        {"mcp_tools": [_MX_MCP], "rag_sources": [], "data_tables": [], "api_endpoints": []},
+        {"mcp_tool_ids": ["t1"]},
+        ["`t1` (Search Tool)", "Operations declaradas", "operation=docs"],
+    ),
+    "rag": (
+        {"mcp_tools": [], "rag_sources": [_MX_RAG], "data_tables": [], "api_endpoints": []},
+        {"source_ids": ["s1"], "min_relevance": 0.2},
+        ["## Evidence Policy", "- s1   # Manuais (internal)", "min_relevance: 0.2"],
+    ),
+    "tabela": (
+        {"mcp_tools": [], "rag_sources": [], "data_tables": [_MX_TAB], "api_endpoints": []},
+        {"table_ids": ["tb1"]},
+        ["execution_mode: declarative", "table_ref: urn:table:clientes",
+         "if_present: cd_cliente", "output_mapping"],
+    ),
+    "api": (
+        {"mcp_tools": [], "rag_sources": [], "data_tables": [], "api_endpoints": [_MX_API]},
+        {"api_keys": ["c1:ep1"]},
+        ["## API Bindings", "connector: c1", "path: /cep/{cep}",
+         "execution_mode: declarative"],
+    ),
+    "decisoes": (
+        {"mcp_tools": [], "rag_sources": [], "data_tables": [], "api_endpoints": []},
+        {"decisions": {"categoria": ["tecnico", "financeiro"]}},
+        ["## Decisions", '"categoria"', '"tecnico"'],
+    ),
+    "combinado": (
+        {"mcp_tools": [_MX_MCP], "rag_sources": [_MX_RAG],
+         "data_tables": [_MX_TAB], "api_endpoints": [_MX_API]},
+        {"mcp_tool_ids": ["t1"], "source_ids": ["s1"], "table_ids": ["tb1"],
+         "api_keys": ["c1:ep1"], "decisions": {"categoria": ["tecnico", "financeiro"]},
+         "min_relevance": 0.15, "length_preset": "digest"},
+        ["`t1` (Search Tool)", "## Evidence Policy", "table_ref: urn:table:clientes",
+         "## API Bindings", "## Decisions", "length_preset: digest"],
+    ),
+}
+
+_MX_OBRIG_INI = "=== SEÇÕES OBRIGATÓRIAS A INCLUIR NO SKILL.md ==="
+_MX_OBRIG_FIM = "=== FIM DAS SEÇÕES OBRIGATÓRIAS ==="
+_MX_SKELETON_MARK = "O SKILL.md deve conter EXATAMENTE"
+
+
+class TestWizardVerbosityBindingsMatrix:
+    @pytest.mark.parametrize("cenario", sorted(_MX_CENARIOS))
+    def test_bloco_obrigatorio_e_regras_identicos_nos_3_niveis(self, cenario):
+        from app.routes.wizard import _WIZARD_VERBOSITY_VALUES
+        bindings, req_kwargs, marcadores = _MX_CENARIOS[cenario]
+        req = WizardSkillRequest(description="skill de teste", kind="subagent",
+                                 domain="qa", **req_kwargs)
+        blocos, regras = {}, {}
+        for level in sorted(_WIZARD_VERBOSITY_VALUES):
+            sp, _ = _build_wizard_prompt(req, bindings, "standard", verbosity=level)
+            blocos[level] = sp[sp.index(_MX_OBRIG_INI):sp.index(_MX_OBRIG_FIM)]
+            # tudo ANTES do esqueleto = anti-invenção + G1-G4 + sub-blocos
+            regras[level] = sp[:sp.index(_MX_SKELETON_MARK)]
+        assert len(set(blocos.values())) == 1, (
+            f"{cenario}: bloco SEÇÕES OBRIGATÓRIAS DIVERGE entre níveis — "
+            "verbosidade jamais pode tocar a configuração dos bindings")
+        assert len(set(regras.values())) == 1, (
+            f"{cenario}: regras de binding (G1-G4/anti-invenção) divergem entre níveis")
+        for m in marcadores:
+            assert m in next(iter(blocos.values())), (
+                f"{cenario}: marcador de configuração ausente do bloco obrigatório: {m!r}")
+
+
+# ═════════════════════════════════════════════════════════════════
 # Verbosidade por GERAÇÃO (68.1.0) — campo do request + modal
 # ═════════════════════════════════════════════════════════════════
 
