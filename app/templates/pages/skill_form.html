@@ -504,8 +504,11 @@
                     <!-- ═════ Vincular fontes RAG (Onda 6 Wave 2b) ═════ -->
                     <!-- Multi-select de knowledge_sources. Mudanças mutam o
                          bloco fenced YAML em ## Evidence Policy do raw_content. -->
-                    <div class="relative" x-data="{ragDropdown:false}">
-                        <button @click="ragDropdown = !ragDropdown; if (ragDropdown && availableSources.length === 0) loadAvailableSources()"
+                    <!-- U2 (68.4.0): busca no dropdown do editor — mesmo estado
+                         bindingPicker() da U1 do wizard, via spread no x-data.
+                         42 fontes numa lista rolável sem filtro era o gargalo. -->
+                    <div class="relative" x-data="{ragDropdown:false, ...bindingPicker(['name', 'confidentiality_label', 'source_type'])}">
+                        <button @click="ragDropdown = !ragDropdown; q = ''; if (ragDropdown && availableSources.length === 0) loadAvailableSources()"
                                 type="button"
                                 class="inline-flex items-center gap-1 rounded-lg bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
                                 :title="boundSourceIds.length ? 'Skill restrita a ' + boundSourceIds.length + ' fonte(s)' : 'Sem restrição (skill consulta TODAS as fontes autorizadas)'">
@@ -522,14 +525,23 @@
                                 <span>Fontes Permitidas (Evidence Policy)</span>
                                 <button @click="syncBoundSourcesFromContent()" type="button" class="text-emerald-600 hover:text-emerald-700 normal-case font-normal text-[10px]" title="Re-ler ## Evidence Policy do markdown">↻ sync</button>
                             </div>
+                            <div x-show="availableSources.length > 0" class="px-3 py-1.5 border-b border-surface-100">
+                                <input type="text" x-model="q" data-testid="editor-rag-search"
+                                       @keydown.down.prevent="down()" @keydown.up.prevent="up()"
+                                       @keydown.enter.prevent="if (f[hi]) toggleBoundSource(f[hi].id)"
+                                       @keydown.escape.stop="q = ''"
+                                       placeholder="Pesquisar fontes — nome, confidencialidade ou tipo…"
+                                       class="w-full rounded-md border border-surface-200 bg-white px-2 py-1 text-[11px] text-brand-900 outline-none focus:border-emerald-400">
+                            </div>
                             <template x-if="availableSources.length === 0">
                                 <div class="px-3 py-4 text-center text-[11px] text-surface-400">
                                     <p>Sem fontes registradas.</p>
                                     <a href="/rag" target="_blank" class="text-emerald-600 hover:text-emerald-700 font-medium">+ Cadastrar em /rag →</a>
                                 </div>
                             </template>
-                            <template x-for="src in availableSources" :key="src.id">
-                                <label class="flex items-start gap-2 px-3 py-2 hover:bg-surface-50 cursor-pointer">
+                            <template x-for="(src, ix) in fil(availableSources)" :key="src.id">
+                                <label class="flex items-start gap-2 px-3 py-2 hover:bg-surface-50 cursor-pointer"
+                                       :class="hi === ix ? 'bg-surface-50' : ''" @mouseenter="hi = ix">
                                     <input type="checkbox"
                                            :checked="boundSourceIds.includes(src.id)"
                                            @change="toggleBoundSource(src.id)"
@@ -545,6 +557,7 @@
                                     </div>
                                 </label>
                             </template>
+                            <div x-show="availableSources.length > 0 && f.length === 0" class="px-3 py-3 text-center text-[10.5px] text-surface-400">Nada casa com a busca.</div>
                             <div x-show="availableSources.length > 0" class="border-t border-surface-100 px-3 py-2 flex items-center justify-between text-[10px]">
                                 <button @click="boundSourceIds = []; applyEvidencePolicy()" type="button" class="text-rose-600 hover:text-rose-700 font-medium">Limpar</button>
                                 <button @click="boundSourceIds = availableSources.map(s => s.id); applyEvidencePolicy()" type="button" class="text-emerald-600 hover:text-emerald-700 font-medium">Selecionar todas</button>
