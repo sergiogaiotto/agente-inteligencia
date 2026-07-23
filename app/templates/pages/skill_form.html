@@ -1,5 +1,62 @@
 {% extends "layouts/base.html" %}
 
+{# ─── Seletor compacto de bindings (U1, 68.3.0) ──────────────────────
+     A tela mostra SÓ os chips selecionados + busca com autocomplete; o
+     catálogo inteiro vive no painel (antes: grid com TODOS os itens —
+     42 fontes RAG tomavam a tela). Estado local por seção via
+     bindingPicker() (busca sem acento, teclado ↑↓/Enter/Esc); os arrays
+     de seleção e os toggles do skillForm ficam INTOCADOS — payload
+     idêntico. O conteúdo da LINHA do painel vem do bloco chamador
+     (alias `it`). #}
+{% macro binding_picker(tipo, label, items_expr, sel_expr, toggle_fn, key_field, label_field, fields_js, color, manage_href='', placeholder='Pesquisar…') %}
+<div x-show="({{ items_expr }}).length > 0" x-data="bindingPicker({{ fields_js }})" @click.outside="open = false" data-testid="binding-picker-{{ tipo }}">
+    <div class="flex items-center justify-between mb-1.5">
+        <label class="block text-[11px] font-semibold text-red-800">{{ label }}</label>
+        <span class="flex items-center gap-2">
+            <span class="text-[10px] font-medium text-surface-400"
+                  x-text="({{ sel_expr }}).length + '/' + ({{ items_expr }}).length"></span>
+            {% if manage_href %}<a href="{{ manage_href }}" target="_blank" class="text-[10px] text-red-500 hover:text-red-700">Gerenciar →</a>{% endif %}
+        </span>
+    </div>
+    <div x-show="({{ sel_expr }}).length > 0" class="flex flex-wrap gap-1.5 mb-1.5">
+        <template x-for="it in ({{ items_expr }}).filter(x => ({{ sel_expr }}).includes(x.{{ key_field }}))" :key="it.{{ key_field }}">
+            <span class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium bg-{{ color }}-100 border-{{ color }}-300 text-{{ color }}-700">
+                <span x-text="it.{{ label_field }}"></span>
+                <button type="button" @click="{{ toggle_fn }}(it.{{ key_field }})"
+                        :data-testid="'binding-picker-{{ tipo }}-remove-' + it.{{ key_field }}"
+                        class="leading-none text-surface-400 hover:text-surface-600" aria-label="Remover">&times;</button>
+            </span>
+        </template>
+    </div>
+    <input type="text" x-model="q" @focus="open = true" @input="open = true"
+           @keydown.down.prevent="down()" @keydown.up.prevent="up()"
+           @keydown.enter.prevent="if (open && f[hi]) { {{ toggle_fn }}(f[hi].{{ key_field }}) }"
+           @keydown.escape.stop="open = false; q = ''"
+           data-testid="binding-picker-{{ tipo }}-input" placeholder="{{ placeholder }}"
+           class="w-full rounded-lg border border-surface-200 bg-white px-3 py-1.5 text-[11px] text-brand-900 outline-none focus:border-red-400">
+    <div x-show="open" x-cloak class="mt-1 rounded-lg border border-surface-200 bg-white shadow-sm overflow-hidden">
+        <div class="max-h-48 overflow-y-auto" role="listbox">
+            <template x-for="(it, ix) in fil({{ items_expr }})" :key="it.{{ key_field }}">
+                <div @click="{{ toggle_fn }}(it.{{ key_field }})" @mouseenter="hi = ix" role="option"
+                     :aria-selected="({{ sel_expr }}).includes(it.{{ key_field }})"
+                     :data-testid="'binding-picker-{{ tipo }}-option-' + it.{{ key_field }}"
+                     class="flex items-center gap-2 px-3 py-1.5 cursor-pointer text-[11px] text-brand-900"
+                     :class="hi === ix ? 'bg-{{ color }}-50' : ''">
+                    <span class="w-3.5 shrink-0 text-center font-bold"
+                          :class="({{ sel_expr }}).includes(it.{{ key_field }}) ? 'text-{{ color }}-600' : 'text-surface-400'"
+                          x-text="({{ sel_expr }}).includes(it.{{ key_field }}) ? '✓' : '·'"></span>
+                    {{ caller() }}
+                </div>
+            </template>
+            <div x-show="f.length === 0" class="px-3 py-2 text-[10.5px] text-surface-400">Nada casa com a busca.</div>
+        </div>
+        <div class="border-t border-surface-200 bg-white px-3 py-1 text-[9.5px] text-surface-400">
+            <span x-text="f.length + ' de ' + ({{ items_expr }}).length"></span> · ↑↓ navega · Enter marca/desmarca · Esc fecha
+        </div>
+    </div>
+</div>
+{% endmacro %}
+
 {% block content %}
 <div x-data="skillForm('{{ skill_id | default('') }}')" x-init="load()" class="max-w-3xl">
 
@@ -36,38 +93,23 @@
                 <textarea x-model="wizardPrompt" rows="3" placeholder="Ex: Skill para consultar padrões de desenvolvimento via Context7 MCP..."
                           class="w-full rounded-xl border border-red-200 bg-white px-4 py-3 text-[13px] text-brand-900 placeholder:text-red-300 focus:border-red-400 focus:ring-2 focus:ring-red-100 outline-none transition resize-none"></textarea>
             </div>
-            <!-- MCP selector -->
-            <div x-show="mcpTools.length > 0">
-                <label class="block text-[11px] font-semibold text-red-800 mb-1.5">Vincular Ferramentas MCP (Tool Bindings)</label>
-                <div class="flex flex-wrap gap-1.5">
-                    <template x-for="t in mcpTools" :key="t.id">
-                        <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 cursor-pointer transition-colors text-[11px]"
-                               :class="wizardMcpIds.includes(t.id) ? 'bg-red-100 border-red-300 text-red-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-red-200'">
-                            <input type="checkbox" :checked="wizardMcpIds.includes(t.id)" @change="toggleWizardMcp(t.id)" class="hidden">
-                            <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/></svg>
-                            <span x-text="t.name"></span>
-                        </label>
-                    </template>
-                </div>
-            </div>
-            <!-- API endpoint selector -->
-            <div x-show="apiEndpointsFlat.length > 0">
-                <div class="flex items-center justify-between mb-1.5">
-                    <label class="block text-[11px] font-semibold text-red-800">Vincular API (endpoint) — modo declarativo</label>
-                    <a href="/api-connectors" target="_blank" class="text-[10px] text-red-500 hover:text-red-700">Gerenciar →</a>
-                </div>
-                <div class="flex flex-wrap gap-1.5">
-                    <template x-for="item in apiEndpointsFlat" :key="item.key">
-                        <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 cursor-pointer transition-colors text-[11px]"
-                               :class="wizardApiKeys.includes(item.key) ? 'bg-red-100 border-red-300 text-red-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-red-200'">
-                            <input type="checkbox" :checked="wizardApiKeys.includes(item.key)" @change="toggleWizardApi(item.key)" class="hidden">
-                            <span class="font-mono font-bold text-[9px]" x-text="item.method"></span>
-                            <span x-text="item.ep_name"></span>
-                            <span class="text-[9px] text-surface-400" x-text="'· ' + item.conn_name"></span>
-                        </label>
-                    </template>
-                </div>
-            </div>
+            <!-- U1 (68.3.0): seletores compactos — chips só dos SELECIONADOS +
+                 busca com autocomplete. O catálogo (42 fontes e crescendo)
+                 tomava a tela; agora vive no painel do macro binding_picker. -->
+            {% call binding_picker('mcp', 'Vincular Ferramentas MCP (Tool Bindings)',
+                    'mcpTools', 'wizardMcpIds', 'toggleWizardMcp', 'id', 'name',
+                    "['name']", 'red', manage_href='/mcp',
+                    placeholder='Pesquisar ferramentas MCP…') %}
+                <span x-text="it.name"></span>
+            {% endcall %}
+            {% call binding_picker('api', 'Vincular API (endpoint) — modo declarativo',
+                    'apiEndpointsFlat', 'wizardApiKeys', 'toggleWizardApi', 'key', 'ep_name',
+                    "['ep_name', 'conn_name', 'method']", 'red', manage_href='/api-connectors',
+                    placeholder='Pesquisar endpoints — nome, conector ou método…') %}
+                <span class="font-mono font-bold text-[9px]" x-text="it.method"></span>
+                <span x-text="it.ep_name"></span>
+                <span class="text-[9px] text-surface-400" x-text="'· ' + it.conn_name"></span>
+            {% endcall %}
             <div x-show="apiEndpointsFlat.length === 0 && mcpTools.length > 0" class="rounded-lg border border-dashed border-red-200 bg-red-50/50 px-3 py-2 text-[10px] text-red-600">
                 Nenhum endpoint de API cadastrado.
                 <a href="/api-connectors" target="_blank" class="font-semibold underline hover:text-red-800">Cadastrar em API Connectors →</a>
@@ -75,21 +117,19 @@
 
             <!-- Wave Wizard UX: Fontes RAG (knowledge_sources) — paridade com o Editor. -->
             <div x-show="availableSources.length > 0">
-                <div class="flex items-center justify-between mb-1.5">
-                    <label class="block text-[11px] font-semibold text-red-800">Vincular Fontes RAG (Evidence Policy)</label>
-                    <a href="/rag" target="_blank" class="text-[10px] text-red-500 hover:text-red-700">Gerenciar →</a>
-                </div>
-                <div class="flex flex-wrap gap-1.5">
-                    <template x-for="s in availableSources" :key="s.id">
-                        <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 cursor-pointer transition-colors text-[11px]"
-                               :class="wizardSourceIds.includes(s.id) ? 'bg-emerald-100 border-emerald-300 text-emerald-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-emerald-200'">
-                            <input type="checkbox" :checked="wizardSourceIds.includes(s.id)" @change="toggleWizardSource(s.id)" class="hidden">
-                            <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
-                            <span x-text="s.name"></span>
-                            <span class="text-[9px] text-surface-400" x-text="'· ' + (s.confidentiality_label || 'internal')"></span>
-                        </label>
-                    </template>
-                </div>
+                {% call binding_picker('rag', 'Vincular Fontes RAG (Evidence Policy)',
+                        'availableSources', 'wizardSourceIds', 'toggleWizardSource', 'id', 'name',
+                        "['name', 'confidentiality_label']", 'emerald', manage_href='/rag',
+                        placeholder='Pesquisar fontes — nome ou confidencialidade…') %}
+                    <span class="flex-1 truncate" x-text="it.name"></span>
+                    <span class="shrink-0 rounded-full px-2 py-0.5 text-[9px] font-medium"
+                          :class="{
+                              'bg-red-100 text-red-700': it.confidentiality_label === 'restricted',
+                              'bg-emerald-100 text-emerald-700': it.confidentiality_label === 'public',
+                              'bg-surface-100 text-surface-500': !it.confidentiality_label || it.confidentiality_label === 'internal',
+                          }"
+                          x-text="it.confidentiality_label || 'internal'"></span>
+                {% endcall %}
                 <!-- min_relevance: threshold de evidência (## Evidence Policy →
                      min_relevance no SKILL.md gerado). Só aparece quando há fonte
                      selecionada — sem RAG, threshold não faz sentido. Empty string
@@ -112,23 +152,13 @@
             <!-- Wave Wizard UX: Tabelas (data_tables DuckDB) — seleção simples. -->
             <!-- Query Builder completo (filtros, colunas, joins) fica no editor; -->
             <!-- wizard só marca quais tabelas estão disponíveis pro LLM referenciar. -->
-            <div x-show="availableTables.length > 0">
-                <div class="flex items-center justify-between mb-1.5">
-                    <label class="block text-[11px] font-semibold text-red-800">Vincular Tabelas (Data Tables)</label>
-                    <a href="/rag" target="_blank" class="text-[10px] text-red-500 hover:text-red-700">Gerenciar →</a>
-                </div>
-                <div class="flex flex-wrap gap-1.5">
-                    <template x-for="t in availableTables" :key="t.id">
-                        <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 cursor-pointer transition-colors text-[11px]"
-                               :class="wizardTableIds.includes(t.id) ? 'bg-amber-100 border-amber-300 text-amber-700 font-medium' : 'bg-white border-surface-200 text-surface-500 hover:border-amber-200'">
-                            <input type="checkbox" :checked="wizardTableIds.includes(t.id)" @change="toggleWizardTable(t.id)" class="hidden">
-                            <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5m.75-9l3-3 2.148 2.148A12.061 12.061 0 0116.5 7.605"/></svg>
-                            <span x-text="t.name"></span>
-                            <span class="text-[9px] text-surface-400" x-text="t.row_count ? '· ' + t.row_count.toLocaleString() + ' linhas' : ''"></span>
-                        </label>
-                    </template>
-                </div>
-            </div>
+            {% call binding_picker('tabelas', 'Vincular Tabelas (Data Tables)',
+                    'availableTables', 'wizardTableIds', 'toggleWizardTable', 'id', 'name',
+                    "['name']", 'amber', manage_href='/rag',
+                    placeholder='Pesquisar tabelas…') %}
+                <span class="flex-1 truncate" x-text="it.name"></span>
+                <span class="shrink-0 text-[9px] text-surface-400" x-text="it.row_count ? it.row_count.toLocaleString() + ' linhas' : ''"></span>
+            {% endcall %}
 
             <!-- Wave Wizard UX: Execution Profile como CARDS ricos (paridade com Editor abaixo). -->
             <!-- Auto-inferido pelo backend se nenhum card selecionado — preview indica. -->
@@ -1343,6 +1373,33 @@
 
 {% block scripts %}
 <script>
+// Estado local de UMA seção do seletor compacto de bindings (macro
+// binding_picker, U1 68.3.0). x-data ANINHADO: enxerga o escopo do
+// skillForm (arrays de seleção e toggles) pela cadeia do Alpine — este
+// objeto só carrega busca/painel/teclado. `fields` = campos do item
+// varridos pela busca (sem acento e sem caixa, pt-BR-friendly).
+function bindingPicker(fields) {
+    return {
+        q: '',        // termo de busca
+        open: false,  // painel visível
+        hi: 0,        // índice destacado (teclado)
+        f: [],        // último resultado filtrado (Enter/contador usam)
+        _norm(s) {
+            return (s || '').toString().toLowerCase()
+                .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        },
+        fil(items) {
+            const nq = this._norm(this.q);
+            this.f = !nq ? items
+                : items.filter(it => fields.some(fd => this._norm(it[fd]).includes(nq)));
+            if (this.hi >= this.f.length) this.hi = Math.max(0, this.f.length - 1);
+            return this.f;
+        },
+        down() { this.open = true; this.hi = Math.min(this.hi + 1, Math.max(0, this.f.length - 1)); },
+        up() { this.hi = Math.max(this.hi - 1, 0); },
+    };
+}
+
 function skillForm(editId) {
     return {
         isEdit: !!editId,
