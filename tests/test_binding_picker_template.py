@@ -89,3 +89,35 @@ class TestBindingPickerWizard:
         # linhas da tabela e método+conector da API
         assert "it.row_count" in wiz
         assert "it.method" in wiz and "it.conn_name" in wiz
+
+
+class TestBindingPickerEditor:
+    """U2 (68.4.0): o dropdown "Fontes RAG" do EDITOR já era compacto — o
+    gargalo eram 42 fontes numa lista rolável SEM filtro. A busca reusa o
+    MESMO bindingPicker() da U1 (spread no x-data do dropdown); o toggle
+    continua o toggleBoundSource → applyEvidencePolicy (muta o YAML do
+    ## Evidence Policy), intocado."""
+
+    @pytest.fixture(scope="class")
+    def editor(self) -> str:
+        env = Environment(
+            loader=FileSystemLoader("app/templates"), undefined=ChainableUndefined,
+        )
+        env.globals.update(app_version="test", request=None)
+        html = env.get_template("pages/skill_form.html").render(skill_id="", role="root")
+        ini = html.index("Vincular fontes RAG (Onda 6 Wave 2b)")
+        return html[ini:html.index("Contrato de Decisão (Cond-C.2", ini)]
+
+    def test_busca_no_dropdown_do_editor(self, editor):
+        assert 'data-testid="editor-rag-search"' in editor
+        assert "...bindingPicker(['name', 'confidentiality_label', 'source_type'])" in editor
+        assert "fil(availableSources)" in editor
+        assert "Nada casa com a busca." in editor
+
+    def test_toggle_e_acoes_em_massa_intocados(self, editor):
+        # o caminho de mutação do ## Evidence Policy não muda com a busca
+        assert "toggleBoundSource(src.id)" in editor
+        assert "toggleBoundSource(f[hi].id)" in editor  # Enter marca a destacada
+        assert "boundSourceIds = []; applyEvidencePolicy()" in editor
+        assert "boundSourceIds = availableSources.map(s => s.id); applyEvidencePolicy()" in editor
+        assert "syncBoundSourcesFromContent()" in editor
