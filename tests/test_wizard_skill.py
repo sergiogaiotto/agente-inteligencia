@@ -835,6 +835,74 @@ class TestWizardVerbosityPrompt:
 
 
 # ═════════════════════════════════════════════════════════════════
+# Verbosidade por GERAÇÃO (68.1.0) — campo do request + modal
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestWizardVerbosityRequestField:
+    def test_default_none_e_valores_validos(self):
+        """Itera o frozenset de RUNTIME (não uma tupla literal): se o enum
+        crescer sem o pattern do request acompanhar, este teste fica vermelho
+        — senão a modal enviaria o nível novo e a geração morreria em 422."""
+        from app.routes.wizard import _WIZARD_VERBOSITY_VALUES
+        assert WizardSkillRequest(description="x").verbosity is None
+        for v in sorted(_WIZARD_VERBOSITY_VALUES):
+            assert WizardSkillRequest(description="x", verbosity=v).verbosity == v
+
+    def test_valor_invalido_e_422(self):
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="verbosity"):
+            WizardSkillRequest(description="x", verbosity="máximo")
+
+    def test_resolve_verbosity_explicito_vence_setting(self, monkeypatch):
+        """Único ponto de resolução (prompt E `resolved` da resposta usam o
+        mesmo) — override por geração vence; None cai no setting."""
+        from app.routes import wizard as _wiz
+
+        # Stub ≠ fail-safe 'didatico' DE PROPÓSITO: com 'didatico' a asserção
+        # do ramo None passaria mesmo se o código ignorasse o setting e
+        # devolvesse a constante default (mutação invisível).
+        class _Stub:
+            wizard_verbosity = "padrao"
+
+        monkeypatch.setattr(_wiz, "get_settings", lambda: _Stub())
+        assert _wiz._resolve_verbosity("enxuto") == "enxuto"
+        assert _wiz._resolve_verbosity(None) == "padrao"
+
+
+class TestWizardVerbosityModalUi:
+    """Invariantes de template da modal do Wizard: cards presentes, payload
+    envia o campo, toast reporta o nível efetivo — e o enum dos cards ≡ enum
+    de runtime (mesma classe #721 selada na aba Parâmetros)."""
+
+    def test_cards_payload_e_toast(self):
+        src = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        assert 'data-testid="wizard-verbosity"' in src
+        for v in ("enxuto", "padrao", "didatico"):
+            assert f'data-testid="wizard-verbosity-{v}"' in src
+        assert "wizardVerbosity: ''" in src                      # estado (vazio = setting)
+        assert "verbosity: this.wizardVerbosity || null" in src  # payload da geração
+        # Toast: o fragmento existe E está concatenado no return — só a
+        # substring 'resolved.verbosity' deixaria verde a mutação de remover
+        # `+ verbosity` do return mantendo a const órfã.
+        assert "SKILL ${resolved.verbosity}" in src
+        assert "return bindings + profile + verbosity + llm" in src
+
+    def test_enum_dos_cards_bate_com_runtime(self):
+        from app.routes.wizard import _WIZARD_VERBOSITY_VALUES
+        src = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        # Harvest 1 — literais de toggle: [^']+ captura QUALQUER value (acento,
+        # hífen, maiúscula, dígito), então um 4º card com typo entra no set e
+        # quebra a igualdade, em vez de escapar do regex ([a-z]+ era fail-open).
+        toggles = set(re.findall(r"wizardVerbosity === '([^']+)'", src))
+        assert toggles == set(_WIZARD_VERBOSITY_VALUES)
+        # Harvest 2 (independente) — testids dos cards: pega card escrito sem
+        # espaços no === ou refatorado para helper, que escaparia do harvest 1.
+        testids = set(re.findall(r'data-testid="wizard-verbosity-([^"]+)"', src))
+        assert testids == set(_WIZARD_VERBOSITY_VALUES)
+
+
+# ═════════════════════════════════════════════════════════════════
 # Regras de invocação MCP — fix bug Context7 (2026-05-29)
 # ═════════════════════════════════════════════════════════════════
 #

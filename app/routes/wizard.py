@@ -109,6 +109,16 @@ def _wizard_verbosity() -> str:
     return raw if raw in _WIZARD_VERBOSITY_VALUES else _WIZARD_VERBOSITY_DEFAULT
 
 
+def _resolve_verbosity(explicit: Optional[str]) -> str:
+    """Nível efetivo: override explícito (por geração, 68.1.0) ou o setting.
+
+    Único ponto de resolução — usado pelo _build_wizard_prompt E pelo
+    endpoint (que reporta o nível efetivo no `resolved` da resposta); dois
+    caminhos divergirem aqui seria o resumo mentindo pro operador.
+    """
+    return explicit if explicit in _WIZARD_VERBOSITY_VALUES else _wizard_verbosity()
+
+
 async def _resolve_wizard_llm(data, route_name: str) -> tuple[str, str, str]:
     """Resolve (provider, model, task_type) para uma requisição de wizard.
 
@@ -454,6 +464,14 @@ class WizardSkillRequest(BaseModel):
     # {campo: [valores]} vira a seção ## Decisions (selada, copiada verbatim).
     # None/vazio = wizard não emite a seção.
     decisions: Optional[dict] = None
+    # Verbosidade do DOCUMENTO gerado (68.1.0): override POR GERAÇÃO do
+    # setting de plataforma `wizard_verbosity`. None = default da plataforma.
+    # Enum fechado espelha o setting (422 em valor inválido; paridade com as
+    # options do card selada em test_wizard_skill).
+    verbosity: Optional[str] = Field(
+        default=None,
+        pattern=r"^(enxuto|padrao|didatico)$",
+    )
 
     @field_validator("decisions")
     @classmethod
@@ -1688,11 +1706,10 @@ def _build_wizard_prompt(
         + "\n=== FIM DAS SEÇÕES OBRIGATÓRIAS ==="
     ) if obligatory_sections else ""
 
-    # Nível de verbosidade: explícito (param — usado por testes e, adiante,
-    # pelo campo do request) ou o setting da plataforma. O corpo didático é
-    # byte-idêntico ao esqueleto pré-68.0.0 (golden em tests/fixtures/).
-    level = verbosity if verbosity in _WIZARD_VERBOSITY_VALUES else _wizard_verbosity()
-    corpo = _WIZARD_PROMPT_BODIES[level]
+    # Nível de verbosidade: explícito (campo do request/testes) ou o setting
+    # da plataforma. O corpo didático é byte-idêntico ao esqueleto pré-68.0.0
+    # (golden em tests/fixtures/).
+    corpo = _WIZARD_PROMPT_BODIES[_resolve_verbosity(verbosity)]
 
     system_prompt = f"""Você é um arquiteto de skills para plataforma multi-agente.
 Gere um SKILL.md completo seguindo a anatomia canônica.
@@ -1756,7 +1773,12 @@ async def wizard_skill(data: WizardSkillRequest):
     try:
         bindings = await _resolve_bindings_for_prompt(data)
         exec_mode = _infer_exec_mode(data)
-        system_prompt, user_prompt = _build_wizard_prompt(data, bindings, exec_mode)
+        # 68.1.0: nível por geração (campo do request) > setting da plataforma.
+        # Resolvido AQUI (e passado pronto) para o `resolved` da resposta
+        # reportar exatamente o nível que o prompt usou.
+        verbosity = _resolve_verbosity(data.verbosity)
+        system_prompt, user_prompt = _build_wizard_prompt(
+            data, bindings, exec_mode, verbosity=verbosity)
 
         # Wave Wizard Routing: usa task_type=reasoning (default) e roteamento global.
         provider, model, resolved_task = await _resolve_wizard_llm(data, "skill")
@@ -1852,6 +1874,9 @@ async def wizard_skill(data: WizardSkillRequest):
             "skill_md": skill_md,
             "resolved": {
                 "exec_mode": exec_mode,
+                # Nível EFETIVO usado no prompt (override do request ou setting
+                # da plataforma) — a UI mostra no toast pós-geração.
+                "verbosity": verbosity,
                 "mcp_count": len(bindings["mcp_tools"]),
                 "rag_count": len(bindings["rag_sources"]),
                 "table_count": len(bindings["data_tables"]),
