@@ -1,7 +1,9 @@
 # Configurações da Plataforma — Registro de Opções
 
 > **Súmula das opções de configuração possíveis** do Maestro, por área.
-> Reflete o código em **`APP_VERSION = 10.24.0`**. Fontes: `app/core/config.py`,
+> Criado em **10.24.0** e atualizado incrementalmente desde então (as marcações
+> "Desde X"/"68.0.0" datam cada opção; a versão vigente vive no SSOT
+> `app/core/version.py`). Fontes: `app/core/config.py`,
 > `app/core/database.py` (tabela `platform_settings`), `app/templates/pages/settings.html`,
 > `app/templates/pages/federation.html`, `app/llm_routing.py`, `app/core/logging_setup.py`.
 
@@ -188,12 +190,25 @@ Configurado por ambiente (alguns também na UI). Defaults pensados para zero-ris
 | `OTEL_TRACES_SAMPLER` | `parentbased_always_on` | Sampling (prod: `parentbased_traceidratio` + `_ARG=0.1`). |
 | `LOKI_ENDPOINT` | `http://loki:3100` | Reservado p/ push nativo (hoje via Promtail). |
 
-### 3.8 Versão
+### 3.8 Geração no Wizard (aba Parâmetros)
+
+> Editáveis na UI em **Configurações → Parâmetros → 🪄 Geração no Wizard**
+> (root/admin), efeito em runtime sem restart; o `.env` vale como fallback
+> enquanto não salvo. Controlam como a IA **gera** SKILL.md/agentes no Wizard —
+> não afetam skills já salvas nem a execução em runtime.
+
+| Variável | Default | Efeito |
+|---|---|---|
+| `WIZARD_REASONING_EFFORT` | `high` | Esforço de raciocínio nas gerações pesadas do Wizard (skill + agente): `high`/`medium`/`low`/`off` (desligado). Gate por MODELO em `get_provider` — só chega a modelos que aceitam (gpt-oss sempre; Azure/OpenAI só o1/o3/o4/gpt-5); gpt-4o/gpt-4.1 descartam sem erro. Desde 68.0.0 o PUT valida o enum (422; antes, valor inválido virava "desligado" em silêncio) e o sentinela de desligado é `off` — a option `''` antiga nunca sobrevivia à aplicação (env falsy é removida no `apply_settings_to_env`) e o efetivo caía em `high` silenciosamente. |
+| `WIZARD_VERBOSITY` | `didatico` | **68.0.0.** Verbosidade do **DOCUMENTO** SKILL.md gerado (não confundir com `## Output Shape`/`length_preset`, que é o tamanho da RESPOSTA em runtime): `enxuto`/`padrao`/`didatico`. Motivo: Purpose/Workflow/Output Contract/Guardrails entram verbatim no prompt a **cada** invoke (e Contract+Guardrails de novo no prompt do juiz, sem teto) — prosa a mais na geração vira custo recorrente em toda execução futura. `didatico` (default) = prompt de geração byte-idêntico ao pré-68.0.0 (golden em `tests/fixtures/`); `padrao` = mesmas 10 seções com contrapeso de concisão e máx. 2 exemplos; `enxuto` = só as 7 seções do parser + Guardrails + 1 exemplo rastreado, com orçamento por seção (mais o que os bindings declarados exigirem — ex.: Evidence Policy de uma linha em skill só-MCP). A armadura anti-alucinação (regras anti-invenção, G1–G4, bloco obrigatório, Execution Profile explícito) é idêntica nos 3 níveis. Enum fechado no PUT (422). |
+
+### 3.9 Versão
 | Item | Onde | Efeito |
 |---|---|---|
-| `APP_VERSION` | `app/core/version.py` (SSOT) | Versão no rodapé. Bump **manual** por PR: nova func→MAJOR, melhoria→MEDIUM, fix→MINOR. Atual: **10.24.0**. |
+| `APP_VERSION` | `app/core/version.py` (SSOT) | Versão no rodapé. Bump **manual** por PR: nova func→MAJOR, melhoria→MEDIUM, fix→MINOR. O número atual vive no SSOT (não é repetido aqui de propósito — repetição hardcoded já envelheceu uma vez). |
 
 ---
 
-> Este documento é um **registro de referência**, gerado a partir do código em 10.24.0.
+> Este documento é um **registro de referência**, criado a partir do código em 10.24.0
+> e atualizado incrementalmente desde então.
 > Ao adicionar/alterar uma opção de configuração, atualize a seção correspondente aqui.

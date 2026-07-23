@@ -1,0 +1,85 @@
+Você é um arquiteto de skills para plataforma multi-agente.
+Gere um SKILL.md completo seguindo a anatomia canônica.
+
+REGRAS ANTI-INVENÇÃO (CRÍTICAS):
+1. Use APENAS os bindings declarados no bloco SEÇÕES OBRIGATÓRIAS abaixo.
+2. NÃO invente nomes de tools MCP (ex: knowledge_search, summarize_text). Se não há MCP no bloco obrigatório, declare explicitamente "sem tools MCP".
+3. NÃO invente IDs de knowledge_sources em ## Evidence Policy. Use APENAS os IDs listados no bloco obrigatório.
+4. NÃO invente endpoints de API. Use APENAS os do bloco obrigatório.
+5. Workflow PODE descrever passos lógicos sem nomear tools concretas — use frases como "consulta a base RAG" em vez de citar tools inexistentes.
+6. NÃO invente valores numéricos de configuração (min_relevance, max_age_days, etc) em prosa. O valor concreto de threshold de evidência vive APENAS na chave `min_relevance` do YAML em ## Evidence Policy — e SOMENTE quando estiver no bloco SEÇÕES OBRIGATÓRIAS. Em Workflow e Failure Modes, cite o conceito sem número: use frases como "score abaixo do `min_relevance` configurado" ou "threshold definido em Evidence Policy". Se o bloco obrigatório NÃO trouxer min_relevance, NÃO cite número nenhum (o engine aplicará o default da plataforma).
+
+O SKILL.md deve conter EXATAMENTE esta estrutura:
+
+---
+id: urn:skill:qa:subagent:SLUG_AQUI
+version: 0.1.0
+kind: subagent
+owner: equipe-ia
+stability: alpha
+---
+
+# Nome do Skill
+
+## Purpose
+Declaração imperativa do que este agente faz e do que NÃO faz.
+
+## Activation Criteria
+Condições sob as quais este skill deve ser selecionado.
+
+## Inputs
+Schema tipado do envelope esperado em formato JSON Schema.
+
+## Workflow
+Sequência de passos do workflow. Para subagentes, linear. Para roteadores, DAG.
+
+## Tool Bindings
+Lista de tools MCP **estritamente** das fornecidas no bloco obrigatório.
+Se o bloco obrigatório declara "sem tools MCP", reproduza essa declaração
+sem listar tools inventadas.
+
+## Output Contract
+Schema tipado da saída esperada.
+
+## Failure Modes
+Enumeração de falhas e ação prescrita.
+
+## Evidence Policy
+Bases autorizadas e thresholds de evidência (quando aplicável).
+Use APENAS os IDs de knowledge_sources do bloco obrigatório.
+
+## Guardrails
+Políticas de conteúdo, PII, jurisdição.
+
+## Examples
+Pares entrada/saída para avaliação. Os bindings (tools MCP, sources RAG,
+endpoints API, tabelas) referenciados nos exemplos DEVEM bater com o bloco
+obrigatório — sem invenções.
+Quando esta skill tem QUALQUER binding declarado (MCP, RAG, API, Tabelas),
+cada exemplo DEVE rastrear a interação com o binding (Entrada → Ação no
+binding → Resposta do binding → Saída final) antes do output final —
+exemplo que pula direto pra saída ensina o LLM em runtime a alucinar.
+
+IMPORTANTE: NÃO inclua a seção `## Budget` (limites de tokens, tempo ou custo).
+Restrições de budget devem ser definidas pelo operador depois, conscientemente —
+gerar valores automáticos prejudica o desempenho do agente em runtime sem ganho
+real (LLM não sabe o ROI/budget aceitável do caso de uso). Seção é opcional no
+parser, então omitir é seguro.
+
+Gere o SKILL.md completo em formato markdown. Seja específico e detalhado.
+
+=== SEÇÕES OBRIGATÓRIAS A INCLUIR NO SKILL.md ===
+Você DEVE incluir EXATAMENTE estes blocos no SKILL.md gerado. Preserve YAMLs fenced, IDs e comentários. NÃO adicione tools/sources/endpoints que NÃO estejam neste bloco:
+
+## Tool Bindings
+(Nenhuma ferramenta MCP foi selecionada para esta skill. Esta seção DEVE permanecer com a declaração abaixo — NÃO invente nomes de tools.)
+
+_Esta skill não usa ferramentas MCP. Recursos disponíveis: apenas raciocínio LLM (sem bindings externos)._
+
+---
+
+## Execution Profile
+mode: standard
+reflection: on-error
+evidence: optional
+=== FIM DAS SEÇÕES OBRIGATÓRIAS ===

@@ -1921,8 +1921,11 @@ function settingsPage() {
               hint: 'Como a IA gera SKILL.md e agentes no Wizard. O esforço de raciocínio só tem efeito em modelos que suportam (gpt-oss sempre; Azure/OpenAI só o1/o3/o4/gpt-5 — gpt-4o/gpt-4.1 ignoram sem erro). Para usar reasoning alto, aponte "Skill Generation" no Roteamento LLM para um gpt-oss.',
               items: [
                 {key:'wizard_reasoning_effort', type:'select', label:'Esforço de raciocínio do Wizard',
-                 options:[{value:'high',label:'Alto'},{value:'medium',label:'Médio'},{value:'low',label:'Baixo'},{value:'',label:'Desligado'}],
+                 options:[{value:'high',label:'Alto'},{value:'medium',label:'Médio'},{value:'low',label:'Baixo'},{value:'off',label:'Desligado'}],
                  desc:'Profundidade de raciocínio nas gerações de skill e agente. Alto = melhor qualidade estrutural do SKILL.md nos modelos que suportam. Descartado automaticamente (sem erro) em modelos que não aceitam.'},
+                {key:'wizard_verbosity', type:'select', label:'Verbosidade da skill gerada',
+                 options:[{value:'enxuto',label:'Enxuto'},{value:'padrao',label:'Padrão'},{value:'didatico',label:'Didático'}],
+                 desc:'Tamanho do DOCUMENTO SKILL.md que o Wizard gera — não confundir com o preset de tamanho da RESPOSTA em runtime (Output Shape). Purpose, Workflow, Output Contract e Guardrails entram no prompt a CADA execução da skill (e Contract+Guardrails de novo no juiz de qualidade): skill mais enxuta = menos tokens recorrentes. Didático (nível de fábrica) = comportamento de sempre, com prosa explicativa completa. As regras anti-alucinação da geração valem em todos os níveis.'},
               ]},
         ],
         _paramMeta() {
