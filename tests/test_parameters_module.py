@@ -180,6 +180,34 @@ class TestResetParameter:
 
 # ─── Consistência UI ↔ backend (min/max ↔ ge/le) ───────────────────
 
+def _selects_da_aba_parametros() -> dict:
+    """Extrai {key: [valores das options]} dos type:'select' da REGIÃO
+    paramGroups de settings.html.
+
+    Falha FECHADO: se um select for escrito num formato que o extrator não
+    reconhece (label antes de type, aspas duplas, espaço após ':', select sem
+    options), a contagem crua de type:'select' denuncia a divergência em vez
+    de o item escapar da paridade em silêncio. Escopo por REGIÃO, não por
+    membership em PARAMETER_UI_KEYS — um select da aba fora da tupla é
+    exatamente o bug que os testes de paridade devem acusar (lição #700/#721),
+    não um caso a filtrar.
+    """
+    import re
+    src = Path("app/templates/pages/settings.html").read_text(encoding="utf-8")
+    region = src[src.index("paramGroups: ["):src.index("_paramMeta()")]
+    matches = list(re.finditer(
+        r"\{key:'([a-z0-9_]+)',\s*type:'select'.*?options:\[(.*?)\]", region, re.S
+    ))
+    raw = re.findall(r"type\s*:\s*['\"]select['\"]", region)
+    assert len(raw) == len(matches), (
+        f"{len(raw)} select(s) crus na aba Parâmetros mas só {len(matches)} no "
+        "formato que o extrator reconhece ({key:'...', type:'select', ... "
+        "options:[...]}) — escreva o item no formato canônico ou atualize o "
+        "extrator; um select fora do padrão escaparia da paridade em silêncio."
+    )
+    return {m.group(1): re.findall(r"value:'([^']*)'", m.group(2)) for m in matches}
+
+
 class TestUiRangesMatchBackend:
     def test_faixas_ui_batem_com_settings_save(self):
         import re
@@ -205,19 +233,16 @@ class TestUiRangesMatchBackend:
         — a manqueira do precedente wizard_reasoning_effort (27.0.0): sem
         pattern no SettingsSave, QUALQUER string era aceita e o runtime tratava
         lixo como default em silêncio. Sela a classe (68.0.0): toda option do
-        select da aba é aceita pelo modelo; valor fora do enum é 422."""
-        import re
+        select da aba é aceita pelo modelo; valor fora do enum é 422; select
+        da aba fora de PARAMETER_UI_KEYS é acusado (lição #700/#721)."""
         from app.routes.dashboard import SettingsSave
-        src = Path("app/templates/pages/settings.html").read_text(encoding="utf-8")
-        pat_sel = re.compile(
-            r"\{key:'([a-z0-9_]+)',\s*type:'select'.*?options:\[(.*?)\]", re.S
+        found = _selects_da_aba_parametros()
+        fora = sorted(set(found) - set(PARAMETER_UI_KEYS))
+        assert not fora, (
+            f"selects da aba Parâmetros fora de PARAMETER_UI_KEYS {fora} — "
+            "renderizam na tela mas GET /settings/parameters não os carrega e "
+            "toda a cadeia de paridade fica cega (lição #700/#721)."
         )
-        pat_val = re.compile(r"value:'([^']*)'")
-        found = {
-            m.group(1): pat_val.findall(m.group(2))
-            for m in pat_sel.finditer(src)
-            if m.group(1) in PARAMETER_UI_KEYS  # selects de OUTRAS abas não salvam por aqui
-        }
         # regressão do extrator: os 2 selects do grupo 🪄 existem hoje
         assert {"wizard_reasoning_effort", "wizard_verbosity"} <= set(found)
         for key, values in found.items():
@@ -226,6 +251,23 @@ class TestUiRangesMatchBackend:
                 SettingsSave(**{key: v})  # toda option da UI é aceita
             with pytest.raises(ValidationError, match=key):
                 SettingsSave(**{key: "valor-fora-do-enum-xyz"})
+
+    def test_enums_de_runtime_batem_com_as_options_da_ui(self):
+        """3º elo da cadeia (classe #721): UI ↔ SettingsSave é coberto acima;
+        aqui UI ↔ enums de RUNTIME do wizard. Option nova na UI+pattern sem o
+        leitor/corpo correspondente viraria default silencioso (sanitização)
+        — ou KeyError no request real, no caso dos corpos de prompt."""
+        from app.routes.wizard import (
+            _REASONING_EFFORT_VALUES,
+            _WIZARD_PROMPT_BODIES,
+            _WIZARD_VERBOSITY_VALUES,
+        )
+        found = _selects_da_aba_parametros()
+        assert set(found["wizard_verbosity"]) == set(_WIZARD_VERBOSITY_VALUES)
+        assert set(_WIZARD_PROMPT_BODIES) == set(_WIZARD_VERBOSITY_VALUES)
+        # 'off' é o sentinela de desligado da UI (68.0.0; '' não sobrevive ao
+        # apply, que poppa env falsy) — o leitor o sanitiza para None.
+        assert set(found["wizard_reasoning_effort"]) == _REASONING_EFFORT_VALUES | {"off"}
 
 
 # ─── GET /settings/parameters — efetivo + fonte ─────────────────────

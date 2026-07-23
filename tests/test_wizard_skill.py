@@ -665,9 +665,12 @@ class TestWizardReasoningEffort:
         assert _wiz._wizard_reasoning_effort() == expected
 
     def test_default_setting_is_high(self):
-        """O default do setting preserva o comportamento anterior (high)."""
+        """O default do setting preserva o comportamento anterior (high).
+        Testa o default da CLASSE (hermético) — Settings() leria os.environ e
+        o .env do host, e quebraria sem regressão de código no dia em que
+        alguém setasse WIZARD_REASONING_EFFORT localmente."""
         from app.core.config import Settings
-        assert Settings().wizard_reasoning_effort == "high"
+        assert Settings.model_fields["wizard_reasoning_effort"].default == "high"
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -716,9 +719,10 @@ class TestWizardVerbositySetting:
         assert _wiz._wizard_verbosity() == expected
 
     def test_default_setting_is_didatico(self):
-        """Default 'didatico' = prompt byte-idêntico ao pré-68.0.0."""
+        """Default 'didatico' = prompt byte-idêntico ao pré-68.0.0.
+        Default da CLASSE (hermético — não lê os.environ nem o .env do host)."""
         from app.core.config import Settings
-        assert Settings().wizard_verbosity == "didatico"
+        assert Settings.model_fields["wizard_verbosity"].default == "didatico"
 
 
 class TestWizardVerbosityPrompt:
@@ -788,11 +792,12 @@ class TestWizardVerbosityPrompt:
     def test_enxuto_um_exemplo_e_sem_evidence_policy_no_esqueleto(self):
         system = _prompt("enxuto")
         assert "UM único exemplo" in system
-        # Evidence Policy sai do ESQUELETO (é inerte sem RAG) — o teste ancora
-        # na linha descritiva da seção, porque "## Evidence Policy" também
-        # aparece (corretamente) na regra anti-invenção nº 3, que é armadura
-        # presente em TODOS os níveis. Com RAG o bloco obrigatório injeta o
-        # YAML real — coberto no teste abaixo.
+        # Evidence Policy sai do ESQUELETO no enxuto — o teste ancora na linha
+        # descritiva da seção, porque "## Evidence Policy" também aparece
+        # (corretamente) na regra anti-invenção nº 3, armadura presente em
+        # TODOS os níveis. Com RAG o bloco obrigatório injeta o YAML real; em
+        # skill só-MCP o sub-bloco exige a versão de UMA linha (carve-out
+        # testado abaixo).
         assert "Bases autorizadas e thresholds de evidência" not in system
         assert "Seja específico e enxuto." in system
         assert "Seja específico e detalhado." not in system
@@ -806,6 +811,21 @@ class TestWizardVerbosityPrompt:
         }
         system = _prompt("enxuto", bindings=bindings, source_ids=["s1"])
         assert "## Evidence Policy" in system   # YAML real, do bloco obrigatório
+
+    def test_enxuto_so_mcp_preserva_carve_out_de_evidence_policy(self):
+        """Skill só-MCP: o sub-bloco MCP (armadura comum aos 3 níveis) manda
+        escrever a Evidence Policy de UMA linha ("única fonte autorizada é o
+        binding") — a proibição de seções extras do enxuto abre exceção
+        explícita para os sub-blocos, senão o MESMO prompt mandaria e
+        proibiria a seção ao mesmo tempo (saída não-determinística)."""
+        bindings = {
+            "mcp_tools": [{"id": "t1", "name": "Search Tool",
+                           "description": "Busca", "operations": "docs, code"}],
+            "rag_sources": [], "data_tables": [], "api_endpoints": [],
+        }
+        system = _prompt("enxuto", bindings=bindings, mcp_tool_ids=["t1"])
+        assert "a seção Evidence Policy deve dizer" in system  # ordem do sub-bloco MCP
+        assert "das exigidas explicitamente pelos SUB-BLOCOS" in system  # carve-out
 
     def test_padrao_limita_exemplos_e_tem_contrapeso(self):
         system = _prompt("padrao")

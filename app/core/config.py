@@ -415,8 +415,10 @@ class Settings(BaseSettings):
     # Esforço de raciocínio das GERAÇÕES do Wizard (SKILL.md + agente). O gate por
     # MODELO vive em get_provider: 'high' só CHEGA ao modelo que aceita (gpt-oss
     # sempre; Azure/OpenAI só o1/o3/o4/gpt-5 — gpt-4o/gpt-4.1 descartam sem erro,
-    # sem 400). 'high'|'medium'|'low' ou '' (desligado). Default 'high' = o
-    # comportamento anterior (constante hardcoded no wizard). Editável na aba
+    # sem 400). 'high'|'medium'|'low' ou 'off' (desligado; sentinela NÃO-vazio
+    # de propósito — 68.0.0 — porque '' não sobrevive ao apply_settings_to_env,
+    # que poppa env falsy e faz o efetivo cair neste default). Default 'high' =
+    # o comportamento anterior (constante hardcoded no wizard). Editável na aba
     # Parâmetros, runtime sem restart.
     wizard_reasoning_effort: str = "high"
 
@@ -691,7 +693,7 @@ _UI_TO_ENV_MAP = {
     "cb_cooldown_seconds": "CB_COOLDOWN_SECONDS",
     "cb_half_open_max_probes": "CB_HALF_OPEN_MAX_PROBES",
     # Esforço de raciocínio das gerações do Wizard (skill/agente) — gate por
-    # modelo em get_provider. 'high'|'medium'|'low'|'' (desligado). Default 'high'.
+    # modelo em get_provider. 'high'|'medium'|'low'|'off' (desligado). Default 'high'.
     "wizard_reasoning_effort": "WIZARD_REASONING_EFFORT",
     # Verbosidade da geração de SKILL.md no Wizard (68.0.0) — tamanho do
     # DOCUMENTO gerado. 'enxuto'|'padrao'|'didatico'. Default 'didatico'.

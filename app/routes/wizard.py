@@ -76,9 +76,11 @@ def _wizard_reasoning_effort() -> Optional[str]:
     """Esforço de raciocínio configurado para as gerações do Wizard.
 
     Lê o setting `wizard_reasoning_effort` e sanitiza para {high,medium,low}
-    ou None (qualquer outro valor / vazio = desligado). O gate por MODELO
-    continua em get_provider — o valor só tem EFEITO em modelos que aceitam
-    (gpt-oss sempre); em gpt-4o/gpt-4.1 é descartado sem erro.
+    ou None (qualquer outro valor = desligado; o sentinela canônico da UI é
+    'off' — 68.0.0 — porque '' não sobrevive ao apply_settings_to_env, que
+    poppa env falsy e faz o Settings cair no default 'high'). O gate por
+    MODELO continua em get_provider — o valor só tem EFEITO em modelos que
+    aceitam (gpt-oss sempre); em gpt-4o/gpt-4.1 é descartado sem erro.
     """
     raw = (get_settings().wizard_reasoning_effort or "").strip().lower()
     return raw if raw in _REASONING_EFFORT_VALUES else None
@@ -1296,9 +1298,11 @@ UM único exemplo entrada/saída. Se a skill tem QUALQUER binding declarado
 output final — exemplo que pula direto pra saída ensina o LLM em runtime a
 alucinar.
 
-IMPORTANTE: NÃO inclua a seção `## Budget` nem seções além das listadas acima
-e das do bloco SEÇÕES OBRIGATÓRIAS. Restrições de budget são definidas pelo
-operador depois, conscientemente.
+IMPORTANTE: NÃO inclua a seção `## Budget` nem seções além das listadas acima,
+das do bloco SEÇÕES OBRIGATÓRIAS e das exigidas explicitamente pelos SUB-BLOCOS
+POR TIPO DE BINDING (ex.: `## Evidence Policy` de UMA linha quando indicada
+para skill só-MCP). Restrições de budget são definidas pelo operador depois,
+conscientemente.
 
 REGRAS DE CONCISÃO (nível ENXUTO — CRÍTICAS):
 - Purpose, Workflow, Output Contract e Guardrails entram VERBATIM no prompt de

@@ -3778,13 +3778,16 @@ class SettingsSave(BaseModel):
     fx_usd_brl: Optional[float] = Field(default=None, ge=0.01, le=100.0)
     ragas_ground_truth_enabled: Optional[bool] = None
     # Esforço de raciocínio das gerações do Wizard (27.0.0): 'high'|'medium'|
-    # 'low'|'' (desligado). Gate por modelo em get_provider. Default 'high'.
+    # 'low'|'off' (desligado). Gate por modelo em get_provider. Default 'high'.
     # Pattern fechado (68.0.0): antes aceitava QUALQUER string e o runtime
     # tratava lixo como "desligado" em silêncio — agora 422 nomeado, como os
     # campos numéricos. O enum espelha as options do select da aba Parâmetros
-    # (paridade selada em test_parameters_module).
+    # (paridade selada em test_parameters_module). O sentinela de desligado é
+    # 'off', NÃO '': valor vazio não sobrevive à cadeia de aplicação
+    # (apply_settings_to_env POPPA a env de valor falsy → Settings cai no
+    # default 'high') — a option '' antiga era um beco sem saída silencioso.
     wizard_reasoning_effort: Optional[str] = Field(
-        default=None, pattern=r"^(high|medium|low|)$",
+        default=None, pattern=r"^(high|medium|low|off)$",
     )
     # Verbosidade da geração de SKILL.md no Wizard (68.0.0): tamanho do
     # DOCUMENTO gerado (não da resposta em runtime). Enum fechado = 422.
