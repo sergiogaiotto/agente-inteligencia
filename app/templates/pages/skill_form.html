@@ -171,6 +171,46 @@
                 </div>
             </div>
 
+            <!-- 68.1.0: verbosidade do DOCUMENTO SKILL.md por geração (override do
+                 setting wizard_verbosity). NÃO confundir com o preset de tamanho da
+                 RESPOSTA (campo abaixo) — a cópia explicita a diferença. -->
+            <div data-testid="wizard-verbosity">
+                <div class="flex items-center justify-between mb-1">
+                    <label class="block text-[11px] font-semibold text-red-800">Verbosidade do SKILL.md (documento)</label>
+                    <span x-show="!wizardVerbosity" class="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-[9px] font-medium">vazio = padrão da plataforma (aba Parâmetros)</span>
+                </div>
+                <p class="mb-2 text-[10px] text-surface-500 leading-tight">Purpose, Workflow, Output Contract e Guardrails entram no prompt a <b>cada execução</b> da skill (Contract+Guardrails de novo no juiz). O tamanho da <b>resposta</b> é o campo abaixo.</p>
+                <div class="grid grid-cols-3 gap-2">
+                    <button @click="wizardVerbosity = wizardVerbosity === 'enxuto' ? '' : 'enxuto'" type="button" data-testid="wizard-verbosity-enxuto"
+                            class="rounded-xl border-2 p-2.5 text-left transition-all"
+                            :class="wizardVerbosity === 'enxuto' ? 'border-teal-400 bg-teal-50' : 'border-surface-200 bg-white hover:border-teal-200'">
+                        <div class="flex items-center gap-1.5 mb-1">
+                            <svg class="w-3.5 h-3.5 text-teal-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 6.75h16.5M3.75 12h10.5m-10.5 5.25h6"/></svg>
+                            <span class="text-[12px] font-semibold text-brand-900">Enxuto</span>
+                        </div>
+                        <p class="text-[10px] text-surface-500 leading-tight">Mínimo que opera a skill. 1 exemplo. Menos tokens recorrentes por execução.</p>
+                    </button>
+                    <button @click="wizardVerbosity = wizardVerbosity === 'padrao' ? '' : 'padrao'" type="button" data-testid="wizard-verbosity-padrao"
+                            class="rounded-xl border-2 p-2.5 text-left transition-all"
+                            :class="wizardVerbosity === 'padrao' ? 'border-sky-400 bg-sky-50' : 'border-surface-200 bg-white hover:border-sky-200'">
+                        <div class="flex items-center gap-1.5 mb-1">
+                            <svg class="w-3.5 h-3.5 text-sky-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 5.25h16.5m-16.5 4.5h16.5m-16.5 4.5h10.5m-10.5 4.5h6"/></svg>
+                            <span class="text-[12px] font-semibold text-brand-900">Padrão</span>
+                        </div>
+                        <p class="text-[10px] text-surface-500 leading-tight">Completo sem prosa redundante. Máx. 2 exemplos.</p>
+                    </button>
+                    <button @click="wizardVerbosity = wizardVerbosity === 'didatico' ? '' : 'didatico'" type="button" data-testid="wizard-verbosity-didatico"
+                            class="rounded-xl border-2 p-2.5 text-left transition-all"
+                            :class="wizardVerbosity === 'didatico' ? 'border-amber-400 bg-amber-50' : 'border-surface-200 bg-white hover:border-amber-200'">
+                        <div class="flex items-center gap-1.5 mb-1">
+                            <svg class="w-3.5 h-3.5 text-amber-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
+                            <span class="text-[12px] font-semibold text-brand-900">Didático</span>
+                        </div>
+                        <p class="text-[10px] text-surface-500 leading-tight">Prosa explicativa completa — o comportamento clássico do Wizard.</p>
+                    </button>
+                </div>
+            </div>
+
             <!-- Onda 1 Output Shape: preset de tamanho da resposta. Quando preenchido,
                  wizard injeta ## Output Shape no SKILL.md. Engine respeita via diretiva
                  no system_prompt + truncate hard pós-LLM. -->
@@ -1335,6 +1375,9 @@ function skillForm(editId) {
         // Onda 1 Output Shape: preset de tamanho. Vazio = backend não emite
         // ## Output Shape; engine usa default 'digest' (1500 chars).
         wizardLengthPreset: '',
+        // 68.1.0: verbosidade do DOCUMENTO SKILL.md por geração. Vazio =
+        // default da plataforma (setting wizard_verbosity, aba Parâmetros).
+        wizardVerbosity: '',
         // Contrato de Decisão (Cond-C.2, 36.2.0): linhas do formulário do wizard
         // ({campo, valores[], draft}) e do EDITOR (roundtrip com ## Decisions
         // do raw_content, padrão Evidence Policy).
@@ -2726,6 +2769,7 @@ ${outMap}`;
                     exec_mode: this.wizardExecMode,  // "" → backend infere
                     min_relevance: minRelevance,
                     length_preset: this.wizardLengthPreset || null,
+                    verbosity: this.wizardVerbosity || null,  // null → setting da plataforma
                     decisions: this._decisionsPayload(this.wizardDecisions),
                 });
                 this.wizardStage = 3;   // resposta chegou: validando/aplicando
@@ -2753,6 +2797,9 @@ ${outMap}`;
             if (resolved.api_count > 0) parts.push(`${resolved.api_count} API`);
             const bindings = parts.length ? ` (${parts.join(', ')})` : '';
             const profile = resolved.exec_mode ? ` · ${resolved.exec_mode}` : '';
+            // 68.1.0: nível EFETIVO de verbosidade que o prompt usou (override
+            // da modal ou setting da plataforma) — sempre reportado.
+            const verbosity = resolved.verbosity ? ` · SKILL ${resolved.verbosity}` : '';
             // Mostra QUAL LLM realmente gerou (pós-fallback). O backend já devolve
             // llm_provider/llm_model/llm_fallback (resolved) — a UI ignorava, o que
             // dava a impressão de "não sei qual provider foi usado".
@@ -2761,7 +2808,7 @@ ${outMap}`;
                 llm = ` · ${resolved.llm_provider || '?'}/${resolved.llm_model}`;
                 if (resolved.llm_fallback) llm += ' ⚠ fallback (o modelo roteado estava inacessível/401)';
             }
-            return bindings + profile + llm;
+            return bindings + profile + verbosity + llm;
         },
 
         async parseSkill() {

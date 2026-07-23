@@ -835,6 +835,56 @@ class TestWizardVerbosityPrompt:
 
 
 # ═════════════════════════════════════════════════════════════════
+# Verbosidade por GERAÇÃO (68.1.0) — campo do request + modal
+# ═════════════════════════════════════════════════════════════════
+
+
+class TestWizardVerbosityRequestField:
+    def test_default_none_e_valores_validos(self):
+        assert WizardSkillRequest(description="x").verbosity is None
+        for v in ("enxuto", "padrao", "didatico"):
+            assert WizardSkillRequest(description="x", verbosity=v).verbosity == v
+
+    def test_valor_invalido_e_422(self):
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="verbosity"):
+            WizardSkillRequest(description="x", verbosity="máximo")
+
+    def test_resolve_verbosity_explicito_vence_setting(self, monkeypatch):
+        """Único ponto de resolução (prompt E `resolved` da resposta usam o
+        mesmo) — override por geração vence; None cai no setting."""
+        from app.routes import wizard as _wiz
+
+        class _Stub:
+            wizard_verbosity = "didatico"
+
+        monkeypatch.setattr(_wiz, "get_settings", lambda: _Stub())
+        assert _wiz._resolve_verbosity("enxuto") == "enxuto"
+        assert _wiz._resolve_verbosity(None) == "didatico"
+
+
+class TestWizardVerbosityModalUi:
+    """Invariantes de template da modal do Wizard: cards presentes, payload
+    envia o campo, toast reporta o nível efetivo — e o enum dos cards ≡ enum
+    de runtime (mesma classe #721 selada na aba Parâmetros)."""
+
+    def test_cards_payload_e_toast(self):
+        src = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        assert 'data-testid="wizard-verbosity"' in src
+        for v in ("enxuto", "padrao", "didatico"):
+            assert f'data-testid="wizard-verbosity-{v}"' in src
+        assert "wizardVerbosity: ''" in src                      # estado (vazio = setting)
+        assert "verbosity: this.wizardVerbosity || null" in src  # payload da geração
+        assert "resolved.verbosity" in src                       # toast mostra o efetivo
+
+    def test_enum_dos_cards_bate_com_runtime(self):
+        from app.routes.wizard import _WIZARD_VERBOSITY_VALUES
+        src = Path("app/templates/pages/skill_form.html").read_text(encoding="utf-8")
+        toggles = set(re.findall(r"wizardVerbosity === '([a-z]+)'", src))
+        assert toggles == set(_WIZARD_VERBOSITY_VALUES)
+
+
+# ═════════════════════════════════════════════════════════════════
 # Regras de invocação MCP — fix bug Context7 (2026-05-29)
 # ═════════════════════════════════════════════════════════════════
 #
