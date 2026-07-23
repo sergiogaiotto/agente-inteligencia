@@ -833,6 +833,22 @@ class TestWizardVerbosityPrompt:
         assert "REGRAS DE CONCISÃO (nível PADRÃO)" in system
         assert "Seja específico e detalhado." not in system
 
+    def test_niveis_concisos_protegem_declarative_inputs_e_evidence(self):
+        """Endurecimento pós-auditoria (68.2.0): a lista nunca-encurte dos
+        níveis concisos cita EXPLICITAMENTE os 3 riscos que a compressão
+        amplificava — `execution_mode: declarative` do frontmatter (Tabela/API
+        morrem em silêncio sem ele), o inputs_schema multi-coluna exigido pelo
+        sub-bloco de Tabelas, e o formato COMPLETO da Evidence Policy (a
+        versão de UMA linha vale só para skill só-MCP)."""
+        enxuto = _prompt("enxuto")
+        assert "`execution_mode: declarative` quando presente" in enxuto
+        assert "TODAS as propriedades que o sub-bloco de Tabelas exigir" in enxuto
+        assert "a versão de UMA linha vale SÓ para skill só-MCP" in enxuto
+        padrao = _prompt("padrao")
+        # (frase quebra de linha no corpo padrão — asserts não atravessam o wrap)
+        assert "incluindo a diretiva de frontmatter `execution_mode: declarative`" in padrao
+        assert "`inputs_schema` que o sub-bloco de Tabelas exigir" in padrao
+
 
 # ═════════════════════════════════════════════════════════════════
 # Matriz bindings × verbosidade (68.1.1) — nenhum nível degrada binding
